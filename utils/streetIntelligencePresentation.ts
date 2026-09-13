@@ -1,22 +1,48 @@
 export type StreetIntelligencePresentationState = 'supported' | 'caution' | 'unknown';
 export type StreetIntelligenceSource = 'admin' | 'sweepnyc' | 'nyc_open_data';
 
+/**
+ * Why a result is not fully confident. The UI names the actual doubt instead of
+ * printing a generic "review recommended" over every result.
+ */
+export type StreetIntelligenceCautionReason =
+  | 'side_unresolved'
+  | 'block_not_decisive'
+  | 'conflicting_schedules'
+  | 'incomplete_parse'
+  | 'flagged_for_review'
+  | 'low_confidence'
+  | 'stale_data';
+
 export interface StreetIntelligencePresentation {
   state: StreetIntelligencePresentationState;
   source: StreetIntelligenceSource | null;
   lastSourceSync: string | null;
+  /** Empty when state is 'supported'. Most significant first. */
+  reasons: StreetIntelligenceCautionReason[];
 }
 
 const SOURCES: StreetIntelligenceSource[] = ['admin', 'sweepnyc', 'nyc_open_data'];
 
+/**
+ * All three are authoritative publishers: ParQueen's own reviewed data, SweepNYC,
+ * and NYC's own Open Data. Being the fallback route makes a result later, not
+ * less true, so provider identity alone no longer downgrades a result -- only the
+ * evidence attached to it does.
+ */
 function isSource(value: unknown): value is StreetIntelligenceSource {
   return typeof value === 'string' && SOURCES.includes(value as StreetIntelligenceSource);
 }
 
-function hasSupportedConfidence(segment: Record<string, any>): boolean {
-  return (segment.source === 'admin' && segment.confidenceScore === 1)
-    || (segment.source === 'sweepnyc' && segment.confidenceScore === 0.95);
-}
+/**
+ * A floor, not an allowlist of exact values. The previous check required
+ * (admin && === 1) || (sweepnyc && === 0.95), which no nyc_open_data segment
+ * could ever satisfy no matter how decisive its evidence.
+ */
+const CONFIDENCE_FLOOR = 0.9;
+
+/** Beyond this a schedule is old enough that the city may have re-signed the block. */
+const STALE_AFTER_DAYS = 180;
 
 function latestSourceSync(rules: Record<string, any>[]): string | null {
   const values = rules
@@ -26,14 +52,45 @@ function latestSourceSync(rules: Record<string, any>[]): string | null {
   return values.length > 0 ? values[values.length - 1] : null;
 }
 
+function isStale(lastSourceSync: string | null, now: number): boolean {
+  if (!lastSourceSync) return false; // absence of a timestamp is handled by provenance checks
+  const synced = Date.parse(lastSourceSync);
+  if (!Number.isFinite(synced)) return false;
+  return now - synced > STALE_AFTER_DAYS * 24 * 60 * 60 * 1000;
+}
+
+const scheduleKey = (s: Record<string, any>) =>
+  `${s.side ?? ''}|${(Array.isArray(s.days) ? s.days : []).join(',')}|${s.startTime ?? ''}|${s.endTime ?? ''}|${s.ruleType ?? ''}`;
+
+/**
+ * Mixed sources are only a problem when they disagree. Two providers publishing
+ * the same window for the same side is corroboration, not conflict.
+ */
+function hasConflictingSchedules(rules: Record<string, any>[]): boolean {
+  const bySide = new Map<string, Set<string>>();
+  for (const rule of rules) {
+    for (const schedule of Array.isArray(rule.schedules) ? rule.schedules : []) {
+      const side = String(schedule?.side ?? '');
+      if (!side) continue;
+      const set = bySide.get(side) ?? new Set<string>();
+      set.add(scheduleKey(schedule));
+      bySide.set(side, set);
+    }
+  }
+  for (const keys of bySide.values()) if (keys.size > 1) return true;
+  return false;
+}
+
 export function classifyStreetIntelligence(
   segment: Record<string, any> | null,
   rules: Record<string, any>[],
+  now: number = Date.now(),
 ): StreetIntelligencePresentation {
   const unknown: StreetIntelligencePresentation = {
     state: 'unknown',
     source: null,
     lastSourceSync: null,
+    reasons: [],
   };
 
   if (!segment || !Array.isArray(rules) || rules.length === 0) return unknown;
@@ -48,22 +105,32 @@ export function classifyStreetIntelligence(
 
   const ruleSources = [...new Set(rules.map(rule => rule.source as StreetIntelligenceSource))];
   const source = ruleSources.length === 1 ? ruleSources[0] : null;
-  const hasMixedRuleSources = ruleSources.length > 1;
   const lastSourceSync = latestSourceSync(rules);
-  const hasFallbackSource = ruleSources.includes('nyc_open_data')
-    || segment.provenance.geometrySource === 'fallback';
-  const hasReviewSignal = segment.status === 'needs_review'
+
+  // Evidence the producer recorded about how the block face was resolved. Absent
+  // on segments written before it was persisted, which stay conservative.
+  const evidence = segment.blockFaceEvidence ?? null;
+
+  const reasons: StreetIntelligenceCautionReason[] = [];
+
+  if (segment.status === 'needs_review'
     || segment.needsReview === true
     || rules.some(rule => rule.needsReview === true)
     || segment.confidence?.level === 'flagged'
-    || segment.confidence?.level === 'unverified';
-  const hasLowConfidence = !hasSupportedConfidence(segment);
+    || segment.confidence?.level === 'unverified') {
+    reasons.push('flagged_for_review');
+  }
+  if (evidence && evidence.blockDecisive === false) reasons.push('block_not_decisive');
+  if (evidence && evidence.sideResolved === false) reasons.push('side_unresolved');
+  if (evidence && evidence.parseComplete === false) reasons.push('incomplete_parse');
+  if (hasConflictingSchedules(rules)) reasons.push('conflicting_schedules');
+  if (segment.confidenceScore < CONFIDENCE_FLOOR) reasons.push('low_confidence');
+  if (isStale(lastSourceSync, now)) reasons.push('stale_data');
 
   return {
-    state: hasFallbackSource || hasReviewSignal || hasLowConfidence || hasMixedRuleSources
-      ? 'caution'
-      : 'supported',
+    state: reasons.length > 0 ? 'caution' : 'supported',
     source,
     lastSourceSync,
+    reasons,
   };
 }

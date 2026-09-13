@@ -4586,6 +4586,29 @@ async function _fallbackToNYCOpenData(lat, lng) {
       ? _detectCardinalSide(lat, lng, fromLat, fromLng, toLat, toLng, bearing)
       : streetCtx.side;
 
+    // selectBlockFace only returns a group when the evidence is decisive: it needs
+    // BOTH bounding cross streets to match and to beat second place outright,
+    // otherwise it returns null and we never get here. 'single_candidate' is the
+    // one weaker case -- one group and no cross-street context to confirm it.
+    const blockDecisive = selectionReason === 'bounding_pair'
+      || selectionReason === 'bounding_pair_and_side';
+    // A synthetic centreline only degrades the drawn line. The side then comes
+    // from the DOT record's own side_of_street, which is authoritative.
+    const sideResolved = Boolean(parkingSide);
+    const parseComplete = unparsed.length === 0;
+    const decisive = blockDecisive && sideResolved && parseComplete;
+    const blockFaceEvidence = {
+      selectionReason,
+      selectionScore,
+      blockDecisive,
+      sideResolved,
+      sideSource: geometrySource === 'osm' ? 'geometry' : 'dot_record',
+      parseComplete,
+      parsedCount: parsed.length,
+      unparsedCount: unparsed.length,
+      groupSize: bestGroup.length,
+    };
+
     const now = Timestamp.now();
     const sourceOrderNumbers = bestGroup.map(r => r.order_number).filter(Boolean);
     const provenance = {
@@ -4616,11 +4639,12 @@ async function _fallbackToNYCOpenData(lat, lng) {
       evenSideIsPositiveCross: false,
       source: 'nyc_open_data',
       provenance,
-      needsReview: true,
-      status: 'needs_review',
-      confidenceScore: 0.5,
+      blockFaceEvidence,
+      needsReview: !decisive,
+      status: decisive ? 'active' : 'needs_review',
+      confidenceScore: decisive ? 0.9 : 0.5,
       confidence: {
-        level: 'unverified',
+        level: decisive ? 'community' : 'unverified',
         source: 'nyc_open_data',
         lastVerifiedAt: now,
         communityConfirmations: 0,
@@ -4642,13 +4666,13 @@ async function _fallbackToNYCOpenData(lat, lng) {
       }),
       source: 'nyc_open_data',
       provenance,
-      needsReview: true,
+      needsReview: !decisive,
       lastSourceSync: new Date().toISOString(),
       createdAt: now,
       updatedAt: now,
     });
 
-    console.log('[NYCOpenData] wrote segment', docId, '| parkingSide:', parkingSide, '| geometrySource:', geometrySource, '| selectionReason:', selectionReason);
+    console.log('[NYCOpenData] wrote segment', docId, '| parkingSide:', parkingSide, '| geometrySource:', geometrySource, '| selectionReason:', selectionReason, '| decisive:', decisive);
     return {
       success: true,
       segmentId: docId,
@@ -4667,7 +4691,8 @@ async function _fallbackToNYCOpenData(lat, lng) {
         sideOfStreet,
         aspCount: aspRows.length,
         parsedCount: parsed.length,
-        needsReview: true,
+        needsReview: !decisive,
+        blockFaceEvidence,
       },
     };
   } catch (err) {

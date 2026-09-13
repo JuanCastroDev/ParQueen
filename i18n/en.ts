@@ -962,6 +962,14 @@ const en: Record<string, string> = {
     'messages.smart_replies_aria': 'Suggested replies',
 
     // Street Intelligence — card + session sheet
+    'street_intel.caution_side_unresolved': "We found the schedule, but couldn't confidently match your side of the street.",
+    'street_intel.caution_block_not_decisive': "We couldn't pin this to a single block face, so the schedule may belong to a neighbouring block.",
+    'street_intel.caution_conflicting_schedules': 'This block has conflicting street-cleaning records.',
+    'street_intel.caution_incomplete_parse': "Some signs on this block couldn't be read, so the schedule may be incomplete.",
+    'street_intel.caution_flagged_for_review': 'This block is flagged for review, so the schedule may be out of date.',
+    'street_intel.caution_low_confidence': "We're not confident this record matches your exact spot.",
+    'street_intel.caution_stale_data': "This schedule hasn't been refreshed recently and the block may have been re-signed.",
+    'street_intel.disclaimer': 'Posted signs are always the final word.',
     'street_intel.info_available': 'Parking info available',
     'street_intel.which_side': 'Which side are you parked on?',
     'street_intel.schedules_found_street': 'We found schedules for {street}. Confirm your side for your Safe Until time.',

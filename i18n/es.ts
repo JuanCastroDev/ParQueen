@@ -962,6 +962,14 @@ const es: Record<string, string> = {
     'messages.smart_replies_aria': 'Respuestas sugeridas',
 
     // Street Intelligence — tarjeta + hoja de sesión
+    'street_intel.caution_side_unresolved': 'Encontramos el horario, pero no pudimos confirmar tu lado de la calle.',
+    'street_intel.caution_block_not_decisive': 'No pudimos identificar una sola cara de la cuadra, así que el horario podría ser de la cuadra vecina.',
+    'street_intel.caution_conflicting_schedules': 'Esta cuadra tiene registros de limpieza contradictorios.',
+    'street_intel.caution_incomplete_parse': 'No pudimos leer algunos letreros de esta cuadra, así que el horario podría estar incompleto.',
+    'street_intel.caution_low_confidence': 'No tenemos plena certeza de que este registro corresponda a tu lugar exacto.',
+    'street_intel.caution_flagged_for_review': 'Esta cuadra está marcada para revisión, así que el horario podría estar desactualizado.',
+    'street_intel.caution_stale_data': 'Este horario no se ha actualizado recientemente y la cuadra podría tener letreros nuevos.',
+    'street_intel.disclaimer': 'Los letreros en la calle siempre tienen la última palabra.',
     'street_intel.info_available': 'Información de estacionamiento disponible',
     'street_intel.which_side': '¿En qué lado estás estacionado?',
     'street_intel.schedules_found_street': 'Encontramos horarios para {street}. Confirma tu lado para ver tu hora límite.',
