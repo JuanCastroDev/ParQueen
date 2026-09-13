@@ -23,6 +23,12 @@ const { redactForLog, sanitizeError } = require('./redactForLog');
 const { checkRateLimit } = require('./rateLimiter');
 const { requireCurrentAdmin, requireCurrentAuthenticatedUser } = require('./adminAuth');
 const { isSweepNYCData, computeSegmentUpdate, computeRuleUpdate } = require('./backfillLogic');
+const {
+  NYC_OD_EVIDENCE_REVALIDATION_VERSION,
+  deriveNYCOpenDataConfidence,
+  isLegacyNYCOpenDataSegment,
+  runLegacyNYCOpenDataRevalidation,
+} = require('./streetIntelligenceLegacy');
 const { ADMIN_READ_VIEWS } = require('./adminReadViews');
 const { haversineDistMiles, filterCandidates, buildMessages, collectStaleTokens, MAX_CANDIDATES, FCM_BATCH } = require('./notifyFanout');
 const { createHash, createHmac, randomInt: secureRandomInt, randomUUID, timingSafeEqual } = require('crypto');
@@ -4199,13 +4205,23 @@ exports.createSegmentFromSweepNYC = onCall(
     const uid = request.auth.uid;
     await checkRateLimit(uid, 'createSegmentFromSweepNYC', { limit: 30, windowSec: 3600 });
 
-    const { lat, lng } = request.data || {};
+    const { lat, lng, revalidateSegmentId } = request.data || {};
     if (typeof lat !== 'number' || typeof lng !== 'number')
       throw new HttpsError('invalid-argument', 'lat and lng must be numbers.');
     if (lat < 40.4 || lat > 40.95 || lng < -74.3 || lng > -73.65)
       throw new HttpsError('invalid-argument', 'Coordinates outside NYC bounds.');
+    if (revalidateSegmentId !== undefined
+      && (typeof revalidateSegmentId !== 'string'
+        || revalidateSegmentId.length === 0
+        || revalidateSegmentId.length > 500
+        || revalidateSegmentId.includes('/'))) {
+      throw new HttpsError('invalid-argument', 'Invalid segment ID.');
+    }
 
     try {
+      if (revalidateSegmentId) {
+        return await _revalidateLegacyNYCOpenDataSegment(revalidateSegmentId, lat, lng);
+      }
       if (_callableHooks.sweepNYCResult) {
         return await _callableHooks.sweepNYCResult(lat, lng);
       }
@@ -4220,6 +4236,78 @@ exports.createSegmentFromSweepNYC = onCall(
     }
   }
 );
+
+function _existingNYCOpenDataResult(segmentId, segment, lat, lng, stage) {
+  const parkingSide = segment.fromLat != null
+    ? _detectCardinalSide(lat, lng, segment.fromLat, segment.fromLng, segment.toLat, segment.toLng, segment.bearing ?? 90)
+    : dotSideToCardinal(segment.sideOfStreet);
+  return {
+    success: true,
+    segmentId,
+    parkingSide,
+    streetName: segment.streetName,
+    revalidation: stage,
+    _diag: { stage: `legacy_revalidation_${stage}`, provider: 'nyc_open_data' },
+  };
+}
+
+async function _claimLegacyNYCOpenDataRevalidation(segmentId) {
+  const segmentRef = db.doc(`streetSegments/${segmentId}`);
+  const operationId = randomUUID();
+  return db.runTransaction(async tx => {
+    const snap = await tx.get(segmentRef);
+    if (!snap.exists) return { acquired: false, segment: null, state: 'missing' };
+    const segment = snap.data();
+    if (!isLegacyNYCOpenDataSegment(segment)) {
+      const isNYCOpenData = segment.source === 'nyc_open_data'
+        && segment.provenance?.provider === 'nyc_open_data';
+      return {
+        acquired: false,
+        segment: isNYCOpenData ? segment : null,
+        state: isNYCOpenData ? (segment.legacyRevalidation?.state || 'cached') : 'not_legacy',
+      };
+    }
+    tx.set(segmentRef, {
+      legacyRevalidation: {
+        version: NYC_OD_EVIDENCE_REVALIDATION_VERSION,
+        state: 'in_progress',
+        operationId,
+        startedAt: Timestamp.now(),
+      },
+    }, { merge: true });
+    return { acquired: true, segment, operationId };
+  });
+}
+
+async function _markLegacyNYCOpenDataRevalidationFailed(segmentId, operationId, reason) {
+  const segmentRef = db.doc(`streetSegments/${segmentId}`);
+  await db.runTransaction(async tx => {
+    const snap = await tx.get(segmentRef);
+    const marker = snap.exists ? snap.data().legacyRevalidation : null;
+    if (marker?.version !== NYC_OD_EVIDENCE_REVALIDATION_VERSION
+      || marker?.operationId !== operationId) return;
+    tx.set(segmentRef, {
+      legacyRevalidation: {
+        ...marker,
+        state: 'failed',
+        reason,
+        completedAt: Timestamp.now(),
+      },
+    }, { merge: true });
+  });
+}
+
+async function _revalidateLegacyNYCOpenDataSegment(segmentId, lat, lng) {
+  return runLegacyNYCOpenDataRevalidation({
+    segmentId,
+    loadAndClaim: _claimLegacyNYCOpenDataRevalidation,
+    refresh: operationId => _fallbackToNYCOpenData(lat, lng, { segmentId, operationId }),
+    markFailed: (operationId, reason) =>
+      _markLegacyNYCOpenDataRevalidationFailed(segmentId, operationId, reason),
+    cachedResult: (segment, stage) =>
+      _existingNYCOpenDataResult(segmentId, segment, lat, lng, stage),
+  });
+}
 
 // ── NYC Open Data fallback helpers ───────────────────────────────────────────
 
@@ -4454,7 +4542,7 @@ async function _queryNYCOpenData(likePattern, borough) {
  * Main NYC Open Data fallback orchestrator.
  * Called when SweepNYC has no usable data for lat/lng.
  */
-async function _fallbackToNYCOpenData(lat, lng) {
+async function _fallbackToNYCOpenData(lat, lng, revalidation = null) {
   try {
     const geocode = await _reverseGeocodeStreet(lat, lng);
     if (!geocode) {
@@ -4521,8 +4609,11 @@ async function _fallbackToNYCOpenData(lat, lng) {
 
     // Dedup: deterministic doc ID keyed on block face — prevents broad street-level cache
     const docId = nycOdSegmentDocId(boroughCode, dotName, fromStreet, toStreet, sideOfStreet);
+    if (revalidation && revalidation.segmentId !== docId) {
+      return { success: false, reason: 'legacy_revalidation_target_changed' };
+    }
     const existingSnap = await db.doc(`streetSegments/${docId}`).get();
-    if (existingSnap.exists) {
+    if (existingSnap.exists && !revalidation) {
       const d = existingSnap.data();
       const ps = d.fromLat != null
         ? _detectCardinalSide(lat, lng, d.fromLat, d.fromLng, d.toLat, d.toLng, d.bearing ?? 90)
@@ -4596,7 +4687,6 @@ async function _fallbackToNYCOpenData(lat, lng) {
     // from the DOT record's own side_of_street, which is authoritative.
     const sideResolved = Boolean(parkingSide);
     const parseComplete = unparsed.length === 0;
-    const decisive = blockDecisive && sideResolved && parseComplete;
     const blockFaceEvidence = {
       selectionReason,
       selectionScore,
@@ -4608,6 +4698,7 @@ async function _fallbackToNYCOpenData(lat, lng) {
       unparsedCount: unparsed.length,
       groupSize: bestGroup.length,
     };
+    const confidenceMetadata = deriveNYCOpenDataConfidence(blockFaceEvidence);
 
     const now = Timestamp.now();
     const sourceOrderNumbers = bestGroup.map(r => r.order_number).filter(Boolean);
@@ -4618,12 +4709,14 @@ async function _fallbackToNYCOpenData(lat, lng) {
       rawSignTexts: bestGroup.map(r => r.sign_description || ''),
       geometrySource,
       sourceOrderNumbers,
-      refreshedAt: null,
-      refreshCount: 0,
+      refreshedAt: revalidation ? now : null,
+      refreshCount: revalidation
+        ? Number(existingSnap.data()?.provenance?.refreshCount || 0) + 1
+        : 0,
     };
 
     const segRef = db.doc(`streetSegments/${docId}`);
-    await segRef.set({
+    const segmentWrite = {
       cityId: 'nyc',
       streetName: dotName,
       onStreet: dotName,
@@ -4640,21 +4733,29 @@ async function _fallbackToNYCOpenData(lat, lng) {
       source: 'nyc_open_data',
       provenance,
       blockFaceEvidence,
-      needsReview: !decisive,
-      status: decisive ? 'active' : 'needs_review',
-      confidenceScore: decisive ? 0.9 : 0.5,
+      needsReview: confidenceMetadata.needsReview,
+      status: confidenceMetadata.status,
+      confidenceScore: confidenceMetadata.confidenceScore,
       confidence: {
-        level: decisive ? 'community' : 'unverified',
+        level: confidenceMetadata.level,
         source: 'nyc_open_data',
         lastVerifiedAt: now,
         communityConfirmations: 0,
       },
       editedBy: 'system:nyc_open_data',
-      createdAt: now,
+      ...(revalidation ? {
+        legacyRevalidation: {
+          version: NYC_OD_EVIDENCE_REVALIDATION_VERSION,
+          state: 'complete',
+          operationId: revalidation.operationId,
+          completedAt: now,
+        },
+      } : { createdAt: now }),
       updatedAt: now,
-    });
+    };
 
-    await segRef.collection('streetRules').doc('nyc_open_data_v1').set({
+    const ruleRef = segRef.collection('streetRules').doc('nyc_open_data_v1');
+    const ruleWrite = {
       type: 'streetCleaning',
       effectiveDate: now,
       supersededAt: null,
@@ -4666,13 +4767,30 @@ async function _fallbackToNYCOpenData(lat, lng) {
       }),
       source: 'nyc_open_data',
       provenance,
-      needsReview: !decisive,
+      needsReview: confidenceMetadata.needsReview,
       lastSourceSync: new Date().toISOString(),
-      createdAt: now,
+      ...(revalidation ? {} : { createdAt: now }),
       updatedAt: now,
-    });
+    };
 
-    console.log('[NYCOpenData] wrote segment', docId, '| parkingSide:', parkingSide, '| geometrySource:', geometrySource, '| selectionReason:', selectionReason, '| decisive:', decisive);
+    if (revalidation) {
+      const applied = await db.runTransaction(async tx => {
+        const current = await tx.get(segRef);
+        const marker = current.exists ? current.data().legacyRevalidation : null;
+        if (marker?.version !== NYC_OD_EVIDENCE_REVALIDATION_VERSION
+          || marker?.operationId !== revalidation.operationId
+          || marker?.state !== 'in_progress') return false;
+        tx.set(segRef, segmentWrite, { merge: true });
+        tx.set(ruleRef, ruleWrite, { merge: true });
+        return true;
+      });
+      if (!applied) return { success: false, reason: 'legacy_revalidation_claim_lost' };
+    } else {
+      await segRef.set(segmentWrite);
+      await ruleRef.set(ruleWrite);
+    }
+
+    console.log('[NYCOpenData] wrote segment', docId, '| parkingSide:', parkingSide, '| geometrySource:', geometrySource, '| selectionReason:', selectionReason, '| decisive:', confidenceMetadata.decisive);
     return {
       success: true,
       segmentId: docId,
@@ -4691,7 +4809,7 @@ async function _fallbackToNYCOpenData(lat, lng) {
         sideOfStreet,
         aspCount: aspRows.length,
         parsedCount: parsed.length,
-        needsReview: !decisive,
+        needsReview: confidenceMetadata.needsReview,
         blockFaceEvidence,
       },
     };

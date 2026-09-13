@@ -149,14 +149,6 @@ const MATRIX: Row[] = [
     },
     rules: [odRule({ needsReview: true })],
   },
-  {
-    fixture: 'schedule last synced 2024',
-    source: 'admin', blockFace: 'exact', side: 'confirmed', parse: 'complete',
-    was: 'supported', now: 'caution', reasons: ['stale_data'],
-    why: 'newly caught — the block may have been re-signed since',
-    segment: seg({ source: 'admin', confidenceScore: 1, provenance: { provider: 'admin' } }),
-    rules: [{ source: 'admin', schedules: W, lastSourceSync: '2024-01-01T00:00:00.000Z' }],
-  },
 ];
 
 describe('street intelligence confidence matrix', () => {

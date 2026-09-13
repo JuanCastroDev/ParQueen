@@ -139,10 +139,4 @@ describe('classifyStreetIntelligence', () => {
     expect(classifyStreetIntelligence(adminSegment, [adminRule]).reasons).toEqual([]);
   });
 
-  it('flags a schedule old enough that the block may have been re-signed', () => {
-    const old = { ...adminRule, lastSourceSync: '2024-01-01T00:00:00.000Z' };
-    const result = classifyStreetIntelligence(adminSegment, [old], Date.parse('2026-09-13T00:00:00.000Z'));
-    expect(result.state).toBe('caution');
-    expect(result.reasons).toContain('stale_data');
-  });
 });

@@ -79,7 +79,6 @@ const CAUTION_REASON_KEY: Record<StreetIntelligenceCautionReason, string> = {
   incomplete_parse: 'street_intel.caution_incomplete_parse',
   flagged_for_review: 'street_intel.caution_flagged_for_review',
   low_confidence: 'street_intel.caution_low_confidence',
-  stale_data: 'street_intel.caution_stale_data',
 };
 
 const cautionCopy = (reasons: StreetIntelligenceCautionReason[]): string | null =>
@@ -287,9 +286,6 @@ export const StreetIntelligenceCard = ({
             </button>
           ))}
         </div>
-        <p className="text-xs text-[var(--color-text-secondary)] mt-3">
-          {t('street_intel.disclaimer')}
-        </p>
         {metadataBlock}
         {debugBlock}
       </div>
@@ -316,11 +312,11 @@ export const StreetIntelligenceCard = ({
             : t('street_intel.no_schedule_unknown')}
         </p>
         {metadataBlock}
-        <p className="text-xs text-[var(--color-text-secondary)] mt-3">
-          {presentation.state === 'caution'
-            ? (cautionCopy(presentation.reasons) ?? t('street_intel.decision_caution'))
-            : t('street_intel.disclaimer')}
-        </p>
+        {presentation.state === 'caution' && (
+          <p className="text-xs text-[var(--color-text-secondary)] mt-3">
+            {cautionCopy(presentation.reasons) ?? t('street_intel.decision_caution')}
+          </p>
+        )}
         {debugBlock}
       </div>
     );
@@ -414,11 +410,11 @@ export const StreetIntelligenceCard = ({
         )}
       </div>
       {metadataBlock}
-      <p className="text-xs text-[var(--color-text-secondary)] mt-3">
-        {presentation.state === 'caution'
-          ? (cautionCopy(presentation.reasons) ?? t('street_intel.decision_caution'))
-          : t('street_intel.disclaimer')}
-      </p>
+      {presentation.state === 'caution' && (
+        <p className="text-xs text-[var(--color-text-secondary)] mt-3">
+          {cautionCopy(presentation.reasons) ?? t('street_intel.decision_caution')}
+        </p>
+      )}
       {debugBlock}
     </div>
   );

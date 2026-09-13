@@ -11,8 +11,7 @@ export type StreetIntelligenceCautionReason =
   | 'conflicting_schedules'
   | 'incomplete_parse'
   | 'flagged_for_review'
-  | 'low_confidence'
-  | 'stale_data';
+  | 'low_confidence';
 
 export interface StreetIntelligencePresentation {
   state: StreetIntelligencePresentationState;
@@ -41,22 +40,12 @@ function isSource(value: unknown): value is StreetIntelligenceSource {
  */
 const CONFIDENCE_FLOOR = 0.9;
 
-/** Beyond this a schedule is old enough that the city may have re-signed the block. */
-const STALE_AFTER_DAYS = 180;
-
 function latestSourceSync(rules: Record<string, any>[]): string | null {
   const values = rules
     .map(rule => rule.lastSourceSync)
     .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
     .sort();
   return values.length > 0 ? values[values.length - 1] : null;
-}
-
-function isStale(lastSourceSync: string | null, now: number): boolean {
-  if (!lastSourceSync) return false; // absence of a timestamp is handled by provenance checks
-  const synced = Date.parse(lastSourceSync);
-  if (!Number.isFinite(synced)) return false;
-  return now - synced > STALE_AFTER_DAYS * 24 * 60 * 60 * 1000;
 }
 
 const scheduleKey = (s: Record<string, any>) =>
@@ -84,7 +73,7 @@ function hasConflictingSchedules(rules: Record<string, any>[]): boolean {
 export function classifyStreetIntelligence(
   segment: Record<string, any> | null,
   rules: Record<string, any>[],
-  now: number = Date.now(),
+  _now: number = Date.now(),
 ): StreetIntelligencePresentation {
   const unknown: StreetIntelligencePresentation = {
     state: 'unknown',
@@ -125,7 +114,6 @@ export function classifyStreetIntelligence(
   if (evidence && evidence.parseComplete === false) reasons.push('incomplete_parse');
   if (hasConflictingSchedules(rules)) reasons.push('conflicting_schedules');
   if (segment.confidenceScore < CONFIDENCE_FLOOR) reasons.push('low_confidence');
-  if (isStale(lastSourceSync, now)) reasons.push('stale_data');
 
   return {
     state: reasons.length > 0 ? 'caution' : 'supported',

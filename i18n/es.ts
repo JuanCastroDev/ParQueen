@@ -968,8 +968,6 @@ const es: Record<string, string> = {
     'street_intel.caution_incomplete_parse': 'No pudimos leer algunos letreros de esta cuadra, así que el horario podría estar incompleto.',
     'street_intel.caution_low_confidence': 'No tenemos plena certeza de que este registro corresponda a tu lugar exacto.',
     'street_intel.caution_flagged_for_review': 'Esta cuadra está marcada para revisión, así que el horario podría estar desactualizado.',
-    'street_intel.caution_stale_data': 'Este horario no se ha actualizado recientemente y la cuadra podría tener letreros nuevos.',
-    'street_intel.disclaimer': 'Los letreros en la calle siempre tienen la última palabra.',
     'street_intel.info_available': 'Información de estacionamiento disponible',
     'street_intel.which_side': '¿En qué lado estás estacionado?',
     'street_intel.schedules_found_street': 'Encontramos horarios para {street}. Confirma tu lado para ver tu hora límite.',
