@@ -18,6 +18,7 @@ import { t, useLang } from '../i18n';
 import { VehicleIcon } from '../utils/vehicleIcon';
 import { getTitleForCrowns } from '../utils/crowns';
 import { createUserLocationGeohashPersister } from '../utils/userLocationGeohash';
+import { getCurrentPosition, isGeolocationAvailable, watchPosition, type LocationWatchHandle } from '../utils/geolocation';
 import { derivePingLifecycle, getPingExpiresAtMs, getPingPhase, timestampToMillis } from '../utils/pingLifecycle';
 
 
@@ -327,10 +328,10 @@ export const MapView: React.FC<MapViewProps> = ({
         if (!isDebugMode) return;
         setCfTestLoading(true);
         dbg('--- DIRECT CF TEST ---');
-        navigator.geolocation.getCurrentPosition(async pos => {
+        void getCurrentPosition().then(async pos => {
             const lat = pos.coords.latitude;
             const lng = pos.coords.longitude;
-            dbg(`CF test lat:${lat.toFixed(6)} lng:${lng.toFixed(6)}`);
+            dbg('CF test: received a position (coordinates omitted)');
             try {
                 const fn = httpsCallable(getFunctions(getApp(), 'us-central1'), 'createSegmentFromSweepNYC');
                 const result = await fn({ lat, lng });
@@ -343,8 +344,8 @@ export const MapView: React.FC<MapViewProps> = ({
                 setCfTestLoading(false);
                 dbg('--- CF TEST DONE ---');
             }
-        }, err => {
-            dbg(`CF test geolocation error: ${err.message}`);
+        }).catch(err => {
+            dbg(`CF test geolocation error: ${err?.kind ?? err?.message ?? 'failed'}`);
             setCfTestLoading(false);
         });
     }, [isDebugMode, dbg]);
@@ -821,7 +822,7 @@ export const MapView: React.FC<MapViewProps> = ({
         mapboxgl.accessToken = mapboxToken;
 
         let cancelled = false;
-        let watchId: number | undefined;
+        let watchHandle: LocationWatchHandle | undefined;
         let ro: ResizeObserver | undefined;
 
         const initMap = (center: [number, number]) => {
@@ -884,8 +885,8 @@ export const MapView: React.FC<MapViewProps> = ({
             if (!mapRef.current) initMap(NYC_CENTER);
         }, 5000);
 
-        if (allowLocationTrackingRef.current && navigator.geolocation) {
-            watchId = navigator.geolocation.watchPosition(
+        if (allowLocationTrackingRef.current && isGeolocationAvailable()) {
+            watchHandle = watchPosition(
                 (position) => {
                     const { longitude, latitude, accuracy } = position.coords;
                     lastGpsAccuracyRef.current = accuracy ?? null;
@@ -927,7 +928,7 @@ export const MapView: React.FC<MapViewProps> = ({
         return () => {
             cancelled = true;
             clearTimeout(fallbackTimer);
-            if (watchId !== undefined) navigator.geolocation.clearWatch(watchId);
+            watchHandle?.clear();
             ro?.disconnect();
             if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
         };
@@ -1383,8 +1384,8 @@ export const MapView: React.FC<MapViewProps> = ({
                     onSaveError(error);
                 }
             } else {
-                navigator.geolocation.getCurrentPosition(
-                    async (position) => {
+                void getCurrentPosition({ enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 })
+                    .then(async (position) => {
                         const location: [number, number] = [position.coords.longitude, position.coords.latitude];
                         const geohash = geofire.geohashForLocation([location[1], location[0]]);
 
@@ -1412,14 +1413,12 @@ export const MapView: React.FC<MapViewProps> = ({
                         } catch (error) {
                             onSaveError(error);
                         }
-                    },
-                    (error) => {
-                        console.error("Error getting position for ping:", error);
+                    })
+                    .catch((error) => {
+                        console.error("Error getting position for ping:", error?.kind ?? error?.code ?? 'position_error');
                         setPingError(t('ping_errors.location'));
                         setIsPinging(false);
-                    },
-                    { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
-                );
+                    });
             }
         }
     };

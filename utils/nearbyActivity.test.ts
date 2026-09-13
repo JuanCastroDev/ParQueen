@@ -21,6 +21,14 @@ describe('nearbyPermissionState', () => {
     it('denied → permanently_blocked', () => expect(nearbyPermissionState('denied')).toBe('permanently_blocked'));
     it('declined → denied_requestable', () => expect(nearbyPermissionState('declined')).toBe('denied_requestable'));
     it('unknown → not_determined', () => expect(nearbyPermissionState('unknown')).toBe('not_determined'));
+
+    it('device Location Services off beats a stored grant', () => {
+        expect(nearbyPermissionState('granted', { locationServicesEnabled: false })).toBe('services_disabled');
+    });
+
+    it('unknown services state leaves the stored mapping unchanged', () => {
+        expect(nearbyPermissionState('granted', { locationServicesEnabled: null })).toBe('granted');
+    });
 });
 
 // ─── deriveNearbyState — permission gates ─────────────────────────────────────

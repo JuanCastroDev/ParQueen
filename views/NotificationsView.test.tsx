@@ -114,6 +114,8 @@ async function renderNotifications(props: Partial<React.ComponentProps<typeof No
             callbacks: noopCallbacks,
             ...props,
         }));
+        // getCurrentPosition is promise-based; flush the browser-geo microtask.
+        await Promise.resolve();
     });
     return renderer!;
 }

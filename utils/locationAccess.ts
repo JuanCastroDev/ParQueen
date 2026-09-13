@@ -43,3 +43,15 @@ export function resolveFromPermissions(
     // 'prompt' — honour the stored choice (e.g. 'declined' from a previous Not now)
     return stored;
 }
+
+/**
+ * Same product mapping as `resolveFromPermissions`, for the location abstraction
+ * snapshot (`unavailable` behaves like `prompt`: do not invent a denial).
+ */
+export function resolveFromPermissionSnapshot(
+    status: 'prompt' | 'granted' | 'denied' | 'unavailable',
+    stored: LocationAccess,
+): LocationAccess {
+    if (status === 'unavailable') return stored;
+    return resolveFromPermissions(status, stored);
+}

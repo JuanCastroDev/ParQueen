@@ -21,6 +21,7 @@ import {
     summarizeFeed, MAX_VISIBLE_PINGS,
 } from '../utils/nearbyFeed';
 import { deriveNotificationPresentation } from '../utils/notificationPresentation';
+import { getCurrentPosition, isGeolocationAvailable } from '../utils/geolocation';
 
 interface NotificationsViewProps {
     user: any;
@@ -80,19 +81,17 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
 
     // Fetch coordinates only when granted
     const fetchLocation = useCallback(() => {
-        if (!navigator.geolocation) { setLocationError(true); return; }
+        if (!isGeolocationAvailable()) { setLocationError(true); return; }
         setLocating(true);
         setLocationError(false);
         const timer = setTimeout(() => { setLocating(false); setLocationError(true); }, 10000);
-        navigator.geolocation.getCurrentPosition(
-            pos => {
+        void getCurrentPosition({ enableHighAccuracy: true, timeout: 10000 })
+            .then(pos => {
                 clearTimeout(timer);
                 setUserLocation([pos.coords.latitude, pos.coords.longitude]);
                 setLocating(false);
-            },
-            () => { clearTimeout(timer); setLocating(false); setLocationError(true); },
-            { enableHighAccuracy: true, timeout: 10000 }
-        );
+            })
+            .catch(() => { clearTimeout(timer); setLocating(false); setLocationError(true); });
     }, []);
 
     useEffect(() => {

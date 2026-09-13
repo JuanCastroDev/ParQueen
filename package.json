@@ -22,6 +22,7 @@
   "dependencies": {
     "@capacitor/android": "^8.5.2",
     "@capacitor/core": "^8.5.2",
+    "@capacitor/geolocation": "^8.2.1",
     "@capacitor/ios": "^8.5.2",
     "@sentry/react": "^10.72.0",
     "firebase": "^10.8.0",

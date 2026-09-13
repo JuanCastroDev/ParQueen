@@ -66,5 +66,9 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>ParQueen uses your location while the app is open to show nearby parking Pings and your position on the map.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>ParQueen uses your location while the app is open to show nearby parking Pings and your position on the map.</string>
 </dict>
 </plist>

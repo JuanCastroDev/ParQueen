@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { t, useLang } from '../i18n';
-import { readPersistedAccess, resolveFromPermissions } from '../utils/locationAccess';
+import { readPersistedAccess, resolveFromPermissionSnapshot } from '../utils/locationAccess';
+import { checkLocationPermission, requestLocationPermission } from '../utils/geolocation';
 
 interface LocationPromptViewProps {
     onComplete: (access: 'granted' | 'declined' | 'denied') => void;
@@ -13,43 +14,48 @@ const prefersReduced =
 export const LocationPromptView: React.FC<LocationPromptViewProps> = ({ onComplete }) => {
     useLang();
     const [requesting, setRequesting] = useState(false);
+    const [hint, setHint] = useState<'services_off' | 'try_again' | null>(null);
 
-    // Best-effort Permissions API check — skip the primer if already resolved
+    // Skip the primer when OS / browser permission is already resolved.
     useEffect(() => {
-        if (!navigator.permissions) return;
-        navigator.permissions
-            .query({ name: 'geolocation' })
-            .then((result) => {
-                const resolved = resolveFromPermissions(result.state, readPersistedAccess());
-                if (resolved === 'granted') {
-                    onComplete('granted');
-                } else if (resolved === 'denied') {
-                    // Permission already denied by the browser — skip the primer
-                    onComplete('denied');
-                }
-                // 'unknown' or 'declined' → show the primer normally
+        let cancelled = false;
+        checkLocationPermission()
+            .then((snap) => {
+                if (cancelled) return;
+                const resolved = resolveFromPermissionSnapshot(snap.status, readPersistedAccess());
+                if (resolved === 'granted') onComplete('granted');
+                else if (resolved === 'denied') onComplete('denied');
             })
             .catch(() => {
-                // Safari / unavailable — show the primer normally
+                // Unavailable — show the primer normally
             });
+        return () => { cancelled = true; };
     }, [onComplete]);
 
-    const handleEnable = useCallback(() => {
+    const handleEnable = useCallback(async () => {
         if (requesting) return;
-        if (!navigator.geolocation) {
-            onComplete('denied');
-            return;
-        }
         setRequesting(true);
-        navigator.geolocation.getCurrentPosition(
-            () => {
+        setHint(null);
+        try {
+            const snap = await requestLocationPermission();
+            if (snap.locationServicesEnabled === false) {
+                setHint('services_off');
+                return;
+            }
+            if (snap.status === 'granted') {
                 onComplete('granted');
-            },
-            () => {
+                return;
+            }
+            if (snap.status === 'denied') {
                 onComplete('denied');
-            },
-            { enableHighAccuracy: false, timeout: 15000 }
-        );
+                return;
+            }
+            setHint('try_again');
+        } catch {
+            setHint('try_again');
+        } finally {
+            setRequesting(false);
+        }
     }, [requesting, onComplete]);
 
     const handleSkip = useCallback(() => {
@@ -217,6 +223,12 @@ export const LocationPromptView: React.FC<LocationPromptViewProps> = ({ onComple
                 </p>
 
                 {/* Enable location */}
+                {hint && (
+                    <p className="text-[13px] leading-snug mb-3" style={{ color: 'rgba(255,255,255,0.72)' }}>
+                        {hint === 'services_off' ? t('location_prompt.services_off') : t('location_prompt.try_again')}
+                    </p>
+                )}
+
                 <button
                     type="button"
                     onClick={handleEnable}

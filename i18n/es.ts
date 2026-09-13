@@ -61,6 +61,8 @@ const es: Record<string, string> = {
     'location_prompt.skip': 'Ahora no',
     'location_prompt.reassurance': 'Puedes activar tu ubicación más tarde desde la configuración de tu dispositivo.',
     'location_prompt.map_desc': 'Vista previa del mapa con estacionamientos cercanos',
+    'location_prompt.services_off': 'Los servicios de ubicación están desactivados. Actívalos en la configuración del dispositivo e inténtalo de nuevo.',
+    'location_prompt.try_again': 'Aún no se pudo obtener la ubicación. El acceso no fue bloqueado — inténtalo de nuevo.',
 
     // App Tour — welcome
     'tour.welcome.title': 'Bienvenido a ParQueen',

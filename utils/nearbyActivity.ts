@@ -77,9 +77,14 @@ export function deriveNearbyState(p: NearbyStateParams): NearbyRenderState {
     return 'results';
 }
 
-/** Web beta adapter: maps web-only LocationAccess to the native permission model.
- *  Never emits services_disabled — the web Permissions API cannot detect it. */
-export function nearbyPermissionState(access: LocationAccess): LocationPermissionState {
+/** Maps persisted LocationAccess (and optional runtime extras) to the nearby permission model.
+ *  `services_disabled` is only emitted when the location abstraction reports device
+ *  Location Services off. The web Permissions API cannot detect that on its own. */
+export function nearbyPermissionState(
+    access: LocationAccess,
+    extras?: { locationServicesEnabled?: boolean | null },
+): LocationPermissionState {
+    if (extras?.locationServicesEnabled === false) return 'services_disabled';
     if (access === 'granted') return 'granted';
     if (access === 'denied') return 'permanently_blocked';
     if (access === 'declined') return 'denied_requestable';

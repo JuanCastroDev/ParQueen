@@ -4,6 +4,7 @@ import {
     persistAccessChoice,
     shouldShowPrimer,
     resolveFromPermissions,
+    resolveFromPermissionSnapshot,
     type LocationAccess,
 } from './locationAccess';
 
@@ -142,6 +143,19 @@ describe('resolveFromPermissions', () => {
 
     it('granted stored + prompt API → granted', () => {
         expect(resolveFromPermissions('prompt', 'granted')).toBe('granted');
+    });
+});
+
+describe('resolveFromPermissionSnapshot', () => {
+    it('maps granted and denied the same way as the Permissions API helper', () => {
+        expect(resolveFromPermissionSnapshot('granted', 'declined')).toBe('granted');
+        expect(resolveFromPermissionSnapshot('denied', 'granted')).toBe('denied');
+    });
+
+    it('does not treat unavailable / services-off as a permanent denial', () => {
+        expect(resolveFromPermissionSnapshot('unavailable', 'unknown')).toBe('unknown');
+        expect(resolveFromPermissionSnapshot('unavailable', 'granted')).toBe('granted');
+        expect(resolveFromPermissionSnapshot('prompt', 'declined')).toBe('declined');
     });
 });
 

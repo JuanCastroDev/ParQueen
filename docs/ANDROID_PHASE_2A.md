@@ -72,4 +72,4 @@ In-app Terms / Privacy reuse `TermsOfUseView` and `PrivacyPolicyView`. Back (vis
 
 ## Out of scope / next (Phase 2B)
 
-Native geolocation is **not** part of Phase 2A. The Android manifest currently lacks location permissions and the web app still relies on `navigator.geolocation`. Track that as a separate Phase 2B task.
+Native geolocation is **not** part of Phase 2A. See `docs/ANDROID_PHASE_2B.md` for the later foreground Capacitor geolocation work.
