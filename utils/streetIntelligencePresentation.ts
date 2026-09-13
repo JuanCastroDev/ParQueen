@@ -48,25 +48,66 @@ function latestSourceSync(rules: Record<string, any>[]): string | null {
   return values.length > 0 ? values[values.length - 1] : null;
 }
 
-const scheduleKey = (s: Record<string, any>) =>
-  `${s.side ?? ''}|${(Array.isArray(s.days) ? s.days : []).join(',')}|${s.startTime ?? ''}|${s.endTime ?? ''}|${s.ruleType ?? ''}`;
+/**
+ * Canonical fingerprint for one schedule window. Day order is sorted so
+ * ["Thu","Mon"] matches ["Mon","Thu"]. ruleType is material when present:
+ * CleaningSchedule uses it for metered_no_parking_window vs classic ASP
+ * (absent). Missing / blank / whitespace-only all mean classic ASP.
+ */
+function canonicalizeSchedule(s: Record<string, any>): string | null {
+  const side = String(s?.side ?? '').trim();
+  if (!side) return null;
+  const days = (Array.isArray(s.days) ? s.days : [])
+    .map((d: unknown) => String(d).trim())
+    .filter(Boolean)
+    .sort((a: string, b: string) => a.localeCompare(b));
+  const startTime = String(s?.startTime ?? '').trim();
+  const endTime = String(s?.endTime ?? '').trim();
+  const rawType = typeof s?.ruleType === 'string' ? s.ruleType.trim() : '';
+  // Empty means classic ASP; non-empty values (e.g. metered_no_parking_window) differ.
+  const ruleType = rawType;
+  return `${side}|${days.join(',')}|${startTime}|${endTime}|${ruleType}`;
+}
 
 /**
- * Mixed sources are only a problem when they disagree. Two providers publishing
- * the same window for the same side is corroboration, not conflict.
+ * Mixed sources are only a problem when their complete schedule sets for a
+ * side disagree. One source may publish multiple windows on one side; that is
+ * not a conflict. Compare source+side complete sets, not global window keys.
  */
 function hasConflictingSchedules(rules: Record<string, any>[]): boolean {
-  const bySide = new Map<string, Set<string>>();
+  // side -> source -> sorted unique canonical schedule keys for that source+side
+  const bySide = new Map<string, Map<string, Set<string>>>();
+
   for (const rule of rules) {
+    const source = typeof rule?.source === 'string' ? rule.source : '';
+    if (!source) continue;
     for (const schedule of Array.isArray(rule.schedules) ? rule.schedules : []) {
-      const side = String(schedule?.side ?? '');
-      if (!side) continue;
-      const set = bySide.get(side) ?? new Set<string>();
-      set.add(scheduleKey(schedule));
-      bySide.set(side, set);
+      const key = canonicalizeSchedule(schedule);
+      if (!key) continue;
+      const side = String(schedule?.side ?? '').trim();
+      let bySource = bySide.get(side);
+      if (!bySource) {
+        bySource = new Map();
+        bySide.set(side, bySource);
+      }
+      let set = bySource.get(source);
+      if (!set) {
+        set = new Set();
+        bySource.set(source, set);
+      }
+      set.add(key);
     }
   }
-  for (const keys of bySide.values()) if (keys.size > 1) return true;
+
+  for (const bySource of bySide.values()) {
+    if (bySource.size < 2) continue; // fewer than two sources for this side: no cross-source conflict
+    const fingerprints: string[] = [];
+    for (const set of bySource.values()) {
+      fingerprints.push([...set].sort((a, b) => a.localeCompare(b)).join('||'));
+    }
+    const distinct = new Set(fingerprints);
+    if (distinct.size > 1) return true;
+  }
   return false;
 }
 

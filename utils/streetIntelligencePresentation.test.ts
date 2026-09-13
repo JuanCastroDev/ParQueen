@@ -139,4 +139,87 @@ describe('classifyStreetIntelligence', () => {
     expect(classifyStreetIntelligence(adminSegment, [adminRule]).reasons).toEqual([]);
   });
 
+  describe('conflicting_schedules compares complete source+side sets', () => {
+    const westMorning = { side: 'West', days: ['Mon', 'Thu'], startTime: '08:30', endTime: '10:00' };
+    const westAfternoon = { side: 'West', days: ['Mon', 'Thu'], startTime: '13:00', endTime: '14:30' };
+    const eastMorning = { side: 'East', days: ['Tue', 'Fri'], startTime: '08:30', endTime: '10:00' };
+
+    it('keeps one source with two legitimate West schedules supported', () => {
+      const rule = { ...sweepRule, schedules: [westMorning, westAfternoon] };
+      const result = classifyStreetIntelligence(sweepSegment, [rule]);
+      expect(result.state).toBe('supported');
+      expect(result.reasons).not.toContain('conflicting_schedules');
+    });
+
+    it('treats two sources with identical two-schedule West sets as corroboration', () => {
+      const a = { ...sweepRule, schedules: [westMorning, westAfternoon] };
+      const b = { ...adminRule, schedules: [westMorning, westAfternoon] };
+      const result = classifyStreetIntelligence(sweepSegment, [a, b]);
+      expect(result.state).toBe('supported');
+      expect(result.reasons).not.toContain('conflicting_schedules');
+    });
+
+    it('ignores different day ordering within the same window', () => {
+      const a = { ...sweepRule, schedules: [{ ...westMorning, days: ['Mon', 'Thu'] }] };
+      const b = { ...adminRule, schedules: [{ ...westMorning, days: ['Thu', 'Mon'] }] };
+      const result = classifyStreetIntelligence(sweepSegment, [a, b]);
+      expect(result.state).toBe('supported');
+      expect(result.reasons).not.toContain('conflicting_schedules');
+    });
+
+    it('ignores different schedule-array ordering for the same complete set', () => {
+      const a = { ...sweepRule, schedules: [westMorning, westAfternoon] };
+      const b = { ...adminRule, schedules: [westAfternoon, westMorning] };
+      const result = classifyStreetIntelligence(sweepSegment, [a, b]);
+      expect(result.state).toBe('supported');
+      expect(result.reasons).not.toContain('conflicting_schedules');
+    });
+
+    it('flags genuine West disagreement across sources', () => {
+      const a = { ...sweepRule, schedules: [westMorning] };
+      const b = { ...adminRule, schedules: [{ ...westMorning, startTime: '11:00', endTime: '12:30' }] };
+      const result = classifyStreetIntelligence(sweepSegment, [a, b]);
+      expect(result.state).toBe('caution');
+      expect(result.reasons).toContain('conflicting_schedules');
+    });
+
+    it('still flags West disagreement when sources agree on East', () => {
+      const a = { ...sweepRule, schedules: [eastMorning, westMorning] };
+      const b = { ...adminRule, schedules: [eastMorning, { ...westMorning, startTime: '11:00', endTime: '12:30' }] };
+      const result = classifyStreetIntelligence(sweepSegment, [a, b]);
+      expect(result.state).toBe('caution');
+      expect(result.reasons).toContain('conflicting_schedules');
+    });
+
+    it('does not conflict when only one source supplies West', () => {
+      const a = { ...sweepRule, schedules: [westMorning, eastMorning] };
+      const b = { ...adminRule, schedules: [eastMorning] };
+      const result = classifyStreetIntelligence(sweepSegment, [a, b]);
+      expect(result.state).toBe('supported');
+      expect(result.reasons).not.toContain('conflicting_schedules');
+    });
+
+    it('treats missing and blank ruleType as classic ASP (no false conflict)', () => {
+      const a = { ...sweepRule, schedules: [{ ...westMorning }] };
+      const b = { ...adminRule, schedules: [{ ...westMorning, ruleType: '' }] };
+      const c = { ...adminRule, source: 'nyc_open_data', schedules: [{ ...westMorning, ruleType: '   ' }] };
+      // two-source: missing vs blank
+      expect(classifyStreetIntelligence(sweepSegment, [a, b]).reasons).not.toContain('conflicting_schedules');
+      expect(classifyStreetIntelligence(sweepSegment, [a, b]).state).toBe('supported');
+      // three sources all classic-equivalent should still corroborate
+      expect(classifyStreetIntelligence(sweepSegment, [a, b, c]).state).toBe('supported');
+    });
+
+    it('flags when ruleType materially differs (metered vs classic ASP)', () => {
+      const a = { ...sweepRule, schedules: [{ ...westMorning }] };
+      const b = {
+        ...adminRule,
+        schedules: [{ ...westMorning, ruleType: 'metered_no_parking_window' }],
+      };
+      const result = classifyStreetIntelligence(sweepSegment, [a, b]);
+      expect(result.state).toBe('caution');
+      expect(result.reasons).toContain('conflicting_schedules');
+    });
+  });
+
 });
