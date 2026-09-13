@@ -23,6 +23,12 @@ const { redactForLog, sanitizeError } = require('./redactForLog');
 const { checkRateLimit } = require('./rateLimiter');
 const { requireCurrentAdmin, requireCurrentAuthenticatedUser } = require('./adminAuth');
 const { isSweepNYCData, computeSegmentUpdate, computeRuleUpdate } = require('./backfillLogic');
+const {
+  NYC_OD_EVIDENCE_REVALIDATION_VERSION,
+  deriveNYCOpenDataConfidence,
+  isLegacyNYCOpenDataSegment,
+  runLegacyNYCOpenDataRevalidation,
+} = require('./streetIntelligenceLegacy');
 const { ADMIN_READ_VIEWS } = require('./adminReadViews');
 const { haversineDistMiles, filterCandidates, buildMessages, collectStaleTokens, MAX_CANDIDATES, FCM_BATCH } = require('./notifyFanout');
 const { createHash, createHmac, randomInt: secureRandomInt, randomUUID, timingSafeEqual } = require('crypto');
@@ -4199,13 +4205,23 @@ exports.createSegmentFromSweepNYC = onCall(
     const uid = request.auth.uid;
     await checkRateLimit(uid, 'createSegmentFromSweepNYC', { limit: 30, windowSec: 3600 });
 
-    const { lat, lng } = request.data || {};
+    const { lat, lng, revalidateSegmentId } = request.data || {};
     if (typeof lat !== 'number' || typeof lng !== 'number')
       throw new HttpsError('invalid-argument', 'lat and lng must be numbers.');
     if (lat < 40.4 || lat > 40.95 || lng < -74.3 || lng > -73.65)
       throw new HttpsError('invalid-argument', 'Coordinates outside NYC bounds.');
+    if (revalidateSegmentId !== undefined
+      && (typeof revalidateSegmentId !== 'string'
+        || revalidateSegmentId.length === 0
+        || revalidateSegmentId.length > 500
+        || revalidateSegmentId.includes('/'))) {
+      throw new HttpsError('invalid-argument', 'Invalid segment ID.');
+    }
 
     try {
+      if (revalidateSegmentId) {
+        return await _revalidateLegacyNYCOpenDataSegment(revalidateSegmentId, lat, lng);
+      }
       if (_callableHooks.sweepNYCResult) {
         return await _callableHooks.sweepNYCResult(lat, lng);
       }
@@ -4220,6 +4236,91 @@ exports.createSegmentFromSweepNYC = onCall(
     }
   }
 );
+
+function _existingNYCOpenDataResult(segmentId, segment, lat, lng, stage) {
+  const parkingSide = segment.fromLat != null
+    ? _detectCardinalSide(lat, lng, segment.fromLat, segment.fromLng, segment.toLat, segment.toLng, segment.bearing ?? 90)
+    : dotSideToCardinal(segment.sideOfStreet);
+  return {
+    success: true,
+    segmentId,
+    parkingSide,
+    streetName: segment.streetName,
+    revalidation: stage,
+    _diag: { stage: `legacy_revalidation_${stage}`, provider: 'nyc_open_data' },
+  };
+}
+
+async function _claimLegacyNYCOpenDataRevalidation(segmentId) {
+  const segmentRef = db.doc(`streetSegments/${segmentId}`);
+  const operationId = randomUUID();
+  return db.runTransaction(async tx => {
+    const snap = await tx.get(segmentRef);
+    if (!snap.exists) return { acquired: false, segment: null, state: 'missing' };
+    const segment = snap.data();
+    if (!isLegacyNYCOpenDataSegment(segment)) {
+      const isNYCOpenData = segment.source === 'nyc_open_data'
+        && segment.provenance?.provider === 'nyc_open_data';
+      return {
+        acquired: false,
+        segment: isNYCOpenData ? segment : null,
+        state: isNYCOpenData ? (segment.legacyRevalidation?.state || 'cached') : 'not_legacy',
+      };
+    }
+    tx.set(segmentRef, {
+      legacyRevalidation: {
+        version: NYC_OD_EVIDENCE_REVALIDATION_VERSION,
+        state: 'in_progress',
+        operationId,
+        startedAt: Timestamp.now(),
+      },
+    }, { merge: true });
+    return { acquired: true, segment, operationId };
+  });
+}
+
+async function _markLegacyNYCOpenDataRevalidationOutcome(
+  segmentId,
+  operationId,
+  state,
+  reason,
+  retryAfterMs = null,
+) {
+  const segmentRef = db.doc(`streetSegments/${segmentId}`);
+  await db.runTransaction(async tx => {
+    const snap = await tx.get(segmentRef);
+    const marker = snap.exists ? snap.data().legacyRevalidation : null;
+    if (marker?.version !== NYC_OD_EVIDENCE_REVALIDATION_VERSION
+      || marker?.operationId !== operationId) return;
+    tx.set(segmentRef, {
+      legacyRevalidation: {
+        ...marker,
+        state,
+        reason,
+        completedAt: Timestamp.now(),
+        ...(retryAfterMs == null ? {} : { retryAfter: Timestamp.fromMillis(retryAfterMs) }),
+      },
+    }, { merge: true });
+  });
+}
+
+async function _revalidateLegacyNYCOpenDataSegment(segmentId, lat, lng) {
+  return runLegacyNYCOpenDataRevalidation({
+    segmentId,
+    loadAndClaim: _claimLegacyNYCOpenDataRevalidation,
+    refresh: operationId => _fallbackToNYCOpenData(lat, lng, { segmentId, operationId }),
+    markFailed: (operationId, reason, retryAfterMs) =>
+      _markLegacyNYCOpenDataRevalidationOutcome(
+        segmentId, operationId, 'failed', reason, retryAfterMs,
+      ),
+    markTerminal: (operationId, reason) =>
+      _markLegacyNYCOpenDataRevalidationOutcome(
+        segmentId, operationId, 'terminal_caution', reason,
+      ),
+    cachedResult: (segment, stage) =>
+      _existingNYCOpenDataResult(segmentId, segment, lat, lng, stage),
+  });
+}
 
 // ── NYC Open Data fallback helpers ───────────────────────────────────────────
 
@@ -4253,19 +4354,22 @@ const OSM_ROAD_TYPES = new Set([
  * callers swallowed. Observed in production on the Greene Street fallback.
  *
  * Returns parsed JSON, or null for any non-2xx / non-JSON / network failure.
+ * Revalidation can opt into throwing those operational failures so its lease
+ * records a retryable outage rather than a deterministic caution result.
  * Deliberately single-shot: no retry, so an Overpass outage is never amplified.
  *
  * Sends OSM_USER_AGENT: Overpass rejects User-Agent-less requests with 406 and an
  * HTML body, so before this header every cross-street lookup came back empty and
  * the NYC Open Data fallback could never disambiguate a block face.
  */
-async function _overpassJson(query, label) {
+async function _overpassJson(query, label, strictOperationalFailures = false) {
   try {
     const res = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`, {
       headers: { 'User-Agent': OSM_USER_AGENT },
     });
     if (!res.ok) {
       console.warn(`[Overpass] ${label} non-OK response:`, res.status);
+      if (strictOperationalFailures) throw new Error(`overpass_${label}_unavailable`);
       return null;
     }
     const body = await res.text();
@@ -4274,11 +4378,13 @@ async function _overpassJson(query, label) {
     // payload itself rather than trusting the header.
     if (head !== '{' && head !== '[') {
       console.warn(`[Overpass] ${label} returned a non-JSON body (status ${res.status})`);
+      if (strictOperationalFailures) throw new Error(`overpass_${label}_invalid_response`);
       return null;
     }
     return JSON.parse(body);
   } catch (err) {
     console.warn(`[Overpass] ${label} fetch error:`, sanitizeError(err));
+    if (strictOperationalFailures) throw err;
     return null;
   }
 }
@@ -4338,13 +4444,13 @@ function _boroughFromAddress(address) {
  * the extra ways cost nothing but are filtered to real roads to keep footpaths
  * and service alleys from being treated as intersections.
  */
-async function _fetchBlockContext(lat, lng, mainStreetOsmName) {
+async function _fetchBlockContext(lat, lng, mainStreetOsmName, strictOperationalFailures = false) {
   const delta = 0.004; // ~440 m: enough to contain both bounds of a long block
   const bbox = `${lat - delta},${lng - delta},${lat + delta},${lng + delta}`;
   const q = `[out:json][timeout:15];way[highway][name](${bbox});out geom;`;
   const EMPTY = { crossStreets: [], side: null, bearing: null };
   try {
-    const data = await _overpassJson(q, 'block-context');
+    const data = await _overpassJson(q, 'block-context', strictOperationalFailures);
     if (!data || !data.elements?.length) return EMPTY;
     const ways = data.elements
       .filter(el => el.tags?.name && el.geometry?.length >= 2 && OSM_ROAD_TYPES.has(el.tags.highway))
@@ -4354,17 +4460,21 @@ async function _fetchBlockContext(lat, lng, mainStreetOsmName) {
     return ctx;
   } catch (err) {
     console.warn('[NYCOpenData] block-context fetch error:', sanitizeError(err));
+    if (strictOperationalFailures) throw err;
     return EMPTY;
   }
 }
 
 
 /** Reverse geocodes lat/lng via Nominatim → OSM road name. */
-async function _reverseGeocodeStreet(lat, lng) {
+async function _reverseGeocodeStreet(lat, lng, strictOperationalFailures = false) {
   try {
     const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=17`;
     const res = await fetch(url, { headers: { 'User-Agent': OSM_USER_AGENT } });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      if (strictOperationalFailures) throw new Error('nominatim_unavailable');
+      return null;
+    }
     const data = await res.json();
     const road = (data && data.address && data.address.road) || null;
     if (!road) return null;
@@ -4373,6 +4483,7 @@ async function _reverseGeocodeStreet(lat, lng) {
     return { road, boroughCode: _boroughFromAddress(data && data.address) };
   } catch (err) {
     console.warn('[NYCOpenData] reverse geocode error:', sanitizeError(err));
+    if (strictOperationalFailures) throw err;
     return null;
   }
 }
@@ -4403,7 +4514,7 @@ function _socrataToken() {
  * Queries NYC Open Data nfid-uabd for sign records matching a LIKE street pattern in a borough.
  * Paginates up to 3000 rows to handle long avenues (Broadway, 3rd Ave, Grand Concourse).
  */
-async function _queryNYCOpenData(likePattern, borough) {
+async function _queryNYCOpenData(likePattern, borough, strictOperationalFailures = false) {
   const BASE = 'https://data.cityofnewyork.us/resource/nfid-uabd.json';
   const token = _socrataToken();
   if (!token) console.warn('[NYCOpenData] SOCRATA_APP_TOKEN not set — using unauthenticated rate limit');
@@ -4434,6 +4545,7 @@ async function _queryNYCOpenData(likePattern, borough) {
       const res = await fetch(`${BASE}?${params}`, { headers });
       if (!res.ok) {
         console.warn('[NYCOpenData] API error:', res.status);
+        if (strictOperationalFailures) throw new Error('nyc_open_data_unavailable');
         break;
       }
       const batch = await res.json();
@@ -4442,6 +4554,7 @@ async function _queryNYCOpenData(likePattern, borough) {
       if (batch.length < PAGE) break;
     } catch (err) {
       console.warn('[NYCOpenData] fetch error page', page, ':', sanitizeError(err));
+      if (strictOperationalFailures) throw err;
       break;
     }
   }
@@ -4454,9 +4567,10 @@ async function _queryNYCOpenData(likePattern, borough) {
  * Main NYC Open Data fallback orchestrator.
  * Called when SweepNYC has no usable data for lat/lng.
  */
-async function _fallbackToNYCOpenData(lat, lng) {
+async function _fallbackToNYCOpenData(lat, lng, revalidation = null) {
   try {
-    const geocode = await _reverseGeocodeStreet(lat, lng);
+    const strictOperationalFailures = Boolean(revalidation);
+    const geocode = await _reverseGeocodeStreet(lat, lng, strictOperationalFailures);
     if (!geocode) {
       console.warn('[NYCOpenData] reverse geocode returned null — giving up');
       return { success: false, reason: 'no_sweepnyc_data' };
@@ -4479,7 +4593,7 @@ async function _fallbackToNYCOpenData(lat, lng) {
     }
     console.log('[NYCOpenData] DOT name:', dotName, '| borough:', borough, '| source:', boroughSource, '| pattern:', likePattern);
 
-    const rows = await _queryNYCOpenData(likePattern, borough);
+    const rows = await _queryNYCOpenData(likePattern, borough, strictOperationalFailures);
     const aspRows = rows.filter(r => _isASPSign(r.sign_description));
     console.log('[NYCOpenData] ASP rows:', aspRows.length, '/ total:', rows.length);
     if (!aspRows.length) {
@@ -4499,7 +4613,7 @@ async function _fallbackToNYCOpenData(lat, lng) {
 
     // Block bounds + side from OSM geometry; both empty if Overpass is unavailable,
     // in which case selection stays conservative rather than guessing.
-    const blockCtx = await _fetchBlockContext(lat, lng, osmStreet);
+    const blockCtx = await _fetchBlockContext(lat, lng, osmStreet, strictOperationalFailures);
     const crossStreets = blockCtx.crossStreets;
     const userSide = blockCtx.side;
     console.log('[NYCOpenData] bounding cross streets:', crossStreets, '| user side:', userSide);
@@ -4521,8 +4635,11 @@ async function _fallbackToNYCOpenData(lat, lng) {
 
     // Dedup: deterministic doc ID keyed on block face — prevents broad street-level cache
     const docId = nycOdSegmentDocId(boroughCode, dotName, fromStreet, toStreet, sideOfStreet);
+    if (revalidation && revalidation.segmentId !== docId) {
+      return { success: false, reason: 'legacy_revalidation_target_changed' };
+    }
     const existingSnap = await db.doc(`streetSegments/${docId}`).get();
-    if (existingSnap.exists) {
+    if (existingSnap.exists && !revalidation) {
       const d = existingSnap.data();
       const ps = d.fromLat != null
         ? _detectCardinalSide(lat, lng, d.fromLat, d.fromLng, d.toLat, d.toLng, d.bearing ?? 90)
@@ -4563,7 +4680,7 @@ async function _fallbackToNYCOpenData(lat, lng) {
 
     let fromLat, fromLng, toLat, toLng, bearing, geometrySource;
     try {
-      const geo = await _fetchStreetGeometry(osmStreet, lat, lng);
+      const geo = await _fetchStreetGeometry(osmStreet, lat, lng, strictOperationalFailures);
       if (geo) {
         ({ fromLat, fromLng, toLat, toLng, bearing } = geo);
         geometrySource = 'osm';
@@ -4574,6 +4691,7 @@ async function _fallbackToNYCOpenData(lat, lng) {
       }
     } catch (geoErr) {
       console.error('[NYCOpenData] geometry error:', sanitizeError(geoErr));
+      if (strictOperationalFailures) throw geoErr;
       const HALF = 0.0005;
       fromLat = lat - HALF; fromLng = lng; toLat = lat + HALF; toLng = lng; bearing = 0;
       geometrySource = 'fallback';
@@ -4586,6 +4704,29 @@ async function _fallbackToNYCOpenData(lat, lng) {
       ? _detectCardinalSide(lat, lng, fromLat, fromLng, toLat, toLng, bearing)
       : streetCtx.side;
 
+    // selectBlockFace only returns a group when the evidence is decisive: it needs
+    // BOTH bounding cross streets to match and to beat second place outright,
+    // otherwise it returns null and we never get here. 'single_candidate' is the
+    // one weaker case -- one group and no cross-street context to confirm it.
+    const blockDecisive = selectionReason === 'bounding_pair'
+      || selectionReason === 'bounding_pair_and_side';
+    // A synthetic centreline only degrades the drawn line. The side then comes
+    // from the DOT record's own side_of_street, which is authoritative.
+    const sideResolved = Boolean(parkingSide);
+    const parseComplete = unparsed.length === 0;
+    const blockFaceEvidence = {
+      selectionReason,
+      selectionScore,
+      blockDecisive,
+      sideResolved,
+      sideSource: geometrySource === 'osm' ? 'geometry' : 'dot_record',
+      parseComplete,
+      parsedCount: parsed.length,
+      unparsedCount: unparsed.length,
+      groupSize: bestGroup.length,
+    };
+    const confidenceMetadata = deriveNYCOpenDataConfidence(blockFaceEvidence);
+
     const now = Timestamp.now();
     const sourceOrderNumbers = bestGroup.map(r => r.order_number).filter(Boolean);
     const provenance = {
@@ -4595,12 +4736,14 @@ async function _fallbackToNYCOpenData(lat, lng) {
       rawSignTexts: bestGroup.map(r => r.sign_description || ''),
       geometrySource,
       sourceOrderNumbers,
-      refreshedAt: null,
-      refreshCount: 0,
+      refreshedAt: revalidation ? now : null,
+      refreshCount: revalidation
+        ? Number(existingSnap.data()?.provenance?.refreshCount || 0) + 1
+        : 0,
     };
 
     const segRef = db.doc(`streetSegments/${docId}`);
-    await segRef.set({
+    const segmentWrite = {
       cityId: 'nyc',
       streetName: dotName,
       onStreet: dotName,
@@ -4616,21 +4759,30 @@ async function _fallbackToNYCOpenData(lat, lng) {
       evenSideIsPositiveCross: false,
       source: 'nyc_open_data',
       provenance,
-      needsReview: true,
-      status: 'needs_review',
-      confidenceScore: 0.5,
+      blockFaceEvidence,
+      needsReview: confidenceMetadata.needsReview,
+      status: confidenceMetadata.status,
+      confidenceScore: confidenceMetadata.confidenceScore,
       confidence: {
-        level: 'unverified',
+        level: confidenceMetadata.level,
         source: 'nyc_open_data',
         lastVerifiedAt: now,
         communityConfirmations: 0,
       },
       editedBy: 'system:nyc_open_data',
-      createdAt: now,
+      ...(revalidation ? {
+        legacyRevalidation: {
+          version: NYC_OD_EVIDENCE_REVALIDATION_VERSION,
+          state: 'complete',
+          operationId: revalidation.operationId,
+          completedAt: now,
+        },
+      } : { createdAt: now }),
       updatedAt: now,
-    });
+    };
 
-    await segRef.collection('streetRules').doc('nyc_open_data_v1').set({
+    const ruleRef = segRef.collection('streetRules').doc('nyc_open_data_v1');
+    const ruleWrite = {
       type: 'streetCleaning',
       effectiveDate: now,
       supersededAt: null,
@@ -4642,13 +4794,30 @@ async function _fallbackToNYCOpenData(lat, lng) {
       }),
       source: 'nyc_open_data',
       provenance,
-      needsReview: true,
+      needsReview: confidenceMetadata.needsReview,
       lastSourceSync: new Date().toISOString(),
-      createdAt: now,
+      ...(revalidation ? {} : { createdAt: now }),
       updatedAt: now,
-    });
+    };
 
-    console.log('[NYCOpenData] wrote segment', docId, '| parkingSide:', parkingSide, '| geometrySource:', geometrySource, '| selectionReason:', selectionReason);
+    if (revalidation) {
+      const applied = await db.runTransaction(async tx => {
+        const current = await tx.get(segRef);
+        const marker = current.exists ? current.data().legacyRevalidation : null;
+        if (marker?.version !== NYC_OD_EVIDENCE_REVALIDATION_VERSION
+          || marker?.operationId !== revalidation.operationId
+          || marker?.state !== 'in_progress') return false;
+        tx.set(segRef, segmentWrite, { merge: true });
+        tx.set(ruleRef, ruleWrite, { merge: true });
+        return true;
+      });
+      if (!applied) return { success: false, reason: 'legacy_revalidation_claim_lost' };
+    } else {
+      await segRef.set(segmentWrite);
+      await ruleRef.set(ruleWrite);
+    }
+
+    console.log('[NYCOpenData] wrote segment', docId, '| parkingSide:', parkingSide, '| geometrySource:', geometrySource, '| selectionReason:', selectionReason, '| decisive:', confidenceMetadata.decisive);
     return {
       success: true,
       segmentId: docId,
@@ -4667,7 +4836,8 @@ async function _fallbackToNYCOpenData(lat, lng) {
         sideOfStreet,
         aspCount: aspRows.length,
         parsedCount: parsed.length,
-        needsReview: true,
+        needsReview: confidenceMetadata.needsReview,
+        blockFaceEvidence,
       },
     };
   } catch (err) {
@@ -4791,12 +4961,12 @@ function _computeBearing(fromLat, fromLng, toLat, toLng) {
   return (Math.atan2(y, x) * (180 / Math.PI) + 360) % 360;
 }
 
-async function _fetchStreetGeometry(streetName, lat, lng) {
+async function _fetchStreetGeometry(streetName, lat, lng, strictOperationalFailures = false) {
   const delta = 0.003;
   const bbox = `${lat - delta},${lng - delta},${lat + delta},${lng + delta}`;
   const q = `[out:json][timeout:10];way[name="${streetName}"](${bbox});out geom;`;
   try {
-    const data = await _overpassJson(q, 'street-geometry');
+    const data = await _overpassJson(q, 'street-geometry', strictOperationalFailures);
     if (!data || !data.elements?.length) return null;
     // Use the single way closest to (lat, lng) — prevents multi-block bearing errors from aggregating all ways
     const validWays = data.elements.filter(el => el.geometry && el.geometry.length >= 2);
@@ -4817,7 +4987,8 @@ async function _fetchStreetGeometry(streetName, lat, lng) {
       bearing = _computeBearing(fromLat, fromLng, toLat, toLng);
     }
     return { fromLat, fromLng, toLat, toLng, bearing };
-  } catch {
+  } catch (err) {
+    if (strictOperationalFailures) throw err;
     return null;
   }
 }

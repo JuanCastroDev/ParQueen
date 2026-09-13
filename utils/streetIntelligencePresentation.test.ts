@@ -17,8 +17,20 @@ const sweepSegment = {
   provenance: { provider: 'sweepnyc', geometrySource: 'osm' },
 };
 
+const odEvidence = { blockDecisive: true, sideResolved: true, parseComplete: true, selectionReason: 'bounding_pair_and_side' };
+
+const odSegment = {
+  status: 'active',
+  source: 'nyc_open_data',
+  confidenceScore: 0.9,
+  provenance: { provider: 'nyc_open_data', geometrySource: 'osm' },
+  confidence: { level: 'community' },
+  blockFaceEvidence: odEvidence,
+};
+
 const adminRule = { source: 'admin', schedules, lastSourceSync: '2026-08-29' };
 const sweepRule = { source: 'sweepnyc', schedules, lastSourceSync: '2026-08-29T18:20:00.000Z' };
+const odRule = { source: 'nyc_open_data', schedules, lastSourceSync: '2026-08-29T18:20:00.000Z' };
 
 describe('classifyStreetIntelligence', () => {
   it.each([
@@ -41,9 +53,10 @@ describe('classifyStreetIntelligence', () => {
     ['needs_review status', { ...sweepSegment, status: 'needs_review' }, [sweepRule]],
     ['needsReview flag', { ...sweepSegment, needsReview: true }, [sweepRule]],
     ['rule needsReview flag', sweepSegment, [{ ...sweepRule, needsReview: true }]],
-    ['fallback geometry', { ...sweepSegment, confidenceScore: 0.6, provenance: { provider: 'sweepnyc', geometrySource: 'fallback' } }, [sweepRule]],
-    ['NYC Open Data fallback', { ...sweepSegment, source: 'nyc_open_data', confidenceScore: 0.5, provenance: { provider: 'nyc_open_data', geometrySource: 'osm' } }, [{ ...sweepRule, source: 'nyc_open_data' }]],
     ['low repository confidence', { ...sweepSegment, confidenceScore: 0.6 }, [sweepRule]],
+    ['block face not decisive', { ...odSegment, blockFaceEvidence: { ...odEvidence, blockDecisive: false } }, [odRule]],
+    ['side not resolved', { ...odSegment, blockFaceEvidence: { ...odEvidence, sideResolved: false } }, [odRule]],
+    ['partially parsed signs', { ...odSegment, blockFaceEvidence: { ...odEvidence, parseComplete: false } }, [odRule]],
   ])('uses caution for %s', (_name, segment, rules) => {
     expect(classifyStreetIntelligence(segment, rules).state).toBe('caution');
   });
@@ -69,15 +82,144 @@ describe('classifyStreetIntelligence', () => {
     expect(result.source).toBe('admin');
   });
 
-  it('treats mixed active rule sources as caution and does not imply one authoritative source', () => {
+  it('treats agreeing mixed sources as corroboration, not conflict', () => {
+    // Two publishers stating the same window for the same side is stronger
+    // evidence, not weaker. `source` stays null because no single one owns it.
     const result = classifyStreetIntelligence(sweepSegment, [sweepRule, adminRule]);
-    expect(result).toMatchObject({ state: 'caution', source: null });
+    expect(result).toMatchObject({ state: 'supported', source: null, reasons: [] });
+  });
+
+  it('flags mixed sources only when they actually disagree for the same side', () => {
+    const conflicting = { ...adminRule, schedules: [{ side: 'West', days: ['Tue'], startTime: '11:00', endTime: '12:30' }] };
+    const result = classifyStreetIntelligence(sweepSegment, [sweepRule, conflicting]);
+    expect(result.state).toBe('caution');
+    expect(result.reasons).toContain('conflicting_schedules');
   });
 
   it.each([
     ['admin source with SweepNYC confidence', { ...adminSegment, confidenceScore: 0.95 }, adminRule],
     ['SweepNYC source with admin confidence', { ...sweepSegment, confidenceScore: 1 }, sweepRule],
-  ])('fails closed to caution for mismatched source semantics: %s', (_name, segment, rule) => {
-    expect(classifyStreetIntelligence(segment, [rule]).state).toBe('caution');
+  ])('accepts any score above the floor rather than an exact per-source value: %s', (_name, segment, rule) => {
+    // Previously an exact-equality allowlist, which no nyc_open_data segment
+    // could ever satisfy. Provider/provenance agreement is still enforced above.
+    expect(classifyStreetIntelligence(segment, [rule]).state).toBe('supported');
   });
+
+  describe('NYC Open Data is judged on evidence, not on being the fallback route', () => {
+    it('is supported when the block face is decisive, the side resolved and the parse complete', () => {
+      const result = classifyStreetIntelligence(odSegment, [odRule]);
+      expect(result).toMatchObject({ state: 'supported', source: 'nyc_open_data', reasons: [] });
+    });
+
+    it('stays supported when only the drawn geometry fell back', () => {
+      // A synthetic centreline degrades the map line, not the schedule: the side
+      // then comes from the DOT record's own side_of_street field.
+      const segment = { ...odSegment, provenance: { provider: 'nyc_open_data', geometrySource: 'fallback' } };
+      expect(classifyStreetIntelligence(segment, [odRule]).state).toBe('supported');
+    });
+
+    it('stays caution while the producer has not recorded any evidence', () => {
+      // Segments written before evidence was persisted keep their conservative stamp.
+      const legacy = { ...odSegment, blockFaceEvidence: undefined, status: 'needs_review', needsReview: true, confidenceScore: 0.5, confidence: { level: 'unverified' } };
+      const result = classifyStreetIntelligence(legacy, [odRule]);
+      expect(result.state).toBe('caution');
+      expect(result.reasons).toEqual(expect.arrayContaining(['flagged_for_review', 'low_confidence']));
+    });
+  });
+
+  it('names every distinct doubt so the UI never has to say "review recommended"', () => {
+    const segment = { ...odSegment, confidenceScore: 0.5, blockFaceEvidence: { blockDecisive: false, sideResolved: false, parseComplete: false } };
+    const result = classifyStreetIntelligence(segment, [odRule]);
+    expect(result.reasons).toEqual(expect.arrayContaining([
+      'block_not_decisive', 'side_unresolved', 'incomplete_parse', 'low_confidence',
+    ]));
+  });
+
+  it('reports supported results with no reasons at all', () => {
+    expect(classifyStreetIntelligence(adminSegment, [adminRule]).reasons).toEqual([]);
+  });
+
+  describe('conflicting_schedules compares complete source+side sets', () => {
+    const westMorning = { side: 'West', days: ['Mon', 'Thu'], startTime: '08:30', endTime: '10:00' };
+    const westAfternoon = { side: 'West', days: ['Mon', 'Thu'], startTime: '13:00', endTime: '14:30' };
+    const eastMorning = { side: 'East', days: ['Tue', 'Fri'], startTime: '08:30', endTime: '10:00' };
+
+    it('keeps one source with two legitimate West schedules supported', () => {
+      const rule = { ...sweepRule, schedules: [westMorning, westAfternoon] };
+      const result = classifyStreetIntelligence(sweepSegment, [rule]);
+      expect(result.state).toBe('supported');
+      expect(result.reasons).not.toContain('conflicting_schedules');
+    });
+
+    it('treats two sources with identical two-schedule West sets as corroboration', () => {
+      const a = { ...sweepRule, schedules: [westMorning, westAfternoon] };
+      const b = { ...adminRule, schedules: [westMorning, westAfternoon] };
+      const result = classifyStreetIntelligence(sweepSegment, [a, b]);
+      expect(result.state).toBe('supported');
+      expect(result.reasons).not.toContain('conflicting_schedules');
+    });
+
+    it('ignores different day ordering within the same window', () => {
+      const a = { ...sweepRule, schedules: [{ ...westMorning, days: ['Mon', 'Thu'] }] };
+      const b = { ...adminRule, schedules: [{ ...westMorning, days: ['Thu', 'Mon'] }] };
+      const result = classifyStreetIntelligence(sweepSegment, [a, b]);
+      expect(result.state).toBe('supported');
+      expect(result.reasons).not.toContain('conflicting_schedules');
+    });
+
+    it('ignores different schedule-array ordering for the same complete set', () => {
+      const a = { ...sweepRule, schedules: [westMorning, westAfternoon] };
+      const b = { ...adminRule, schedules: [westAfternoon, westMorning] };
+      const result = classifyStreetIntelligence(sweepSegment, [a, b]);
+      expect(result.state).toBe('supported');
+      expect(result.reasons).not.toContain('conflicting_schedules');
+    });
+
+    it('flags genuine West disagreement across sources', () => {
+      const a = { ...sweepRule, schedules: [westMorning] };
+      const b = { ...adminRule, schedules: [{ ...westMorning, startTime: '11:00', endTime: '12:30' }] };
+      const result = classifyStreetIntelligence(sweepSegment, [a, b]);
+      expect(result.state).toBe('caution');
+      expect(result.reasons).toContain('conflicting_schedules');
+    });
+
+    it('still flags West disagreement when sources agree on East', () => {
+      const a = { ...sweepRule, schedules: [eastMorning, westMorning] };
+      const b = { ...adminRule, schedules: [eastMorning, { ...westMorning, startTime: '11:00', endTime: '12:30' }] };
+      const result = classifyStreetIntelligence(sweepSegment, [a, b]);
+      expect(result.state).toBe('caution');
+      expect(result.reasons).toContain('conflicting_schedules');
+    });
+
+    it('does not conflict when only one source supplies West', () => {
+      const a = { ...sweepRule, schedules: [westMorning, eastMorning] };
+      const b = { ...adminRule, schedules: [eastMorning] };
+      const result = classifyStreetIntelligence(sweepSegment, [a, b]);
+      expect(result.state).toBe('supported');
+      expect(result.reasons).not.toContain('conflicting_schedules');
+    });
+
+    it('treats missing and blank ruleType as classic ASP (no false conflict)', () => {
+      const a = { ...sweepRule, schedules: [{ ...westMorning }] };
+      const b = { ...adminRule, schedules: [{ ...westMorning, ruleType: '' }] };
+      const c = { ...adminRule, source: 'nyc_open_data', schedules: [{ ...westMorning, ruleType: '   ' }] };
+      // two-source: missing vs blank
+      expect(classifyStreetIntelligence(sweepSegment, [a, b]).reasons).not.toContain('conflicting_schedules');
+      expect(classifyStreetIntelligence(sweepSegment, [a, b]).state).toBe('supported');
+      // three sources all classic-equivalent should still corroborate
+      expect(classifyStreetIntelligence(sweepSegment, [a, b, c]).state).toBe('supported');
+    });
+
+    it('flags when ruleType materially differs (metered vs classic ASP)', () => {
+      const a = { ...sweepRule, schedules: [{ ...westMorning }] };
+      const b = {
+        ...adminRule,
+        schedules: [{ ...westMorning, ruleType: 'metered_no_parking_window' }],
+      };
+      const result = classifyStreetIntelligence(sweepSegment, [a, b]);
+      expect(result.state).toBe('caution');
+      expect(result.reasons).toContain('conflicting_schedules');
+    });
+  });
+
 });

@@ -51,6 +51,7 @@ import { AppTour, TOUR_KEY } from './street-parking/AppTour';
 import { resolveNotificationPing } from '../utils/notificationPing';
 import { AccessibleModal } from '../components/AccessibleModal';
 import { shouldShowMapPrimaryNavigation } from './street-parking/mobileNavigationVisibility';
+import { isLegacyNYCOpenDataSegment } from '../utils/streetIntelligenceLegacy';
 
 
 export const MapView: React.FC<MapViewProps> = ({
@@ -469,6 +470,31 @@ export const MapView: React.FC<MapViewProps> = ({
             withDist.sort((a: any, b: any) => a.dist - b.dist);
             const nearest = withDist[0];
             dbg(`selected nearest: ${nearest.id} | street:${nearest.streetName ?? '?'} | status:${nearest.status ?? 'none'} | dist:${(nearest.dist * 1000).toFixed(0)}m`);
+
+            if (isLegacyNYCOpenDataSegment(nearest)) {
+                // Rows written before block-face evidence existed must not be
+                // promoted from their old conservative stamp. Ask the server to
+                // re-run the authoritative selector/parser for this exact row.
+                // Any failure falls through to the existing caution data below.
+                try {
+                    const fn = httpsCallable(getFunctions(getApp(), 'us-central1'), 'createSegmentFromSweepNYC');
+                    const result = await fn({ lat: userLat, lng: userLng, revalidateSegmentId: nearest.id });
+                    const data = result.data as { success: boolean; segmentId?: string; parkingSide?: string; streetName?: string; reason?: string };
+                    if (data.success && data.segmentId) {
+                        return {
+                            segmentId: data.segmentId,
+                            parkingSide: data.parkingSide ?? null,
+                            restrictionVersionId: null,
+                            segmentStreetName: data.streetName ?? nearest.streetName ?? null,
+                            streetIntelStatus: 'found' as const,
+                            streetIntelReason: null,
+                        };
+                    }
+                    console.warn('[Street Intelligence] legacy revalidation retained the existing caution row:', data.reason ?? 'unknown');
+                } catch (e: any) {
+                    console.warn('[Street Intelligence] legacy revalidation unavailable; retaining existing caution row:', e?.code ?? 'unknown');
+                }
+            }
 
             const parkingSide = nearest.source === 'sweepnyc'
                 ? detectCardinalSide(userLat, userLng, nearest.fromLat, nearest.fromLng, nearest.toLat, nearest.toLng, nearest.bearing ?? 90)

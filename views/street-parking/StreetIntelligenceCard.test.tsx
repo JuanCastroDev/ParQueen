@@ -285,12 +285,16 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         expect(text).not.toContain('ParQueen Verified');
     });
 
-    it('supported data keeps Safe Until useful with conservative authority and adjacent safety copy', async () => {
+    it('answers a supported result declaratively, without defensive copy', async () => {
         const { renderer } = await renderCard();
         const text = renderedText(renderer);
         expect(text).toContain('Safe Until');
         expect(text).toContain('Parking info available');
-        expect(text).toContain('Check posted signs and current NYC rules before parking.');
+        // A supported answer is declarative. Safety copy belongs only to a
+        // concrete caution/unknown reason, not every successful calculation.
+        expect(text).not.toContain('Check posted signs and current NYC rules before parking.');
+        expect(text).not.toMatch(/review recommended|needs review/i);
+        expect(text).not.toMatch(/posted signs are always the final word|verify posted signs|confirm before parking/i);
         expect(text).not.toContain('ParQueen Verified');
         expect(text).not.toMatch(/guarantee(?:d|s)? legal parking/i);
     });

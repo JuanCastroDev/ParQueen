@@ -8,6 +8,7 @@ import {
 } from '../../utils/streetIntelligence';
 import {
   classifyStreetIntelligence,
+  StreetIntelligenceCautionReason,
   StreetIntelligencePresentation,
   StreetIntelligenceSource,
 } from '../../utils/streetIntelligencePresentation';
@@ -67,6 +68,22 @@ export const StreetIntelligenceUnavailableCard = () => (
   </div>
 );
 
+/**
+ * Every caution state names the doubt, so the UI never has to fall back on a
+ * generic "review recommended" over a result the data actually supports.
+ */
+const CAUTION_REASON_KEY: Record<StreetIntelligenceCautionReason, string> = {
+  side_unresolved: 'street_intel.caution_side_unresolved',
+  block_not_decisive: 'street_intel.caution_block_not_decisive',
+  conflicting_schedules: 'street_intel.caution_conflicting_schedules',
+  incomplete_parse: 'street_intel.caution_incomplete_parse',
+  flagged_for_review: 'street_intel.caution_flagged_for_review',
+  low_confidence: 'street_intel.caution_low_confidence',
+};
+
+const cautionCopy = (reasons: StreetIntelligenceCautionReason[]): string | null =>
+  reasons.length > 0 ? t(CAUTION_REASON_KEY[reasons[0]]) : null;
+
 const SIDE_KEY_MAP: Record<string, string> = {
   North: 'street_intel.side_north',
   South: 'street_intel.side_south',
@@ -92,7 +109,7 @@ export const StreetIntelligenceCard = ({
   const [scheduleCount, setScheduleCount] = useState(0);
   const [availableSides, setAvailableSides] = useState<string[]>([]);
   const [presentation, setPresentation] = useState<StreetIntelligencePresentation>({
-    state: 'unknown', source: null, lastSourceSync: null,
+    state: 'unknown', source: null, lastSourceSync: null, reasons: [],
   });
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -111,7 +128,7 @@ export const StreetIntelligenceCard = ({
     setLoadError(false);
     setResult(null);
     setAvailableSides([]);
-    setPresentation({ state: 'unknown', source: null, lastSourceSync: null });
+    setPresentation({ state: 'unknown', source: null, lastSourceSync: null, reasons: [] });
 
     const load = async () => {
       cdbg(`load — segmentId:${segmentId} parkingSide:${parkingSide} sideConfidence:${sideConfidence} confirmedParkingSide:${confirmedParkingSide ?? 'null'} effectiveSide:${effectiveSide ?? 'null'} streetName:${streetName}`);
@@ -269,9 +286,6 @@ export const StreetIntelligenceCard = ({
             </button>
           ))}
         </div>
-        <p className="text-xs text-[var(--color-text-secondary)] mt-3">
-          {t('street_intel.decision_caution')}
-        </p>
         {metadataBlock}
         {debugBlock}
       </div>
@@ -298,9 +312,11 @@ export const StreetIntelligenceCard = ({
             : t('street_intel.no_schedule_unknown')}
         </p>
         {metadataBlock}
-        <p className="text-xs text-[var(--color-text-secondary)] mt-3">
-          {t('street_intel.decision_caution')}
-        </p>
+        {presentation.state === 'caution' && (
+          <p className="text-xs text-[var(--color-text-secondary)] mt-3">
+            {cautionCopy(presentation.reasons) ?? t('street_intel.decision_caution')}
+          </p>
+        )}
         {debugBlock}
       </div>
     );
@@ -322,7 +338,7 @@ export const StreetIntelligenceCard = ({
             <p className="text-sm font-bold text-[var(--color-warning)]">{t('street_intel.needs_review')}</p>
           </div>
           <p className="text-xs text-[var(--color-text-secondary)]">
-            {t('street_intel.needs_review_body')}
+            {cautionCopy(presentation.reasons) ?? t('street_intel.needs_review_body')}
           </p>
         </div>
       )}
@@ -394,9 +410,11 @@ export const StreetIntelligenceCard = ({
         )}
       </div>
       {metadataBlock}
-      <p className="text-xs text-[var(--color-text-secondary)] mt-3">
-        {t('street_intel.decision_caution')}
-      </p>
+      {presentation.state === 'caution' && (
+        <p className="text-xs text-[var(--color-text-secondary)] mt-3">
+          {cautionCopy(presentation.reasons) ?? t('street_intel.decision_caution')}
+        </p>
+      )}
       {debugBlock}
     </div>
   );
