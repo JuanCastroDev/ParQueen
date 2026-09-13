@@ -79,14 +79,17 @@ describe('SettingsView — structure and navigation', () => {
         expect(spies.setView).toHaveBeenCalledWith(AppView.MAP);
     });
 
-    it('legal rows keep their same-origin destinations and open in a new tab', () => {
-        const { r } = render();
+    it('legal rows keep their same-origin destinations and open the in-app legal views', () => {
+        const { r, spies } = render();
         const links = r.root.findAll(n => n.type === 'a');
         expect(links.map(a => a.props.href)).toEqual(['/privacy', '/terms']);
         for (const a of links) {
-            expect(a.props.target).toBe('_blank');
-            expect(a.props.rel).toContain('noopener');
+            expect(a.props.target).toBeUndefined();
         }
+        act(() => links[0].props.onClick({ preventDefault: vi.fn() }));
+        expect(spies.setView).toHaveBeenCalledWith(AppView.PRIVACY_POLICY);
+        act(() => links[1].props.onClick({ preventDefault: vi.fn() }));
+        expect(spies.setView).toHaveBeenCalledWith(AppView.TERMS_OF_USE);
     });
 });
 

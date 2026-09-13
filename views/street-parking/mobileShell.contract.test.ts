@@ -34,7 +34,7 @@ describe('mobile shell layout contract', () => {
   it('suppresses the map navigation copy while the Messages overlay owns the visible primary navigation', () => {
     const app = read('App.tsx');
     expect(app).toContain('showPrimaryNavigation={currentView === AppView.MAP}');
-    expect(app).toContain('setView={setCurrentView}');
+    expect(app).toContain('setView={navigatePrimary}');
   });
 
   it('wires every map sheet/dialog state into the idle-root visibility guard', () => {

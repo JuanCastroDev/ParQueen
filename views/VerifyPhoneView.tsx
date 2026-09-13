@@ -1,17 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ConfirmationResult, RecaptchaVerifier, signInWithPhoneNumber } from 'firebase/auth';
-import { auth } from '../firebaseConfig';
+import { RecaptchaVerifier } from 'firebase/auth';
 import { t, useLang } from '../i18n';
 import { maskPhone, maskPhoneForDisplay } from '../utils/phone';
 import { filterOtpInput, otpErrorKey, isOtpComplete } from '../utils/otp';
 import { SignupProgress } from '../components/SignupProgress';
-import { clearRecaptchaVerifier, replaceRecaptchaVerifier } from '../utils/recaptchaLifecycle';
+import { clearRecaptchaVerifier } from '../utils/recaptchaLifecycle';
+import { resendPhoneVerification, type PhoneVerificationSession } from '../utils/phoneAuth';
 
 interface VerifyPhoneViewProps {
     // phone is canonical E.164, e.g. "+15555551234" or "+51987654321"
     phone: string;
-    confirmationResult: ConfirmationResult;
-    onVerify: (confirmationResult: ConfirmationResult) => void;
+    confirmationResult: PhoneVerificationSession;
+    onVerify: (confirmationResult: PhoneVerificationSession) => void;
     onEditNumber: () => void;
 }
 
@@ -29,7 +29,7 @@ export const VerifyPhoneView: React.FC<VerifyPhoneViewProps> = ({
     const [cooldown, setCooldown] = useState(30);
     const [verifying, setVerifying] = useState(false);
     const [error, setError] = useState('');
-    const [confirmation, setConfirmation] = useState<ConfirmationResult>(initialConfirmation);
+    const [confirmation, setConfirmation] = useState<PhoneVerificationSession>(initialConfirmation);
     const inputRef = useRef<HTMLInputElement>(null);
     const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
     const resendingRef = useRef(false);
@@ -105,9 +105,8 @@ export const VerifyPhoneView: React.FC<VerifyPhoneViewProps> = ({
         resendingRef.current = true;
         setError('');
         try {
-            const verifier = replaceRecaptchaVerifier(recaptchaRef, auth, 'recaptcha-resend');
             // phone is canonical E.164 — use directly, no stripping or prefix
-            const result = await signInWithPhoneNumber(auth, phone, verifier);
+            const result = await resendPhoneVerification(phone, recaptchaRef, 'recaptcha-resend');
             setConfirmation(result);
             clearRecaptchaVerifier(recaptchaRef);
             setCode('');
@@ -133,10 +132,16 @@ export const VerifyPhoneView: React.FC<VerifyPhoneViewProps> = ({
     }));
 
     return (
-        <div className="h-full w-full bg-[var(--color-bg)] flex flex-col px-6 pt-10">
+        <div
+            className="min-h-full w-full bg-[var(--color-bg)] flex flex-col px-6"
+            style={{
+                paddingTop: 'max(2.5rem, calc(env(safe-area-inset-top, 0px) + 1rem))',
+                paddingBottom: 'max(2rem, calc(env(safe-area-inset-bottom, 0px) + 1rem))',
+            }}
+        >
 
             {/* Top nav row — matches Step 1 layout */}
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center justify-between mb-3 shrink-0">
                 <div className="w-11 h-11" aria-hidden="true" />
                 <span className="text-[12px] font-semibold text-[var(--color-text-secondary)] tracking-wide">
                     {t('verify_phone.step')}
@@ -144,10 +149,13 @@ export const VerifyPhoneView: React.FC<VerifyPhoneViewProps> = ({
             </div>
 
             {/* 4-segment progress */}
-            <SignupProgress step={2} />
+            <div className="shrink-0">
+                <SignupProgress step={2} />
+            </div>
 
-            {/* Content — entrance animation */}
-            <div className={prefersReduced ? '' : 'auth-fade-in'}>
+            {/* Content — entrance animation. shrink-0 so a short keyboard
+                viewport scrolls instead of crushing the OTP row. */}
+            <div className={`shrink-0 ${prefersReduced ? '' : 'auth-fade-in'}`}>
 
                 {/* Eyebrow */}
                 <p className="text-[11px] font-bold tracking-[0.13em] text-[var(--color-accent)] uppercase mb-3 mt-2">

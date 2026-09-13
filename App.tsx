@@ -43,6 +43,9 @@ import { ChevronLeft } from 'lucide-react';
 import ErrorBoundary from './ErrorBoundary';
 import { logoutUser, deleteUser, unlinkFcmTokenBeforeDeletion } from './database';
 import { ConfirmationResult, RecaptchaVerifier, reauthenticateWithPhoneNumber, signOut } from 'firebase/auth';
+import { useInAppLegalNavigation } from './hooks/useInAppLegalNavigation';
+import { legalViewFor } from './utils/inAppLegalNavigation';
+import type { PhoneVerificationSession } from './utils/phoneAuth';
 import { maskPhoneNumber, verifyUidUnchanged } from './utils/reauthBeforeDelete';
 import { auth, db } from './firebaseConfig';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -99,6 +102,7 @@ export default function App() {
     if (view === AppView.NOTIFICATIONS) setPendingUpdatesCount(0);
     setCurrentView(view);
   };
+  const { setViewWithLegalReturn, closeLegal } = useInAppLegalNavigation(currentView, setCurrentView);
   const pushToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [notificationRuntime, setNotificationRuntime] = useState<NotificationRuntimeState | null>(null);
   const [notificationBusy, setNotificationBusy] = useState(false);
@@ -110,7 +114,7 @@ export default function App() {
   const deleteCancelRef = useRef<HTMLButtonElement>(null);
   // phone stores canonical E.164 (e.g. "+15555551234", "+51987654321")
   const [phone, setPhone] = useState('');
-  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
+  const [confirmationResult, setConfirmationResult] = useState<PhoneVerificationSession | ConfirmationResult | null>(null);
   const [reauthOtp, setReauthOtp] = useState('');
   const [reauthResendCooldown, setReauthResendCooldown] = useState(0);
   const [reauthError, setReauthError] = useState('');
@@ -416,7 +420,7 @@ export default function App() {
     setCurrentView(AppView.MESSAGES);
   };
 
-  const handleCreateAccount = (phone: string, result: ConfirmationResult) => {
+  const handleCreateAccount = (phone: string, result: PhoneVerificationSession) => {
     setPhone(phone);
     setConfirmationResult(result);
     setCurrentView(AppView.VERIFY_PHONE);
@@ -673,6 +677,7 @@ export default function App() {
       case AppView.CREATE_ACCOUNT:
         return <CreateAccountView
           onContinue={handleCreateAccount}
+          onOpenLegal={document => setViewWithLegalReturn(legalViewFor(document))}
         />;
       case AppView.VERIFY_PHONE:
         return <VerifyPhoneView
@@ -714,7 +719,7 @@ export default function App() {
       case AppView.PROFILE:
         return <ProfileView user={user} setView={navigatePrimary} onBack={() => setCurrentView(AppView.MAP)} unreadMessagesCount={unreadMessagesCount} pendingUpdatesCount={pendingUpdatesCount} />;
       case AppView.SETTINGS:
-        return <SettingsView user={user} setView={setCurrentView} onBack={() => setCurrentView(AppView.PROFILE)} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} theme={theme} toggleTheme={toggleTheme} permissionState={nearbyPermissionState(locationAccess)} notificationRuntime={notificationRuntime} />;
+        return <SettingsView user={user} setView={setViewWithLegalReturn} onBack={() => setCurrentView(AppView.PROFILE)} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} theme={theme} toggleTheme={toggleTheme} permissionState={nearbyPermissionState(locationAccess)} notificationRuntime={notificationRuntime} />;
       case AppView.NOTIFICATIONS_SETTINGS:
         return <NotificationsSettingsView user={user} onBack={() => setCurrentView(AppView.SETTINGS)} notificationRuntime={notificationRuntime} notificationBusy={notificationBusy} onEnableNotifications={handleEnableNotifications} onRecheckNotifications={handleRecheckNotifications} />;
       case AppView.LOCATION_SETTINGS:
@@ -730,9 +735,9 @@ export default function App() {
       case AppView.PARKING_SPACE:
         return <ActivitiesView user={user} onBack={() => setCurrentView(AppView.PROFILE)} />;
       case AppView.PRIVACY_POLICY:
-        return <PrivacyPolicyView onBack={() => setCurrentView(AppView.PROFILE)} />;
+        return <PrivacyPolicyView onBack={closeLegal} />;
       case AppView.TERMS_OF_USE:
-        return <TermsOfUseView onBack={() => setCurrentView(AppView.PROFILE)} />;
+        return <TermsOfUseView onBack={closeLegal} />;
       case AppView.CONTACT_US:
         return <ContactUsView onBack={() => setCurrentView(AppView.PROFILE)} />;
       case AppView.EDIT_VEHICLE: {
@@ -755,6 +760,7 @@ export default function App() {
       default:
         return <CreateAccountView
           onContinue={handleCreateAccount}
+          onOpenLegal={document => setViewWithLegalReturn(legalViewFor(document))}
         />;
     }
   };
@@ -762,8 +768,8 @@ export default function App() {
   const isMapView = currentView === AppView.MAP || currentView === AppView.MESSAGES;
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-[var(--color-bg)] text-[var(--color-text)] font-sans selection:bg-queen-500 selection:text-white transition-colors duration-300">
-      <main className={`flex-1 relative ${isMapView ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+    <div className="h-full w-full flex flex-col bg-[var(--color-bg)] text-[var(--color-text)] font-sans selection:bg-queen-500 selection:text-white transition-colors duration-300">
+      <main className={`flex-1 min-h-0 relative ${isMapView ? 'overflow-hidden' : 'overflow-y-auto'}`}>
         <ErrorBoundary>
           <Suspense fallback={<LoadingScreen />}>
             {renderView()}

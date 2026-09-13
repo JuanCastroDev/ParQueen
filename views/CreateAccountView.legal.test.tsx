@@ -22,6 +22,8 @@ vi.hoisted(() => {
 vi.mock('firebase/auth', () => ({
   RecaptchaVerifier: class {},
   signInWithPhoneNumber: vi.fn(),
+  signInWithCredential: vi.fn(),
+  PhoneAuthProvider: { credential: vi.fn() },
 }));
 vi.mock('../firebaseConfig', () => ({ auth: {} }));
 vi.mock('../utils/recaptchaLifecycle', () => ({
@@ -51,6 +53,22 @@ describe('CreateAccountView legal notice', () => {
       { href: '/terms', text: 'Terms of Use' },
       { href: '/privacy', text: 'Privacy Policy' },
     ]);
+    expect(renderer!.root.findAll(node => node.type === 'a').every(node => node.props.target == null)).toBe(true);
+  });
+
+  it('opens Terms and Privacy in-app and does not navigate the WebView to /terms or /privacy', () => {
+    const onOpenLegal = vi.fn();
+    let renderer: TestRenderer.ReactTestRenderer;
+    act(() => {
+      renderer = TestRenderer.create(<CreateAccountView onContinue={vi.fn()} onOpenLegal={onOpenLegal} />);
+    });
+    const links = renderer!.root.findAll(node => node.type === 'a');
+    const preventDefault = vi.fn();
+    act(() => links[0].props.onClick({ preventDefault }));
+    act(() => links[1].props.onClick({ preventDefault }));
+    expect(preventDefault).toHaveBeenCalledTimes(2);
+    expect(onOpenLegal).toHaveBeenCalledWith('terms');
+    expect(onOpenLegal).toHaveBeenCalledWith('privacy');
   });
 
   it('renders equivalent Spanish legal-link labels', () => {

@@ -284,10 +284,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user, setView, onBac
                 <section aria-labelledby="pq-set-legal" className="mt-7">
                     <h2 id="pq-set-legal" className="pq-group-label">{t('settings.section_legal')}</h2>
                     <div className="pq-plain-list pq-plain-list--legal">
-                        <a href={LEGAL_PATHS.privacy} target="_blank" rel="noopener noreferrer" className={`${rowClass} px-1`}>
+                        <a
+                            href={LEGAL_PATHS.privacy}
+                            onClick={event => {
+                                event.preventDefault();
+                                setView(AppView.PRIVACY_POLICY);
+                            }}
+                            className={`${rowClass} px-1`}
+                        >
                             <RowBody tone="bare" icon={<Shield size={16} />} title={t('profile.privacy_policy')} detail={t('profile.privacy_policy_subtitle')} trailing={<Chevron />} />
                         </a>
-                        <a href={LEGAL_PATHS.terms} target="_blank" rel="noopener noreferrer" className={`${rowClass} px-1`}>
+                        <a
+                            href={LEGAL_PATHS.terms}
+                            onClick={event => {
+                                event.preventDefault();
+                                setView(AppView.TERMS_OF_USE);
+                            }}
+                            className={`${rowClass} px-1`}
+                        >
                             <RowBody tone="bare" icon={<FileText size={16} />} title={t('profile.terms_of_use')} detail={t('profile.terms_subtitle')} trailing={<Chevron />} />
                         </a>
                     </div>
