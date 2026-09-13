@@ -23,6 +23,8 @@ const signInWithPhoneNumber = vi.fn();
 vi.mock('firebase/auth', () => ({
   RecaptchaVerifier: class {},
   signInWithPhoneNumber: (...a: unknown[]) => signInWithPhoneNumber(...a),
+  signInWithCredential: vi.fn(),
+  PhoneAuthProvider: { credential: vi.fn() },
 }));
 vi.mock('../firebaseConfig', () => ({ auth: {} }));
 vi.mock('../utils/recaptchaLifecycle', () => ({

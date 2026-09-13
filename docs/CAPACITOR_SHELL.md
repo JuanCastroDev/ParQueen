@@ -31,9 +31,12 @@ npm run cap:open:ios   # macOS only
 - `webDir` is `dist` — shell loads the same Vite output Hosting uses.
 - Do **not** set `server.url` in `capacitor.config.ts`.
 - Do **not** set `VITE_QA_AUTH=true` for store/native release builds.
-- Phase 1 does **not** add phone auth, push, camera, geolocation, or App Check bridges.
 - Do not commit `GoogleService-Info.plist`, `google-services.json`, keystores, or provisioning profiles.
 
-## Out of scope (Phase 2+)
+## Phase 2A (Android signup)
 
-Native phone auth, push/FCM/APNs, camera, geolocation adapters, App Check attestation bridge, Mapbox native SDK, store signing.
+See `docs/ANDROID_PHASE_2A.md` for the phone-auth bridge, legal-return navigation, keyboard/`adjustResize` layout, `allowBackup=false`, and the Firebase Android registration steps Juan must approve.
+
+## Out of scope (later phases)
+
+Push/FCM/APNs, camera, geolocation adapters, App Check attestation bridge, iOS native auth, Mapbox native SDK, store signing.

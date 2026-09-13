@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { RecaptchaVerifier, signInWithPhoneNumber, ConfirmationResult } from 'firebase/auth';
-import { auth } from '../firebaseConfig';
+import { RecaptchaVerifier } from 'firebase/auth';
 import { t, useLang } from '../i18n';
 import { Shield, Loader2 } from 'lucide-react';
 import { SignupProgress } from '../components/SignupProgress';
@@ -12,11 +11,18 @@ import {
     maskPhone,
 } from '../utils/phone';
 import type { CountryCode } from '../utils/phone';
-import { clearRecaptchaVerifier, replaceRecaptchaVerifier } from '../utils/recaptchaLifecycle';
+import { clearRecaptchaVerifier } from '../utils/recaptchaLifecycle';
 import { LEGAL_PATHS } from '../utils/legalRoutes';
+import type { PublicLegalDocument } from '../utils/legalRoutes';
+import {
+    preparePhoneAuth,
+    startPhoneVerification,
+    type PhoneVerificationSession,
+} from '../utils/phoneAuth';
 
 interface CreateAccountViewProps {
-    onContinue: (phoneE164: string, confirmationResult: ConfirmationResult) => void;
+    onContinue: (phoneE164: string, confirmationResult: PhoneVerificationSession) => void;
+    onOpenLegal?: (document: PublicLegalDocument) => void;
 }
 
 const NANP_PLACEHOLDERS: Partial<Record<string, string>> = {
@@ -37,7 +43,7 @@ function formatNANP(digits: string): string {
     return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
 }
 
-export const CreateAccountView: React.FC<CreateAccountViewProps> = ({ onContinue }) => {
+export const CreateAccountView: React.FC<CreateAccountViewProps> = ({ onContinue, onOpenLegal }) => {
     useLang();
     const [selectedCountry, setSelectedCountry] = useState<CountryCode>('US');
     const [nationalInput, setNationalInput] = useState('');
@@ -62,10 +68,7 @@ export const CreateAccountView: React.FC<CreateAccountViewProps> = ({ onContinue
         NON_NANP_PLACEHOLDERS[selectedCountry] ??
         '';
 
-    useEffect(() => {
-        replaceRecaptchaVerifier(recaptchaRef, auth, 'recaptcha-container');
-        return () => clearRecaptchaVerifier(recaptchaRef);
-    }, []);
+    useEffect(() => preparePhoneAuth(recaptchaRef, 'recaptcha-container'), []);
 
     const handleCountryChange = (country: CountryCode) => {
         setSelectedCountry(country);
@@ -99,9 +102,7 @@ export const CreateAccountView: React.FC<CreateAccountViewProps> = ({ onContinue
         setError('');
         setSending(true);
         try {
-            const verifier = recaptchaRef.current
-                ?? replaceRecaptchaVerifier(recaptchaRef, auth, 'recaptcha-container');
-            const result = await signInWithPhoneNumber(auth, phoneE164, verifier);
+            const result = await startPhoneVerification(phoneE164, recaptchaRef, 'recaptcha-container');
             onContinue(phoneE164, result);
             clearRecaptchaVerifier(recaptchaRef);
         } catch (e: any) {
@@ -119,11 +120,23 @@ export const CreateAccountView: React.FC<CreateAccountViewProps> = ({ onContinue
         }
     };
 
+    const openLegal = (document: PublicLegalDocument, event: React.MouseEvent<HTMLAnchorElement>) => {
+        if (!onOpenLegal) return;
+        event.preventDefault();
+        onOpenLegal(document);
+    };
+
     return (
-        <div className="h-full w-full bg-[var(--color-bg)] flex flex-col px-6 pt-10">
+        <div
+            className="min-h-full w-full bg-[var(--color-bg)] flex flex-col px-6"
+            style={{
+                paddingTop: 'max(2.5rem, calc(env(safe-area-inset-top, 0px) + 1rem))',
+                paddingBottom: 'max(2rem, calc(env(safe-area-inset-bottom, 0px) + 1rem))',
+            }}
+        >
 
             {/* Top nav row — no visible Back on Step 1 */}
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center justify-between mb-3 shrink-0">
                 {/* Left spacer keeps "Step 1 of 4" right-aligned without visual shift */}
                 <div className="w-11 h-11" aria-hidden="true" />
                 <span className="text-[12px] font-semibold text-[var(--color-text-secondary)] tracking-wide">
@@ -132,10 +145,13 @@ export const CreateAccountView: React.FC<CreateAccountViewProps> = ({ onContinue
             </div>
 
             {/* 4-segment progress */}
-            <SignupProgress step={1} />
+            <div className="shrink-0">
+                <SignupProgress step={1} />
+            </div>
 
-            {/* Content block — entrance animation */}
-            <div className={prefersReduced ? '' : 'auth-fade-in'}>
+            {/* Content block — entrance animation. shrink-0 so the keyboard
+                cannot vertically crush the phone field or trust copy. */}
+            <div className={`shrink-0 ${prefersReduced ? '' : 'auth-fade-in'}`}>
 
                 {/* Eyebrow */}
                 <p className="text-[11px] font-bold tracking-[0.13em] text-[var(--color-accent)] uppercase mb-3 mt-2">
@@ -184,6 +200,7 @@ export const CreateAccountView: React.FC<CreateAccountViewProps> = ({ onContinue
                         value={displayValue}
                         onChange={handleChange}
                         onPaste={handlePaste}
+                        onFocus={event => event.currentTarget.scrollIntoView({ block: 'center', inline: 'nearest' })}
                         placeholder={placeholder}
                         className="flex-1 bg-transparent px-4 h-full text-[var(--color-text)] font-semibold outline-none placeholder-[var(--color-text-secondary)] text-[16px]"
                     />
@@ -202,11 +219,12 @@ export const CreateAccountView: React.FC<CreateAccountViewProps> = ({ onContinue
                 )}
             </div>
 
-            {/* Spacer — keeps CTA near the form group, caps so keyboard doesn't push it off screen */}
-            <div className="flex-1" style={{ maxHeight: 36 }} />
+            {/* Flexible gap — shrinks on short/keyboard viewports instead of
+                compressing the form. Parent overflow-y-auto then scrolls. */}
+            <div className="flex-1 min-h-4" />
 
             {/* CTA */}
-            <div className="pb-8">
+            <div className="shrink-0 pb-2">
                 <button
                     onClick={handleSend}
                     disabled={!isValid || sending}
@@ -232,11 +250,19 @@ export const CreateAccountView: React.FC<CreateAccountViewProps> = ({ onContinue
                 </button>
                 <p className="mt-3 text-center text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
                     {t('legal.signup_prefix')}{' '}
-                    <a href={LEGAL_PATHS.terms} target="_blank" rel="noopener noreferrer" className="font-semibold text-[var(--color-info)] hover:underline">
+                    <a
+                        href={LEGAL_PATHS.terms}
+                        onClick={event => openLegal('terms', event)}
+                        className="font-semibold text-[var(--color-info)] hover:underline"
+                    >
                         {t('legal.terms')}
                     </a>{' '}
                     {t('legal.signup_between')}{' '}
-                    <a href={LEGAL_PATHS.privacy} target="_blank" rel="noopener noreferrer" className="font-semibold text-[var(--color-info)] hover:underline">
+                    <a
+                        href={LEGAL_PATHS.privacy}
+                        onClick={event => openLegal('privacy', event)}
+                        className="font-semibold text-[var(--color-info)] hover:underline"
+                    >
                         {t('legal.privacy')}
                     </a>.
                 </p>

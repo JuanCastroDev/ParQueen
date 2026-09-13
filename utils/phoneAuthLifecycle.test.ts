@@ -6,24 +6,31 @@ import es from '../i18n/es';
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
 describe('phone-auth flow integration', () => {
-  it('wires Create Account to owned replacement and cleanup boundaries', () => {
+  it('wires Create Account to the platform abstraction and owned cleanup boundaries', () => {
     const source = read('views/CreateAccountView.tsx');
+    const web = read('utils/phoneAuth.ts');
 
-    expect(source).toContain("replaceRecaptchaVerifier(recaptchaRef, auth, 'recaptcha-container')");
+    expect(source).toContain("preparePhoneAuth(recaptchaRef, 'recaptcha-container')");
+    expect(source).toContain("startPhoneVerification(phoneE164, recaptchaRef, 'recaptcha-container')");
     expect(source).toContain('clearRecaptchaVerifier(recaptchaRef)');
     expect(source).toContain('const sendingRef = useRef(false)');
     expect(source).toMatch(/if \(!phoneE164 \|\| sendingRef\.current\) return;/);
     expect(source).toMatch(/onContinue\(phoneE164, result\);\s*clearRecaptchaVerifier\(recaptchaRef\);/);
+    expect(web).toContain('resolved.replaceVerifier(recaptchaRef, resolved.auth, containerId)');
+    expect(web).toContain('resolved.signInWithPhoneNumber(resolved.auth, phoneE164, verifier)');
   });
 
-  it('wires Verify Phone resend to a fresh verifier for every attempt', () => {
+  it('wires Verify Phone resend through the same platform abstraction', () => {
     const source = read('views/VerifyPhoneView.tsx');
+    const web = read('utils/phoneAuth.ts');
 
-    expect(source).toContain("replaceRecaptchaVerifier(recaptchaRef, auth, 'recaptcha-resend')");
+    expect(source).toContain("resendPhoneVerification(phone, recaptchaRef, 'recaptcha-resend')");
     expect(source).toContain('const resendingRef = useRef(false)');
     expect(source).toContain('const verifyingRef = useRef(false)');
     expect(source).toMatch(/setConfirmation\(result\);\s*clearRecaptchaVerifier\(recaptchaRef\);/);
     expect(source).not.toMatch(/if \(!recaptchaRef\.current\)/);
+    expect(web).toContain('resend: true');
+    expect(web).toContain('resolved.signInWithPhoneNumber(resolved.auth, phoneE164, verifier)');
   });
 
   it('clears deletion reauthentication state on success and auth sign-out', () => {
