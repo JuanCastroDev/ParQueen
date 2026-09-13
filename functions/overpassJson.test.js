@@ -78,6 +78,18 @@ describe('_overpassJson — response handling', () => {
     expect(calls).toHaveLength(1);
   });
 
+  it('propagates operational failure when revalidation requests strict handling', async () => {
+    stub(() => res(504, HTML_504));
+    await expect(_overpassJson('q', 'test', true)).rejects.toThrow('overpass_test_unavailable');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('propagates a network exception in strict revalidation mode', async () => {
+    stub(() => { throw new Error('ETIMEDOUT'); });
+    await expect(_overpassJson('q', 'test', true)).rejects.toThrow('ETIMEDOUT');
+    expect(calls).toHaveLength(1);
+  });
+
   it('never calls res.json() — the stub throws if it does', async () => {
     // res().json() rejects, so any use of it would surface as a rejected promise
     // or a null caused by the wrong path. A 200 JSON body must still parse.
@@ -107,14 +119,14 @@ describe('Overpass callers use the guarded helper', () => {
   it('_fetchBlockContext routes through _overpassJson and degrades to empty context', () => {
     const start = INDEX_SRC.indexOf('async function _fetchBlockContext(');
     const body = INDEX_SRC.slice(start, start + 1400);
-    expect(body).toMatch(/_overpassJson\(q, 'block-context'\)/);
+    expect(body).toMatch(/_overpassJson\(q, 'block-context', strictOperationalFailures\)/);
     expect(body).toMatch(/if \(!data \|\| !data\.elements\?\.length\) return EMPTY;/);
   });
 
   it('_fetchStreetGeometry routes through _overpassJson and degrades to null', () => {
     const start = INDEX_SRC.indexOf('async function _fetchStreetGeometry(');
     const body = INDEX_SRC.slice(start, start + 900);
-    expect(body).toMatch(/_overpassJson\(q, 'street-geometry'\)/);
+    expect(body).toMatch(/_overpassJson\(q, 'street-geometry', strictOperationalFailures\)/);
     expect(body).toMatch(/if \(!data \|\| !data\.elements\?\.length\) return null;/);
   });
 
@@ -159,8 +171,8 @@ describe('Overpass User-Agent', () => {
     // Only one place fetches Overpass, so the header cannot be missed by a caller.
     const sites = INDEX_SRC.match(/fetch\(`https:\/\/overpass-api\.de/g) || [];
     expect(sites).toHaveLength(1);
-    expect(INDEX_SRC).toMatch(/async function _fetchBlockContext\([\s\S]{0,1400}_overpassJson\(q, 'block-context'\)/);
-    expect(INDEX_SRC).toMatch(/async function _fetchStreetGeometry\([\s\S]{0,900}_overpassJson\(q, 'street-geometry'\)/);
+    expect(INDEX_SRC).toMatch(/async function _fetchBlockContext\([\s\S]{0,1400}_overpassJson\(q, 'block-context', strictOperationalFailures\)/);
+    expect(INDEX_SRC).toMatch(/async function _fetchStreetGeometry\([\s\S]{0,900}_overpassJson\(q, 'street-geometry', strictOperationalFailures\)/);
   });
 
   it('shares one constant with the Nominatim request so they cannot drift', () => {

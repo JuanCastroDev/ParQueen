@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import legacyModule from './streetIntelligenceLegacy.js';
 
 const {
+  LEGACY_REVALIDATION_LEASE_MS,
+  LEGACY_REVALIDATION_RETRY_COOLDOWN_MS,
   NYC_OD_EVIDENCE_REVALIDATION_VERSION,
   deriveNYCOpenDataConfidence,
   isLegacyNYCOpenDataSegment,
@@ -113,20 +115,24 @@ describe('legacy NYC Open Data lazy revalidation', () => {
     const result = await runLegacyNYCOpenDataRevalidation({
       segmentId: 'legacy-segment',
       loadAndClaim: async () => ({ acquired: true, segment: existing, operationId: 'op-1' }),
-      refresh: async () => ({ success: false, reason: 'nyc_open_data_ambiguous_block' }),
-      markFailed: async (operationId, reason) => failures.push({ operationId, reason }),
+      refresh: async () => ({ success: false, reason: 'unknown_error' }),
+      markFailed: async (operationId, reason, retryAfterMs) => failures.push({ operationId, reason, retryAfterMs }),
       cachedResult,
     });
     expect(result).toMatchObject({ success: true, segmentId: 'legacy-segment', revalidation: 'failed' });
-    expect(failures).toEqual([{ operationId: 'op-1', reason: 'nyc_open_data_ambiguous_block' }]);
+    expect(failures).toEqual([{
+      operationId: 'op-1',
+      reason: 'unknown_error',
+      retryAfterMs: expect.any(Number),
+    }]);
     expect(existing).toMatchObject({ status: 'needs_review', needsReview: true, confidenceScore: 0.5 });
   });
 
-  it('F. a versioned attempt is not continuously rebuilt on repeated lookup', () => {
+  it('F. a completed versioned attempt is not continuously rebuilt on repeated lookup', () => {
     expect(isLegacyNYCOpenDataSegment(legacy({
       legacyRevalidation: {
         version: NYC_OD_EVIDENCE_REVALIDATION_VERSION,
-        state: 'failed',
+        state: 'complete',
       },
     }))).toBe(false);
   });
@@ -151,5 +157,125 @@ describe('legacy NYC Open Data lazy revalidation', () => {
     ]);
     expect(refreshCalls).toBe(1);
     expect([first.revalidation, second.revalidation]).toContain('in_progress');
+  });
+
+  it('keeps a fresh in-progress claim leased to its current owner', () => {
+    const now = Date.UTC(2026, 8, 13, 14, 0, 0);
+    expect(isLegacyNYCOpenDataSegment(legacy({
+      legacyRevalidation: {
+        version: NYC_OD_EVIDENCE_REVALIDATION_VERSION,
+        state: 'in_progress',
+        startedAt: { toMillis: () => now - LEGACY_REVALIDATION_LEASE_MS + 1 },
+      },
+    }), now)).toBe(false);
+  });
+
+  it('allows an expired in-progress claim to be reclaimed after interruption', () => {
+    const now = Date.UTC(2026, 8, 13, 14, 0, 0);
+    expect(isLegacyNYCOpenDataSegment(legacy({
+      legacyRevalidation: {
+        version: NYC_OD_EVIDENCE_REVALIDATION_VERSION,
+        state: 'in_progress',
+        startedAt: { toMillis: () => now - LEGACY_REVALIDATION_LEASE_MS },
+      },
+    }), now)).toBe(true);
+  });
+
+  it('retains cached caution and records a retry cooldown after transient failure', async () => {
+    const now = Date.UTC(2026, 8, 13, 14, 0, 0);
+    const failures = [];
+    const result = await runLegacyNYCOpenDataRevalidation({
+      segmentId: 'legacy-segment',
+      loadAndClaim: async () => ({ acquired: true, segment: legacy(), operationId: 'transient-op' }),
+      refresh: async () => ({ success: false, reason: 'unknown_error' }),
+      markFailed: async (operationId, reason, retryAfterMs) => failures.push({ operationId, reason, retryAfterMs }),
+      markTerminal: async () => {},
+      cachedResult,
+      nowMs: () => now,
+    });
+    expect(result).toMatchObject({ success: true, revalidation: 'failed' });
+    expect(failures).toEqual([{
+      operationId: 'transient-op',
+      reason: 'unknown_error',
+      retryAfterMs: now + LEGACY_REVALIDATION_RETRY_COOLDOWN_MS,
+    }]);
+  });
+
+  it('treats a thrown parser or infrastructure exception as retryable', async () => {
+    const now = Date.UTC(2026, 8, 13, 14, 0, 0);
+    const failures = [];
+    const result = await runLegacyNYCOpenDataRevalidation({
+      segmentId: 'legacy-segment',
+      loadAndClaim: async () => ({ acquired: true, segment: legacy(), operationId: 'throw-op' }),
+      refresh: async () => { throw new Error('transient internal failure'); },
+      markFailed: async (operationId, reason, retryAfterMs) => failures.push({ operationId, reason, retryAfterMs }),
+      markTerminal: async () => {},
+      cachedResult,
+      nowMs: () => now,
+    });
+    expect(result).toMatchObject({ success: true, revalidation: 'failed' });
+    expect(failures).toEqual([{
+      operationId: 'throw-op',
+      reason: 'legacy_revalidation_failed',
+      retryAfterMs: now + LEGACY_REVALIDATION_RETRY_COOLDOWN_MS,
+    }]);
+  });
+
+  it('does not immediately retry failed work but retries after its cooldown', () => {
+    const now = Date.UTC(2026, 8, 13, 14, 0, 0);
+    const marker = {
+      version: NYC_OD_EVIDENCE_REVALIDATION_VERSION,
+      state: 'failed',
+      retryAfter: { toMillis: () => now + LEGACY_REVALIDATION_RETRY_COOLDOWN_MS },
+    };
+    expect(isLegacyNYCOpenDataSegment(legacy({ legacyRevalidation: marker }), now)).toBe(false);
+    expect(isLegacyNYCOpenDataSegment(legacy({ legacyRevalidation: marker }), now + LEGACY_REVALIDATION_RETRY_COOLDOWN_MS)).toBe(true);
+  });
+
+  it('can migrate to supported evidence on a later retry after transient failure', async () => {
+    const result = await runLegacyNYCOpenDataRevalidation({
+      segmentId: 'legacy-segment',
+      loadAndClaim: async () => ({ acquired: true, segment: legacy(), operationId: 'retry-op' }),
+      refresh: async () => ({
+        success: true,
+        segmentId: 'legacy-segment',
+        confidence: deriveNYCOpenDataConfidence({
+          blockDecisive: true,
+          sideResolved: true,
+          parseComplete: true,
+        }),
+      }),
+      markFailed: async () => {},
+      markTerminal: async () => {},
+      cachedResult,
+    });
+    expect(result).toMatchObject({
+      success: true,
+      revalidation: 'complete',
+      confidence: { decisive: true, status: 'active', needsReview: false },
+    });
+  });
+
+  it('persists deterministic ambiguity as terminal caution without a retry loop', async () => {
+    const terminal = [];
+    const result = await runLegacyNYCOpenDataRevalidation({
+      segmentId: 'legacy-segment',
+      loadAndClaim: async () => ({ acquired: true, segment: legacy(), operationId: 'ambiguous-op' }),
+      refresh: async () => ({ success: false, reason: 'nyc_open_data_ambiguous_block' }),
+      markFailed: async () => {},
+      markTerminal: async (operationId, reason) => terminal.push({ operationId, reason }),
+      cachedResult,
+    });
+    expect(result).toMatchObject({ success: true, revalidation: 'terminal_caution' });
+    expect(terminal).toEqual([{
+      operationId: 'ambiguous-op',
+      reason: 'nyc_open_data_ambiguous_block',
+    }]);
+    expect(isLegacyNYCOpenDataSegment(legacy({
+      legacyRevalidation: {
+        version: NYC_OD_EVIDENCE_REVALIDATION_VERSION,
+        state: 'terminal_caution',
+      },
+    }))).toBe(false);
   });
 });

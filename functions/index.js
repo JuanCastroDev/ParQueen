@@ -4279,7 +4279,13 @@ async function _claimLegacyNYCOpenDataRevalidation(segmentId) {
   });
 }
 
-async function _markLegacyNYCOpenDataRevalidationFailed(segmentId, operationId, reason) {
+async function _markLegacyNYCOpenDataRevalidationOutcome(
+  segmentId,
+  operationId,
+  state,
+  reason,
+  retryAfterMs = null,
+) {
   const segmentRef = db.doc(`streetSegments/${segmentId}`);
   await db.runTransaction(async tx => {
     const snap = await tx.get(segmentRef);
@@ -4289,9 +4295,10 @@ async function _markLegacyNYCOpenDataRevalidationFailed(segmentId, operationId, 
     tx.set(segmentRef, {
       legacyRevalidation: {
         ...marker,
-        state: 'failed',
+        state,
         reason,
         completedAt: Timestamp.now(),
+        ...(retryAfterMs == null ? {} : { retryAfter: Timestamp.fromMillis(retryAfterMs) }),
       },
     }, { merge: true });
   });
@@ -4302,8 +4309,14 @@ async function _revalidateLegacyNYCOpenDataSegment(segmentId, lat, lng) {
     segmentId,
     loadAndClaim: _claimLegacyNYCOpenDataRevalidation,
     refresh: operationId => _fallbackToNYCOpenData(lat, lng, { segmentId, operationId }),
-    markFailed: (operationId, reason) =>
-      _markLegacyNYCOpenDataRevalidationFailed(segmentId, operationId, reason),
+    markFailed: (operationId, reason, retryAfterMs) =>
+      _markLegacyNYCOpenDataRevalidationOutcome(
+        segmentId, operationId, 'failed', reason, retryAfterMs,
+      ),
+    markTerminal: (operationId, reason) =>
+      _markLegacyNYCOpenDataRevalidationOutcome(
+        segmentId, operationId, 'terminal_caution', reason,
+      ),
     cachedResult: (segment, stage) =>
       _existingNYCOpenDataResult(segmentId, segment, lat, lng, stage),
   });
@@ -4341,19 +4354,22 @@ const OSM_ROAD_TYPES = new Set([
  * callers swallowed. Observed in production on the Greene Street fallback.
  *
  * Returns parsed JSON, or null for any non-2xx / non-JSON / network failure.
+ * Revalidation can opt into throwing those operational failures so its lease
+ * records a retryable outage rather than a deterministic caution result.
  * Deliberately single-shot: no retry, so an Overpass outage is never amplified.
  *
  * Sends OSM_USER_AGENT: Overpass rejects User-Agent-less requests with 406 and an
  * HTML body, so before this header every cross-street lookup came back empty and
  * the NYC Open Data fallback could never disambiguate a block face.
  */
-async function _overpassJson(query, label) {
+async function _overpassJson(query, label, strictOperationalFailures = false) {
   try {
     const res = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`, {
       headers: { 'User-Agent': OSM_USER_AGENT },
     });
     if (!res.ok) {
       console.warn(`[Overpass] ${label} non-OK response:`, res.status);
+      if (strictOperationalFailures) throw new Error(`overpass_${label}_unavailable`);
       return null;
     }
     const body = await res.text();
@@ -4362,11 +4378,13 @@ async function _overpassJson(query, label) {
     // payload itself rather than trusting the header.
     if (head !== '{' && head !== '[') {
       console.warn(`[Overpass] ${label} returned a non-JSON body (status ${res.status})`);
+      if (strictOperationalFailures) throw new Error(`overpass_${label}_invalid_response`);
       return null;
     }
     return JSON.parse(body);
   } catch (err) {
     console.warn(`[Overpass] ${label} fetch error:`, sanitizeError(err));
+    if (strictOperationalFailures) throw err;
     return null;
   }
 }
@@ -4426,13 +4444,13 @@ function _boroughFromAddress(address) {
  * the extra ways cost nothing but are filtered to real roads to keep footpaths
  * and service alleys from being treated as intersections.
  */
-async function _fetchBlockContext(lat, lng, mainStreetOsmName) {
+async function _fetchBlockContext(lat, lng, mainStreetOsmName, strictOperationalFailures = false) {
   const delta = 0.004; // ~440 m: enough to contain both bounds of a long block
   const bbox = `${lat - delta},${lng - delta},${lat + delta},${lng + delta}`;
   const q = `[out:json][timeout:15];way[highway][name](${bbox});out geom;`;
   const EMPTY = { crossStreets: [], side: null, bearing: null };
   try {
-    const data = await _overpassJson(q, 'block-context');
+    const data = await _overpassJson(q, 'block-context', strictOperationalFailures);
     if (!data || !data.elements?.length) return EMPTY;
     const ways = data.elements
       .filter(el => el.tags?.name && el.geometry?.length >= 2 && OSM_ROAD_TYPES.has(el.tags.highway))
@@ -4442,17 +4460,21 @@ async function _fetchBlockContext(lat, lng, mainStreetOsmName) {
     return ctx;
   } catch (err) {
     console.warn('[NYCOpenData] block-context fetch error:', sanitizeError(err));
+    if (strictOperationalFailures) throw err;
     return EMPTY;
   }
 }
 
 
 /** Reverse geocodes lat/lng via Nominatim → OSM road name. */
-async function _reverseGeocodeStreet(lat, lng) {
+async function _reverseGeocodeStreet(lat, lng, strictOperationalFailures = false) {
   try {
     const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=17`;
     const res = await fetch(url, { headers: { 'User-Agent': OSM_USER_AGENT } });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      if (strictOperationalFailures) throw new Error('nominatim_unavailable');
+      return null;
+    }
     const data = await res.json();
     const road = (data && data.address && data.address.road) || null;
     if (!road) return null;
@@ -4461,6 +4483,7 @@ async function _reverseGeocodeStreet(lat, lng) {
     return { road, boroughCode: _boroughFromAddress(data && data.address) };
   } catch (err) {
     console.warn('[NYCOpenData] reverse geocode error:', sanitizeError(err));
+    if (strictOperationalFailures) throw err;
     return null;
   }
 }
@@ -4491,7 +4514,7 @@ function _socrataToken() {
  * Queries NYC Open Data nfid-uabd for sign records matching a LIKE street pattern in a borough.
  * Paginates up to 3000 rows to handle long avenues (Broadway, 3rd Ave, Grand Concourse).
  */
-async function _queryNYCOpenData(likePattern, borough) {
+async function _queryNYCOpenData(likePattern, borough, strictOperationalFailures = false) {
   const BASE = 'https://data.cityofnewyork.us/resource/nfid-uabd.json';
   const token = _socrataToken();
   if (!token) console.warn('[NYCOpenData] SOCRATA_APP_TOKEN not set — using unauthenticated rate limit');
@@ -4522,6 +4545,7 @@ async function _queryNYCOpenData(likePattern, borough) {
       const res = await fetch(`${BASE}?${params}`, { headers });
       if (!res.ok) {
         console.warn('[NYCOpenData] API error:', res.status);
+        if (strictOperationalFailures) throw new Error('nyc_open_data_unavailable');
         break;
       }
       const batch = await res.json();
@@ -4530,6 +4554,7 @@ async function _queryNYCOpenData(likePattern, borough) {
       if (batch.length < PAGE) break;
     } catch (err) {
       console.warn('[NYCOpenData] fetch error page', page, ':', sanitizeError(err));
+      if (strictOperationalFailures) throw err;
       break;
     }
   }
@@ -4544,7 +4569,8 @@ async function _queryNYCOpenData(likePattern, borough) {
  */
 async function _fallbackToNYCOpenData(lat, lng, revalidation = null) {
   try {
-    const geocode = await _reverseGeocodeStreet(lat, lng);
+    const strictOperationalFailures = Boolean(revalidation);
+    const geocode = await _reverseGeocodeStreet(lat, lng, strictOperationalFailures);
     if (!geocode) {
       console.warn('[NYCOpenData] reverse geocode returned null — giving up');
       return { success: false, reason: 'no_sweepnyc_data' };
@@ -4567,7 +4593,7 @@ async function _fallbackToNYCOpenData(lat, lng, revalidation = null) {
     }
     console.log('[NYCOpenData] DOT name:', dotName, '| borough:', borough, '| source:', boroughSource, '| pattern:', likePattern);
 
-    const rows = await _queryNYCOpenData(likePattern, borough);
+    const rows = await _queryNYCOpenData(likePattern, borough, strictOperationalFailures);
     const aspRows = rows.filter(r => _isASPSign(r.sign_description));
     console.log('[NYCOpenData] ASP rows:', aspRows.length, '/ total:', rows.length);
     if (!aspRows.length) {
@@ -4587,7 +4613,7 @@ async function _fallbackToNYCOpenData(lat, lng, revalidation = null) {
 
     // Block bounds + side from OSM geometry; both empty if Overpass is unavailable,
     // in which case selection stays conservative rather than guessing.
-    const blockCtx = await _fetchBlockContext(lat, lng, osmStreet);
+    const blockCtx = await _fetchBlockContext(lat, lng, osmStreet, strictOperationalFailures);
     const crossStreets = blockCtx.crossStreets;
     const userSide = blockCtx.side;
     console.log('[NYCOpenData] bounding cross streets:', crossStreets, '| user side:', userSide);
@@ -4654,7 +4680,7 @@ async function _fallbackToNYCOpenData(lat, lng, revalidation = null) {
 
     let fromLat, fromLng, toLat, toLng, bearing, geometrySource;
     try {
-      const geo = await _fetchStreetGeometry(osmStreet, lat, lng);
+      const geo = await _fetchStreetGeometry(osmStreet, lat, lng, strictOperationalFailures);
       if (geo) {
         ({ fromLat, fromLng, toLat, toLng, bearing } = geo);
         geometrySource = 'osm';
@@ -4665,6 +4691,7 @@ async function _fallbackToNYCOpenData(lat, lng, revalidation = null) {
       }
     } catch (geoErr) {
       console.error('[NYCOpenData] geometry error:', sanitizeError(geoErr));
+      if (strictOperationalFailures) throw geoErr;
       const HALF = 0.0005;
       fromLat = lat - HALF; fromLng = lng; toLat = lat + HALF; toLng = lng; bearing = 0;
       geometrySource = 'fallback';
@@ -4934,12 +4961,12 @@ function _computeBearing(fromLat, fromLng, toLat, toLng) {
   return (Math.atan2(y, x) * (180 / Math.PI) + 360) % 360;
 }
 
-async function _fetchStreetGeometry(streetName, lat, lng) {
+async function _fetchStreetGeometry(streetName, lat, lng, strictOperationalFailures = false) {
   const delta = 0.003;
   const bbox = `${lat - delta},${lng - delta},${lat + delta},${lng + delta}`;
   const q = `[out:json][timeout:10];way[name="${streetName}"](${bbox});out geom;`;
   try {
-    const data = await _overpassJson(q, 'street-geometry');
+    const data = await _overpassJson(q, 'street-geometry', strictOperationalFailures);
     if (!data || !data.elements?.length) return null;
     // Use the single way closest to (lat, lng) — prevents multi-block bearing errors from aggregating all ways
     const validWays = data.elements.filter(el => el.geometry && el.geometry.length >= 2);
@@ -4960,7 +4987,8 @@ async function _fetchStreetGeometry(streetName, lat, lng) {
       bearing = _computeBearing(fromLat, fromLng, toLat, toLng);
     }
     return { fromLat, fromLng, toLat, toLng, bearing };
-  } catch {
+  } catch (err) {
+    if (strictOperationalFailures) throw err;
     return null;
   }
 }
