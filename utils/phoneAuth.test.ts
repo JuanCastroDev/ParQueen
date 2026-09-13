@@ -4,6 +4,7 @@ import {
   preparePhoneAuth,
   resendPhoneVerification,
   startPhoneVerification,
+  type PhoneAuthDependencies,
 } from './phoneAuth';
 import type { RecaptchaVerifierRef } from './recaptchaLifecycle';
 
@@ -26,12 +27,12 @@ const webDeps = {
   credentialFromVerification,
   startNative,
   auth,
-};
+} as PhoneAuthDependencies;
 
 const nativeDeps = {
   ...webDeps,
   resolvePath: () => 'native' as const,
-};
+} as PhoneAuthDependencies;
 
 describe('preparePhoneAuth', () => {
   beforeEach(() => vi.clearAllMocks());

@@ -22,8 +22,8 @@ export interface PhoneAuthDependencies {
   resolvePath?: () => PhoneAuthPath;
   startNative?: (options: { phoneNumber: string; resend?: boolean }) => Promise<NativePhoneVerificationResult>;
   signInWithPhoneNumber?: typeof signInWithPhoneNumber;
-  signInWithCredential?: typeof signInWithCredential;
-  credentialFromVerification?: (verificationId: string, code: string) => ReturnType<typeof PhoneAuthProvider.credential>;
+  signInWithCredential?: (firebaseAuth: Auth, credential: unknown) => Promise<unknown>;
+  credentialFromVerification?: (verificationId: string, code: string) => unknown;
   auth?: Auth;
   replaceVerifier?: typeof replaceRecaptchaVerifier;
 }
@@ -62,7 +62,7 @@ export const createNativePhoneSession = (
   return {
     confirm: (code: string) => resolved.signInWithCredential(
       resolved.auth,
-      resolved.credentialFromVerification(verificationId, code),
+      resolved.credentialFromVerification(verificationId, code) as Parameters<typeof signInWithCredential>[1],
     ),
   };
 };
