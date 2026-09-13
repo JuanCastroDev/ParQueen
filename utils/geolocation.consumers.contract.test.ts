@@ -25,6 +25,6 @@ describe('location consumers use the shared abstraction', () => {
     const manifest = read('../android/app/src/main/AndroidManifest.xml');
     expect(manifest).toContain('android.permission.ACCESS_COARSE_LOCATION');
     expect(manifest).toContain('android.permission.ACCESS_FINE_LOCATION');
-    expect(manifest).not.toContain('ACCESS_BACKGROUND_LOCATION');
+    expect(manifest).not.toMatch(/uses-permission[^>]*ACCESS_BACKGROUND_LOCATION/);
   });
 });
