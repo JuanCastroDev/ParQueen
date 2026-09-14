@@ -41,6 +41,10 @@ See `docs/ANDROID_PHASE_2A.md` for the phone-auth bridge, legal-return navigatio
 
 See `docs/ANDROID_PHASE_2B.md` for `@capacitor/geolocation`, the shared `utils/geolocation` abstraction, and foreground-only Android permissions.
 
+## Phase 2C (Android native push)
+
+See `docs/ANDROID_PHASE_2C.md` for `@capacitor/push-notifications`, `POST_NOTIFICATIONS`, and the shared `notificationRegistration` abstraction. Stacked on Phase 2B / PR #156.
+
 ## Out of scope (later phases)
 
-Push/FCM/APNs, camera, App Check attestation bridge, iOS native auth, Mapbox native SDK, store signing, background location.
+iOS native push / APNs, camera, App Check attestation bridge, iOS native auth, Mapbox native SDK, store signing, background location, multi-device FCM token lists.

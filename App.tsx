@@ -109,6 +109,14 @@ export default function App() {
   const pushToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [notificationRuntime, setNotificationRuntime] = useState<NotificationRuntimeState | null>(null);
   const [notificationBusy, setNotificationBusy] = useState(false);
+  const notificationAccountRef = useRef<{ uid: string | null; productPreferenceEnabled: boolean }>({
+    uid: null,
+    productPreferenceEnabled: true,
+  });
+  notificationAccountRef.current = {
+    uid: user?.id ?? null,
+    productPreferenceEnabled: user?.notificationsEnabled !== false,
+  };
   const notificationIntentQueueRef = useRef<ReturnType<typeof createNotificationIntentQueue> | null>(null);
   const [titleUnlock, setTitleUnlock] = useState<string | null>(null);
   const prevTitleRef = useRef<string | null>(null);
@@ -312,6 +320,26 @@ export default function App() {
     };
   }, [user?.id, user?.notificationsEnabled]);
 
+  // Recover OS notification permission after Android Settings changes.
+  // Inspect / silent refresh only — never prompt on resume.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      const { uid, productPreferenceEnabled } = notificationAccountRef.current;
+      if (!uid) return;
+      void (async () => {
+        const inspected = await notificationRegistration.inspect();
+        setNotificationRuntime(
+          inspected.capability === 'supported' && inspected.permission === 'granted'
+            ? await notificationRegistration.refreshGranted(uid, productPreferenceEnabled)
+            : inspected,
+        );
+      })();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, []);
+
   useEffect(() => {
     const queue = createNotificationIntentQueue(intent => {
       executeNotificationIntent(intent, {
@@ -343,8 +371,18 @@ export default function App() {
       queue.accept(normalizeNotificationIntent(message.intent) ?? { version: 1, type: 'notifications' });
     };
     navigator.serviceWorker?.addEventListener('message', onWorkerMessage);
+    let unsubscribeOpen = () => {};
+    void notificationRegistration.subscribeOpen(payload => {
+      queue.accept(
+        normalizeNotificationIntent(payload)
+          ?? readNotificationIntentFromPayload(payload),
+      );
+    }).then(unsubscribe => {
+      unsubscribeOpen = unsubscribe;
+    });
     return () => {
       navigator.serviceWorker?.removeEventListener('message', onWorkerMessage);
+      unsubscribeOpen();
       queue.dispose();
       if (notificationIntentQueueRef.current === queue) notificationIntentQueueRef.current = null;
     };
