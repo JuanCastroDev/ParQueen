@@ -4,6 +4,7 @@
     <!-- allowBackup=false: Firebase JS Auth persists the session in WebView
          storage. Auto-backup would copy that authenticated state off-device. -->
     <application
+        android:name=".ParQueenApplication"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"

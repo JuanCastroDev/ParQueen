@@ -1,64 +1,96 @@
 # App Check Rollout Plan (TM-12)
 
-## Current State
+This document separates **what is already enforced in production source**
+from **future** client and callable work. Phase 2E (Android native App Check
+bridge) does not change enforcement.
 
-App Check is **not enforced**. All Cloud Functions callables have `enforceAppCheck: false`. Client-side, `firebaseConfig.ts` already contains a complete, tested App Check initialization (reCAPTCHA Enterprise provider, `isTokenAutoRefreshEnabled: true`, DEV-only debug-token hook) — it is gated on `VITE_FIREBASE_APPCHECK_SITE_KEY` and is dead code (tree-shaken from the prod bundle) until that variable is set. No further source changes are required to activate client-side token generation.
+## Current enforcement (source of truth: `functions/index.js`)
 
-**Stage 1 of the rollout is client initialization with zero backend enforcement.** Enforcement (Step 4 below) is a later, separate stage and must not be enabled until App Check traffic has been observed in production metrics first — see Step 6.
+Exactly **five** callables currently declare `enforceAppCheck: true`. Do not
+treat this list as “all callables” or “none”:
 
-## Why Not Enforced Yet
+| Callable | Status |
+| --- | --- |
+| `deleteChat` | **Enforced now** |
+| `sendMessage` | **Enforced now** |
+| `updateDisplayName` | **Enforced now** |
+| `adminReadView` | **Enforced now** (Stage 4A admin canary) |
+| `checkHydrantDistance` | **Enforced now** |
 
-Web enforcement requires a reCAPTCHA site key from Firebase console and explicit enrollment per app. Premature enforcement would lock out legitimate users before the site key is configured.
+`consumeAppCheckToken` is unused on every callable.
 
-## Steps to Enable Production Enforcement
+Everything else stays unenforced until a later, explicit Functions change.
+Examples that are **not** enforced today (non-exhaustive): `claimUsername`,
+`analyzeSign`, `generateSmartReplies`, `generateListingDescription`,
+`generateEmailOTP`, `deleteAccount`, `bootstrapAdmin`. `claimUsername` is
+deliberately still off — see `docs/PROFILE_IDENTITY_HARDENING.md`.
 
-### 1. Register App Check in Firebase Console
+**This Phase 2E PR must not flip any of those flags.**
 
-1. Firebase Console → App Check → Apps
-2. Register the web app (appId `1:768131391875:web:613c5d2a948862333196b6`)
-3. Choose provider: **reCAPTCHA Enterprise** (recommended for production) or reCAPTCHA v3
-4. Copy the site key
+## Current client initialization
 
-### 2. Configure the site key in the Vite build environment
+| Surface | Provider | Gate |
+| --- | --- | --- |
+| Web / PWA | `ReCaptchaEnterpriseProvider` | `VITE_FIREBASE_APPCHECK_SITE_KEY` (unchanged) |
+| Capacitor Android | Native Play Integrity (release) or Debug (`BuildConfig.DEBUG`), fed to Firebase JS via `CustomProvider` | Not the reCAPTCHA site key. No WebView reCAPTCHA fallback. See `docs/ANDROID_PHASE_2E.md`. |
+| Capacitor iOS | Same as Web / PWA | App Attest is **future** / out of Phase 2E |
 
-Set in the production build environment (wherever `npm run build` is invoked before `firebase deploy --only hosting`):
-```
-VITE_FIREBASE_APPCHECK_SITE_KEY=<site-key-from-console>
-```
-This is the single Firebase Hosting site (`parkqueen-46475363-ccf36`) that serves both `parkqueen-46475363-ccf36.web.app` and the `admin.parqueen.app` custom domain from the same build — one variable, one build, both domains covered.
+`initializeAppCheck` runs **exactly once**.
+`isTokenAutoRefreshEnabled: true` on both the native and reCAPTCHA paths.
 
-### 3. App Check initialization in `firebaseConfig.ts` — already implemented
+Web debug tokens (`VITE_APPCHECK_DEBUG_TOKEN` / `FIREBASE_APPCHECK_DEBUG_TOKEN`)
+remain DEV-only and tree-shaken from production web bundles. Android DEBUG
+APKs use the native `DebugAppCheckProviderFactory` instead; that SDK may
+print a debug secret to **local logcat** on Juan's device. Never commit,
+CI-print, or PR-paste that secret.
 
-No code change is needed here. `firebaseConfig.ts` already calls `initializeAppCheck` with `ReCaptchaEnterpriseProvider`, gated on `VITE_FIREBASE_APPCHECK_SITE_KEY`, with `isTokenAutoRefreshEnabled: true`. Setting the environment variable in Step 2 is what activates it — do not add a second `initializeAppCheck` call anywhere.
+## Why some callables are still unenforced
 
-### 4. Enable Enforcement on Cloud Functions — separate stage, do not combine with Steps 1–3
+Premature enforcement on callables without observed valid-token traffic
+locks out legitimate clients (web without a site key, Android without a
+registered Play Integrity app / debug token, iOS still on reCAPTCHA). The
+five enforced callables were turned on in earlier hardening canaries; the
+rest wait for metrics.
 
-Steps 1–3 only get valid App Check tokens flowing from real clients; nothing is blocked yet. Deploy hosting with the site key set (Step 2) and confirm in Firebase Console → App Check → Metrics that legitimate traffic is producing valid tokens *before* touching this step. Only after that observation window should `enforceAppCheck: false` be flipped to `true`, and only in `functions/index.js`, one callable at a time. Start with the highest-risk callables:
-- `analyzeSign`
-- `generateSmartReplies`
-- `generateEmailOTP`
-- `claimUsername`
+## Future enforcement (not this phase)
 
-### 5. Deploy
+Do **not** combine these with the Android bridge spike:
 
-```bash
-firebase deploy --only functions,hosting
-```
+1. Register / confirm App Check apps in Firebase Console (web reCAPTCHA,
+   Android Play Integrity). **Not done by this PR.**
+2. Keep `VITE_FIREBASE_APPCHECK_SITE_KEY` in the production web build
+   environment.
+3. Watch Firebase Console → App Check → Metrics until invalid-token rate
+   is acceptable on each remaining callable.
+4. Flip `enforceAppCheck: true` in `functions/index.js` **one callable at a
+   time**. Candidates after the current five include:
+   - `analyzeSign`
+   - `generateSmartReplies`
+   - `generateEmailOTP`
+   - `claimUsername` (only after fresh post-App-Check-client traffic)
+5. Deploy Functions only after that observation window.
+   `firebase deploy --only functions` — not part of Phase 2E.
+6. iOS App Attest remains a later native phase.
 
-### 6. Monitor
+Rollback for a newly enforced callable: set that callable's
+`enforceAppCheck` back to `false` and redeploy Functions. Do not roll back
+the five current canaries as a bundle unless metrics show they are blocking
+legitimate traffic.
 
-- Firebase Console → App Check → Metrics — watch for blocked requests
-- If legitimate traffic is blocked, check browser console for App Check token errors
-- Rollback: set `enforceAppCheck: false` and redeploy functions
+## Dev debug token (web only)
 
-## Dev Debug Token
+Set `VITE_APPCHECK_DEBUG_TOKEN=<token>` in `.env.local`. Obtain a debug
+token from Firebase Console → App Check → Apps → overflow menu → Manage
+debug tokens.
 
-Set `VITE_APPCHECK_DEBUG_TOKEN=<token>` in `.env.local`. Obtain a debug token from Firebase Console → App Check → Apps → overflow menu → Manage debug tokens.
+The token is only read when `import.meta.env.DEV` is true and is never
+included in production web bundles.
 
-The token is only read when `import.meta.env.DEV` is true and is never included in production bundles.
+## Blocking items
 
-## Blocking Items
-
-- [ ] Operator: register app in Firebase Console and obtain reCAPTCHA site key
-- [ ] Product: decide enforcement rollout order (which callables first)
-- [ ] Legal: confirm reCAPTCHA Enterprise terms acceptable
+- [ ] Operator: register Play Integrity for Android `app.parqueen` (and
+      keep the web reCAPTCHA site key configured) — Console work, not this PR
+- [ ] Operator: Samsung debug-APK App Check validation per
+      `docs/ANDROID_PHASE_2E.md` (device-local debug secret; do not paste it)
+- [ ] Product: decide the next callable to enforce after the current five
+- [ ] Future: iOS App Attest

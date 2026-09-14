@@ -49,6 +49,10 @@ See `docs/ANDROID_PHASE_2C.md` for `@capacitor/push-notifications`, `POST_NOTIFI
 
 See `docs/ANDROID_PHASE_2D.md` for `@capacitor/camera`, the shared `utils/signScanner` abstraction, FileProvider narrowing, and the physical Samsung AI Sign Scanner checklist.
 
+## Phase 2E (Android App Check Play Integrity / Debug bridge)
+
+See `docs/ANDROID_PHASE_2E.md` for the narrow native App Check Capacitor bridge, `CustomProvider` JS wiring, and the Samsung debug-token operator steps. iOS App Attest remains out of scope.
+
 ## Out of scope (later phases)
 
-iOS native push / APNs, iOS native camera, App Check attestation bridge, iOS native auth, Mapbox native SDK, store signing, background location, multi-device FCM token lists.
+iOS native push / APNs, iOS native camera, iOS App Attest, iOS native auth, Mapbox native SDK, store signing, background location, multi-device FCM token lists.

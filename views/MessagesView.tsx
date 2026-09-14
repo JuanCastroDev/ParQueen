@@ -172,7 +172,33 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
   const deleteCancelRef = useRef<HTMLButtonElement>(null);
   const reportCancelRef = useRef<HTMLButtonElement>(null);
 
+  const lastThreadMetaRef = useRef<{ otherUserId: string; relatedSpotTitle: string } | null>(null);
+  const composerFocusedRef = useRef(false);
+
   const activeConversation = conversations.find(c => c.id === activeConversationId);
+  if (activeConversation) {
+    lastThreadMetaRef.current = {
+      otherUserId: activeConversation.otherUser.id,
+      relatedSpotTitle: activeConversation.relatedSpotTitle || '',
+    };
+  }
+  if (!activeConversationId) {
+    lastThreadMetaRef.current = null;
+  }
+
+  // Header meta must not depend on the chats snapshot being present this
+  // render. After Ping init, activeConversationId is set before the list
+  // listener has the new shell; gating the thread on `activeConversation`
+  // would unmount the inbox and remount the composer, which dismisses the
+  // Android keyboard. Keep the thread mounted for the whole id lifetime.
+  const threadOtherUserId = activeConversation?.otherUser?.id
+    || lastThreadMetaRef.current?.otherUserId
+    || (activeConversationId ? activeChatContext?.userId : undefined)
+    || '';
+  const threadSpotTitle = activeConversation?.relatedSpotTitle
+    || lastThreadMetaRef.current?.relatedSpotTitle
+    || (activeConversationId ? (activeChatContext?.context || '') : '')
+    || '';
 
   // Server-mediated deletion (see functions/index.js deleteChat) — the
   // client no longer enumerates or batch-deletes messages itself, so
@@ -562,8 +588,11 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
       suppressAutoScrollRef.current = false;
       return;
     }
+    // Smooth scrollIntoView while an input is focused dismisses the Android
+    // WebView keyboard (adjustResize + overflow scroll). Skip while typing.
+    if (composerFocusedRef.current) return;
     if (activeConversationId && messages.length > 0) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      messagesEndRef.current?.scrollIntoView({ block: 'nearest' });
     }
   }, [messages, activeConversationId]);
 
@@ -576,7 +605,7 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
         if (key !== lastSmartReplyKey.current) {
           lastSmartReplyKey.current = key;
           let active = true;
-          generateSmartReplies(lastMsg.text, activeConversation?.relatedSpotTitle || "Parking Spot")
+          generateSmartReplies(lastMsg.text, activeConversation?.relatedSpotTitle || threadSpotTitle || "Parking Spot")
             .then(replies => { if (active) setSmartReplies(replies); })
             .catch(err => {
               console.warn("Gemini smart replies failed", err);
@@ -647,11 +676,11 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
     }
   };
 
-  if (activeConversationId && activeConversation) {
-    const displayName = userProfilesCache[activeConversation.otherUser.id]?.name
+  if (activeConversationId) {
+    const displayName = userProfilesCache[threadOtherUserId]?.name
       || t('messages.anonymous');
 
-    const otherProfile = userProfilesCache[activeConversation.otherUser.id];
+    const otherProfile = userProfilesCache[threadOtherUserId];
     const now = new Date();
 
     return (
@@ -671,10 +700,10 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
             <Avatar name={displayName} url={otherProfile?.avatarUrl} size={40} radius={14} />
             <div className="flex-1 min-w-0 pl-1.5">
               <h1 className="text-[16px] font-extrabold text-[var(--color-text)] leading-tight tracking-tight truncate">{displayName}</h1>
-              {activeConversation.relatedSpotTitle && (
+              {threadSpotTitle && (
                 <p className="pq-accent-text flex items-center gap-1 text-[12px] font-semibold mt-0.5 min-w-0">
                   <MapPin size={11} aria-hidden="true" className="shrink-0" />
-                  <span className="truncate">{activeConversation.relatedSpotTitle}</span>
+                  <span className="truncate">{threadSpotTitle}</span>
                 </p>
               )}
             </div>
@@ -840,8 +869,11 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
           <div className="pq-composer-field flex items-center gap-2 pl-4 pr-1">
             <input
               type="text"
+              key={activeConversationId}
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
+              onFocus={() => { composerFocusedRef.current = true; }}
+              onBlur={() => { composerFocusedRef.current = false; }}
               placeholder={t('messages.type_placeholder')}
               aria-label={t('messages.type_placeholder')}
               enterKeyHint="send"
