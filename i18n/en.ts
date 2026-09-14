@@ -61,6 +61,8 @@ const en: Record<string, string> = {
     'location_prompt.skip': 'Not now',
     'location_prompt.reassurance': 'You can enable location later in your device settings.',
     'location_prompt.map_desc': 'Map preview showing nearby parking spots',
+    'location_prompt.services_off': 'Location services are turned off. Turn them on in your device settings, then try again.',
+    'location_prompt.try_again': 'Couldn’t get a location fix yet. Location was not blocked — try again.',
 
     // App Tour — welcome
     'tour.welcome.title': 'Welcome to ParQueen',

@@ -4,6 +4,10 @@ import {
     persistAccessChoice,
     shouldShowPrimer,
     resolveFromPermissions,
+    resolveFromPermissionSnapshot,
+    resolveFromNativePermissionSnapshot,
+    reconcileLocationAccess,
+    persistReconciledAccess,
     type LocationAccess,
 } from './locationAccess';
 
@@ -13,6 +17,7 @@ const makeStorage = (entries: Record<string, string> = {}) => {
     return {
         getItem: (k: string) => map.get(k) ?? null,
         setItem: (k: string, v: string) => { map.set(k, v); },
+        removeItem: (k: string) => { map.delete(k); },
         get: (k: string) => map.get(k),
     };
 };
@@ -142,6 +147,24 @@ describe('resolveFromPermissions', () => {
 
     it('granted stored + prompt API → granted', () => {
         expect(resolveFromPermissions('prompt', 'granted')).toBe('granted');
+    });
+});
+
+describe('resolveFromPermissionSnapshot', () => {
+    it('maps granted and denied the same way as the Permissions API helper', () => {
+        expect(resolveFromPermissionSnapshot('granted', 'declined')).toBe('granted');
+        expect(resolveFromPermissionSnapshot('denied', 'granted')).toBe('denied');
+    });
+
+    it('does not treat unavailable / services-off as a permanent denial', () => {
+        expect(resolveFromPermissionSnapshot('unavailable', 'unknown')).toBe('unknown');
+        expect(resolveFromPermissionSnapshot('unavailable', 'granted')).toBe('granted');
+        expect(resolveFromPermissionSnapshot('prompt', 'declined')).toBe('declined');
+    });
+
+    it('web/PWA: prompt preserves stored denied (unchanged browser semantics)', () => {
+        expect(resolveFromPermissionSnapshot('prompt', 'denied')).toBe('denied');
+        expect(reconcileLocationAccess('prompt', 'denied', 'browser')).toBe('denied');
     });
 });
 

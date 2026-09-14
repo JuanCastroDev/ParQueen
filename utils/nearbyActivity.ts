@@ -77,13 +77,40 @@ export function deriveNearbyState(p: NearbyStateParams): NearbyRenderState {
     return 'results';
 }
 
-/** Web beta adapter: maps web-only LocationAccess to the native permission model.
- *  Never emits services_disabled — the web Permissions API cannot detect it. */
-export function nearbyPermissionState(access: LocationAccess): LocationPermissionState {
+/** Maps persisted LocationAccess (and optional runtime extras) to the nearby permission model.
+ *  `services_disabled` is only emitted when the location abstraction reports device
+ *  Location Services off. The web Permissions API cannot detect that on its own. */
+export function nearbyPermissionState(
+    access: LocationAccess,
+    extras?: { locationServicesEnabled?: boolean | null },
+): LocationPermissionState {
+    if (extras?.locationServicesEnabled === false) return 'services_disabled';
     if (access === 'granted') return 'granted';
     if (access === 'denied') return 'permanently_blocked';
     if (access === 'declined') return 'denied_requestable';
     return 'not_determined'; // 'unknown'
+}
+
+/** Settings / primer CTA kind. Enable must be offered when the OS can still be asked. */
+export type LocationPermissionCTAKind =
+    | 'enable'
+    | 'recheck'
+    | 'openSettings'
+    | 'openLocationServices';
+
+export function locationPermissionCTAKind(
+    state: LocationPermissionState,
+    caps: Pick<LocationCallbacks, 'canOpenAppSettings' | 'canOpenLocationServicesSettings'> = {
+        canOpenAppSettings: false,
+        canOpenLocationServicesSettings: false,
+    },
+): LocationPermissionCTAKind | null {
+    if (state === 'not_determined' || state === 'denied_requestable') return 'enable';
+    if (state === 'permanently_blocked') return caps.canOpenAppSettings ? 'openSettings' : 'recheck';
+    if (state === 'services_disabled') {
+        return caps.canOpenLocationServicesSettings ? 'openLocationServices' : 'recheck';
+    }
+    return null;
 }
 
 /** What CTA action to wire for blocked permission states.

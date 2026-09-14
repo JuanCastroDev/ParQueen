@@ -37,6 +37,10 @@ npm run cap:open:ios   # macOS only
 
 See `docs/ANDROID_PHASE_2A.md` for the phone-auth bridge, legal-return navigation, keyboard/`adjustResize` layout, `allowBackup=false`, and the Firebase Android registration steps Juan must approve.
 
+## Phase 2B (Android foreground geolocation)
+
+See `docs/ANDROID_PHASE_2B.md` for `@capacitor/geolocation`, the shared `utils/geolocation` abstraction, and foreground-only Android permissions.
+
 ## Out of scope (later phases)
 
-Push/FCM/APNs, camera, geolocation adapters, App Check attestation bridge, iOS native auth, Mapbox native SDK, store signing.
+Push/FCM/APNs, camera, App Check attestation bridge, iOS native auth, Mapbox native SDK, store signing, background location.

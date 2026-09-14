@@ -3,7 +3,7 @@ import { ChevronLeft, MapPin, Navigation } from 'lucide-react';
 import { t, useLang } from '../i18n';
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import type { LocationPermissionState, LocationCallbacks } from '../utils/nearbyActivity';
+import { locationPermissionCTAKind, type LocationPermissionState, type LocationCallbacks } from '../utils/nearbyActivity';
 
 interface LocationSettingsViewProps {
     user: any;
@@ -36,17 +36,17 @@ function permissionStatusLabel(state: LocationPermissionState): string {
 }
 
 function permissionCTA(state: LocationPermissionState, callbacks: LocationCallbacks): { label: string; action: () => void } | null {
-    switch (state) {
-        case 'granted': return null;
-        case 'not_determined':
-        case 'denied_requestable':
+    switch (locationPermissionCTAKind(state, callbacks)) {
+        case 'enable':
             return { label: t('settings.location_enable'), action: callbacks.requestLocationPermission };
-        case 'permanently_blocked':
-            if (callbacks.canOpenAppSettings) return { label: t('settings.location_open_settings'), action: callbacks.openAppSettings };
+        case 'openSettings':
+            return { label: t('settings.location_open_settings'), action: callbacks.openAppSettings };
+        case 'openLocationServices':
+            return { label: t('settings.location_open_settings'), action: callbacks.openLocationServicesSettings };
+        case 'recheck':
             return { label: t('settings.location_check_again'), action: callbacks.recheckPermission };
-        case 'services_disabled':
-            if (callbacks.canOpenLocationServicesSettings) return { label: t('settings.location_open_settings'), action: callbacks.openLocationServicesSettings };
-            return { label: t('settings.location_check_again'), action: callbacks.recheckPermission };
+        case null:
+            return null;
     }
 }
 

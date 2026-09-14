@@ -35,8 +35,10 @@ const PrivacyPolicyView = lazy(() => import('./views/PrivacyPolicyView').then(m 
 const TermsOfUseView = lazy(() => import('./views/TermsOfUseView').then(m => ({ default: m.TermsOfUseView })));
 const ContactUsView = lazy(() => import('./views/ContactUsView').then(m => ({ default: m.ContactUsView })));
 import { AppView } from './types';
-import { readPersistedAccess, persistAccessChoice, shouldShowPrimer, resolveFromPermissions, type LocationAccess } from './utils/locationAccess';
+import { readPersistedAccess, persistAccessChoice, persistReconciledAccess, shouldShowPrimer, reconcileLocationAccess, type LocationAccess } from './utils/locationAccess';
 import { nearbyPermissionState, type LocationCallbacks } from './utils/nearbyActivity';
+import { checkLocationPermission, requestLocationPermission } from './utils/geolocation';
+import { resolveGeolocationPath } from './utils/geolocationPlatform';
 import { getLang, setLang, t } from './i18n';
 import { getLanguageHydrationAction } from './utils/languageHydration';
 import { ChevronLeft } from 'lucide-react';
@@ -83,6 +85,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState(AppView.CREATE_ACCOUNT);
   const [vehicleOnboarding, setVehicleOnboarding] = useState(false);
   const [locationAccess, setLocationAccess] = useState<LocationAccess>(() => readPersistedAccess());
+  const [locationServicesEnabled, setLocationServicesEnabled] = useState<boolean | null>(null);
   const [pendingSpotId, setPendingSpotId] = useState<string | null>(null);
   const [pendingMyCarOpen, setPendingMyCarOpen] = useState(false);
   const [user, setUser] = useState(null);
@@ -231,16 +234,16 @@ export default function App() {
             // This corrects stale 'declined' state (Not now recovery, legacy users) and
             // catches browser permission revocations before the map mounts.
             let access = readPersistedAccess();
-            if (navigator.permissions) {
-              try {
-                const perm = await navigator.permissions.query({ name: 'geolocation' });
-                const reconciled = resolveFromPermissions(perm.state, access);
-                if ((reconciled === 'granted' || reconciled === 'denied') && reconciled !== access) {
-                  persistAccessChoice(reconciled);
-                  access = reconciled;
-                }
-              } catch {}
-            }
+            try {
+              const snap = await checkLocationPermission();
+              if (snap.locationServicesEnabled === false) setLocationServicesEnabled(false);
+              else if (snap.locationServicesEnabled === true) setLocationServicesEnabled(true);
+              const reconciled = reconcileLocationAccess(snap.status, access, resolveGeolocationPath());
+              if (reconciled !== access) {
+                persistReconciledAccess(reconciled);
+                access = reconciled;
+              }
+            } catch {}
             // Sync React state — ensures allowLocationTracking is correct when MapView mounts
             setLocationAccess(access);
             setCurrentView(shouldShowPrimer(access) ? AppView.LOCATION_PROMPT : AppView.MAP);
@@ -366,7 +369,7 @@ export default function App() {
   // Native adapters use AppState.addEventListener('change', ...) instead.
   useEffect(() => {
     if (currentView !== AppView.NOTIFICATIONS) return;
-    const pState = nearbyPermissionState(locationAccess);
+    const pState = nearbyPermissionState(locationAccess, { locationServicesEnabled });
     if (pState !== 'permanently_blocked' && pState !== 'services_disabled') return;
     const onVisible = () => {
       if (document.visibilityState === 'visible') locationCallbacks.recheckPermission();
@@ -467,35 +470,40 @@ export default function App() {
   };
 
 
-  // Web beta adapter for the native LocationCallbacks interface.
-  // The future React Native layer replaces this object with native module calls.
+  // Product permission callbacks. OS vs browser details live in utils/geolocation.
   const locationCallbacks: LocationCallbacks = {
-    requestLocationPermission: () => {
-      if (!navigator.geolocation) { persistAccessChoice('denied'); setLocationAccess('denied'); return; }
-      navigator.geolocation.getCurrentPosition(
-        () => { persistAccessChoice('granted'); setLocationAccess('granted'); },
-        () => { persistAccessChoice('denied'); setLocationAccess('denied'); },
-        { enableHighAccuracy: false, timeout: 15000 }
-      );
+    requestLocationPermission: async () => {
+      try {
+        const snap = await requestLocationPermission();
+        if (snap.locationServicesEnabled === false) {
+          setLocationServicesEnabled(false);
+          return;
+        }
+        if (snap.locationServicesEnabled === true) setLocationServicesEnabled(true);
+        const next = reconcileLocationAccess(snap.status, locationAccess, resolveGeolocationPath());
+        if (next !== locationAccess) persistReconciledAccess(next);
+        setLocationAccess(next);
+      } catch {}
     },
     openAppSettings: () => {
-      // Web beta: no deep-link to app settings; recheck in case the user already changed it
       locationCallbacks.recheckPermission();
     },
     openLocationServicesSettings: () => {
-      // Web beta: device-wide Location Services does not apply; no-op
+      // No settings deep-link in this phase; recheck covers returning from OS Settings.
     },
-    canOpenAppSettings: false,              // web cannot deep-link to app settings
-    canOpenLocationServicesSettings: false, // web cannot open device Location Services
+    canOpenAppSettings: false,
+    canOpenLocationServicesSettings: false,
     recheckPermission: async () => {
-      if (!navigator.permissions) return;
       try {
-        const perm = await navigator.permissions.query({ name: 'geolocation' });
-        const reconciled = resolveFromPermissions(perm.state, locationAccess);
-        if ((reconciled === 'granted' || reconciled === 'denied') && reconciled !== locationAccess) {
-          persistAccessChoice(reconciled);
-          setLocationAccess(reconciled);
+        const snap = await checkLocationPermission();
+        if (snap.locationServicesEnabled === false) {
+          setLocationServicesEnabled(false);
+          return;
         }
+        if (snap.locationServicesEnabled === true) setLocationServicesEnabled(true);
+        const reconciled = reconcileLocationAccess(snap.status, locationAccess, resolveGeolocationPath());
+        if (reconciled !== locationAccess) persistReconciledAccess(reconciled);
+        setLocationAccess(reconciled);
       } catch {}
     },
   };
@@ -719,15 +727,15 @@ export default function App() {
       case AppView.PROFILE:
         return <ProfileView user={user} setView={navigatePrimary} onBack={() => setCurrentView(AppView.MAP)} unreadMessagesCount={unreadMessagesCount} pendingUpdatesCount={pendingUpdatesCount} />;
       case AppView.SETTINGS:
-        return <SettingsView user={user} setView={setViewWithLegalReturn} onBack={() => setCurrentView(AppView.PROFILE)} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} theme={theme} toggleTheme={toggleTheme} permissionState={nearbyPermissionState(locationAccess)} notificationRuntime={notificationRuntime} />;
+        return <SettingsView user={user} setView={setViewWithLegalReturn} onBack={() => setCurrentView(AppView.PROFILE)} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} theme={theme} toggleTheme={toggleTheme} permissionState={nearbyPermissionState(locationAccess, { locationServicesEnabled })} notificationRuntime={notificationRuntime} />;
       case AppView.NOTIFICATIONS_SETTINGS:
         return <NotificationsSettingsView user={user} onBack={() => setCurrentView(AppView.SETTINGS)} notificationRuntime={notificationRuntime} notificationBusy={notificationBusy} onEnableNotifications={handleEnableNotifications} onRecheckNotifications={handleRecheckNotifications} />;
       case AppView.LOCATION_SETTINGS:
-        return <LocationSettingsView user={user} onBack={() => setCurrentView(AppView.SETTINGS)} permissionState={nearbyPermissionState(locationAccess)} callbacks={locationCallbacks} />;
+        return <LocationSettingsView user={user} onBack={() => setCurrentView(AppView.SETTINGS)} permissionState={nearbyPermissionState(locationAccess, { locationServicesEnabled })} callbacks={locationCallbacks} />;
       case AppView.LANGUAGE_SETTINGS:
         return <LanguageSettingsView user={user} onBack={() => setCurrentView(AppView.SETTINGS)} />;
       case AppView.NOTIFICATIONS:
-        return <NotificationsView user={user} onBack={() => setCurrentView(AppView.MAP)} onSelectSpot={(id) => { setPendingSpotId(id); setCurrentView(AppView.MAP); }} permissionState={nearbyPermissionState(locationAccess)} callbacks={locationCallbacks} notificationRuntime={notificationRuntime} notificationBusy={notificationBusy} onEnableNotifications={handleEnableNotifications} onRecheckNotifications={handleRecheckNotifications} setView={navigatePrimary} unreadMessagesCount={unreadMessagesCount} pendingUpdatesCount={pendingUpdatesCount} />;
+        return <NotificationsView user={user} onBack={() => setCurrentView(AppView.MAP)} onSelectSpot={(id) => { setPendingSpotId(id); setCurrentView(AppView.MAP); }} permissionState={nearbyPermissionState(locationAccess, { locationServicesEnabled })} callbacks={locationCallbacks} notificationRuntime={notificationRuntime} notificationBusy={notificationBusy} onEnableNotifications={handleEnableNotifications} onRecheckNotifications={handleRecheckNotifications} setView={navigatePrimary} unreadMessagesCount={unreadMessagesCount} pendingUpdatesCount={pendingUpdatesCount} />;
       case AppView.ADMIN_LOGIN:
         return <AdminLoginView onVerified={() => setCurrentView(AppView.ADMIN_DASHBOARD)} />;
       case AppView.ADMIN_DASHBOARD:

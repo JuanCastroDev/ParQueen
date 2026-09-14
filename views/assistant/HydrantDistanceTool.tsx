@@ -8,6 +8,7 @@ import {
   assessHydrantDistance, type HydrantAssessment, HYDRANT_THRESHOLD_FT,
 } from '../../utils/hydrantDistance';
 import { HydrantIcon } from './HydrantIcon';
+import { getCurrentPosition } from '../../utils/geolocation';
 
 type Phase = 'choose' | 'locating' | 'checking' | 'result' | 'error';
 type Source = 'car' | 'current';
@@ -38,14 +39,9 @@ export async function lookupNearestHydrant(lat: number, lng: number): Promise<Hy
   }
 }
 
-/** Resolves the browser position, or a reason it could not. */
-function getPosition(): Promise<GeolocationPosition> {
-  return new Promise((resolve, reject) => {
-    if (!('geolocation' in navigator)) { reject(new Error('unsupported')); return; }
-    navigator.geolocation.getCurrentPosition(resolve, reject, {
-      enableHighAccuracy: true, timeout: 15000, maximumAge: 0,
-    });
-  });
+/** Resolves the current position, or a reason it could not. */
+function getPosition() {
+  return getCurrentPosition({ enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
 }
 
 const STATUS_META = {
