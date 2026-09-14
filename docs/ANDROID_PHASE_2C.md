@@ -88,21 +88,41 @@ Taps use `pushNotificationActionPerformed` through the same intent queue as the 
 
 `@capacitor/push-notifications` may be present in the iOS package graph after `cap sync` because Capacitor links official plugins for both platforms. **ParQueen does not use native iOS push, APNs, or Push capability in Phase 2C.** JS on Capacitor iOS stays on the browser Web Messaging path. `AppDelegate.swift` is intentionally unchanged (no `didRegisterForRemoteNotifications` hooks). iOS native push remains out of scope.
 
-## Physical Samsung acceptance (Juan)
+## Physical Samsung acceptance (validated 2026-09-14)
 
-Not performed by this change. Validate on **Samsung SM-G981U1 / Android 13** with a local debug APK after `npx cap sync` + `:app:assembleDebug`. `google-services.json` must be present on the validation machine.
+**Validated on Samsung SM-G981U1 / Android 13** against exact head `da4f4e3ffd61cd2d34978a67865c3c8bac3e21a1`. No Hosting / Functions / Firestore rules deploy. `google-services.json` remained local/gitignored.
 
-1. Fresh install (or clear app data) so notification permission has never been requested. Sign in.
-2. Open Notifications Settings (or Nearby). The toggle is **not** enabled. Enable Notifications / Enable parking alerts is available.
-3. Tap **Enable parking alerts**. The **Android native** permission dialog appears (`POST_NOTIFICATIONS`). Not a browser `Notification.requestPermission()` sheet.
-4. Tap **Allow**.
-5. The ParQueen toggle becomes enabled only after permission **and** FCM registration succeed.
-6. Force-close and reopen: remains enabled. No second OS prompt.
-7. Android Settings → Apps → ParQueen → Notifications → **Deny**. Return to ParQueen (or Recheck / reopen). The app reflects disabled / blocked.
-8. Re-enable notifications in Android Settings. Recheck or reopen. ParQueen recovers and can register again.
-9. FCM token registration succeeds. Logcat / console must **not** print the token.
-10. Send a real test push (nearby Ping or Firebase console to the Android app) and confirm it is received on the Samsung **before merge**.
+| Check | Result |
+| --- | --- |
+| `POST_NOTIFICATIONS` present in package state | Pass |
+| Initial OS grant=`false`; Settings toggle off + Enable parking alerts | Pass |
+| Enable parking alerts -> native Android notification dialog | Pass |
+| Allow -> ParQueen toggle on automatically | Pass |
+| Force-close / reopen: stays enabled, no second prompt | Pass |
+| Package state `POST_NOTIFICATIONS` granted=`true` after allow | Pass |
+| Deny in Android Settings -> ParQueen disabled + Enable exposed | Pass |
+| Re-enable in Android Settings -> ParQueen recovers | Pass |
+| Native PushNotifications registered; FCM `registration` fired; no `registrationError` | Pass |
+| FCM token persisted to signed-in user private preferences (not in validation logs) | Pass |
+| Firebase Console test message: native OS notification while backgrounded | Pass |
+| Foreground: in-app toast, no duplicate Android system banner | Pass |
+| No `ACCESS_BACKGROUND_LOCATION` declared | Pass |
 
-Confirm `dumpsys package app.parqueen` now lists `POST_NOTIFICATIONS`. Confirm no `ACCESS_BACKGROUND_LOCATION`.
+This completes the Phase 2C Samsung physical acceptance checklist.
+
+### Acceptance checklist (completed)
+
+1. Fresh / not-yet-requested notification permission (granted=false).
+2. Tap Enable parking alerts.
+3. Android native permission dialog.
+4. Allow.
+5. Toggle enabled after OS grant + registration.
+6. Force-close / reopen: remains enabled, no second prompt.
+7. Deny in Android Settings -> ParQueen reflects disabled / Enable.
+8. Re-enable in Android Settings -> ParQueen recovers.
+9. FCM registration succeeds; token not exposed in logs.
+10. Real Firebase Console test push received (background OS notification; foreground in-app toast only).
+
+Confirm `dumpsys package app.parqueen` lists `POST_NOTIFICATIONS`. Confirm no `ACCESS_BACKGROUND_LOCATION`.
 
 Do not deploy Hosting, Functions, or Firestore rules for this validation.
