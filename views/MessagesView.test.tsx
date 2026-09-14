@@ -991,6 +991,22 @@ describe('MessagesView — bounded message history pagination', () => {
         act(() => renderer.unmount());
     });
 
+    it('does not auto-scroll to bottom while the composer is focused (keeps the Android keyboard)', async () => {
+        const renderer = await openConversationLive();
+        const m1 = msg('m1', T0);
+        emitMessages(0, [m1], added([m1]));
+        scrollMock.scrollIntoView.mockClear();
+        act(() => { getMessageInput(renderer).props.onFocus(); });
+        const m2 = msg('m2', T0 + 1000);
+        emitMessages(0, [m2, m1], added([m2]));
+        expect(scrollMock.scrollIntoView).not.toHaveBeenCalled();
+        act(() => { getMessageInput(renderer).props.onBlur(); });
+        const m3 = msg('m3', T0 + 2000);
+        emitMessages(0, [m3, m2, m1], added([m3]));
+        expect(scrollMock.scrollIntoView).toHaveBeenCalled();
+        act(() => renderer.unmount());
+    });
+
     // ─── Empty chat ──────────────────────────────────────────────────────
 
     it('an empty conversation shows no Load earlier control and normal empty rendering, unaffected by pagination', async () => {
@@ -1348,6 +1364,8 @@ describe('MessagesView — Ping chat-shell init (no read-before-create)', () => 
         // Parent now exists; listener may attach. Still no existence getDoc.
         expect(chatGetDocCalls).toEqual([]);
         expect(messagesSnapshotCalls.length).toBe(1);
+        expect(isInConversationDetail(renderer)).toBe(true);
+        expect(() => getMessageInput(renderer)).not.toThrow();
         act(() => renderer.unmount());
     });
 
@@ -1376,5 +1394,21 @@ describe('MessagesView — Ping chat-shell init (no read-before-create)', () => 
         expect(source).not.toMatch(/activeChatContext && user \? \[user\.id, activeChatContext\.userId\]\.sort\(\)\.join/);
         const listener = source.slice(source.indexOf('Listen to the newest MESSAGE_PAGE_SIZE'));
         expect(listener).toMatch(/if \(!activeConversationId \|\| !user \|\| !db\)/);
+        expect(source).not.toMatch(/if \(activeConversationId && activeConversation\)/);
+        expect(source).toMatch(/if \(composerFocusedRef\.current\) return/);
+    });
+
+    it('opens the thread and keeps the composer mounted before the chats snapshot includes the new shell', async () => {
+        const renderer = await renderMessages({ activeChatContext: pingContext });
+        await act(async () => { await flush(); });
+
+        expect(isInConversationDetail(renderer)).toBe(true);
+        expect(() => getMessageInput(renderer)).not.toThrow();
+
+        emitChats([chatDoc(pingChatId, ['me', 'alice'], { relatedSpotTitle: 'Spot pinged by Alice' })]);
+        await act(async () => { await flush(); });
+        expect(isInConversationDetail(renderer)).toBe(true);
+        expect(() => getMessageInput(renderer)).not.toThrow();
+        act(() => renderer.unmount());
     });
 });
