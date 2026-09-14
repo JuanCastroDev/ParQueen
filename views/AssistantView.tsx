@@ -352,14 +352,22 @@ export const AssistantView = ({ onBack, onOpenMyCar }: AssistantViewProps = {}) 
           {/* B/C/D/E — image chosen */}
           {scanState !== 'idle' && image && (
             <div className="w-full max-w-sm">
-              <div className="relative rounded-3xl overflow-hidden border border-[var(--color-border)] shadow-2xl mb-4">
+                            <div
+                className={`relative rounded-3xl overflow-hidden border border-[var(--color-border)] shadow-2xl mb-4 ${
+                  scanState === 'done'
+                    ? 'flex items-center justify-center bg-[var(--color-surface)] max-h-[160px]'
+                    : ''
+                }`}
+              >
                 {/* Once the verdict exists it is the point of the screen, so the
-                    photo drops to a thumbnail — at 390x844 a full-height image
-                    pushed the answer entirely below the fold. */}
+                    photo drops to a compact thumbnail — keep object-contain so
+                    portrait signs are never cropped (Samsung Phase 2D finding). */}
                 <img
                   src={image}
                   alt={t('assistant.preview_alt')}
-                  className={`w-full h-auto object-cover ${scanState === 'done' ? 'max-h-[120px]' : 'max-h-[340px]'}`}
+                  className={`w-full h-auto object-contain ${
+                    scanState === 'done' ? 'max-h-[160px]' : 'max-h-[340px]'
+                  }`}
                 />
                 {scanState === 'analyzing' && <span className="pq-scanline" aria-hidden="true" />}
               </div>
