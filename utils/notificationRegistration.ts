@@ -1,6 +1,10 @@
+import { PushNotifications } from '@capacitor/push-notifications';
 import { doc, setDoc } from 'firebase/firestore';
 import { deleteToken, getToken, onMessage, type MessagePayload, type Messaging } from 'firebase/messaging';
 import { db, getFCM } from '../firebaseConfig';
+import { createNativeNotificationRegistrationService, type NativePushPlugin } from './notificationNative';
+import { FCM_OWNER_UID_KEY, FCM_OWNER_VERSION, FCM_OWNER_VERSION_KEY } from './notificationOwnership';
+import { resolveNotificationPath, type NotificationPath } from './notificationPlatform';
 
 export type NotificationCapability = 'supported' | 'ios_install_required' | 'unsupported';
 export type NotificationPermissionState = NotificationPermission | 'unavailable';
@@ -36,9 +40,12 @@ export interface NotificationRegistrationDependencies {
   vapidKey?: string;
 }
 
-const FCM_OWNER_UID_KEY = 'parqueen_fcm_owner_uid';
-const FCM_OWNER_VERSION_KEY = 'parqueen_fcm_owner_version';
-const FCM_OWNER_VERSION = '1';
+export { FCM_OWNER_UID_KEY, FCM_OWNER_VERSION, FCM_OWNER_VERSION_KEY } from './notificationOwnership';
+
+export const writeNotificationPreferences = (
+  uid: string,
+  values: { fcmToken: string; notificationsEnabled?: true },
+) => setDoc(doc(db, 'users', uid, 'private', 'preferences'), values, { merge: true });
 
 export function detectNotificationPlatform(input: NotificationPlatformInput): NotificationCapability {
   const iosDevice = /iPad|iPhone|iPod/i.test(input.userAgent)
@@ -171,34 +178,55 @@ export function createNotificationRegistrationService(deps: NotificationRegistra
     });
   };
 
+  const subscribeOpen = async (_handler: (payload: unknown) => void): Promise<() => void> => () => {};
+
   return {
     inspect,
     enable,
     refreshGranted,
     subscribeForeground,
+    subscribeOpen,
     getVapidStatus: () => deps.vapidKey?.trim() ? 'configured' as const : 'missing' as const,
   };
 }
 
+export type NotificationRegistrationService = ReturnType<typeof createNotificationRegistrationService>;
+
 const configuredVapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY as string | undefined;
 
-export const notificationRegistration = createNotificationRegistrationService({
-  getPlatform: inspectBrowserNotificationPlatform,
-  getPermission: () => typeof Notification === 'undefined' ? 'unavailable' : Notification.permission,
-  requestPermission: () => Notification.requestPermission(),
-  getMessaging: getFCM,
-  getToken: (messaging, options) => getToken(messaging as Messaging, options),
-  deleteToken: messaging => deleteToken(messaging as Messaging),
-  writePreferences: (uid, values) => setDoc(
-    doc(db, 'users', uid, 'private', 'preferences'),
-    values,
-    { merge: true },
-  ),
-  getLocal: key => localStorage.getItem(key),
-  setLocal: (key, value) => localStorage.setItem(key, value),
-  onMessage: (messaging, handler) => onMessage(
-    messaging as Messaging,
-    payload => handler(payload as MessagePayload),
-  ),
-  vapidKey: configuredVapidKey,
-});
+const browserLocalStorage = {
+  getLocal: (key: string) => localStorage.getItem(key),
+  setLocal: (key: string, value: string) => localStorage.setItem(key, value),
+};
+
+export function createParQueenNotificationRegistration(
+  path: NotificationPath = resolveNotificationPath(),
+  nativePlugin: NativePushPlugin = PushNotifications,
+): NotificationRegistrationService {
+  if (path === 'native') {
+    return createNativeNotificationRegistrationService({
+      plugin: nativePlugin,
+      writePreferences: writeNotificationPreferences,
+      ...browserLocalStorage,
+    });
+  }
+
+  return createNotificationRegistrationService({
+    getPlatform: inspectBrowserNotificationPlatform,
+    getPermission: () => typeof Notification === 'undefined' ? 'unavailable' : Notification.permission,
+    requestPermission: () => Notification.requestPermission(),
+    getMessaging: getFCM,
+    getToken: (messaging, options) => getToken(messaging as Messaging, options),
+    deleteToken: messaging => deleteToken(messaging as Messaging),
+    writePreferences: writeNotificationPreferences,
+    getLocal: browserLocalStorage.getLocal,
+    setLocal: browserLocalStorage.setLocal,
+    onMessage: (messaging, handler) => onMessage(
+      messaging as Messaging,
+      payload => handler(payload as MessagePayload),
+    ),
+    vapidKey: configuredVapidKey,
+  });
+}
+
+export const notificationRegistration = createParQueenNotificationRegistration();

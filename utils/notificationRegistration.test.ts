@@ -189,4 +189,12 @@ describe('notification registration service', () => {
     unsubscribe();
     expect(calls.filter(call => call === 'unsubscribe')).toHaveLength(1);
   });
+
+  it('keeps Web/PWA subscribeOpen as a no-op so the service-worker listener stays authoritative', async () => {
+    const { deps } = dependencies();
+    const service = createNotificationRegistrationService(deps);
+    const unsubscribe = await service.subscribeOpen(vi.fn());
+    expect(typeof unsubscribe).toBe('function');
+    unsubscribe();
+  });
 });
