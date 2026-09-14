@@ -46,7 +46,7 @@ function dependencies(plugin: NativePushPlugin, overrides: Record<string, unknow
       setLocal: (key: string, value: string) => {
         local.set(key, value);
         calls.push(`setLocal:${key}`);
-      }),
+      },
       ...overrides,
     },
   };

@@ -189,7 +189,7 @@ export function createNativeNotificationRegistrationService(
     if (current.permission === 'denied') return stateFor('denied');
     if (current.permission === 'unavailable') return { capability: 'unsupported', permission: 'unavailable', registration: 'not_registered' };
 
-    let permission = current.permission;
+    let permission: NotificationPermissionState = current.permission;
     if (permission === 'default') {
       const requested = await deps.plugin.requestPermissions();
       permission = mapNativeReceivePermission(requested.receive);
