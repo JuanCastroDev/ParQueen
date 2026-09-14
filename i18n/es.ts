@@ -939,6 +939,7 @@ const es: Record<string, string> = {
     'messages.report_other': 'Otro',
     'messages.toast_delete_failed': 'No se pudo eliminar la conversación.',
     'messages.toast_send_failed': 'No se pudo enviar el mensaje. Inténtalo de nuevo.',
+    'messages.toast_open_failed': 'No se pudo abrir la conversación. Inténtalo de nuevo.',
     'messages.rate_limited': 'Estás enviando mensajes demasiado rápido. Espera un momento.',
     'messages.toast_blocked': 'Usuario bloqueado',
     'messages.toast_block_failed': 'No se pudo bloquear al usuario',

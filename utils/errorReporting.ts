@@ -39,7 +39,8 @@ export type CriticalAction =
   | 'spot_claim'
   | 'claim_cancel'
   | 'message_send'
-  | 'chat_delete';
+  | 'chat_delete'
+  | 'chat_init';
 
 /**
  * Deliberately tiny and low-cardinality — no document/user identifiers, no
