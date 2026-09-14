@@ -7,9 +7,11 @@
  * docs/APP_CHECK_ROLLOUT.md.
  *
  * Vite strips the `if (import.meta.env.DEV)` guard in production builds.
- * When VITE_FIREBASE_APPCHECK_SITE_KEY is absent (CI/local without key),
- * the initializeAppCheck branch is also dead code and is tree-shaken from
- * the prod bundle — the call never ships to production without a site key.
+ * The web ReCaptcha initializeAppCheck branch is gated on
+ * VITE_FIREBASE_APPCHECK_SITE_KEY (replaced at build time). Capacitor
+ * Android uses CustomProvider in the same bundle; that path is a runtime
+ * platform split and is not tree-shaken. Sensitive-value checks still
+ * require that site-key / debug-token identifiers are not assigned in dist/.
  *
  * Tests skip when dist/ does not exist (pre-build). Run `npm run build` first
  * or let §10 (full release gate) provide the built output.
@@ -123,7 +125,7 @@ describe('§6 — App Check prod bundle assertions', () => {
 
     it('AC-10: missing site key triggers a bounded DEV-only warning on the web path, not an error or silent fail', () => {
         const src = fs.readFileSync(APP_CHECK_SRC, 'utf-8');
-        expect(src).toMatch(/else if \(isDev\)/);
+        expect(src).toMatch(/else if \(import\.meta\.env\.DEV\)/);
         expect(src).toMatch(/TM-12 OPEN: VITE_FIREBASE_APPCHECK_SITE_KEY not set/);
     });
 

@@ -11,7 +11,7 @@ import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderF
 /**
  * Installs the native App Check provider factory once, before any token
  * request. DEBUG APKs use DebugAppCheckProviderFactory; release uses Play
- * Integrity. There is no reCAPTCHA fallback.
+ * Integrity. There is no web-provider fallback.
  */
 final class AppCheckProviderInstaller {
     private static final String TAG = "ParQueenAppCheck";

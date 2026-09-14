@@ -28,7 +28,6 @@ const androidDeps = (): AppCheckInitDependencies => ({
   CustomProvider: CustomProvider as never,
   ReCaptchaEnterpriseProvider: ReCaptchaEnterpriseProvider as never,
   siteKey: 'web-recaptcha-site-key',
-  isDev: true,
   warn,
 });
 
@@ -100,7 +99,7 @@ describe('initializeParQueenAppCheck', () => {
   });
 
   it('skips web initialization without a site key and emits the DEV TM-12 warning', () => {
-    initializeParQueenAppCheck(app, { ...webDeps(), siteKey: undefined, isDev: true });
+    initializeParQueenAppCheck(app, { ...webDeps(), siteKey: undefined });
     expect(initializeAppCheck).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith(
       '[AppCheck] TM-12 OPEN: VITE_FIREBASE_APPCHECK_SITE_KEY not set. App Check not initialized.',
@@ -108,7 +107,7 @@ describe('initializeParQueenAppCheck', () => {
   });
 
   it('does not warn about a missing site key on the native Android path', () => {
-    initializeParQueenAppCheck(app, { ...androidDeps(), siteKey: undefined, isDev: true });
+    initializeParQueenAppCheck(app, { ...androidDeps(), siteKey: undefined });
     expect(warn.mock.calls.flat().join('\n')).not.toMatch(/VITE_FIREBASE_APPCHECK_SITE_KEY/);
   });
 

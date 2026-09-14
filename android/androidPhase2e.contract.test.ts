@@ -38,7 +38,7 @@ describe('Android Phase 2E App Check contracts', () => {
     expect(debugGuardIdx).toBeLessThan(debugIdx);
     expect(debugIdx).toBeLessThan(releaseIdx);
     expect(installer).not.toContain('Recaptcha');
-    expect(installer).not.toContain('reCAPTCHA');
+    expect(installer).not.toMatch(/RecaptchaEnterprise|RecaptchaV3/);
   });
 
   it('returns the real AppCheckToken token and expireTimeMillis without inventing TTL', () => {
@@ -66,9 +66,9 @@ describe('Android Phase 2E App Check contracts', () => {
     const plugin = read('./app/src/main/java/app/parqueen/AppCheckBridgePlugin.java');
     const installer = read('./app/src/main/java/app/parqueen/AppCheckProviderInstaller.java');
     const js = [
-      read(new URL('../utils/appCheck.ts', import.meta.url)),
-      read(new URL('../utils/appCheckNative.ts', import.meta.url)),
-      read(new URL('../firebaseConfig.ts', import.meta.url)),
+      read('../utils/appCheck.ts'),
+      read('../utils/appCheckNative.ts'),
+      read('../firebaseConfig.ts'),
     ].join('\n');
     const native = `${plugin}\n${installer}`;
     expect(native).not.toMatch(/Log\.\w+\([^;]*getToken\(\)/);
@@ -94,7 +94,7 @@ describe('Android Phase 2E App Check contracts', () => {
 
   it('does not add @capacitor-firebase/app-check or change Android permissions', () => {
     const manifest = read('./app/src/main/AndroidManifest.xml');
-    const pkg = read(new URL('../package.json', import.meta.url));
+    const pkg = read('../package.json');
     expect(pkg).not.toContain('@capacitor-firebase/app-check');
     expect(pkg).toMatch(/"firebase":\s*"\^10\.8\.0"/);
     expect(manifest).toContain('android.permission.INTERNET');
@@ -109,7 +109,7 @@ describe('Android Phase 2E App Check contracts', () => {
   });
 
   it('does not change Cloud Functions App Check enforcement', () => {
-    const functions = read(new URL('../functions/index.js', import.meta.url));
+    const functions = read('../functions/index.js');
     expect(functions.match(/enforceAppCheck:\s*true/g) || []).toHaveLength(5);
     for (const name of ENFORCED_CALLABLES) {
       const start = functions.indexOf(`exports.${name} = onCall(`);

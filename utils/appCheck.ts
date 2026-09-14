@@ -16,7 +16,6 @@ export interface AppCheckInitDependencies {
   CustomProvider?: typeof CustomProvider;
   ReCaptchaEnterpriseProvider?: typeof ReCaptchaEnterpriseProvider;
   siteKey?: string | undefined;
-  isDev?: boolean;
   warn?: (message: string) => void;
 }
 
@@ -71,7 +70,6 @@ export const initializeParQueenAppCheck = (
   const Custom = deps.CustomProvider ?? CustomProvider;
   const Recaptcha = deps.ReCaptchaEnterpriseProvider ?? ReCaptchaEnterpriseProvider;
   const siteKey = deps.siteKey ?? import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY;
-  const isDev = deps.isDev ?? import.meta.env.DEV;
   const warn = deps.warn ?? ((message: string) => console.warn(message));
   const path = resolvePath();
 
@@ -99,7 +97,7 @@ export const initializeParQueenAppCheck = (
     } catch {
       warn('[AppCheck] Initialization failed.');
     }
-  } else if (isDev) {
+  } else if (import.meta.env.DEV) {
     warn('[AppCheck] TM-12 OPEN: VITE_FIREBASE_APPCHECK_SITE_KEY not set. App Check not initialized.');
   }
 };
