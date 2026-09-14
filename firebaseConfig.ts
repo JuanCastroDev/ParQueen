@@ -1,8 +1,8 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
 import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { getMessaging, isSupported } from 'firebase/messaging';
+import { initializeParQueenAppCheck } from './utils/appCheck';
 
 const firebaseConfig = {
   apiKey: "AIzaSyCKSqWVd6JqpcrNUG6hei8Ug1njaIkAI7Y",
@@ -31,30 +31,20 @@ if (import.meta.env.DEV) {
 // same [DEFAULT] app rather than throwing app/duplicate-app.
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-// ── App Check (TM-12) ────────────────────────────────────────────────────────
-// Initializes App Check when VITE_FIREBASE_APPCHECK_SITE_KEY is present.
-// Without the key the branch is dead code (Vite replaces the env ref with
-// undefined; Rollup eliminates the unreachable if-block from the prod bundle).
+// ── App Check (TM-12 / Phase 2E) ─────────────────────────────────────────────
+// Exactly one initializeAppCheck, split by platform in utils/appCheck.ts:
+//   Capacitor Android → CustomProvider wrapping the native Play Integrity /
+//     Debug bridge. Not gated on the reCAPTCHA site key. Never falls back
+//     to WebView reCAPTCHA.
+//   Web/PWA (and Capacitor iOS, out of scope) → existing
+//     ReCaptchaEnterpriseProvider, still gated on VITE_FIREBASE_APPCHECK_SITE_KEY.
+// isTokenAutoRefreshEnabled remains true on both paths.
 // Required before any protected Firebase service call so App Check tokens
 // are available when Auth/Firestore/Functions requests are issued.
 //
-// To enable:
-//   1. Register the app in Firebase Console → App Check → Apps
-//   2. Add VITE_FIREBASE_APPCHECK_SITE_KEY=<site-key> to .env.production
-//   3. Deploy; monitor Firebase Console → App Check → Metrics
-//   4. Enable enforceAppCheck:true on callables per docs/APP_CHECK_ROLLOUT.md
-//
-// Status: SOURCE PREPARED — PROVIDER REGISTRATION AND ENFORCEMENT PENDING
-const appCheckSiteKey = import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY;
-if (appCheckSiteKey) {
-  initializeAppCheck(app, {
-    provider: new ReCaptchaEnterpriseProvider(appCheckSiteKey),
-    isTokenAutoRefreshEnabled: true,
-  });
-} else if (import.meta.env.DEV) {
-  // ponytail: DEV-only warning — tree-shaken from prod bundle
-  console.warn('[AppCheck] TM-12 OPEN: VITE_FIREBASE_APPCHECK_SITE_KEY not set. App Check not initialized.');
-}
+// Enforcement of Cloud Functions is independent of this client init — see
+// docs/APP_CHECK_ROLLOUT.md. This phase does not change enforceAppCheck.
+initializeParQueenAppCheck(app);
 
 export const auth = getAuth(app);
 export const db = getFirestore(app);

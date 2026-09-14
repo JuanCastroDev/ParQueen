@@ -1,7 +1,10 @@
 /**
  * §6 — App Check prod bundle and source assertions (TM-12).
  *
- * Status: SOURCE PREPARED — PROVIDER REGISTRATION AND ENFORCEMENT PENDING
+ * Status: Web reCAPTCHA still gated on VITE_FIREBASE_APPCHECK_SITE_KEY.
+ * Capacitor Android uses CustomProvider + native Play Integrity / Debug
+ * (Phase 2E). Enforcement of Cloud Functions is independent — see
+ * docs/APP_CHECK_ROLLOUT.md.
  *
  * Vite strips the `if (import.meta.env.DEV)` guard in production builds.
  * When VITE_FIREBASE_APPCHECK_SITE_KEY is absent (CI/local without key),
@@ -18,6 +21,7 @@ import path from 'path';
 const DIST_DIR = path.resolve(__dirname, '../dist');
 const distExists = fs.existsSync(DIST_DIR);
 const SRC_CONFIG = path.resolve(__dirname, '../firebaseConfig.ts');
+const APP_CHECK_SRC = path.resolve(__dirname, './appCheck.ts');
 
 // Once App Check survives production tree-shaking, the official Firebase App
 // Check SDK's own compiled runtime legitimately contains the bare identifier
@@ -82,53 +86,52 @@ describe('§6 — App Check prod bundle assertions', () => {
         expect(devGuardIndex).toBeLessThan(debugTokenIndex);
     });
 
-    it('AC-6: initializeAppCheck is called in firebaseConfig.ts and guarded by site key (TM-12 source prepared)', () => {
+    it('AC-6: firebaseConfig.ts initializes App Check exactly once via initializeParQueenAppCheck(app)', () => {
         const src = fs.readFileSync(SRC_CONFIG, 'utf-8');
-        // Source is prepared: initializeAppCheck IS called
-        expect(src).toMatch(/initializeAppCheck\s*\(/);
-        // The call must be gated on VITE_FIREBASE_APPCHECK_SITE_KEY
-        const callIndex = src.indexOf('initializeAppCheck(');
-        const siteKeyGuardIndex = src.lastIndexOf('VITE_FIREBASE_APPCHECK_SITE_KEY', callIndex);
-        expect(siteKeyGuardIndex, 'VITE_FIREBASE_APPCHECK_SITE_KEY guard must precede initializeAppCheck call').toBeGreaterThan(-1);
-        expect(siteKeyGuardIndex).toBeLessThan(callIndex);
+        expect(src).toMatch(/initializeParQueenAppCheck\(app\)/);
+        expect(src.match(/initializeParQueenAppCheck\(/g) || []).toHaveLength(1);
+        expect(src).not.toMatch(/initializeAppCheck\s*\(/);
     });
 
-    it('AC-7: ReCaptchaEnterpriseProvider is used as the App Check provider', () => {
-        const src = fs.readFileSync(SRC_CONFIG, 'utf-8');
+    it('AC-7: ReCaptchaEnterpriseProvider remains the Web/PWA App Check provider', () => {
+        const src = fs.readFileSync(APP_CHECK_SRC, 'utf-8');
         expect(src).toMatch(/ReCaptchaEnterpriseProvider/);
-        // The provider is constructed with the site key variable, not a literal
-        const providerCallIdx = src.indexOf('new ReCaptchaEnterpriseProvider(');
+        const providerCallIdx = src.indexOf('new Recaptcha(');
         expect(providerCallIdx).toBeGreaterThan(-1);
         const providerArg = src.slice(providerCallIdx, src.indexOf(')', providerCallIdx));
         expect(providerArg).toMatch(/appCheckSiteKey/);
-        expect(providerArg).not.toMatch(/"[A-Za-z0-9_-]{20,}"/); // no hardcoded key literal
+        expect(providerArg).not.toMatch(/"[A-Za-z0-9_-]{20,}"/);
+        const nativeReturnIdx = src.indexOf("if (path === 'native-android')");
+        const recaptchaIdx = src.indexOf('new Recaptcha(');
+        expect(nativeReturnIdx).toBeGreaterThan(-1);
+        expect(src.lastIndexOf('return;', recaptchaIdx)).toBeGreaterThan(nativeReturnIdx);
     });
 
     it('AC-8: initializeAppCheck uses the same app instance as auth and db exports', () => {
         const src = fs.readFileSync(SRC_CONFIG, 'utf-8');
-        // All three must reference the same `app` variable, not getApp() or a fresh initializeApp()
-        expect(src).toMatch(/initializeAppCheck\(app,/);
+        const appCheckSrc = fs.readFileSync(APP_CHECK_SRC, 'utf-8');
+        expect(src).toMatch(/initializeParQueenAppCheck\(app\)/);
         expect(src).toMatch(/getAuth\(app\)/);
         expect(src).toMatch(/getFirestore\(app\)/);
+        expect(appCheckSrc).toMatch(/init\(app,/);
     });
 
-    it('AC-9: token auto-refresh is enabled', () => {
-        const src = fs.readFileSync(SRC_CONFIG, 'utf-8');
-        expect(src).toMatch(/isTokenAutoRefreshEnabled:\s*true/);
+    it('AC-9: token auto-refresh is enabled on both App Check paths', () => {
+        const src = fs.readFileSync(APP_CHECK_SRC, 'utf-8');
+        expect(src.match(/isTokenAutoRefreshEnabled:\s*true/g) || []).toHaveLength(2);
     });
 
-    it('AC-10: missing site key triggers a bounded DEV-only warning, not an error or silent fail', () => {
-        const src = fs.readFileSync(SRC_CONFIG, 'utf-8');
-        // else branch exists for missing key
-        expect(src).toMatch(/else if \(import\.meta\.env\.DEV\)/);
-        // warning is emitted, not an error throw
-        expect(src).toMatch(/console\.warn\(.*TM-12/);
+    it('AC-10: missing site key triggers a bounded DEV-only warning on the web path, not an error or silent fail', () => {
+        const src = fs.readFileSync(APP_CHECK_SRC, 'utf-8');
+        expect(src).toMatch(/else if \(isDev\)/);
+        expect(src).toMatch(/TM-12 OPEN: VITE_FIREBASE_APPCHECK_SITE_KEY not set/);
     });
 
-    it('AC-11: initializeAppCheck import is present in firebaseConfig.ts', () => {
-        const src = fs.readFileSync(SRC_CONFIG, 'utf-8');
-        expect(src).toMatch(/import.*initializeAppCheck.*from 'firebase\/app-check'/);
-        expect(src).toMatch(/import.*ReCaptchaEnterpriseProvider.*from 'firebase\/app-check'/);
+    it('AC-11: initializeAppCheck import is present in utils/appCheck.ts with both providers', () => {
+        const src = fs.readFileSync(APP_CHECK_SRC, 'utf-8');
+        expect(src).toMatch(/import[\s\S]*initializeAppCheck[\s\S]*from 'firebase\/app-check'/);
+        expect(src).toMatch(/import[\s\S]*ReCaptchaEnterpriseProvider[\s\S]*from 'firebase\/app-check'/);
+        expect(src).toMatch(/import[\s\S]*CustomProvider[\s\S]*from 'firebase\/app-check'/);
     });
 
     it('AC-13: initializeApp in firebaseConfig.ts is guarded by getApps() — idempotent init', () => {

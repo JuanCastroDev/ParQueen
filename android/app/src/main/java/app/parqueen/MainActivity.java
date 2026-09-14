@@ -8,6 +8,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(PhoneAuthPlugin.class);
+        registerPlugin(AppCheckBridgePlugin.class);
         super.onCreate(savedInstanceState);
     }
 }
