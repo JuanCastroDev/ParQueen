@@ -45,6 +45,10 @@ See `docs/ANDROID_PHASE_2B.md` for `@capacitor/geolocation`, the shared `utils/g
 
 See `docs/ANDROID_PHASE_2C.md` for `@capacitor/push-notifications`, `POST_NOTIFICATIONS`, and the shared `notificationRegistration` abstraction. Stacked on Phase 2B / PR #156.
 
+## Phase 2D (Android native camera / photo picker)
+
+See `docs/ANDROID_PHASE_2D.md` for `@capacitor/camera`, the shared `utils/signScanner` abstraction, FileProvider narrowing, and the physical Samsung AI Sign Scanner checklist.
+
 ## Out of scope (later phases)
 
-iOS native push / APNs, camera, App Check attestation bridge, iOS native auth, Mapbox native SDK, store signing, background location, multi-device FCM token lists.
+iOS native push / APNs, iOS native camera, App Check attestation bridge, iOS native auth, Mapbox native SDK, store signing, background location, multi-device FCM token lists.

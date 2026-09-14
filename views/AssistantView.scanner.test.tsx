@@ -169,6 +169,27 @@ describe('Sign Scanner — scan states', () => {
     expect(textOf(r)).toContain('Cancel');
   });
 
+  it('shows the full sign photo with object-contain in preview and compact result', async () => {
+    const r = await mount();
+    await choosePhoto(r);
+    const previewImg = r.root.findByType('img');
+    expect(previewImg.props.className).toContain('object-contain');
+    expect(previewImg.props.className).not.toContain('object-cover');
+    expect(previewImg.props.className).toContain('max-h-[340px]');
+
+    await act(async () => {
+      buttonWith(r, 'Analyze Sign').props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const doneImg = r.root.findByType('img');
+    expect(doneImg.props.className).toContain('object-contain');
+    expect(doneImg.props.className).not.toContain('object-cover');
+    expect(doneImg.props.className).toContain('max-h-[160px]');
+    expect(textOf(r)).toContain('Parking allowed after 6pm.');
+  });
+
   it('prevents duplicate submissions from a double tap', async () => {
     let resolveCall: (v: any) => void = () => {};
     analyzeParkingSign.mockImplementation(() => new Promise(res => { resolveCall = res; }));
