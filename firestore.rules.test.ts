@@ -974,6 +974,48 @@ describe('chats and messages — participant isolation', () => {
         );
     });
 
+    it('CM-20b: a create-shaped setDoc of an existing chat is denied (update:false) — concurrent/re-open init treats this as already-exists', async () => {
+        await assertFails(
+            setDoc(doc(ownerDb(), 'chats', CHAT_ID), {
+                id: CHAT_ID,
+                participants: chatData.participants,
+                relatedSpotTitle: chatData.relatedSpotTitle,
+            })
+        );
+    });
+
+    it('CM-31: getDoc of a nonexistent chat is denied even for a signed-in would-be participant (existence probe is not allowed)', async () => {
+        const missingId = [OWNER_UID, THIRD_UID].sort().join('_') + '_missing';
+        await assertFails(getDoc(doc(ownerDb(), 'chats', missingId)));
+    });
+
+    it('CM-32: listing messages of a nonexistent parent chat is denied (messages listener must not attach before the shell exists)', async () => {
+        const missingId = [OWNER_UID, THIRD_UID].sort().join('_') + '_missing_msgs';
+        await assertFails(getDocs(collection(ownerDb(), 'chats', missingId, 'messages')));
+    });
+
+    it('CM-33: a signed-in stranger cannot create a chat they are not a participant of', async () => {
+        const strangerChatId = `${OWNER_UID}_${OTHER_UID}_stranger`;
+        await assertFails(
+            setDoc(doc(thirdDb(), 'chats', strangerChatId), {
+                id: strangerChatId,
+                participants: [OWNER_UID, OTHER_UID],
+                relatedSpotTitle: 'Street Spot',
+            })
+        );
+    });
+
+    it('CM-34: an unauthenticated client cannot create a chat', async () => {
+        const anonChatId = `${OWNER_UID}_${OTHER_UID}_anon`;
+        await assertFails(
+            setDoc(doc(anonDb(), 'chats', anonChatId), {
+                id: anonChatId,
+                participants: [OWNER_UID, OTHER_UID],
+                relatedSpotTitle: 'Street Spot',
+            })
+        );
+    });
+
     it('CM-16: a brand-new chat can be created with the shell schema only (id, participants, relatedSpotTitle — no participantNames, no lastMessage/lastMessageTimestamp/lastSenderId)', async () => {
         const newChatId = `${OWNER_UID}_${THIRD_UID}`;
         await assertSucceeds(
@@ -983,6 +1025,21 @@ describe('chats and messages — participant isolation', () => {
                 relatedSpotTitle: 'Street Spot',
             })
         );
+    });
+
+    it('CM-16c: after creating a new shell, only participants can read it — signed-in strangers remain denied (no read widening)', async () => {
+        const newChatId = `${OWNER_UID}_${THIRD_UID}_postcreate`;
+        await assertSucceeds(
+            setDoc(doc(ownerDb(), 'chats', newChatId), {
+                id: newChatId,
+                participants: [OWNER_UID, THIRD_UID],
+                relatedSpotTitle: 'Street Spot',
+            })
+        );
+        await assertSucceeds(getDoc(doc(ownerDb(), 'chats', newChatId)));
+        await assertSucceeds(getDoc(doc(thirdDb(), 'chats', newChatId)));
+        await assertFails(getDoc(doc(otherDb(), 'chats', newChatId)));
+        await assertFails(getDocs(collection(otherDb(), 'chats', newChatId, 'messages')));
     });
 
     it('CM-16b: creating a new chat with a participantNames field included is denied (removed from schema)', async () => {

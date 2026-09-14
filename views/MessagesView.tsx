@@ -8,6 +8,7 @@ import { getApp } from 'firebase/app';
 import { db } from '../firebase';
 import { moderateMessage } from '../utils/moderation';
 import { reportCriticalActionFailure } from '../utils/errorReporting';
+import { chatShellCreatePayload, ensureChatShell } from '../utils/chatShell';
 import { t, useLang } from '../i18n';
 import { AppView } from '../types';
 import { NavigationBar } from './street-parking/NavigationBar';
@@ -104,9 +105,11 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
   const lang = useLang();
   const locale = lang === 'es' ? 'es-US' : 'en-US';
   const [conversations, setConversations] = useState<any[]>([]);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(
-    activeChatContext && user ? [user.id, activeChatContext.userId].sort().join('_') : null
-  );
+  // Never seed this from activeChatContext: a Ping-opened NEW chat has no
+  // parent document yet, and the messages listener (effect 3) would attach
+  // against a nonexistent chats/{chatId} and receive permission-denied.
+  // initChat confirms/creates the shell first, then sets the id.
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [inputText, setInputText] = useState('');
   const [moderationError, setModerationError] = useState('');
@@ -160,6 +163,8 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
   // userProfilesCache).
   const userProfilesCacheRef = useRef(userProfilesCache);
   useEffect(() => { userProfilesCacheRef.current = userProfilesCache; }, [userProfilesCache]);
+  const conversationsRef = useRef(conversations);
+  conversationsRef.current = conversations;
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deletingChat, setDeletingChat] = useState(false);
@@ -343,41 +348,55 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
     return () => unsubscribe();
   }, [user?.id, JSON.stringify(user?.blockedUsers)]);
 
-  // 2. Handle activeChatContext passed from spot click
+  // 2. Handle activeChatContext passed from a Ping "Message" tap.
+  // Do not getDoc the chat first: a brand-new deterministic chat has no
+  // document, and `allow read: if chatParticipant(resource.data)` denies
+  // that existence probe. Create-only setDoc is allowed; if the shell
+  // already exists, update is denied and ensureChatShell treats that as
+  // already-exists. The messages listener (effect 3) must not attach until
+  // this completes — activeConversationId stays null until then.
   useEffect(() => {
     if (!user || !activeChatContext || !db) return;
 
+    let cancelled = false;
+    const payload = chatShellCreatePayload(
+      user.id,
+      activeChatContext.userId,
+      activeChatContext.context || 'Street Spot',
+    );
+    const chatId = payload.id;
+
     const initChat = async () => {
-      const chatId = [user.id, activeChatContext.userId].sort().join("_");
-      const chatRef = doc(db, "chats", chatId);
-
-      // Chat shell (id/participants/relatedSpotTitle) is create-once — the
-      // chats/{chatId} Rules deny direct client update entirely, so a
-      // re-navigation to an already-existing conversation must not attempt
-      // to write anything at all. participantNames is no longer part of the
-      // schema: display names are always sourced live from users/{uid}.
-      // fullName (see the conversation-list effect below), so there is
-      // nothing left for this function to fetch or cache. See
-      // docs/CHAT_SHELL_METADATA_HARDENING.md.
-      const existing = await getDoc(chatRef);
-      if (!existing.exists()) {
-        await setDoc(chatRef, {
-          id: chatId,
-          participants: [user.id, activeChatContext.userId],
-          relatedSpotTitle: activeChatContext.context || "Street Spot",
-        });
+      const alreadyListed = conversationsRef.current.some(c => c.id === chatId);
+      if (!alreadyListed) {
+        try {
+          await ensureChatShell(
+            (shell) => setDoc(doc(db, 'chats', shell.id), shell),
+            payload,
+          );
+        } catch (e: any) {
+          if (cancelled) return;
+          const code: string = e?.code ?? '';
+          console.error('Error initializing chat:', e);
+          reportCriticalActionFailure('chat_init', e, code ? { errorCode: code } : undefined);
+          showToast(t('messages.toast_open_failed'), true);
+          return;
+        }
       }
-
-      setActiveConversationId(chatId);
+      if (!cancelled) setActiveConversationId(chatId);
     };
 
     initChat();
+    return () => { cancelled = true; };
   }, [user?.id, activeChatContext]);
 
   // 3. Listen to the newest MESSAGE_PAGE_SIZE messages for the active
   // conversation in realtime; older history is loaded explicitly via
   // loadOlderMessages(). See the state block above for the
   // retainedMessagesRef/liveWindowIdsRef contract.
+  // Invariant: activeConversationId is only set for an existing parent
+  // (inbox click) or after initChat confirms/creates the shell. Do not
+  // attach this listener to a chat id that has not been confirmed.
   useEffect(() => {
     retainedMessagesRef.current = new Map();
     liveWindowIdsRef.current = new Set();
@@ -959,6 +978,11 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
           </>
         )}
       </div>
+      {actionToast && (
+        <div role={toastIsError ? 'alert' : 'status'} className="shrink-0 px-4 pb-2">
+          <p className={`pq-inline-note${toastIsError ? ' pq-inline-note--error' : ''}`}>{actionToast}</p>
+        </div>
+      )}
       {setView && (
         <NavigationBar
           currentView={AppView.MESSAGES}
