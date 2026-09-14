@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <external-path name="my_images" path="." />
-    <cache-path name="my_cache_images" path="." />
+    <!-- App-private cache. @capacitor/camera copies picker/camera bytes here
+         (IonCameraUtils / cacheDir) for processing. Not shared storage. -->
+    <cache-path name="parqueen_camera_cache" path="." />
+    <!-- App-private Pictures dir used by CameraUtils.createImageFile
+         (getExternalFilesDir(DIRECTORY_PICTURES)) when the stock camera
+         Activity writes EXTRA_OUTPUT. App-scoped; not the user gallery. -->
+    <external-files-path name="parqueen_camera_pictures" path="Pictures/" />
 </paths>

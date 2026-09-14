@@ -6,6 +6,12 @@ import { handleVitePreloadError } from './utils/staleChunkRecovery';
 import { initSentry } from './utils/sentryInit';
 import { PublicLegalRoute } from './components/PublicLegalRoute';
 import { resolvePublicLegalRoute } from './utils/legalRoutes';
+import { initSignScannerRestore } from './utils/signScanner';
+
+// Android may kill the WebView while the system camera Activity is open.
+// Register restored-plugin handling before React mounts so a completed
+// capture is not dropped on process recreation.
+initSignScannerRestore();
 
 // Production-only exception monitoring; a no-op in dev/test or when no DSN
 // is configured (see utils/sentryInit.ts for the full privacy contract).

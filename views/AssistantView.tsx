@@ -11,6 +11,13 @@ import { analyzeParkingSign, SignAnalysisResult } from '../services/geminiServic
 import { useParkingTimer } from './street-parking/useParkingTimer';
 import { t, useLang } from '../i18n';
 import { loadRecentScans, recordScan, RecentScan } from '../utils/recentScans';
+import {
+  captureFromCamera,
+  pickFromGallery,
+  subscribeRestoredSignCapture,
+  usesNativeSignCapture,
+  type SignCaptureOutcome,
+} from '../utils/signScanner';
 
 type ScanState = 'idle' | 'preview' | 'analyzing' | 'done';
 
@@ -58,10 +65,39 @@ export const AssistantView = ({ onBack, onOpenMyCar }: AssistantViewProps = {}) 
   // Guards against a second submit while a request is already in flight, which
   // a fast double-tap on the CTA would otherwise produce.
   const inFlightRef = useRef(false);
+  const captureInFlightRef = useRef(false);
   const { startTimer, timer } = useParkingTimer();
   useFocusOnMount(headingRef);
 
   useEffect(() => { setRecent(loadRecentScans()); }, []);
+
+  const applyCapture = useCallback((outcome: SignCaptureOutcome) => {
+    if (outcome.status !== 'captured') return;
+    setImage(outcome.image.previewUrl);
+    setImageData(outcome.image.imageData);
+    setAnalysis(null);
+    setScanState('preview');
+    setMode('scan');
+  }, []);
+
+  useEffect(() => subscribeRestoredSignCapture(applyCapture), [applyCapture]);
+
+  const openNativeOrInput = async (
+    nativeCapture: () => Promise<SignCaptureOutcome>,
+    input: React.RefObject<HTMLInputElement>,
+  ) => {
+    if (!usesNativeSignCapture()) {
+      input.current?.click();
+      return;
+    }
+    if (captureInFlightRef.current) return;
+    captureInFlightRef.current = true;
+    try {
+      applyCapture(await nativeCapture());
+    } finally {
+      captureInFlightRef.current = false;
+    }
+  };
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -284,14 +320,14 @@ export const AssistantView = ({ onBack, onOpenMyCar }: AssistantViewProps = {}) 
               </p>
               <button
                 type="button"
-                onClick={() => fileInputRef.current?.click()}
+                onClick={() => { void openNativeOrInput(captureFromCamera, fileInputRef); }}
                 className="pq-cta w-full py-3.5 rounded-2xl font-bold text-white text-sm mb-3 focus-visible:ring-2 focus-visible:ring-[#38bdf8] focus-visible:outline-none"
               >
                 {t('assistant.open_camera')}
               </button>
               <button
                 type="button"
-                onClick={() => galleryInputRef.current?.click()}
+                onClick={() => { void openNativeOrInput(pickFromGallery, galleryInputRef); }}
                 className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 text-sm font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text)] rounded-2xl border border-[var(--color-border)] focus-visible:ring-2 focus-visible:ring-[#38bdf8] focus-visible:outline-none transition-colors"
               >
                 <ImageIcon size={16} aria-hidden="true" /> {t('assistant.choose_photos')}
