@@ -91,6 +91,28 @@ export function nearbyPermissionState(
     return 'not_determined'; // 'unknown'
 }
 
+/** Settings / primer CTA kind. Enable must be offered when the OS can still be asked. */
+export type LocationPermissionCTAKind =
+    | 'enable'
+    | 'recheck'
+    | 'openSettings'
+    | 'openLocationServices';
+
+export function locationPermissionCTAKind(
+    state: LocationPermissionState,
+    caps: Pick<LocationCallbacks, 'canOpenAppSettings' | 'canOpenLocationServicesSettings'> = {
+        canOpenAppSettings: false,
+        canOpenLocationServicesSettings: false,
+    },
+): LocationPermissionCTAKind | null {
+    if (state === 'not_determined' || state === 'denied_requestable') return 'enable';
+    if (state === 'permanently_blocked') return caps.canOpenAppSettings ? 'openSettings' : 'recheck';
+    if (state === 'services_disabled') {
+        return caps.canOpenLocationServicesSettings ? 'openLocationServices' : 'recheck';
+    }
+    return null;
+}
+
 /** What CTA action to wire for blocked permission states.
  *  Derived from capabilities so the view never labels a button with an action
  *  the adapter cannot perform. */

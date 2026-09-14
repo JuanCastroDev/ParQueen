@@ -5,6 +5,9 @@ import {
     shouldShowPrimer,
     resolveFromPermissions,
     resolveFromPermissionSnapshot,
+    resolveFromNativePermissionSnapshot,
+    reconcileLocationAccess,
+    persistReconciledAccess,
     type LocationAccess,
 } from './locationAccess';
 
@@ -14,6 +17,7 @@ const makeStorage = (entries: Record<string, string> = {}) => {
     return {
         getItem: (k: string) => map.get(k) ?? null,
         setItem: (k: string, v: string) => { map.set(k, v); },
+        removeItem: (k: string) => { map.delete(k); },
         get: (k: string) => map.get(k),
     };
 };
@@ -156,6 +160,11 @@ describe('resolveFromPermissionSnapshot', () => {
         expect(resolveFromPermissionSnapshot('unavailable', 'unknown')).toBe('unknown');
         expect(resolveFromPermissionSnapshot('unavailable', 'granted')).toBe('granted');
         expect(resolveFromPermissionSnapshot('prompt', 'declined')).toBe('declined');
+    });
+
+    it('web/PWA: prompt preserves stored denied (unchanged browser semantics)', () => {
+        expect(resolveFromPermissionSnapshot('prompt', 'denied')).toBe('denied');
+        expect(reconcileLocationAccess('prompt', 'denied', 'browser')).toBe('denied');
     });
 });
 

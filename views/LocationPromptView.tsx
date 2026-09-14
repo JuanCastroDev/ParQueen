@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { t, useLang } from '../i18n';
-import { readPersistedAccess, resolveFromPermissionSnapshot } from '../utils/locationAccess';
+import { readPersistedAccess, reconcileLocationAccess } from '../utils/locationAccess';
 import { checkLocationPermission, requestLocationPermission } from '../utils/geolocation';
+import { resolveGeolocationPath } from '../utils/geolocationPlatform';
 
 interface LocationPromptViewProps {
     onComplete: (access: 'granted' | 'declined' | 'denied') => void;
@@ -22,7 +23,7 @@ export const LocationPromptView: React.FC<LocationPromptViewProps> = ({ onComple
         checkLocationPermission()
             .then((snap) => {
                 if (cancelled) return;
-                const resolved = resolveFromPermissionSnapshot(snap.status, readPersistedAccess());
+                const resolved = reconcileLocationAccess(snap.status, readPersistedAccess(), resolveGeolocationPath());
                 if (resolved === 'granted') onComplete('granted');
                 else if (resolved === 'denied') onComplete('denied');
             })

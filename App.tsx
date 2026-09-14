@@ -35,9 +35,10 @@ const PrivacyPolicyView = lazy(() => import('./views/PrivacyPolicyView').then(m 
 const TermsOfUseView = lazy(() => import('./views/TermsOfUseView').then(m => ({ default: m.TermsOfUseView })));
 const ContactUsView = lazy(() => import('./views/ContactUsView').then(m => ({ default: m.ContactUsView })));
 import { AppView } from './types';
-import { readPersistedAccess, persistAccessChoice, shouldShowPrimer, resolveFromPermissionSnapshot, type LocationAccess } from './utils/locationAccess';
+import { readPersistedAccess, persistAccessChoice, persistReconciledAccess, shouldShowPrimer, reconcileLocationAccess, type LocationAccess } from './utils/locationAccess';
 import { nearbyPermissionState, type LocationCallbacks } from './utils/nearbyActivity';
 import { checkLocationPermission, requestLocationPermission } from './utils/geolocation';
+import { resolveGeolocationPath } from './utils/geolocationPlatform';
 import { getLang, setLang, t } from './i18n';
 import { getLanguageHydrationAction } from './utils/languageHydration';
 import { ChevronLeft } from 'lucide-react';
@@ -237,9 +238,9 @@ export default function App() {
               const snap = await checkLocationPermission();
               if (snap.locationServicesEnabled === false) setLocationServicesEnabled(false);
               else if (snap.locationServicesEnabled === true) setLocationServicesEnabled(true);
-              const reconciled = resolveFromPermissionSnapshot(snap.status, access);
-              if ((reconciled === 'granted' || reconciled === 'denied') && reconciled !== access) {
-                persistAccessChoice(reconciled);
+              const reconciled = reconcileLocationAccess(snap.status, access, resolveGeolocationPath());
+              if (reconciled !== access) {
+                persistReconciledAccess(reconciled);
                 access = reconciled;
               }
             } catch {}
@@ -479,11 +480,9 @@ export default function App() {
           return;
         }
         if (snap.locationServicesEnabled === true) setLocationServicesEnabled(true);
-        const next = resolveFromPermissionSnapshot(snap.status, locationAccess);
-        if ((next === 'granted' || next === 'denied') && next !== locationAccess) {
-          persistAccessChoice(next);
-          setLocationAccess(next);
-        }
+        const next = reconcileLocationAccess(snap.status, locationAccess, resolveGeolocationPath());
+        if (next !== locationAccess) persistReconciledAccess(next);
+        setLocationAccess(next);
       } catch {}
     },
     openAppSettings: () => {
@@ -502,11 +501,9 @@ export default function App() {
           return;
         }
         if (snap.locationServicesEnabled === true) setLocationServicesEnabled(true);
-        const reconciled = resolveFromPermissionSnapshot(snap.status, locationAccess);
-        if ((reconciled === 'granted' || reconciled === 'denied') && reconciled !== locationAccess) {
-          persistAccessChoice(reconciled);
-          setLocationAccess(reconciled);
-        }
+        const reconciled = reconcileLocationAccess(snap.status, locationAccess, resolveGeolocationPath());
+        if (reconciled !== locationAccess) persistReconciledAccess(reconciled);
+        setLocationAccess(reconciled);
       } catch {}
     },
   };

@@ -1,9 +1,12 @@
+import type { GeolocationPath } from './geolocationPlatform';
+
 export type LocationAccess = 'unknown' | 'granted' | 'declined' | 'denied';
+export type LocationPermissionSnapshotStatus = 'prompt' | 'granted' | 'denied' | 'unavailable';
 
 const CHOICE_KEY = 'locationAccessChoice';
 const LEGACY_KEY = 'hasSeenLocationPrompt';
 
-type MinStorage = Pick<Storage, 'getItem' | 'setItem'>;
+type MinStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
 /** Read persisted location access choice from storage. */
 export function readPersistedAccess(storage: MinStorage = localStorage): LocationAccess {
@@ -47,11 +50,57 @@ export function resolveFromPermissions(
 /**
  * Same product mapping as `resolveFromPermissions`, for the location abstraction
  * snapshot (`unavailable` behaves like `prompt`: do not invent a denial).
+ * Web/PWA only — do not use this for Capacitor Android.
  */
 export function resolveFromPermissionSnapshot(
-    status: 'prompt' | 'granted' | 'denied' | 'unavailable',
+    status: LocationPermissionSnapshotStatus,
     stored: LocationAccess,
 ): LocationAccess {
     if (status === 'unavailable') return stored;
     return resolveFromPermissions(status, stored);
+}
+
+/**
+ * Native Android: OS permission is authoritative over stale pre-native
+ * `locationAccessChoice` values written by older WebView/browser builds.
+ *
+ * `prompt` means the OS has not resolved the runtime permission. A stored
+ * `denied` from that older path must not become permanently_blocked.
+ * Intentional "Not now" (`declined`) is preserved and does not auto-prompt.
+ */
+export function resolveFromNativePermissionSnapshot(
+    status: LocationPermissionSnapshotStatus,
+    stored: LocationAccess,
+): LocationAccess {
+    if (status === 'granted') return 'granted';
+    if (status === 'denied') return 'denied';
+    if (status === 'unavailable') return stored;
+    if (stored === 'declined') return 'declined';
+    return 'unknown';
+}
+
+/** Platform-aware mapping. Web keeps browser semantics; Android uses the native helper. */
+export function reconcileLocationAccess(
+    status: LocationPermissionSnapshotStatus,
+    stored: LocationAccess,
+    path: GeolocationPath,
+): LocationAccess {
+    return path === 'native'
+        ? resolveFromNativePermissionSnapshot(status, stored)
+        : resolveFromPermissionSnapshot(status, stored);
+}
+
+/**
+ * Persist a reconciled product choice. `unknown` clears a stale stored denial
+ * so it cannot resurrect on the next read.
+ */
+export function persistReconciledAccess(
+    access: LocationAccess,
+    storage: MinStorage = localStorage,
+): void {
+    if (access === 'granted' || access === 'denied' || access === 'declined') {
+        persistAccessChoice(access, storage);
+        return;
+    }
+    storage.removeItem(CHOICE_KEY);
 }
