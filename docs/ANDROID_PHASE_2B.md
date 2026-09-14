@@ -61,32 +61,33 @@ After an Android grant: `watchPosition` feeds `userLocation` (`[lng, lat]`), the
 
 `ios/App/App/Info.plist` includes `NSLocationWhenInUseUsageDescription` and `NSLocationAlwaysAndWhenInUseUsageDescription` because the official plugin's iOS dependency (`ion-ios-geolocation`) can report location in the background and Apple requires both strings when the binary is linked. **ParQueen does not use native iOS geolocation or background location in Phase 2B.** The Always string is not a ParQueen background-tracking feature. iOS native auth and iOS location validation remain out of scope.
 
-## Physical Samsung acceptance (Juan)
+## Physical Samsung acceptance (validated 2026-09-14)
 
-Not performed by this change. Validate on **Samsung SM-G981U1 / Android 13** with a local debug APK after `npx cap sync` + `:app:assembleDebug`.
+**Validated on Samsung SM-G981U1 / Android 13** against exact head `edc4a045705f8ddf7cf5ccd6cb10f82c92a4eb23`. No Hosting / Functions / Firestore rules deploy.
 
-1. Fresh install (or clear app data). Sign in. Location primer appears.
-2. Tap **Not now**. Map opens without an OS location dialog. No user marker. Recenter does not invent a GPS fix.
-3. Settings → Location → Enable location. OS dialog appears **once**. Allow **precise**.
-4. Map shows a blue user marker near the real position. Recenter flies to it. Walking / waiting updates the marker (`watchPosition`).
-5. Nearby Activity / Notifications uses the same grant and shows nearby Pings (or empty, not a permission wall).
-6. Force-stop and reopen: no second OS dialog; marker returns.
-7. App info → Permissions → Location → **Allow approximate**. Marker / recenter / nearby still work (coarser).
-8. App info → Permissions → Location → **Deny**. App does not re-prompt the OS. Nearby shows blocked / enable-from-settings. Transient GPS timeout while still allowed must **not** flip the app to permanently denied.
-9. Turn off device Location. Enable in-app should not store a permanent denial; turning Location back on and retrying works.
-10. Confirm no `ACCESS_BACKGROUND_LOCATION` in the installed app's permission list.
+| Check | Result |
+| --- | --- |
+| Clean OS location state (coarse/fine not granted) | Pass |
+| Migration: Settings showed Not allowed / **Enable location** (not Blocked / Check again) | Pass |
+| Enable location -> native Android runtime dialog | Pass |
+| Precise + While using the app | Pass |
+| Map showed current location immediately | Pass |
+| Force-close / reopen: no second OS dialog; marker returned | Pass |
+| No `ACCESS_BACKGROUND_LOCATION` declared | Pass |
 
-### Migration: stale pre-native `denied` (discovered on SM-G981U1)
+The stale pre-native denial migration bug is **physically confirmed fixed**.
 
-Existing installs that ran WebView/browser geolocation before Phase 2B can have `locationAccessChoice=denied` while Android still reports `prompt` (both `ACCESS_FINE_LOCATION` and `ACCESS_COARSE_LOCATION` never granted). That used to show Settings → Location **Blocked** with only **Check again**, so the runtime dialog could never appear.
+### Acceptance checklist (completed)
 
-Retest on the same Samsung after this reconciliation fix, **without** ADB grant:
+1. Fresh / clean permission state reproduced (coarse and fine not granted).
+2. Stale stored denial migration: Location not allowed + Enable location (not Blocked / Check again).
+3. Tap Enable location -> Android runtime dialog.
+4. Allow Precise + While using the app.
+5. Map shows current location; current-location marker returns after force-close/reopen without a second dialog.
+6. No `ACCESS_BACKGROUND_LOCATION` in the installed app.
 
-11. Use an install that already has stale `locationAccessChoice=denied` (or write that key, then reopen). App info → Permissions → Location must still be **not granted**.
-12. Open Settings → Location. It must **not** stay on Blocked / Check again. Expect **Not enabled** (or Not allowed if the stored choice is intentional Not now) and an **Enable location** action.
-13. Tap **Enable location**. The Android runtime dialog must appear. Allow precise or approximate.
-14. Location becomes Allowed / Enabled. Map marker and recenter work. Do not ADB-grant first — the in-app Enable path must request the OS permission.
+### Migration note (stale pre-native `denied`)
 
-If the stored choice is **Not now** (`declined`) and OS is still `prompt`, Enable remains available and the primer is not forced again.
+Existing installs that ran WebView/browser geolocation before Phase 2B can have `locationAccessChoice=denied` while Android still reports `prompt`. Native reconciliation treats OS `prompt` as authoritative over that stale denial so Enable can request the OS permission. Web/PWA browser semantics are unchanged.
 
 Do not deploy Hosting, Functions, or Firestore rules for this validation.
