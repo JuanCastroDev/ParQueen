@@ -43,7 +43,7 @@ Android 10+ (API 29+) does not require storage permission for the system Photo P
 
 `saveToGallery` is **false**. Captured sign photos are not copied into the user gallery.
 
-Packaging only (not a permission): Capacitor's Photo Picker backport `ModuleDependencies` service, so older Play-services devices can install the backported picker. Android 13 already has the system picker.
+The official `@capacitor/camera` Android library (`ioncamera-android` 1.0.2) already packages the Photo Picker backport `ModuleDependencies` service. This app manifest does not duplicate it. Android 13 already has the system picker.
 
 ## FileProvider
 
@@ -70,7 +70,15 @@ Why these two are required:
 
 **Removed:** `<external-path path="." />` (shared storage root). Not required for Capacitor Camera with `saveToGallery: false`.
 
-The plugin's in-app editor path uses a separate authority (`${applicationId}.camera.provider`) from `ioncamera-android`. ParQueen sets `editable: 'no'`, so that editor FileProvider is not on the scanner path. The app still keeps the existing `${applicationId}.fileprovider` entry in `AndroidManifest.xml` (exported=false, grantUriPermissions=true) because the camera Activity writes through it.
+The plugin's in-app editor path uses a **separate** FileProvider from `ioncamera-android` 1.0.2:
+
+- Authority: `${applicationId}.camera.provider` (`app.parqueen.camera.provider`)
+- Paths file: library `res/xml/ioncamera_paths.xml` (not this app's `file_paths.xml`)
+- `takePhoto` / `chooseFromGallery` use this provider and write through `cacheDir` (`getAbsoluteCachedFilePath`) when `saveToGallery` is false
+
+That library FileProvider's default path list is broader (including `<external-path path="." />`). ParQueen does **not** copy those entries into `android/app/src/main/res/xml/file_paths.xml`. Overriding `ioncamera_paths.xml` from the app was not done in this phase: it is the official plugin's resource, and a wrong override can fail capture (`IllegalArgumentException: Failed to find configured root`) with no Samsung device in this change to re-verify. The app-level FileProvider was still narrowed as requested.
+
+ParQueen sets `editable: 'no'`, so the in-app editor Activity is not on the scanner path.
 
 ## Process restoration
 
