@@ -1,5 +1,7 @@
 'use strict';
 
+const { createCleaningFingerprint } = require('./cleaningFingerprint');
+
 const SHADOW_COMPARISON_CATEGORIES = Object.freeze([
   'exact_agreement',
   'new_adds_meter',
@@ -70,10 +72,19 @@ function findSensitiveLocationField(value, path = []) {
   return null;
 }
 
-const CLEANING_FINGERPRINT = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)(?:,(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun))*\|(?:[01]\d|2[0-3]):[0-5]\d\|(?:[01]\d|2[0-3]):[0-5]\d$/;
+const SCHEDULE_FINGERPRINT = '(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)(?:,(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun))*\\|(?:[01]\\d|2[0-3]):[0-5]\\d\\|(?:[01]\\d|2[0-3]):[0-5]\\d';
+const CLEANING_FINGERPRINT = new RegExp(`^${SCHEDULE_FINGERPRINT}(?:;${SCHEDULE_FINGERPRINT})*$`);
 const SAFE_SOURCE_VERSION = /^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$/;
-const validFingerprint = value => value === null
-  || (typeof value === 'string' && CLEANING_FINGERPRINT.test(value));
+function validFingerprint(value) {
+  if (value === null) return true;
+  if (typeof value !== 'string' || !CLEANING_FINGERPRINT.test(value)) return false;
+  const schedules = value.split(';').map(entry => {
+    const [days, startTime, endTime] = entry.split('|');
+    return { days: days.split(','), startTime, endTime };
+  });
+  const canonical = createCleaningFingerprint(schedules);
+  return canonical.ok && canonical.fingerprint === value;
+}
 
 function validSourceVersions(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
