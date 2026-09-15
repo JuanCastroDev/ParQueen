@@ -35,7 +35,8 @@ const SOURCE_ADAPTER_BOUNDARIES = Object.freeze({
     resourceId: 'e7yp-wx55',
     role: 'payment_rules',
     authoritative: true,
-    implementationPhase: 'deferred',
+    implementationPhase: 'shadow_only',
+    requiresSourceVersion: true,
   }),
   sweepNyc: Object.freeze({
     role: 'optional_operational_evidence',
