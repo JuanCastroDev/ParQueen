@@ -41,7 +41,7 @@ describe('curb source adapter boundaries', () => {
     expect(SOURCE_ADAPTER_BOUNDARIES).toMatchObject({
       cscl: { mapAssetId: '3mf9-qshr', resourceId: 'inkn-q76z', role: 'official_curb_identity' },
       nycDotSigns: { resourceId: 'nfid-uabd', role: 'posted_regulations' },
-      parkNyc: { resourceId: 'e7yp-wx55', role: 'payment_rules', implementationPhase: 'deferred' },
+      parkNyc: { resourceId: 'e7yp-wx55', role: 'payment_rules', implementationPhase: 'shadow_only', requiresSourceVersion: true },
       sweepNyc: { role: 'optional_operational_evidence', authoritative: false },
     });
   });
