@@ -16,9 +16,19 @@ const meter = (overrides = {}) => ({
 });
 const curb = (state = 'SUPPORTED') => ({ state, officialIdentity: { officialBlockFaceId: '1234567890' } });
 const snapshot = (candidates, state = 'COMPLETE') => ({ candidates, completeness: { state, reason: state === 'COMPLETE' ? null : 'coverage_gap' }, sourceVersion: version });
+const roadwayEvidence = (overrides = {}) => ({
+  officialBlockFaceId: '1234567890',
+  selectedGeometry: meter().geometry,
+  streetWidthFeet: 40,
+  modelUncertaintyMeters: 2,
+  candidateCoverageComplete: true,
+  competingRoadways: [],
+  ...overrides,
+});
 const input = (candidates, extra = {}) => ({
   curbIdentity: curb(), resolvedPoint: point, officialNames: ['GOLD STREET'],
-  officialBounds: ['BEEKMAN STREET', 'ANN STREET'], borough: 'MANHATTAN', side: 'W', candidateSnapshot: snapshot(candidates), ...extra,
+  officialBounds: ['BEEKMAN STREET', 'ANN STREET'], borough: 'MANHATTAN', side: 'W',
+  officialRoadwayEvidence: roadwayEvidence(), candidateSnapshot: snapshot(candidates), ...extra,
 });
 
 describe('official ParkNYC geometry association', () => {
@@ -30,6 +40,48 @@ describe('official ParkNYC geometry association', () => {
       vehicleApplicability: { passenger: true }, meterTerms: { maximumMinutes: 120 },
     });
     expect(result.rules[0].distanceMeters).toBeLessThan(2);
+  });
+
+  it('does not support a lone sub-30m parallel geometry that misses the resolved official roadway', () => {
+    const wrongParallel = meter({
+      geometry: { type: 'MultiLineString', coordinates: [[[-74.00515, 40.70967], [-74.00494, 40.70986]]] },
+    });
+    const result = associateParkNycRules(input([wrongParallel]));
+    expect(result.state).not.toBe('SUPPORTED');
+    expect(result.reasonCodes).toContain('official_meter_geometry_incompatible');
+  });
+
+  it('fails closed when official resolved-roadway geometry evidence is unavailable', () => {
+    const result = associateParkNycRules(input([meter()], { officialRoadwayEvidence: undefined }));
+    expect(result.state).not.toBe('SUPPORTED');
+    expect(result.reasonCodes).toContain('official_meter_geometry_unverified');
+  });
+
+  it('fails closed rather than throwing for malformed competing-roadway evidence', () => {
+    const result = associateParkNycRules(input([meter()], {
+      officialRoadwayEvidence: roadwayEvidence({ competingRoadways: [null] }),
+    }));
+    expect(result.state).not.toBe('SUPPORTED');
+    expect(result.reasonCodes).toContain('official_meter_geometry_unverified');
+  });
+
+  it('does not treat a zero-length meter segment as aligned official geometry', () => {
+    const start = [-74.00515, 40.70949];
+    const result = associateParkNycRules(input([meter({
+      geometry: { type: 'MultiLineString', coordinates: [[start, start, [-74.00494, 40.70968]]] },
+    })]));
+    expect(result.state).not.toBe('SUPPORTED');
+    expect(result.reasonCodes).toContain('official_meter_geometry_incompatible');
+  });
+
+  it('treats distinct same-orientation parallel meter geometries as competing faces', () => {
+    const parallel = meter({
+      zoneId: '100126',
+      geometry: { type: 'MultiLineString', coordinates: [[[-74.00515, 40.70953], [-74.00494, 40.70972]]] },
+    });
+    const result = associateParkNycRules(input([meter(), parallel]));
+    expect(result).toMatchObject({ state: 'UNKNOWN', reasonCodes: ['competing_meter_faces'] });
+    expect(result.rules.map(rule => rule.zoneId)).toEqual(['100124', '100126']);
   });
 
   it.each([
