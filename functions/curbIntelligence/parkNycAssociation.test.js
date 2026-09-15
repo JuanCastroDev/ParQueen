@@ -14,11 +14,17 @@ const meter = (overrides = {}) => ({
   branches: { passenger: { complete: true, rateComplete: true, maximumMinutes: 120 }, commercial: null },
   sourceVersion: version, sourceNative: {}, ...overrides,
 });
-const curb = (state = 'SUPPORTED') => ({ state, officialIdentity: { officialBlockFaceId: '1234567890' } });
+const curb = (state = 'SUPPORTED', csclSide = 'LEFT') => ({
+  state, officialIdentity: { officialBlockFaceId: '1234567890', csclSide },
+});
 const snapshot = (candidates, state = 'COMPLETE') => ({ candidates, completeness: { state, reason: state === 'COMPLETE' ? null : 'coverage_gap' }, sourceVersion: version });
 const roadwayEvidence = (overrides = {}) => ({
   officialBlockFaceId: '1234567890',
-  selectedGeometry: meter().geometry,
+  csclSide: 'LEFT',
+  selectedGeometry: {
+    type: 'MultiLineString',
+    coordinates: [[[-74.00515, 40.70945], [-74.00494, 40.70964]]],
+  },
   streetWidthFeet: 40,
   modelUncertaintyMeters: 2,
   candidateCoverageComplete: true,
@@ -95,6 +101,58 @@ describe('official ParkNYC geometry association', () => {
     expect(result).toMatchObject({
       state: 'UNKNOWN',
       reasonCodes: ['official_meter_geometry_ambiguous'],
+    });
+  });
+
+  it('keeps stable LEFT-positive and RIGHT-negative official side matches eligible', () => {
+    expect(associateParkNycRules(input([meter()]))).toMatchObject({ state: 'SUPPORTED' });
+
+    const reversedCenterline = {
+      type: 'MultiLineString',
+      coordinates: [[[-74.00494, 40.70964], [-74.00515, 40.70945]]],
+    };
+    const right = associateParkNycRules(input([meter()], {
+      curbIdentity: curb('SUPPORTED', 'RIGHT'),
+      officialRoadwayEvidence: roadwayEvidence({
+        csclSide: 'RIGHT', selectedGeometry: reversedCenterline,
+      }),
+    }));
+    expect(right).toMatchObject({ state: 'SUPPORTED' });
+  });
+
+  it('fails UNKNOWN when stable signed geometry contradicts the resolved CSCL side', () => {
+    const result = associateParkNycRules(input([meter()], {
+      curbIdentity: curb('SUPPORTED', 'RIGHT'),
+      officialRoadwayEvidence: roadwayEvidence({ csclSide: 'RIGHT' }),
+    }));
+    expect(result).toMatchObject({
+      state: 'UNKNOWN', reasonCodes: ['official_meter_side_contradiction'],
+    });
+  });
+
+  it('does not support geometry that meaningfully crosses both sides of the centerline', () => {
+    const crossing = meter({
+      geometry: {
+        type: 'MultiLineString',
+        coordinates: [[[-74.00515, 40.70941], [-74.00504, 40.70958], [-74.00494, 40.70970]]],
+      },
+    });
+    const result = associateParkNycRules(input([crossing]));
+    expect(result).toMatchObject({
+      state: 'UNKNOWN', reasonCodes: ['official_meter_side_crossing'],
+    });
+  });
+
+  it('caps near-centerline side uncertainty at CAUTION', () => {
+    const nearCenter = meter({
+      geometry: {
+        type: 'MultiLineString',
+        coordinates: [[[-74.00515, 40.70946], [-74.00494, 40.70965]]],
+      },
+    });
+    const result = associateParkNycRules(input([nearCenter]));
+    expect(result).toMatchObject({
+      state: 'CAUTION', reasonCodes: ['official_meter_side_uncertain'],
     });
   });
 

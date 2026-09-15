@@ -76,6 +76,8 @@ function validateOfficialRoadwayEvidence(input) {
   const identity = input?.curbIdentity?.officialIdentity;
   if (!evidence || evidence.candidateCoverageComplete !== true
     || evidence.officialBlockFaceId !== identity?.officialBlockFaceId
+    || !['LEFT', 'RIGHT'].includes(evidence.csclSide)
+    || evidence.csclSide !== identity?.csclSide
     || evidence.selectedGeometry?.type !== 'MultiLineString'
     || !Array.isArray(evidence.selectedGeometry.coordinates)
     || !Number.isFinite(evidence.streetWidthFeet) || evidence.streetWidthFeet <= 0
@@ -106,8 +108,21 @@ function compareToRoadway(candidateGeometry, roadwayGeometry) {
     maximumDistanceMeters: Math.max(...projections.map(item => item.distanceMeters)),
     meanDistanceMeters: projections.reduce((sum, item) => sum + item.distanceMeters, 0) / projections.length,
     meanSignedOffsetMeters: projections.reduce((sum, item) => sum + item.signedOffsetMeters, 0) / projections.length,
+    signedOffsetsMeters: projections.map(item => item.signedOffsetMeters),
     tangent: projections[Math.floor(projections.length / 2)].tangent,
   };
+}
+
+function classifySignedSide(offsets, expectedSide, uncertaintyMeters) {
+  if (!Array.isArray(offsets) || !offsets.length || !['LEFT', 'RIGHT'].includes(expectedSide)) {
+    return 'UNCERTAIN';
+  }
+  const positive = offsets.some(value => value > uncertaintyMeters);
+  const negative = offsets.some(value => value < -uncertaintyMeters);
+  if (positive && negative) return 'CROSSING';
+  if (!positive && !negative) return 'UNCERTAIN';
+  const observed = positive ? 'LEFT' : 'RIGHT';
+  return observed === expectedSide ? 'AGREES' : 'CONTRADICTS';
 }
 
 function verifyOfficialGeometry(candidate, evidence) {
@@ -122,7 +137,15 @@ function verifyOfficialGeometry(candidate, evidence) {
       return { state: 'AMBIGUOUS', selected, competitor };
     }
   }
-  return { state: 'VERIFIED', selected };
+  return {
+    state: 'VERIFIED',
+    selected,
+    sideState: classifySignedSide(
+      selected.signedOffsetsMeters,
+      evidence.csclSide,
+      evidence.modelUncertaintyMeters,
+    ),
+  };
 }
 
 function sameVerifiedFace(left, right, modelUncertaintyMeters) {
@@ -213,6 +236,14 @@ function associateParkNycRules(input) {
     const ordered = [...withOfficialGeometry].sort((a, b) => a.candidate.zoneId.localeCompare(b.candidate.zoneId));
     return { state: 'UNKNOWN', reasonCodes, rules: ordered.map(item => toRule(item, 'UNKNOWN', reasonCodes)) };
   }
+  if (verified.some(item => item.officialGeometry.sideState === 'CROSSING')) {
+    const reasonCodes = ['official_meter_side_crossing', ...capReasons];
+    return { state: 'UNKNOWN', reasonCodes, rules: verified.map(item => toRule(item, 'UNKNOWN', reasonCodes)) };
+  }
+  if (verified.some(item => item.officialGeometry.sideState === 'CONTRADICTS')) {
+    const reasonCodes = ['official_meter_side_contradiction', ...capReasons];
+    return { state: 'UNKNOWN', reasonCodes, rules: verified.map(item => toRule(item, 'UNKNOWN', reasonCodes)) };
+  }
   if (verified.length > 1 && verified.slice(1).some(item => (
     !sameVerifiedFace(verified[0].officialGeometry, item.officialGeometry, officialEvidence.modelUncertaintyMeters)
   ))) {
@@ -233,11 +264,13 @@ function associateParkNycRules(input) {
     return { state: 'UNKNOWN', reasonCodes, rules: distinct.map(item => toRule(item, 'UNKNOWN', reasonCodes)) };
   }
   const incompleteRate = distinct.some(item => item.candidate.branches.passenger.rateComplete !== true);
-  const baseState = distinct.length > 1 || incompleteRate ? 'CAUTION' : 'SUPPORTED';
+  const sideUncertain = distinct.some(item => item.officialGeometry.sideState === 'UNCERTAIN');
+  const baseState = distinct.length > 1 || incompleteRate || sideUncertain ? 'CAUTION' : 'SUPPORTED';
   const state = capAssociationState(baseState, curbState);
   const reasonCodes = [
     ...(distinct.length > 1 ? ['multiple_meter_zones'] : []),
     ...(incompleteRate ? ['meter_rate_incomplete'] : []),
+    ...(sideUncertain ? ['official_meter_side_uncertain'] : []),
     ...capReasons,
   ];
   const rules = distinct.map(item => toRule(item, state, reasonCodes));
