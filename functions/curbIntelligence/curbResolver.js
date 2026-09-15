@@ -53,10 +53,15 @@ function unusableReason(record) {
   if (!record?.sourceNative?.rw_type
     || !record?.sourceNative?.from_level_code
     || !record?.sourceNative?.to_level_code) return 'evidence_insufficient';
-  const status = String(record?.sourceNative?.status || '').toUpperCase();
-  if (['INACTIVE', 'CLOSED', 'DECOMMISSIONED'].includes(status)) return 'unsupported_roadway_status';
-  const nonped = String(record?.sourceNative?.nonped || '').toUpperCase();
-  if (nonped && nonped !== 'N') return 'unsupported_nonpedestrian_roadway';
+  // Official CSCL STATUS: 1 Planned Private, 2 Constructed, 3 Paper,
+  // 4 Under Construction, 5 Demapped, 9 Paper Street Coincident with Boundary.
+  // Only a constructed roadway is eligible; missing/future codes fail closed.
+  const status = String(record?.sourceNative?.status ?? '').trim();
+  if (status !== '2') return 'unsupported_roadway_status';
+  // Official NONPED: D remains pedestrian-accessible (DOE routing exclusion),
+  // V is vehicle-only. Blank means no NONPED designation; unknown codes fail closed.
+  const nonped = String(record?.sourceNative?.nonped ?? '').trim().toUpperCase();
+  if (nonped === 'V' || (nonped && nonped !== 'D')) return 'unsupported_nonpedestrian_roadway';
   const accessible = String(record?.sourceNative?.accessible || '').toUpperCase();
   if (['N', 'NO', '0', 'FALSE'].includes(accessible)) return 'unsupported_inaccessible_roadway';
   return null;

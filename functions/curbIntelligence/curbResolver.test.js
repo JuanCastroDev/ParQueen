@@ -5,7 +5,7 @@ const require = createRequire(import.meta.url);
 const { resolveOfficialCurb } = require('./curbResolver');
 
 const line = ({ id, lng, left = '0000000001', right = '0000000002', b5sc = '100001',
-  physicalid = id, type = '1', level = 'M', status = '2', nonped = 'N', startLat = 40.70, endLat = 40.72,
+  physicalid = id, type = '1', level = 'M', status = '2', nonped = null, startLat = 40.70, endLat = 40.72,
   sourceVersion = { resourceId: 'inkn-q76z', version: 'fixture-v1' } }) => ({
   globalId: id,
   geometry: { type: 'MultiLineString', coordinates: [[[lng, startLat], [lng, endLat]]] },
@@ -159,5 +159,43 @@ describe('official curb resolver', () => {
     });
     expect(mixed).toMatchObject({ state: 'UNKNOWN' });
     expect(mixed.reasons).toContain('evidence_insufficient');
+  });
+
+  it('allows only official CSCL status 2 (Constructed) to continue toward resolution', async () => {
+    const constructed = await resolveOfficialCurb({ lat: 40.71, lng: -73.9999, accuracyMeters: 2 }, {
+      candidateStore: store([line({ id: 'constructed', lng: -74, status: '2' })]), modelErrorMeters: 2,
+    });
+    expect(constructed.state).toBe('SUPPORTED');
+
+    for (const status of ['1', '3', '4', '5', '9', null, undefined, 'UNKNOWN']) {
+      const candidate = line({ id: `status-${status}`, lng: -74, status });
+      if (status === undefined) delete candidate.sourceNative.status;
+      const result = await resolveOfficialCurb({ lat: 40.71, lng: -73.9999, accuracyMeters: 2 }, {
+        candidateStore: store([candidate]), modelErrorMeters: 2,
+      });
+      expect(result, `STATUS=${status}`).toMatchObject({
+        state: 'UNKNOWN', reasons: ['unsupported_roadway_status'],
+      });
+    }
+  });
+
+  it('uses documented NONPED D/V semantics and fails closed for unknown nonempty codes', async () => {
+    for (const nonped of [null, undefined, '', 'D']) {
+      const candidate = line({ id: `allowed-${nonped}`, lng: -74, nonped });
+      if (nonped === undefined) delete candidate.sourceNative.nonped;
+      const result = await resolveOfficialCurb({ lat: 40.71, lng: -73.9999, accuracyMeters: 2 }, {
+        candidateStore: store([candidate]), modelErrorMeters: 2,
+      });
+      expect(result, `NONPED=${nonped}`).toMatchObject({ state: 'SUPPORTED' });
+    }
+
+    for (const nonped of ['V', 'N', 'X']) {
+      const result = await resolveOfficialCurb({ lat: 40.71, lng: -73.9999, accuracyMeters: 2 }, {
+        candidateStore: store([line({ id: `rejected-${nonped}`, lng: -74, nonped })]), modelErrorMeters: 2,
+      });
+      expect(result, `NONPED=${nonped}`).toMatchObject({
+        state: 'UNKNOWN', reasons: ['unsupported_nonpedestrian_roadway'],
+      });
+    }
   });
 });
