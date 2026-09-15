@@ -84,6 +84,20 @@ describe('official ParkNYC geometry association', () => {
     expect(result.rules.map(rule => rule.zoneId)).toEqual(['100124', '100126']);
   });
 
+  it('does not support meter geometry that is also plausible for a competing official roadbed', () => {
+    const nearbyRoadbed = {
+      type: 'MultiLineString',
+      coordinates: [[[-74.00515, 40.70950], [-74.00494, 40.70969]]],
+    };
+    const result = associateParkNycRules(input([meter()], {
+      officialRoadwayEvidence: roadwayEvidence({ competingRoadways: [nearbyRoadbed] }),
+    }));
+    expect(result).toMatchObject({
+      state: 'UNKNOWN',
+      reasonCodes: ['official_meter_geometry_ambiguous'],
+    });
+  });
+
   it.each([
     ['borough', meter({ borough: 'BROOKLYN' })],
     ['side', meter({ side: 'E' })],
