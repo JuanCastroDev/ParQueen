@@ -97,4 +97,15 @@ describe('privacy-safe shadow comparison contract', () => {
       reasonCodes: ['latitude=40.7000'],
     })).toEqual({ ok: false, reason: 'invalid_reason_codes' });
   });
+
+  it('rejects syntactically valid but noncanonical cleaning fingerprints', () => {
+    expect(createShadowComparison({
+      ...validInput('cleaning_schedule_differs'),
+      oldCleaningFingerprint: 'Fri,Mon|08:00|09:00',
+    })).toEqual({ ok: false, reason: 'invalid_cleaning_fingerprint' });
+    expect(createShadowComparison({
+      ...validInput('cleaning_schedule_differs'),
+      newCleaningFingerprint: 'Thu|11:00|12:00;Mon|08:00|09:00',
+    })).toEqual({ ok: false, reason: 'invalid_cleaning_fingerprint' });
+  });
 });
