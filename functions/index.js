@@ -1,6 +1,6 @@
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore");
-const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
 const { onObjectFinalized } = require("firebase-functions/v2/storage");
 const { defineString, defineSecret } = require("firebase-functions/params");
 const { GoogleGenAI, Type } = require("@google/genai");
@@ -5486,3 +5486,102 @@ exports.generateListingDescription = onCall(
     return { description: parsed ?? LISTING_DESCRIPTION_FALLBACK };
   }
 );
+
+// ─── Marketing-site waitlist (double opt-in) ─────────────────────────────────
+// Public HTTP endpoints reached same-origin through the marketing site's
+// Firebase Hosting rewrites (/api/waitlist, /api/waitlist/confirm). Logic and
+// the privacy contract live in ./waitlist.js; see docs/WAITLIST.md.
+//
+// Operator actions before deploy (random 32-byte hex for the peppers):
+//   firebase functions:secrets:set WAITLIST_ID_PEPPER
+//   firebase functions:secrets:set WAITLIST_RATE_LIMIT_PEPPER
+//   firebase functions:secrets:set TURNSTILE_SECRET_KEY
+const waitlist = require('./waitlist');
+const waitlistIdPepper = defineSecret("WAITLIST_ID_PEPPER");
+const waitlistRateLimitPepper = defineSecret("WAITLIST_RATE_LIMIT_PEPPER");
+const turnstileSecretKey = defineSecret("TURNSTILE_SECRET_KEY");
+// Staging/QA: https://parqueen-marketing.web.app. Switch to https://parqueen.app at domain cutover.
+const waitlistConfirmBaseUrl = defineString("WAITLIST_CONFIRM_BASE_URL", {
+  default: "https://parqueen-marketing.web.app",
+});
+const waitlistAllowedHostnames = defineString("WAITLIST_ALLOWED_HOSTNAMES", {
+  default: "parqueen-marketing.web.app,parqueen.app",
+});
+
+// Test seams, mirroring _emailOtpHooks: integration tests replace delivery,
+// Turnstile and token generation so no real email or Cloudflare call happens.
+const _waitlistHooks = { deliver: null, verifyTurnstile: null, newToken: null, now: null };
+exports._waitlistHooks = _waitlistHooks;
+
+// Local end-to-end only: the Astro dev server calls the emulator cross-origin.
+// In production the endpoints are same-origin through Hosting and send no CORS headers.
+const WAITLIST_EMULATOR_ORIGINS = new Set(["http://localhost:4321", "http://127.0.0.1:4321"]);
+
+function _waitlistDeps() {
+  return {
+    db,
+    FieldValue,
+    Timestamp,
+    canonicalizeEmail: _canonicalizeEmail,
+    checkRateLimit,
+    now: () => _waitlistHooks.now?.() ?? Date.now(),
+    newToken: () => _waitlistHooks.newToken?.() ?? waitlist.newConfirmToken(),
+    verifyTurnstile: token => _waitlistHooks.verifyTurnstile?.(token) ?? waitlist.verifyTurnstileToken({
+      token,
+      secret: turnstileSecretKey.value(),
+      allowedHostnames: waitlist.parseHostnameList(waitlistAllowedHostnames.value()),
+    }),
+    deliver: (email, confirmUrl) => _waitlistHooks.deliver?.(email, confirmUrl) ?? waitlist.sendConfirmationEmail({
+      email,
+      confirmUrl,
+      apiKey: sendgridApiKey.value(),
+    }),
+    idPepper: waitlistIdPepper.value(),
+    rateLimitPepper: waitlistRateLimitPepper.value(),
+    confirmBaseUrl: waitlistConfirmBaseUrl.value(),
+  };
+}
+
+function _waitlistEndpoint(handler) {
+  return async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const origin = req.headers.origin;
+    if (process.env.FUNCTIONS_EMULATOR === "true" && WAITLIST_EMULATOR_ORIGINS.has(origin)) {
+      res.set("Access-Control-Allow-Origin", origin);
+      res.set("Access-Control-Allow-Headers", "Content-Type");
+      res.set("Access-Control-Allow-Methods", "POST");
+      if (req.method === "OPTIONS") { res.status(204).send(""); return; }
+    }
+    if (req.method !== "POST") { res.status(405).json({ status: "method_not_allowed" }); return; }
+    if (!req.is("application/json") || typeof req.body !== "object" || req.body === null) {
+      res.status(400).json({ status: "bad_request" }); return;
+    }
+    try {
+      const { status, body } = await handler({ body: req.body, headers: req.headers }, _waitlistDeps());
+      res.status(status).json(body);
+    } catch (err) {
+      // Never log the request body: it carries an email address or a token.
+      console.error("Waitlist endpoint failed", sanitizeError(err));
+      res.status(500).json({ status: "try_again" });
+    }
+  };
+}
+
+const WAITLIST_HTTP_OPTIONS = {
+  region: "us-central1",
+  // Firebase Hosting rewrites require a publicly invokable function.
+  invoker: "public",
+  memory: "256MiB",
+  serviceAccount: 'parqueen-email@parkqueen-46475363-ccf36.iam.gserviceaccount.com',
+};
+
+exports.joinWaitlist = onRequest(
+  { ...WAITLIST_HTTP_OPTIONS, secrets: [sendgridApiKey, waitlistIdPepper, waitlistRateLimitPepper, turnstileSecretKey] },
+  _waitlistEndpoint(waitlist.handleJoin)
+);
+
+exports.confirmWaitlist = onRequest(
+  { ...WAITLIST_HTTP_OPTIONS, secrets: [waitlistIdPepper, waitlistRateLimitPepper] },
+  _waitlistEndpoint(waitlist.handleConfirm)
+);
+
