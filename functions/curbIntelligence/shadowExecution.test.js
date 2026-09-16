@@ -6,6 +6,7 @@ const { normalizeCsclRow } = require('./csclNormalizer');
 const { createMemoryCandidateStore } = require('./candidateStore');
 const { normalizeDotSignRow } = require('./dotSignNormalizer');
 const { normalizeParkNycRow } = require('./parkNycNormalizer');
+const { createOfficialDotRelationshipProvider } = require('./officialDotRelationshipProvider');
 const { createMemoryAggregateShadowSink } = require('./shadowTelemetry');
 const { bounded, runCurbIntelligenceShadow } = require('./shadowExecution');
 
@@ -28,7 +29,7 @@ function csclCandidate() {
 
 function dotCandidate() {
   return normalizeDotSignRow({
-    order_number: 'P-1', record_type: 'Current', order_type: 'P', borough: 'MANHATTAN',
+    order_number: 'P-1', record_type: 'Current', order_type: 'P-', borough: 'MANHATTAN',
     on_street: 'TEST STREET', from_street: 'FIRST STREET', to_street: 'SECOND STREET',
     side_of_street: 'W', sign_code: 'PS-20B',
     sign_description: 'NO PARKING (SANITATION BROOM SYMBOL) MONDAY 8AM-9AM <->',
@@ -164,6 +165,29 @@ describe('standalone Curb Intelligence shadow execution', () => {
     expect(result.runtimeResult.states).toEqual({ curb: 'SUPPORTED', cleaning: 'UNKNOWN', meter: 'SUPPORTED' });
     expect(result.runtimeResult.cleaning.reasons).toContain('official_order_relationship_missing');
     expect(result.persistableComparison.reasonBuckets).toContain('official_order_relationship_missing');
+    expect(JSON.stringify(result.persistableComparison)).not.toContain('provider included private context');
+  });
+
+  it('bounds an authoritative relationship timeout without persisting upstream details', async () => {
+    const officialRelationshipProvider = createOfficialDotRelationshipProvider({
+      providerId: 'fixture-function-3c',
+      blockfaceResolver: {
+        async resolve({ signal }) {
+          await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+          throw new Error('raw relationship response with private context');
+        },
+      },
+    });
+    const result = await run({
+      dependencies: { officialRelationshipProvider },
+      executionPolicy: {
+        ...policy,
+        sourceDeadlineMs: { ...policy.sourceDeadlineMs, relationship: 10 },
+      },
+    });
+    expect(result.runtimeResult.states).toEqual({ curb: 'SUPPORTED', cleaning: 'UNKNOWN', meter: 'SUPPORTED' });
+    expect(JSON.stringify(result.persistableComparison)).not.toContain('raw relationship');
+    expect(JSON.stringify(result.persistableComparison)).not.toMatch(/orderNumber|officialBlockFaceId/i);
   });
 
   it('starts independent DOT and ParkNYC retrieval concurrently after curb resolution', async () => {

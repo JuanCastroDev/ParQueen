@@ -4,6 +4,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { normalizeDotSignRow } = require('./dotSignNormalizer');
 const { createFaceAssociationContext } = require('./dotFaceAssociation');
+const { createOfficialDotRelationshipProvider } = require('./officialDotRelationshipProvider');
 const { associateCleaningRules } = require('./cleaningRuleAssociation');
 const { normalizeParkNycRow } = require('./parkNycNormalizer');
 const { associateParkNycRules } = require('./parkNycAssociation');
@@ -27,9 +28,15 @@ describe('nine public NYC Phase 1B.2 fixtures', () => {
       expect(JSON.stringify(fixture).toLowerCase()).not.toContain('userid');
       expect(fixture).not.toHaveProperty('address');
     }
+    const bay = NYC_RULE_FIXTURES.find(fixture => fixture.id === 'bay_victory_hannah_west');
+    expect(bay.dotRows[0]).toMatchObject({
+      order_number: 'P-01683639',
+      order_type: 'P-',
+      on_street_suffix: 'W RDWY',
+    });
   });
 
-  it('normalizes official excerpts and preserves independent expected outcomes', () => {
+  it('normalizes official excerpts and preserves independent expected outcomes', async () => {
     for (const fixture of NYC_RULE_FIXTURES) {
       const curbFixture = NYC_RESOLVER_FIXTURES.find(item => item.id === fixture.id);
       expect(curbFixture, `${fixture.id}: Phase 1B.1 curb evidence`).toBeDefined();
@@ -38,14 +45,37 @@ describe('nine public NYC Phase 1B.2 fixtures', () => {
         expect(result.ok, `${fixture.id}: DOT normalize`).toBe(true);
         return result.record;
       });
-      const context = createFaceAssociationContext({
-        curbIdentityState: fixture.curbState, borough: fixture.borough,
-        streetNames: fixture.streetNames, fromNames: [fixture.bounds[0]], toNames: [fixture.bounds[1]], side: fixture.side,
-        officialRelationship: {
-          providerId: 'deterministic-public-fixture-context', version: '2026-09-15',
-          orderApplicability: Object.fromEntries(dotCandidates.map(candidate => [candidate.orderNumber, fixture.dotApplicability])),
+      const provider = createOfficialDotRelationshipProvider({
+        providerId: 'deterministic-public-fixture-function-3c',
+        blockfaceResolver: {
+          async resolve({ onStreet, crossStreetOne, crossStreetTwo }) {
+            return {
+              ok: true,
+              officialBlockFaceId: curbFixture.expected.face,
+              normalizedStreetNames: { onStreet, crossStreetOne, crossStreetTwo },
+              returnCode: '00', reasonCode: null,
+              sourceVersion: { release: 'fixture-26c' },
+            };
+          },
         },
       });
+      const relationship = await provider.resolve({
+        resolution: {
+          state: fixture.curbState,
+          officialIdentity: { officialBlockFaceId: curbFixture.expected.face },
+        },
+        candidateSnapshot: {
+          candidates: dotCandidates,
+          completeness: { state: 'COMPLETE', reason: null },
+          sourceVersion: DOT_VERSION,
+        },
+        signal: new AbortController().signal,
+      });
+      const expectedApplicability = Object.fromEntries(dotCandidates.map(candidate => [
+        candidate.orderNumber, fixture.expectedRelationship,
+      ]));
+      expect(relationship.faceContext.officialRelationship.orderApplicability).toEqual(expectedApplicability);
+      const context = createFaceAssociationContext(relationship.faceContext);
       const cleaning = associateCleaningRules({
         curbIdentity: { state: fixture.curbState }, faceContext: context,
         candidateSnapshot: { candidates: dotCandidates, completeness: { state: 'COMPLETE', reason: null }, sourceVersion: DOT_VERSION },
