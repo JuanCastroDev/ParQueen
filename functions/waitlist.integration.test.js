@@ -276,3 +276,25 @@ describe('WL-C — confirm', () => {
         }
     });
 });
+
+describe('WL-X — expireStaleWaitlistSignups', () => {
+    it('WL-X1 deletes only pending signups older than 30 days', async () => {
+        const old = Timestamp.fromMillis(Date.now() - waitlist.PENDING_RETENTION_MS - 60_000);
+        const recent = Timestamp.fromMillis(Date.now() - 60_000);
+        const seedDoc = (label, data) => {
+            const email = nextEmail(label);
+            return db.collection('waitlist').doc(docIdFor(email)).set({ email, confirmedAt: null, ...data })
+                .then(() => email);
+        };
+        const stale = await seedDoc('stale', { status: 'pending_confirmation', createdAt: old });
+        const fresh = await seedDoc('fresh', { status: 'pending_confirmation', createdAt: recent });
+        const oldSubscriber = await seedDoc('oldsub', { status: 'subscribed', createdAt: old });
+
+        indexModule._waitlistHooks.now = null;
+        await indexModule.expireStaleWaitlistSignups.run({});
+
+        expect(await readDoc(stale)).toBeUndefined();
+        expect(await readDoc(fresh)).toBeDefined();
+        expect(await readDoc(oldSubscriber)).toBeDefined();
+    });
+});

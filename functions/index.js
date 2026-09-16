@@ -5585,3 +5585,22 @@ exports.confirmWaitlist = onRequest(
   _waitlistEndpoint(waitlist.handleConfirm)
 );
 
+// Unconfirmed signups are personal data we have no consent to keep: remove
+// them 30 days after creation.
+exports.expireStaleWaitlistSignups = onSchedule(
+  {
+    schedule: "every day 04:30",
+    timeZone: "America/New_York",
+    region: "us-central1",
+    memory: "256MiB",
+    serviceAccount: 'parqueen-cleanup@parkqueen-46475363-ccf36.iam.gserviceaccount.com',
+  },
+  async () => {
+    const deleted = await waitlist.expireStalePending({
+      db,
+      Timestamp,
+      now: () => _waitlistHooks.now?.() ?? Date.now(),
+    });
+    if (deleted > 0) console.log(`expireStaleWaitlistSignups: removed ${deleted} unconfirmed signup(s)`);
+  }
+);
