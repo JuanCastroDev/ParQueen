@@ -64,21 +64,38 @@ Client access is denied completely by `firestore.rules`
 
 ## Abuse controls
 
-- **Turnstile**, verified server-side: `success`, `action === "waitlist"`, and a
-  hostname in `WAITLIST_ALLOWED_HOSTNAMES`. The visitor IP is not sent to
-  Cloudflare.
-- **Per-client limit:** 5 joins / 10 min, 20 confirms / 10 min, keyed by
-  `HMAC(WAITLIST_RATE_LIMIT_PEPPER, Fastly-Client-IP)` in the expiring
-  `rateLimits` counters. Behind Firebase Hosting the CDN sets
-  `Fastly-Client-IP` to the real caller and overwrites a forged value.
-  `X-Forwarded-For` is **not** used: on this path its visible entry is a
-  Google front-end address. A direct call to the function URL can forge
-  `Fastly-Client-IP`, so this limit is defence in depth; Turnstile and the
-  per-address limit are the controls that cannot be spoofed. Requests without
-  a usable header share one bucket.
-- **Per-address limit:** 3 confirmation emails / hour, keyed by the record ID.
-  Exceeding it still answers `202` so the response never reveals activity on
-  an address.
+In order of strength:
+
+1. **Turnstile**, verified server-side: `success`, `action === "waitlist"`,
+   and a hostname in `WAITLIST_ALLOWED_HOSTNAMES`. The visitor IP is not sent
+   to Cloudflare.
+2. **Per-address limit:** 3 confirmation emails / hour, keyed by the record
+   ID. Exceeding it still answers `202` so the response never reveals
+   activity on an address.
+3. **Best-effort per-client limit:** 5 joins / 10 min, 20 confirms / 10 min.
+   - Input is `Fastly-Client-IP`, which the Firebase Hosting CDN sets to the
+     connecting client (overwriting a value the client sent). This is **abuse
+     mitigation on the Hosting path, not authentication**: a request sent
+     straight to the function URL can set the header to anything.
+   - The IP is immediately HMAC'd with `WAITLIST_RATE_LIMIT_PEPPER`; only that
+     digest is used, only inside expiring `rateLimits` counter IDs. The raw IP
+     is never logged, returned or stored.
+   - `X-Forwarded-For`, `X-Real-IP` and other forwarded headers are **never**
+     consulted.
+   - If `Fastly-Client-IP` is absent or malformed, this layer is **skipped**
+     (not collapsed into a shared bucket, which would let a Hosting header
+     change throttle every real visitor). Layers 1 and 2 still apply.
+
+The per-client check runs first only so an obvious burst does not spend a
+Turnstile `siteverify` call per request; it is not the primary control.
+
+## Marketing-site copy constraints
+
+- Privacy link under the form: **`https://parqueen.app/privacy-policy`**
+  (verified live). Do not use `/privacy`, which redirects to the web app.
+- Before public domain cutover the marketing site needs its own stable privacy
+  route under the ParQueen domain.
+- The form promises "Unsubscribe anytime" — see the unsubscribe section below.
 
 ## Retention
 
@@ -118,8 +135,20 @@ email or public cutover.
 | `WAITLIST_ID_PEPPER` | secret | new, random 32-byte hex — **never rotate** without re-keying records |
 | `WAITLIST_RATE_LIMIT_PEPPER` | secret | new, random 32-byte hex |
 | `TURNSTILE_SECRET_KEY` | secret | Cloudflare Turnstile secret |
-| `WAITLIST_CONFIRM_BASE_URL` | param | `https://parqueen-marketing.web.app` for staging; `https://parqueen.app` at cutover |
-| `WAITLIST_ALLOWED_HOSTNAMES` | param | `parqueen-marketing.web.app,parqueen.app` |
+| `WAITLIST_CONFIRM_BASE_URL` | param | `https://parqueen-marketing.web.app` (staging, pre-launch) |
+| `WAITLIST_ALLOWED_HOSTNAMES` | param | `parqueen-marketing.web.app` (staging, pre-launch) |
+
+The two params have **no code default**. Their values live in the tracked
+`functions/.env.parkqueen-46475363-ccf36`, which the Functions emulator (with or
+without `--project`, since `.firebaserc` has a single project) and `firebase
+deploy` both read. A code default would not help: the CLI treats it as a prompt
+suggestion, so an unset value still stops non-interactive runs. That file holds
+public configuration only — never secrets. `functions/.env.local` stays
+ignored and is only for personal local overrides.
+
+At domain cutover, change both values to the final host in one reviewed commit
+(e.g. `https://parqueen.app` and `parqueen.app`) and repeat the confirmation
+test.
 
 ## Deploy checklist (not yet approved)
 
@@ -132,8 +161,9 @@ email or public cutover.
    Hosting (log presence only — never the value), then remove the check.
 6. One real signup and confirmation to our own inbox.
 7. Implement and verify unsubscribe before public launch.
-8. At domain cutover, set `WAITLIST_CONFIRM_BASE_URL=https://parqueen.app` and
-   repeat step 6.
+8. At domain cutover, update both values in
+   `functions/.env.parkqueen-46475363-ccf36` in a reviewed commit and repeat
+   step 6.
 
 ## Tests
 

@@ -51,9 +51,6 @@ const JOIN_LIMIT = { limit: 5, windowSec: 600 };
 const CONFIRM_LIMIT = { limit: 20, windowSec: 600 };
 const ADDRESS_EMAIL_LIMIT = { limit: 3, windowSec: 3600 };
 
-/** Clients whose IP could not be established share one bucket. */
-const UNVERIFIED_CLIENT_KEY = 'unverified-client';
-
 const TURNSTILE_ACTION = 'waitlist';
 const TURNSTILE_VERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 const SENDGRID_URL = 'https://api.sendgrid.com/v3/mail/send';
@@ -79,22 +76,39 @@ function isWellFormedToken(token) {
 }
 
 /**
- * Rate-limit key for the calling client.
+ * Best-effort per-client throttle key, or null when there is nothing usable.
  *
- * Behind Firebase Hosting the CDN sets Fastly-Client-IP to the real caller and
- * overwrites any value the caller sent. X-Forwarded-For is never used: on this
- * path its visible entry is a Google front-end address, not the visitor. A
- * direct call to the function URL can forge Fastly-Client-IP, so this key is
- * defence in depth only — Turnstile and the per-address limit are the
- * controls that cannot be spoofed. The IP itself is never returned or stored;
- * only its HMAC, and only in the expiring rateLimits counters.
+ * ABUSE MITIGATION ONLY — NOT AUTHENTICATION. Fastly-Client-IP is used because,
+ * on the Firebase Hosting path, the CDN sets it to the connecting client and
+ * overwrites a value the client sent. It is still not an identity and not a
+ * security boundary: a request sent straight to the function URL (bypassing
+ * Hosting) can set it to anything. The controls that hold regardless are, in
+ * order: Turnstile verification, then the per-address confirmation-email
+ * limit. This throttle only raises the cost of bursts from one client.
+ *
+ * - X-Forwarded-For (or any other forwarded header) is never consulted: on
+ *   this path its visible entry is a Google front-end address, and anywhere
+ *   else it is caller-controlled.
+ * - An absent or malformed header returns null and the caller skips this
+ *   throttle. It must not collapse everyone into one shared bucket, which
+ *   would let a header change on Hosting's side throttle every real visitor.
+ * - The IP is HMAC'd immediately with the dedicated rate-limit secret. Only
+ *   that digest is used, and only as part of an expiring rateLimits counter
+ *   ID. The raw IP is never logged, returned or stored.
  */
 function clientRateLimitKey(headers, pepper) {
     if (!pepper) throw new Error('WAITLIST_RATE_LIMIT_PEPPER is not configured');
     const raw = headers?.['fastly-client-ip'];
     const ip = typeof raw === 'string' ? raw.trim() : '';
-    if (!ip || isIP(ip) === 0) return UNVERIFIED_CLIENT_KEY;
+    if (!ip || isIP(ip) === 0) return null;
     return createHmac('sha256', pepper).update(ip).digest('hex');
+}
+
+/** Applies the per-client throttle only when a usable client key exists. */
+async function withinClientLimit(checkRateLimit, headers, pepper, operation, limits) {
+    const key = clientRateLimitKey(headers, pepper);
+    if (key === null) return true;
+    return withinLimit(checkRateLimit, key, operation, limits);
 }
 
 function buildConfirmUrl(baseUrl, token) {
@@ -227,11 +241,13 @@ async function handleJoin({ body, headers }, deps) {
         return reply(400, { status: 'invalid_email' });
     }
 
-    const clientKey = clientRateLimitKey(headers, deps.rateLimitPepper);
-    if (!await withinLimit(deps.checkRateLimit, clientKey, 'waitlistJoin', JOIN_LIMIT)) {
+    // 3rd layer, best effort (see clientRateLimitKey). Checked before Turnstile
+    // only so an obvious burst does not spend a siteverify call per request.
+    if (!await withinClientLimit(deps.checkRateLimit, headers, deps.rateLimitPepper, 'waitlistJoin', JOIN_LIMIT)) {
         return reply(429, { status: 'rate_limited' });
     }
 
+    // 1st layer: Turnstile.
     if (!await deps.verifyTurnstile(body?.turnstileToken)) {
         return reply(400, { status: 'verification_failed' });
     }
@@ -243,7 +259,7 @@ async function handleJoin({ body, headers }, deps) {
     const peek = await ref.get();
     if (peek.exists && peek.data().status === STATUS.SUBSCRIBED) return ACCEPTED;
 
-    // Per-address email limit. Exceeding it is answered exactly like success so
+    // 2nd layer: per-address email limit. Exceeding it is answered exactly like success so
     // the response never hints that someone else recently used this address.
     if (!await withinLimit(deps.checkRateLimit, docId, 'waitlistConfirmEmail', ADDRESS_EMAIL_LIMIT)) {
         return ACCEPTED;
@@ -321,8 +337,7 @@ async function handleConfirm({ body, headers }, deps) {
     const token = body?.token;
     if (!isWellFormedToken(token)) return INVALID_OR_EXPIRED;
 
-    const clientKey = clientRateLimitKey(headers, deps.rateLimitPepper);
-    if (!await withinLimit(deps.checkRateLimit, clientKey, 'waitlistConfirm', CONFIRM_LIMIT)) {
+    if (!await withinClientLimit(deps.checkRateLimit, headers, deps.rateLimitPepper, 'waitlistConfirm', CONFIRM_LIMIT)) {
         return reply(429, { status: 'rate_limited' });
     }
 
@@ -404,7 +419,6 @@ module.exports = {
     JOIN_LIMIT,
     CONFIRM_LIMIT,
     ADDRESS_EMAIL_LIMIT,
-    UNVERIFIED_CLIENT_KEY,
     TURNSTILE_ACTION,
     waitlistDocId,
     newConfirmToken,

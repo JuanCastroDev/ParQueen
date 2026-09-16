@@ -11,7 +11,7 @@ process.env.WAITLIST_RATE_LIMIT_PEPPER = 'integration-test-waitlist-rate-limit-p
 process.env.TURNSTILE_SECRET_KEY = 'integration-test-turnstile-secret';
 process.env.SENDGRID_API_KEY = 'integration-test-sendgrid-key';
 process.env.WAITLIST_CONFIRM_BASE_URL = 'https://parqueen-marketing.web.app';
-process.env.WAITLIST_ALLOWED_HOSTNAMES = 'parqueen-marketing.web.app,parqueen.app';
+process.env.WAITLIST_ALLOWED_HOSTNAMES = 'parqueen-marketing.web.app';
 
 const crypto = require('crypto');
 const { initializeApp, getApps } = require('firebase-admin/app');
@@ -42,10 +42,14 @@ function fakeRes() {
     return res;
 }
 
-async function post(handler, body, { ip = nextIp(), method = 'POST', json = true } = {}) {
+async function post(handler, body, { ip = nextIp(), method = 'POST', json = true, headers = {} } = {}) {
     const req = {
         method,
-        headers: { 'content-type': json ? 'application/json' : 'text/plain', 'fastly-client-ip': ip },
+        headers: {
+            'content-type': json ? 'application/json' : 'text/plain',
+            ...(ip === null ? {} : { 'fastly-client-ip': ip }),
+            ...headers,
+        },
         body,
         is: type => json && type === 'application/json',
     };
@@ -57,6 +61,25 @@ async function post(handler, body, { ip = nextIp(), method = 'POST', json = true
 const join = (email, opts, token = 'turnstile-ok') =>
     post(indexModule.joinWaitlist, { email, turnstileToken: token }, opts);
 const confirm = (token, opts) => post(indexModule.confirmWaitlist, { token }, opts);
+
+// Hooks replace every external call. This guard fails the suite if a real
+// request to Cloudflare or SendGrid is ever attempted.
+const realFetch = globalThis.fetch;
+const leakedCalls = [];
+beforeAll(() => {
+    globalThis.fetch = async (url, ...rest) => {
+        const target = String(url);
+        if (/challenges.cloudflare.com|api.sendgrid.com/.test(target)) {
+            leakedCalls.push(target);
+            throw new Error('Real Cloudflare/SendGrid call attempted in tests');
+        }
+        return realFetch(url, ...rest);
+    };
+});
+afterAll(() => {
+    globalThis.fetch = realFetch;
+    expect(leakedCalls).toEqual([]);
+});
 
 let sent;
 let clock;
@@ -105,6 +128,10 @@ describe('WL-I — join', () => {
         expect(data.confirmTokenHash).toBe(crypto.createHash('sha256').update(token).digest('hex'));
         expect(JSON.stringify(data)).not.toContain(token);
         expect(data.confirmTokenExpiresAt.toMillis()).toBe(clock + waitlist.TOKEN_TTL_MS);
+
+        // Keyed by HMAC, never by the address itself.
+        expect(docIdFor(email)).toMatch(/^[0-9a-f]{64}$/);
+        expect((await db.collection('waitlist').doc(email).get()).exists).toBe(false);
     });
 
     it('WL-I2 stores no IP address in the waitlist record or the rate-limit counters', async () => {
@@ -227,6 +254,31 @@ describe('WL-I — join', () => {
         const data = await readDoc(email);
         expect(data).toMatchObject({ status: 'pending_confirmation', optInMethod: 'double-opt-in', source: 'marketing-site' });
         expect(sent).toHaveLength(1);
+    });
+
+    it('WL-I14 without Fastly-Client-IP, never throttles on forwarded headers', async () => {
+        const statuses = [];
+        for (let i = 0; i < waitlist.JOIN_LIMIT.limit + 2; i++) {
+            const res = await join(nextEmail('noheader'), {
+                ip: null,
+                headers: { 'x-forwarded-for': '198.51.100.23', 'x-real-ip': '198.51.100.23' },
+            });
+            statuses.push(res.statusCode);
+        }
+        // Turnstile and the per-address limit still apply; the client throttle is skipped.
+        expect(statuses.every(s => s === 202)).toBe(true);
+        const forwardedKey = crypto.createHmac('sha256', process.env.WAITLIST_RATE_LIMIT_PEPPER)
+            .update('198.51.100.23').digest('hex');
+        const counters = await db.collection('rateLimits').where('operation', '==', 'waitlistJoin').get();
+        expect(counters.docs.some(d => d.data().uid === forwardedKey)).toBe(false);
+    });
+
+    it('WL-I15 a missing Fastly-Client-IP is not a Turnstile bypass', async () => {
+        const email = nextEmail('noheaderbot');
+        const res = await join(email, { ip: null }, 'turnstile-bad');
+        expect(res.statusCode).toBe(400);
+        expect(await readDoc(email)).toBeUndefined();
+        expect(sent).toHaveLength(0);
     });
 
     it('WL-I13 accepts only JSON POST requests', async () => {

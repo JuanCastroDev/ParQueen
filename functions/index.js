@@ -5500,13 +5500,13 @@ const waitlist = require('./waitlist');
 const waitlistIdPepper = defineSecret("WAITLIST_ID_PEPPER");
 const waitlistRateLimitPepper = defineSecret("WAITLIST_RATE_LIMIT_PEPPER");
 const turnstileSecretKey = defineSecret("TURNSTILE_SECRET_KEY");
-// Staging/QA: https://parqueen-marketing.web.app. Switch to https://parqueen.app at domain cutover.
-const waitlistConfirmBaseUrl = defineString("WAITLIST_CONFIRM_BASE_URL", {
-  default: "https://parqueen-marketing.web.app",
-});
-const waitlistAllowedHostnames = defineString("WAITLIST_ALLOWED_HOSTNAMES", {
-  default: "parqueen-marketing.web.app,parqueen.app",
-});
+// Public, non-secret values come from the tracked
+// functions/.env.parkqueen-46475363-ccf36 (read by the emulator and by deploy).
+// Deliberately no `default`: the CLI treats a default as a prompt suggestion,
+// so it would not prevent a prompt, and a silent fallback could point live
+// confirmation links or the Turnstile hostname allowlist at the wrong host.
+const waitlistConfirmBaseUrl = defineString("WAITLIST_CONFIRM_BASE_URL");
+const waitlistAllowedHostnames = defineString("WAITLIST_ALLOWED_HOSTNAMES");
 
 // Test seams, mirroring _emailOtpHooks: integration tests replace delivery,
 // Turnstile and token generation so no real email or Cloudflare call happens.

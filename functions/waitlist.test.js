@@ -52,23 +52,48 @@ describe('WL-U — waitlist pure helpers', () => {
             .toBe('https://parqueen.app/confirm#t=abc');
     });
 
-    it('WL-U8 keys rate limits on Fastly-Client-IP only, never X-Forwarded-For', () => {
+    it('WL-U8 keys the client throttle on an HMAC of Fastly-Client-IP only', () => {
         const fromFastly = waitlist.clientRateLimitKey({ 'fastly-client-ip': '203.0.113.9' }, PEPPER);
         expect(fromFastly).toMatch(/^[0-9a-f]{64}$/);
         expect(fromFastly).not.toContain('203.0.113.9');
-        expect(waitlist.clientRateLimitKey({ 'x-forwarded-for': '198.51.100.1' }, PEPPER))
-            .toBe(waitlist.UNVERIFIED_CLIENT_KEY);
+        // Secret-dependent: the digest cannot be recomputed without the rate-limit pepper.
+        expect(waitlist.clientRateLimitKey({ 'fastly-client-ip': '203.0.113.9' }, 'other-pepper'))
+            .not.toBe(fromFastly);
+        // A forwarded header alongside it changes nothing.
         expect(waitlist.clientRateLimitKey({
             'fastly-client-ip': '203.0.113.9',
             'x-forwarded-for': '198.51.100.1',
         }, PEPPER)).toBe(fromFastly);
     });
 
-    it.each([undefined, '', 'not-an-ip', '203.0.113.9, 198.51.100.1', '999.1.1.1'])(
-        'WL-U9 falls back to the shared bucket for unusable header %j', value => {
-            expect(waitlist.clientRateLimitKey({ 'fastly-client-ip': value }, PEPPER))
-                .toBe(waitlist.UNVERIFIED_CLIENT_KEY);
-        });
+    it.each([
+        ['absent', {}],
+        ['only X-Forwarded-For', { 'x-forwarded-for': '198.51.100.1' }],
+        ['only X-Real-IP', { 'x-real-ip': '198.51.100.1' }],
+        ['empty', { 'fastly-client-ip': '' }],
+        ['not an IP', { 'fastly-client-ip': 'not-an-ip' }],
+        ['a list', { 'fastly-client-ip': '203.0.113.9, 198.51.100.1' }],
+        ['out of range', { 'fastly-client-ip': '999.1.1.1' }],
+    ])('WL-U9 returns no client key when Fastly-Client-IP is %s — never a forwarded fallback', (_label, headers) => {
+        expect(waitlist.clientRateLimitKey(headers, PEPPER)).toBeNull();
+    });
+
+    it('WL-U13 canonical email is deterministic across case and whitespace', () => {
+        const { canonicalizeEmail } = require('./emailAddress');
+        const forms = ['Driver@Example.com', '  driver@example.com', 'DRIVER@EXAMPLE.COM  '];
+        const canon = forms.map(canonicalizeEmail);
+        expect(new Set(canon)).toEqual(new Set(['driver@example.com']));
+        const ids = canon.map(e => waitlist.waitlistDocId(e, PEPPER));
+        expect(new Set(ids).size).toBe(1);
+    });
+
+    it('WL-U14 never uses the raw email as the document ID', () => {
+        const id = waitlist.waitlistDocId('driver@example.com', PEPPER);
+        expect(id).not.toBe('driver@example.com');
+        expect(id).not.toContain('@');
+        expect(id).not.toContain('driver');
+        expect(id).toMatch(/^[0-9a-f]{64}$/);
+    });
 
     it('WL-U10 accepts IPv6 client addresses', () => {
         expect(waitlist.clientRateLimitKey({ 'fastly-client-ip': '2001:db8::1' }, PEPPER))
@@ -155,4 +180,99 @@ describe('WL-T — Turnstile verification', () => {
         await waitlist.verifyTurnstileToken({ token: 't', secret: 's', allowedHostnames: allowed, fetchFn });
         expect(new URLSearchParams(body).has('remoteip')).toBe(false);
     });
+});
+
+describe('WL-H — handler protection order (no emulator)', () => {
+    // A database that fails the test if it is touched at all.
+    const untouchableDb = new Proxy({}, { get: (_t, prop) => { throw new Error(`db.${String(prop)} must not be used`); } });
+
+    function deps(overrides = {}) {
+        return {
+            db: untouchableDb,
+            FieldValue: {},
+            Timestamp: {},
+            canonicalizeEmail: require('./emailAddress').canonicalizeEmail,
+            checkRateLimit: vi.fn(async () => {}),
+            verifyTurnstile: vi.fn(async () => false),
+            deliver: vi.fn(async () => {}),
+            newToken: () => waitlist.newConfirmToken(),
+            now: () => Date.now(),
+            idPepper: PEPPER,
+            rateLimitPepper: 'unit-rate-limit-pepper',
+            confirmBaseUrl: 'https://parqueen-marketing.web.app',
+            ...overrides,
+        };
+    }
+
+    it('WL-H1 a failed Turnstile check stops before any write or email', async () => {
+        const d = deps();
+        const res = await waitlist.handleJoin(
+            { body: { email: 'driver@example.com', turnstileToken: 'bad' }, headers: { 'fastly-client-ip': '203.0.113.9' } }, d);
+        expect(res).toEqual({ status: 400, body: { status: 'verification_failed' } });
+        expect(d.verifyTurnstile).toHaveBeenCalledWith('bad');
+        expect(d.deliver).not.toHaveBeenCalled();
+    });
+
+    it('WL-H2 with a valid Fastly-Client-IP, throttles on its HMAC — never the raw IP', async () => {
+        const d = deps();
+        await waitlist.handleJoin(
+            { body: { email: 'driver@example.com', turnstileToken: 'bad' }, headers: { 'fastly-client-ip': '203.0.113.9' } }, d);
+        expect(d.checkRateLimit).toHaveBeenCalledTimes(1);
+        const [key, operation, limits] = d.checkRateLimit.mock.calls[0];
+        expect(operation).toBe('waitlistJoin');
+        expect(limits).toEqual(waitlist.JOIN_LIMIT);
+        expect(key).toBe(waitlist.clientRateLimitKey({ 'fastly-client-ip': '203.0.113.9' }, 'unit-rate-limit-pepper'));
+        expect(key).not.toContain('203.0.113.9');
+    });
+
+    it('WL-H3 without Fastly-Client-IP, skips the client throttle and ignores forwarded headers', async () => {
+        const d = deps();
+        const res = await waitlist.handleJoin({
+            body: { email: 'driver@example.com', turnstileToken: 'bad' },
+            headers: { 'x-forwarded-for': '198.51.100.1, 203.0.113.9', 'x-real-ip': '198.51.100.1' },
+        }, d);
+        expect(d.checkRateLimit).not.toHaveBeenCalled();
+        // Turnstile still runs: the missing header is not a bypass.
+        expect(d.verifyTurnstile).toHaveBeenCalledTimes(1);
+        expect(res.status).toBe(400);
+    });
+
+    it('WL-H4 a throttled client is refused before Turnstile or the database', async () => {
+        const exhausted = Object.assign(new Error('Too many requests.'), { code: 'resource-exhausted' });
+        const d = deps({ checkRateLimit: vi.fn(async () => { throw exhausted; }) });
+        const res = await waitlist.handleJoin(
+            { body: { email: 'driver@example.com', turnstileToken: 'ok' }, headers: { 'fastly-client-ip': '203.0.113.9' } }, d);
+        expect(res).toEqual({ status: 429, body: { status: 'rate_limited' } });
+        expect(d.verifyTurnstile).not.toHaveBeenCalled();
+    });
+
+    it('WL-H5 a malformed email is rejected before throttling, Turnstile or the database', async () => {
+        const d = deps();
+        const res = await waitlist.handleJoin({ body: { email: 'nope', turnstileToken: 'ok' }, headers: {} }, d);
+        expect(res).toEqual({ status: 400, body: { status: 'invalid_email' } });
+        expect(d.checkRateLimit).not.toHaveBeenCalled();
+        expect(d.verifyTurnstile).not.toHaveBeenCalled();
+    });
+
+    it('WL-H6 a malformed confirmation token is refused without a lookup', async () => {
+        const d = deps();
+        const res = await waitlist.handleConfirm({ body: { token: 'x' }, headers: {} }, d);
+        expect(res).toEqual({ status: 410, body: { status: 'invalid_or_expired' } });
+        expect(d.checkRateLimit).not.toHaveBeenCalled();
+    });
+});
+
+// No test in this file may reach Cloudflare or SendGrid: every network path
+// above is given an injected fetch. This fails the file if one leaks.
+const realFetch = globalThis.fetch;
+const leakedCalls = [];
+beforeAll(() => {
+    globalThis.fetch = async (url, ...rest) => {
+        leakedCalls.push(String(url));
+        throw new Error(`Unexpected real network call to ${url}`);
+    };
+});
+afterAll(() => {
+    globalThis.fetch = realFetch;
+    expect(leakedCalls).toEqual([]);
 });
