@@ -563,6 +563,13 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Marketing waitlist: written only by joinWaitlist/confirmWaitlist via the
+    // Admin SDK. Holds email addresses and token hashes, so no client access at
+    // all. See docs/WAITLIST.md.
+    match /waitlist/{docId} {
+      allow read, write: if false;
+    }
+
     match /adminBootstrap/{docId} {
       // Direct admin read removed: never read by any client — confirmed via
       // full-repo search. Admin identity/singleton-ownership data must not

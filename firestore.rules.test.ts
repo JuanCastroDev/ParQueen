@@ -3073,6 +3073,50 @@ describe('§5 — rateLimits collection Rules', () => {
     });
 });
 
+describe('WL-R — waitlist collection Rules (server-only)', () => {
+    const WL_DOC = 'a'.repeat(64);
+
+    beforeEach(async () => {
+        await seed('waitlist', WL_DOC, {
+            email: 'driver@example.com',
+            status: 'pending_confirmation',
+            optInMethod: 'double-opt-in',
+            source: 'marketing-site',
+            consentVersion: 'waitlist-2026-09-v1',
+            confirmTokenHash: 'b'.repeat(64),
+            confirmedAt: null,
+        });
+    });
+
+    it('WL-R1: no client can read a waitlist record', async () => {
+        await assertFails(getDoc(doc(anonDb(), 'waitlist', WL_DOC)));
+        await assertFails(getDoc(doc(ownerDb(), 'waitlist', WL_DOC)));
+        await assertFails(getDoc(doc(adminDb(), 'waitlist', WL_DOC)));
+    });
+
+    it('WL-R2: no client can list or query the waitlist', async () => {
+        await assertFails(getDocs(collection(anonDb(), 'waitlist')));
+        await assertFails(getDocs(query(collection(ownerDb(), 'waitlist'), where('status', '==', 'subscribed'))));
+        await assertFails(getDocs(query(collection(adminDb(), 'waitlist'), where('confirmTokenHash', '==', 'b'.repeat(64)))));
+    });
+
+    it('WL-R3: no client can create a waitlist record', async () => {
+        const record = { email: 'x@example.com', status: 'subscribed' };
+        await assertFails(setDoc(doc(anonDb(), 'waitlist', 'c'.repeat(64)), record));
+        await assertFails(setDoc(doc(ownerDb(), 'waitlist', 'c'.repeat(64)), record));
+        await assertFails(addDoc(collection(adminDb(), 'waitlist'), record));
+    });
+
+    it('WL-R4: no client can confirm, change or delete a waitlist record', async () => {
+        await assertFails(setDoc(doc(anonDb(), 'waitlist', WL_DOC), { status: 'subscribed' }, { merge: true }));
+        await assertFails(setDoc(doc(ownerDb(), 'waitlist', WL_DOC), { status: 'subscribed' }, { merge: true }));
+        await assertFails(setDoc(doc(adminDb(), 'waitlist', WL_DOC), { status: 'unsubscribed' }, { merge: true }));
+        const { deleteDoc } = await import('firebase/firestore');
+        await assertFails(deleteDoc(doc(anonDb(), 'waitlist', WL_DOC)));
+        await assertFails(deleteDoc(doc(adminDb(), 'waitlist', WL_DOC)));
+    });
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // §9 — Two-user workflow: OWNER (finder) ↔ OTHER (claimer) lifecycle
 // ═══════════════════════════════════════════════════════════════════════════════
