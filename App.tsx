@@ -36,6 +36,19 @@ const TermsOfUseView = lazy(() => import('./views/TermsOfUseView').then(m => ({ 
 const ContactUsView = lazy(() => import('./views/ContactUsView').then(m => ({ default: m.ContactUsView })));
 import { AppView } from './types';
 import { readPersistedAccess, persistAccessChoice, persistReconciledAccess, shouldShowPrimer, reconcileLocationAccess, type LocationAccess } from './utils/locationAccess';
+import {
+  AUTH_BOOTSTRAP_LOCATION_TIMEOUT_MS,
+  AUTH_BOOTSTRAP_TIMEOUT_MS,
+  createBootstrapDeadline,
+  createBootstrapGenerationTracker,
+  decideAdminDomainAuthenticatedView,
+  decideAuthenticatedConsumerBootstrap,
+  decideLoggedOutStartupView,
+  isExpectedBootstrapUnavailable,
+  lookupProfileBootstrapStatus,
+} from './utils/authBootstrap';
+import { withTimeout } from './utils/withTimeout';
+import { captureClientException } from './utils/errorReporting';
 import { nearbyPermissionState, type LocationCallbacks } from './utils/nearbyActivity';
 import { checkLocationPermission, requestLocationPermission } from './utils/geolocation';
 import { resolveGeolocationPath } from './utils/geolocationPlatform';
@@ -204,8 +217,16 @@ export default function App() {
     let privateAccountUnsubscribe = () => {};
     let privatePreferencesUnsubscribe = () => {};
     let privateSocialUnsubscribe = () => {};
+    const bootstrapGenerations = createBootstrapGenerationTracker();
+
+    const reportBootstrapListenerError = (error: unknown, route: string) => {
+      if (isExpectedBootstrapUnavailable(error)) return;
+      captureClientException(error, { component: 'App', route });
+    };
 
     const authStateUnsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      const generation = bootstrapGenerations.begin();
+      const deadline = createBootstrapDeadline(AUTH_BOOTSTRAP_TIMEOUT_MS);
       userProfileUnsubscribe();
       privateAccountUnsubscribe();
       privatePreferencesUnsubscribe();
@@ -213,120 +234,200 @@ export default function App() {
       privateEmailRef.current = undefined;
       setLoading(true);
 
-      if (firebaseUser) {
-        const userDocRef = doc(db, 'users', firebaseUser.uid);
+      try {
+        if (firebaseUser) {
+          const userDocRef = doc(db, 'users', firebaseUser.uid);
 
-        // Admin domain: skip FCM and profile listener — just check the claim
-        if (isAdminDomain) {
-          const token = await firebaseUser.getIdTokenResult();
-          if (token.claims.role === 'admin') {
+          // Admin domain: skip FCM and profile listener — bounded overall window.
+          if (isAdminDomain) {
+            const tokenBudget = deadline.budgetMs();
+            let tokenStatus: 'admin' | 'non_admin' | 'unavailable' = 'unavailable';
+            if (tokenBudget > 0) {
+              try {
+                const token = await withTimeout(
+                  firebaseUser.getIdTokenResult(),
+                  tokenBudget,
+                  'admin-id-token',
+                );
+                if (!generation.isCurrent()) return;
+                tokenStatus = token.claims.role === 'admin' ? 'admin' : 'non_admin';
+              } catch (error) {
+                if (!generation.isCurrent()) return;
+                if (!isExpectedBootstrapUnavailable(error)) {
+                  captureClientException(error, { component: 'App', route: 'auth_bootstrap_admin_token' });
+                }
+                tokenStatus = 'unavailable';
+              }
+            }
+            if (!generation.isCurrent()) return;
+            setCurrentView(decideAdminDomainAuthenticatedView(tokenStatus));
+            return;
+          }
+
+          // Listen for profile data changes (recover when connectivity returns).
+          // Generation check blocks queued events from a superseded auth bootstrap.
+          userProfileUnsubscribe = onSnapshot(
+            userDocRef,
+            (userDoc) => {
+              if (!generation.isCurrent()) return;
+              if (userDoc.exists()) {
+                const userData = userDoc.data();
+                // Prefer email from private subcollection; fall back to public doc for pre-migration accounts
+                const emailOverride = privateEmailRef.current !== undefined
+                  ? { email: privateEmailRef.current }
+                  : {};
+                setUser({ id: userDoc.id, ...userData, ...emailOverride });
+                const newTitle = userData.title || 'Newcomer';
+                if (prevTitleRef.current && prevTitleRef.current !== newTitle && newTitle !== 'Newcomer') {
+                  setTitleUnlock(newTitle);
+                  setTimeout(() => setTitleUnlock(null), 5000);
+                }
+                prevTitleRef.current = newTitle;
+              } else {
+                setUser({ id: firebaseUser.uid });
+              }
+            },
+            (error) => reportBootstrapListenerError(error, 'auth_bootstrap_profile_listener'),
+          );
+
+          // Listen for private account data (email) — owner-only subcollection
+          const privateAccountRef = doc(db, 'users', firebaseUser.uid, 'private', 'account');
+          privateAccountUnsubscribe = onSnapshot(
+            privateAccountRef,
+            (snap) => {
+              if (!generation.isCurrent()) return;
+              const email = snap.exists() ? snap.data().email : undefined;
+              privateEmailRef.current = email;
+              setUser(prev => prev ? { ...prev, email } : prev);
+            },
+            (error) => reportBootstrapListenerError(error, 'auth_bootstrap_private_account_listener'),
+          );
+
+          // Listen for private preferences (notif settings, location pref) — owner-only
+          const privatePrefsRef = doc(db, 'users', firebaseUser.uid, 'private', 'preferences');
+          privatePreferencesUnsubscribe = onSnapshot(
+            privatePrefsRef,
+            (snap) => {
+              if (!generation.isCurrent()) return;
+              if (!snap.exists()) return;
+              const prefs = snap.data();
+              setUser(prev => prev ? {
+                ...prev,
+                notificationsEnabled: prefs.notificationsEnabled,
+                notificationRadius: prefs.notificationRadius,
+                sharePreciseLocation: prefs.sharePreciseLocation,
+              } : prev);
+            },
+            (error) => reportBootstrapListenerError(error, 'auth_bootstrap_private_prefs_listener'),
+          );
+
+          // Listen for private social (blockedUsers) — owner-only
+          const privateSocialRef = doc(db, 'users', firebaseUser.uid, 'private', 'social');
+          privateSocialUnsubscribe = onSnapshot(
+            privateSocialRef,
+            (snap) => {
+              if (!generation.isCurrent()) return;
+              if (!snap.exists()) return;
+              setUser(prev => prev ? { ...prev, blockedUsers: snap.data().blockedUsers || [] } : prev);
+            },
+            (error) => reportBootstrapListenerError(error, 'auth_bootstrap_private_social_listener'),
+          );
+
+          // Bounded admin-claim check — shares the overall bootstrap deadline.
+          let isAdmin = false;
+          const tokenBudget = deadline.budgetMs();
+          if (tokenBudget > 0) {
+            try {
+              const token = await withTimeout(
+                firebaseUser.getIdTokenResult(),
+                tokenBudget,
+                'id-token',
+              );
+              if (!generation.isCurrent()) return;
+              isAdmin = token.claims.role === 'admin';
+            } catch (error) {
+              if (!generation.isCurrent()) return;
+              if (!isExpectedBootstrapUnavailable(error)) {
+                captureClientException(error, { component: 'App', route: 'auth_bootstrap_token' });
+              }
+              isAdmin = false;
+            }
+          }
+
+          if (isAdmin) {
+            if (!generation.isCurrent()) return;
             setCurrentView(AppView.ADMIN_DASHBOARD);
           } else {
-            setCurrentView(AppView.ADMIN_LOGIN);
-          }
-          setLoading(false);
-          return;
-        }
+            // Profile existence shares remaining overall deadline (not a fresh 6s).
+            const profileBudget = deadline.budgetMs();
+            const profileStatus = await lookupProfileBootstrapStatus(
+              () => getDoc(userDocRef),
+              {
+                timeoutMs: profileBudget,
+                label: 'profile-get',
+                onUnexpectedError: (error) => {
+                  captureClientException(error, { component: 'App', route: 'auth_bootstrap_profile' });
+                },
+              },
+            );
+            if (!generation.isCurrent()) return;
 
-        // Listen for profile data changes
-        userProfileUnsubscribe = onSnapshot(userDocRef, (userDoc) => {
-          if (userDoc.exists()) {
-            const userData = userDoc.data();
-            // Prefer email from private subcollection; fall back to public doc for pre-migration accounts
-            const emailOverride = privateEmailRef.current !== undefined
-              ? { email: privateEmailRef.current }
-              : {};
-            setUser({ id: userDoc.id, ...userData, ...emailOverride });
-            const newTitle = userData.title || 'Newcomer';
-            if (prevTitleRef.current && prevTitleRef.current !== newTitle && newTitle !== 'Newcomer') {
-              setTitleUnlock(newTitle);
-              setTimeout(() => setTitleUnlock(null), 5000);
-            }
-            prevTitleRef.current = newTitle;
-          } else {
-            setUser({ id: firebaseUser.uid });
-          }
-        });
-
-        // Listen for private account data (email) — owner-only subcollection
-        const privateAccountRef = doc(db, 'users', firebaseUser.uid, 'private', 'account');
-        privateAccountUnsubscribe = onSnapshot(privateAccountRef, (snap) => {
-          const email = snap.exists() ? snap.data().email : undefined;
-          privateEmailRef.current = email;
-          setUser(prev => prev ? { ...prev, email } : prev);
-        });
-
-        // Listen for private preferences (notif settings, location pref) — owner-only
-        const privatePrefsRef = doc(db, 'users', firebaseUser.uid, 'private', 'preferences');
-        privatePreferencesUnsubscribe = onSnapshot(privatePrefsRef, (snap) => {
-          if (!snap.exists()) return;
-          const prefs = snap.data();
-          setUser(prev => prev ? {
-            ...prev,
-            notificationsEnabled: prefs.notificationsEnabled,
-            notificationRadius: prefs.notificationRadius,
-            sharePreciseLocation: prefs.sharePreciseLocation,
-          } : prev);
-        });
-
-        // Listen for private social (blockedUsers) — owner-only
-        const privateSocialRef = doc(db, 'users', firebaseUser.uid, 'private', 'social');
-        privateSocialUnsubscribe = onSnapshot(privateSocialRef, (snap) => {
-          if (!snap.exists()) return;
-          setUser(prev => prev ? { ...prev, blockedUsers: snap.data().blockedUsers || [] } : prev);
-        });
-
-        // Check for admin claims and route accordingly
-        const token = await firebaseUser.getIdTokenResult();
-        const isAdmin = token.claims.role === 'admin';
-
-        if (isAdmin) {
-          setCurrentView(AppView.ADMIN_DASHBOARD);
-        } else {
-          // For non-admins, check if their profile is set up
-          const userDoc = await getDoc(userDocRef);
-          if (userDoc.exists()) {
-            // Read stored access, then reconcile against actual browser permission.
-            // This corrects stale 'declined' state (Not now recovery, legacy users) and
-            // catches browser permission revocations before the map mounts.
             let access = readPersistedAccess();
-            try {
-              const snap = await checkLocationPermission();
-              if (snap.locationServicesEnabled === false) setLocationServicesEnabled(false);
-              else if (snap.locationServicesEnabled === true) setLocationServicesEnabled(true);
-              const reconciled = reconcileLocationAccess(snap.status, access, resolveGeolocationPath());
-              if (reconciled !== access) {
-                persistReconciledAccess(reconciled);
-                access = reconciled;
+            if (profileStatus === 'exists') {
+              // Location reconcile: 2.5s sub-cap clipped to remaining overall time.
+              const locationBudget = deadline.budgetMs(AUTH_BOOTSTRAP_LOCATION_TIMEOUT_MS);
+              if (locationBudget > 0) {
+                try {
+                  const snap = await withTimeout(
+                    checkLocationPermission(),
+                    locationBudget,
+                    'location-permission',
+                  );
+                  if (!generation.isCurrent()) return;
+                  if (snap.locationServicesEnabled === false) setLocationServicesEnabled(false);
+                  else if (snap.locationServicesEnabled === true) setLocationServicesEnabled(true);
+                  const reconciled = reconcileLocationAccess(snap.status, access, resolveGeolocationPath());
+                  if (reconciled !== access) {
+                    persistReconciledAccess(reconciled);
+                    access = reconciled;
+                  }
+                } catch {}
               }
-            } catch {}
-            // Sync React state — ensures allowLocationTracking is correct when MapView mounts
+            }
+
+            if (!generation.isCurrent()) return;
+            const decision = decideAuthenticatedConsumerBootstrap(profileStatus, access);
             setLocationAccess(access);
-            setCurrentView(shouldShowPrimer(access) ? AppView.LOCATION_PROMPT : AppView.MAP);
-          } else {
-            setCurrentView(AppView.SETUP_PROFILE);
+            if (decision.seedMinimalUser) {
+              setUser(prev => prev ?? { id: firebaseUser.uid });
+            }
+            setCurrentView(decision.view);
           }
-        }
-      } else {
-        // No user is logged in — clear any pending deletion modal before rerouting.
-        // Successful deletion triggers this branch via signOut(); without this reset
-        // deletePhase stays 'deleting' and the modal survives the Auth transition.
-        clearReauthState();
-        setDeletePhase('idle');
-        setUser(null);
-        if (isAdminDomain) {
-          setCurrentView(AppView.ADMIN_LOGIN);
         } else {
+          // No user is logged in — clear any pending deletion modal before rerouting.
+          // Successful deletion triggers this branch via signOut(); without this reset
+          // deletePhase stays 'deleting' and the modal survives the Auth transition.
+          clearReauthState();
+          setDeletePhase('idle');
+          setUser(null);
+          if (!generation.isCurrent()) return;
           const hasSeen = !!localStorage.getItem('hasSeenOnboarding');
-          setCurrentView(hasSeen ? AppView.CREATE_ACCOUNT : AppView.ONBOARDING);
+          setCurrentView(decideLoggedOutStartupView({
+            isAdminDomain,
+            hasSeenOnboarding: hasSeen,
+          }));
+        }
+      } finally {
+        if (generation.isCurrent()) {
+          setLoading(false);
         }
       }
-      setLoading(false);
     });
 
     return () => {
       if (reauthCooldownRef.current) clearInterval(reauthCooldownRef.current);
       clearRecaptchaVerifier(reauthRecaptchaRef);
+      bootstrapGenerations.begin(); // invalidate any in-flight bootstrap
       authStateUnsubscribe();
       userProfileUnsubscribe();
       privateAccountUnsubscribe();
