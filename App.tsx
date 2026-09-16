@@ -57,7 +57,7 @@ import { getLanguageHydrationAction } from './utils/languageHydration';
 import { ChevronLeft } from 'lucide-react';
 import ErrorBoundary from './ErrorBoundary';
 import { logoutUser, deleteUser, unlinkFcmTokenBeforeDeletion } from './database';
-import { ConfirmationResult, RecaptchaVerifier, reauthenticateWithPhoneNumber, signOut } from 'firebase/auth';
+import { ConfirmationResult, RecaptchaVerifier, signOut } from 'firebase/auth';
 import { useInAppLegalNavigation } from './hooks/useInAppLegalNavigation';
 import { applyAndroidBackAction, useAndroidSystemBack } from './hooks/useAndroidSystemBack';
 import { resolveAndroidBack } from './utils/androidBackNavigation';
@@ -66,13 +66,19 @@ import type { OnboardingAndroidBackHandle } from './views/OnboardingView';
 import { App as CapacitorApp } from '@capacitor/app';
 import { legalViewFor } from './utils/inAppLegalNavigation';
 import type { PhoneVerificationSession } from './utils/phoneAuth';
+import {
+  requireAuthPhoneUser,
+  resendPhoneReauthentication,
+  startPhoneReauthentication,
+  type PhoneReauthSession,
+} from './utils/phoneReauth';
 import { maskPhoneNumber, verifyUidUnchanged } from './utils/reauthBeforeDelete';
 import { auth, db } from './firebaseConfig';
 import { onAuthStateChanged } from 'firebase/auth';
 import { doc, onSnapshot, getDoc } from "firebase/firestore";
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { getApp } from 'firebase/app';
-import { clearRecaptchaVerifier, replaceRecaptchaVerifier } from './utils/recaptchaLifecycle';
+import { clearRecaptchaVerifier } from './utils/recaptchaLifecycle';
 import { notificationRegistration, type NotificationRuntimeState } from './utils/notificationRegistration';
 import { createNotificationLifecycle } from './utils/notificationLifecycle';
 import {
@@ -186,7 +192,7 @@ export default function App() {
   const deleteCancelRef = useRef<HTMLButtonElement>(null);
   // phone stores canonical E.164 (e.g. "+15555551234", "+51987654321")
   const [phone, setPhone] = useState('');
-  const [confirmationResult, setConfirmationResult] = useState<PhoneVerificationSession | ConfirmationResult | null>(null);
+  const [confirmationResult, setConfirmationResult] = useState<PhoneVerificationSession | PhoneReauthSession | ConfirmationResult | null>(null);
   const [reauthOtp, setReauthOtp] = useState('');
   const [reauthResendCooldown, setReauthResendCooldown] = useState(0);
   const [reauthError, setReauthError] = useState('');
@@ -195,12 +201,15 @@ export default function App() {
   const originalUidRef = useRef<string | null>(null);
   const reauthSendingRef = useRef(false);
   const reauthVerifyingRef = useRef(false);
+  /** Bumps on clear/dismiss so in-flight send/verify cannot advance a stale deletion reauth. */
+  const reauthSessionGenRef = useRef(0);
 
   const clearReauthState = () => {
     if (reauthCooldownRef.current) { clearInterval(reauthCooldownRef.current); reauthCooldownRef.current = null; }
     clearRecaptchaVerifier(reauthRecaptchaRef);
     reauthSendingRef.current = false;
     reauthVerifyingRef.current = false;
+    reauthSessionGenRef.current += 1;
     setConfirmationResult(null);
     setReauthOtp('');
     setReauthResendCooldown(0);
@@ -721,18 +730,29 @@ export default function App() {
 
   const handleReauthSendOtp = async () => {
     if (reauthSendingRef.current) return;
-    const currentUser = auth.currentUser;
-    if (!currentUser?.phoneNumber) { setDeletePhase('failed'); return; }
+    let currentUser;
+    try {
+      currentUser = requireAuthPhoneUser(auth);
+    } catch {
+      setDeletePhase('failed');
+      return;
+    }
+    const sessionGen = reauthSessionGenRef.current;
     reauthSendingRef.current = true;
     setReauthError('');
     try {
-      const verifier = replaceRecaptchaVerifier(reauthRecaptchaRef, auth, 'reauth-recaptcha-anchor');
-      const result = await reauthenticateWithPhoneNumber(currentUser, currentUser.phoneNumber, verifier);
+      // Web uses Recaptcha; Android native uses PhoneAuth + reauthenticateWithCredential.
+      const result = await startPhoneReauthentication({
+        currentUser,
+        recaptchaRef: reauthRecaptchaRef,
+        containerId: 'reauth-recaptcha-anchor',
+      });
+      if (sessionGen !== reauthSessionGenRef.current) return;
       setConfirmationResult(result);
-      clearRecaptchaVerifier(reauthRecaptchaRef);
       setDeletePhase('reauth_verifying_otp');
       startResendCooldown();
     } catch (error: any) {
+      if (sessionGen !== reauthSessionGenRef.current) return;
       clearReauthState();
       if (['auth/invalid-app-credential', 'auth/missing-app-credential', 'auth/captcha-check-failed'].includes(error?.code)) {
         setReauthError(t('phone_auth.error_expired'));
@@ -751,10 +771,13 @@ export default function App() {
     if (reauthVerifyingRef.current) return;
     const originalUid = originalUidRef.current;
     if (!originalUid) { setDeletePhase('failed'); return; }
+    const sessionGen = reauthSessionGenRef.current;
+    const activeSession = confirmationResult;
     reauthVerifyingRef.current = true;
     setDeletePhase('deleting');
     try {
-      await confirmationResult.confirm(reauthOtp);
+      await activeSession.confirm(reauthOtp);
+      if (sessionGen !== reauthSessionGenRef.current) return;
       // UID preservation check — abort if a different account was signed in during OTP
       verifyUidUnchanged(auth.currentUser?.uid, originalUid);
       clearReauthState();
@@ -763,25 +786,38 @@ export default function App() {
       clearLocalAccountState();
       setDeletePhase('idle');
     } catch (e: any) {
+      if (sessionGen !== reauthSessionGenRef.current) return;
       if (e?.code === 'auth/account-switched') { try { await signOut(auth); } catch {} }
       clearReauthState();
       setDeletePhase('failed');
+    } finally {
+      reauthVerifyingRef.current = false;
     }
   };
 
   const handleReauthResend = async () => {
     if (reauthResendCooldown > 0 || reauthSendingRef.current) return;
-    const currentUser = auth.currentUser;
-    if (!currentUser?.phoneNumber) { setDeletePhase('failed'); return; }
+    let currentUser;
+    try {
+      currentUser = requireAuthPhoneUser(auth);
+    } catch {
+      setDeletePhase('failed');
+      return;
+    }
+    const sessionGen = reauthSessionGenRef.current;
     reauthSendingRef.current = true;
     setReauthError('');
     try {
-      const verifier = replaceRecaptchaVerifier(reauthRecaptchaRef, auth, 'reauth-recaptcha-anchor');
-      const result = await reauthenticateWithPhoneNumber(currentUser, currentUser.phoneNumber, verifier);
+      const result = await resendPhoneReauthentication({
+        currentUser,
+        recaptchaRef: reauthRecaptchaRef,
+        containerId: 'reauth-recaptcha-anchor',
+      });
+      if (sessionGen !== reauthSessionGenRef.current) return;
       setConfirmationResult(result);
-      clearRecaptchaVerifier(reauthRecaptchaRef);
       startResendCooldown();
     } catch (error: any) {
+      if (sessionGen !== reauthSessionGenRef.current) return;
       clearReauthState();
       if (['auth/invalid-app-credential', 'auth/missing-app-credential', 'auth/captcha-check-failed'].includes(error?.code)) {
         setReauthError(t('phone_auth.error_expired'));
