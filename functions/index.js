@@ -42,27 +42,9 @@ function snapshotGeneration(snapshot) {
   return `${updated.seconds}_${updated.nanoseconds}`;
 }
 
-function _canonicalizeEmail(value) {
-  if (typeof value !== 'string') throw new HttpsError('invalid-argument', 'Valid email required.');
-  const email = value.trim().toLowerCase();
-  if (!email || email.length > 254 || !/^[\x21-\x7e]+$/.test(email)) {
-    throw new HttpsError('invalid-argument', 'Valid email required.');
-  }
-  const parts = email.split('@');
-  if (parts.length !== 2) throw new HttpsError('invalid-argument', 'Valid email required.');
-  const [local, domain] = parts;
-  if (!local || local.length > 64 || local.startsWith('.') || local.endsWith('.') || local.includes('..') ||
-      !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+$/.test(local)) {
-    throw new HttpsError('invalid-argument', 'Valid email required.');
-  }
-  const labels = domain.split('.');
-  if (domain.length > 253 || labels.length < 2 || labels.some(label =>
-      !label || label.length > 63 || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)) ||
-      !/[a-z]/.test(labels.at(-1))) {
-    throw new HttpsError('invalid-argument', 'Valid email required.');
-  }
-  return email;
-}
+// Moved to ./emailAddress so the waitlist importer can share it without
+// loading this module (and initializing a second Firebase app).
+const { canonicalizeEmail: _canonicalizeEmail } = require('./emailAddress');
 
 exports._canonicalizeEmail = _canonicalizeEmail;
 
