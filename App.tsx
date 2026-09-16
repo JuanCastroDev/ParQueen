@@ -855,31 +855,40 @@ export default function App() {
     }
 
 
-    // MAP and MESSAGES share the same MapView instance so selectedItem survives the transition
+    // MAP and MESSAGES share the same MapView instance so selectedItem survives the transition.
+    // While Messages is the full-screen overlay, the map stays mounted but is inert so its
+    // still-open Ping BottomSheet cannot reclaim keyboard focus (Android adjustResize).
     if (currentView === AppView.MAP || currentView === AppView.MESSAGES) {
+      const messagesObscuresMap = currentView === AppView.MESSAGES;
       return (
         <>
-          <MapView
-            user={user}
-            onMessageUser={handleMessageUser}
-            setView={navigatePrimary}
-            pendingSpotId={pendingSpotId}
-            onPendingSpotConsumed={() => setPendingSpotId(null)}
-            onPendingSpotUnavailable={() => {
-              setCurrentView(AppView.NOTIFICATIONS);
-              setPushToast({
-                title: t('notifications.ping_unavailable'),
-                body: '',
-                intent: { version: 1, type: 'notifications' },
-              });
-            }}
-            pendingMyCarOpen={pendingMyCarOpen}
-            onPendingMyCarConsumed={() => setPendingMyCarOpen(false)}
-            allowLocationTracking={locationAccess === 'granted'}
-            showPrimaryNavigation={currentView === AppView.MAP}
-            unreadMessagesCount={unreadMessagesCount}
-            onPendingUpdatesCountChange={setPendingUpdatesCount}
-          />
+          <div
+            className="h-full"
+            aria-hidden={messagesObscuresMap ? true : undefined}
+            {...(messagesObscuresMap ? ({ inert: '' } as Record<string, string>) : {})}
+          >
+            <MapView
+              user={user}
+              onMessageUser={handleMessageUser}
+              setView={navigatePrimary}
+              pendingSpotId={pendingSpotId}
+              onPendingSpotConsumed={() => setPendingSpotId(null)}
+              onPendingSpotUnavailable={() => {
+                setCurrentView(AppView.NOTIFICATIONS);
+                setPushToast({
+                  title: t('notifications.ping_unavailable'),
+                  body: '',
+                  intent: { version: 1, type: 'notifications' },
+                });
+              }}
+              pendingMyCarOpen={pendingMyCarOpen}
+              onPendingMyCarConsumed={() => setPendingMyCarOpen(false)}
+              allowLocationTracking={locationAccess === 'granted'}
+              showPrimaryNavigation={currentView === AppView.MAP}
+              unreadMessagesCount={unreadMessagesCount}
+              onPendingUpdatesCountChange={setPendingUpdatesCount}
+            />
+          </div>
           {currentView === AppView.MESSAGES && (
             <div className="fixed inset-0 z-50 bg-[var(--color-bg)]">
               <MessagesView

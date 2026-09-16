@@ -97,8 +97,17 @@ function focusInsideDialog(dialog: HTMLElement, preferred?: HTMLElement | null) 
 }
 
 function modalRootIsSuspended(modalRoot: HTMLElement | null): boolean {
-  return Boolean((modalRoot as HTMLElement & { inert?: boolean } | null)?.inert)
-    || modalRoot?.getAttribute('aria-hidden') === 'true';
+  if (!modalRoot) return false;
+  if ((modalRoot as HTMLElement & { inert?: boolean }).inert) return true;
+  if (modalRoot.getAttribute('aria-hidden') === 'true') return true;
+  try {
+    // An ancestor marked inert (e.g. Map kept mounted under a full-screen
+    // overlay) is not itself a modal root, but its descendant dialogs must
+    // not trap or reclaim focus from the foreground screen.
+    return Boolean(modalRoot.closest?.('[inert]'));
+  } catch {
+    return false;
+  }
 }
 
 export function useModalAccessibility({
@@ -147,7 +156,9 @@ export function useModalAccessibility({
       : null;
     observer?.observe(backgroundParent!, { childList: true });
 
-    focusInsideDialog(dialog, initialFocusRef?.current);
+    if (!modalRootIsSuspended(modalRoot)) {
+      focusInsideDialog(dialog, initialFocusRef?.current);
+    }
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (modalRootIsSuspended(modalRoot)) return;

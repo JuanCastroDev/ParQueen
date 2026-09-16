@@ -48,6 +48,15 @@ class FakeElement {
     if (name === 'inert') this.inert = false;
   }
 
+  closest(selector: string) {
+    let node: FakeElement | null = this;
+    while (node) {
+      if (selector === '[inert]' && (node.inert || node.hasAttribute('inert'))) return node;
+      node = node.parentElement;
+    }
+    return null;
+  }
+
   matches() {
     return this.isConnected && !this.disabled && !this.inert && this.tabIndex >= 0;
   }
@@ -308,5 +317,43 @@ describe('BottomSheet shared modal accessibility contract', () => {
     expect(harness.page.hasAttribute('aria-hidden')).toBe(false);
     expect(harness.preIsolated.getAttribute('inert')).toBe('legacy-state');
     expect(harness.preIsolated.getAttribute('aria-hidden')).toBe('false');
+  });
+
+  it('does not reclaim or trap focus while an ancestor of the modal is inert, then resumes when that ancestor is interactive again', () => {
+    const harness = modalHarness();
+    const composer = new FakeElement('composer');
+    composer.tabIndex = 0;
+    const backgroundParent = harness.modalRoot.parentElement!;
+    let renderer: TestRenderer.ReactTestRenderer;
+    act(() => {
+      renderer = TestRenderer.create(
+        <BottomSheet isOpen onClose={vi.fn()} ariaLabel="Spot details"><button>Action</button></BottomSheet>,
+        { createNodeMock: element => element.props.role === 'dialog' ? harness.dialog : null },
+      );
+    });
+    expect(harness.first.focus).toHaveBeenCalledTimes(1);
+
+    backgroundParent.setAttribute('inert', '');
+    (globalThis.document as any).activeElement = composer;
+    act(() => {
+      renderer!.update(
+        <BottomSheet isOpen onClose={vi.fn()} ariaLabel="Spot details"><button>Action</button></BottomSheet>,
+      );
+    });
+    expect(harness.first.focus).toHaveBeenCalledTimes(1);
+    expect((globalThis.document as any).activeElement).toBe(composer);
+    const tabWhileObscured = harness.dispatchKey('Tab');
+    expect(tabWhileObscured.preventDefault).not.toHaveBeenCalled();
+
+    backgroundParent.removeAttribute('inert');
+    act(() => {
+      renderer!.update(
+        <BottomSheet isOpen onClose={vi.fn()} ariaLabel="Spot details"><button>Action</button></BottomSheet>,
+      );
+    });
+    expect(harness.first.focus).toHaveBeenCalledTimes(2);
+    expect((globalThis.document as any).activeElement).toBe(harness.first);
+
+    act(() => renderer!.unmount());
   });
 });
