@@ -46,6 +46,11 @@ import ErrorBoundary from './ErrorBoundary';
 import { logoutUser, deleteUser, unlinkFcmTokenBeforeDeletion } from './database';
 import { ConfirmationResult, RecaptchaVerifier, reauthenticateWithPhoneNumber, signOut } from 'firebase/auth';
 import { useInAppLegalNavigation } from './hooks/useInAppLegalNavigation';
+import { applyAndroidBackAction, useAndroidSystemBack } from './hooks/useAndroidSystemBack';
+import { resolveAndroidBack } from './utils/androidBackNavigation';
+import type { MessagesAndroidBackHandle } from './views/MessagesView';
+import type { OnboardingAndroidBackHandle } from './views/OnboardingView';
+import { App as CapacitorApp } from '@capacitor/app';
 import { legalViewFor } from './utils/inAppLegalNavigation';
 import type { PhoneVerificationSession } from './utils/phoneAuth';
 import { maskPhoneNumber, verifyUidUnchanged } from './utils/reauthBeforeDelete';
@@ -106,6 +111,49 @@ export default function App() {
     setCurrentView(view);
   };
   const { setViewWithLegalReturn, closeLegal } = useInAppLegalNavigation(currentView, setCurrentView);
+  const messagesAndroidBackRef = useRef<MessagesAndroidBackHandle | null>(null);
+  const onboardingAndroidBackRef = useRef<OnboardingAndroidBackHandle | null>(null);
+  const androidBackStateRef = useRef({
+    currentView,
+    vehicleOnboarding,
+    locationAccess,
+    closeLegal,
+  });
+  androidBackStateRef.current = {
+    currentView,
+    vehicleOnboarding,
+    locationAccess,
+    closeLegal,
+  };
+
+  useAndroidSystemBack({
+    handleBack: () => {
+      const state = androidBackStateRef.current;
+      const action = resolveAndroidBack({
+        currentView: state.currentView,
+        vehicleOnboarding: state.vehicleOnboarding,
+        locationAccess: state.locationAccess,
+      });
+      applyAndroidBackAction(action, {
+        currentView: state.currentView,
+        navigate: (view) => setCurrentView(view),
+        closeLegal: () => state.closeLegal(),
+        delegateMessages: () => {
+          messagesAndroidBackRef.current?.handleAndroidBack();
+        },
+        delegateOnboarding: () => {
+          const result = onboardingAndroidBackRef.current?.handleAndroidBack();
+          if (result !== 'handled') {
+            void CapacitorApp.minimizeApp();
+          }
+        },
+        minimize: () => {
+          void CapacitorApp.minimizeApp();
+        },
+        clearVehicleOnboarding: () => setVehicleOnboarding(false),
+      });
+    },
+  });
   const pushToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [notificationRuntime, setNotificationRuntime] = useState<NotificationRuntimeState | null>(null);
   const [notificationBusy, setNotificationBusy] = useState(false);
@@ -708,6 +756,7 @@ export default function App() {
                 setView={navigatePrimary}
                 unreadMessagesCount={unreadMessagesCount}
                 pendingUpdatesCount={pendingUpdatesCount}
+                androidBackRef={messagesAndroidBackRef}
               />
             </div>
           )}
@@ -719,6 +768,7 @@ export default function App() {
       case AppView.ONBOARDING:
         return <OnboardingView
           onComplete={() => { localStorage.setItem('hasSeenOnboarding', '1'); setCurrentView(AppView.CREATE_ACCOUNT); }}
+          androidBackRef={onboardingAndroidBackRef}
         />;
       case AppView.CREATE_ACCOUNT:
         return <CreateAccountView
