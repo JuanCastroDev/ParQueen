@@ -37,6 +37,26 @@ describe('mobile shell layout contract', () => {
     expect(app).toContain('setView={navigatePrimary}');
   });
 
+  it('keeps MapView mounted under Messages but marks that background layer inert and accessibility-hidden', () => {
+    const app = read('App.tsx');
+    expect(app).toContain('currentView === AppView.MAP || currentView === AppView.MESSAGES');
+    expect(app).toContain('const messagesObscuresMap = currentView === AppView.MESSAGES');
+    expect(app).toContain('showPrimaryNavigation={currentView === AppView.MAP}');
+    expect(app).toContain('aria-hidden={messagesObscuresMap ? true : undefined}');
+    expect(app).toContain("messagesObscuresMap ? ({ inert: '' } as Record<string, string>) : {}");
+    expect(app).toMatch(/<div[\s\S]*messagesObscuresMap[\s\S]*<MapView[\s\S]*<\/div>\s*\{currentView === AppView\.MESSAGES && \(/);
+    expect(app).toContain('className="fixed inset-0 z-50 bg-[var(--color-bg)]"');
+    expect(app).not.toContain('setSelectedItem(null)');
+    expect(app).toMatch(/setActiveChatContext\(\{ userId, context \}\)[\s\S]*setCurrentView\(AppView\.MESSAGES\)/);
+  });
+
+  it('treats an ancestor-inert modal as suspended so it cannot reclaim focus from a foreground overlay', () => {
+    const hook = read('hooks/useModalAccessibility.ts');
+    expect(hook).toContain("return Boolean(modalRoot.closest?.('[inert]'))");
+    expect(hook).toMatch(/if \(!modalRootIsSuspended\(modalRoot\)\) \{\s*focusInsideDialog\(/);
+    expect(hook).toMatch(/if \(modalRootIsSuspended\(modalRoot\)\) return;\s*const active = document\.activeElement/);
+  });
+
   it('wires every map sheet/dialog state into the idle-root visibility guard', () => {
     const map = read('views/StreetParkingView.tsx');
     for (const mapping of [

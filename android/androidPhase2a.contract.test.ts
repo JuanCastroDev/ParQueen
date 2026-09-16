@@ -7,6 +7,7 @@ describe('Android Phase 2A native contracts', () => {
   it('resizes with the keyboard and does not back up authenticated WebView state', () => {
     const manifest = read('./app/src/main/AndroidManifest.xml');
     expect(manifest).toContain('android:windowSoftInputMode="adjustResize"');
+    expect(manifest).not.toMatch(/windowSoftInputMode="adjust(?:Pan|Nothing)"/);
     expect(manifest).toContain('android:allowBackup="false"');
     expect(manifest).not.toContain('android:allowBackup="true"');
   });
