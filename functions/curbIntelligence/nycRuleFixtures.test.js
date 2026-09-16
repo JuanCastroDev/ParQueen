@@ -7,6 +7,7 @@ const { createFaceAssociationContext } = require('./dotFaceAssociation');
 const { associateCleaningRules } = require('./cleaningRuleAssociation');
 const { normalizeParkNycRow } = require('./parkNycNormalizer');
 const { associateParkNycRules } = require('./parkNycAssociation');
+const { normalizeBlockFaceId } = require('./curbIdentity');
 const { DOT_VERSION, PARK_NYC_VERSION, NYC_RULE_FIXTURES } = require('./fixtures/nycRuleFixtures');
 const { NYC_RESOLVER_FIXTURES } = require('./fixtures/nycResolverFixtures');
 
@@ -54,14 +55,24 @@ describe('nine public NYC Phase 1B.2 fixtures', () => {
         expect(result.ok, `${fixture.id}: ParkNYC normalize`).toBe(true);
         return result.record;
       });
+      const selectedRow = curbFixture.rows.find(row => (
+        normalizeBlockFaceId(row.l_blockfaceid) === curbFixture.expected.face
+        || normalizeBlockFaceId(row.r_blockfaceid) === curbFixture.expected.face
+      ));
+      const csclSide = normalizeBlockFaceId(selectedRow?.l_blockfaceid) === curbFixture.expected.face
+        ? 'LEFT' : 'RIGHT';
       const meter = associateParkNycRules({
-        curbIdentity: { state: fixture.curbState, officialIdentity: { officialBlockFaceId: curbFixture.expected.face } },
+        curbIdentity: {
+          state: fixture.curbState,
+          officialIdentity: { officialBlockFaceId: curbFixture.expected.face, csclSide },
+        },
         resolvedPoint: fixture.point, officialNames: fixture.streetNames, officialBounds: fixture.bounds,
         borough: fixture.borough, side: fixture.side,
         officialRoadwayEvidence: {
           officialBlockFaceId: curbFixture.expected.face,
-          selectedGeometry: curbFixture.rows[0].the_geom,
-          streetWidthFeet: Number(curbFixture.rows[0].streetwidth),
+          csclSide,
+          selectedGeometry: selectedRow.the_geom,
+          streetWidthFeet: Number(selectedRow.streetwidth),
           modelUncertaintyMeters: 3,
           candidateCoverageComplete: fixture.officialRoadwayGeometryComplete !== false,
           competingRoadways: curbFixture.rows.slice(1).map(row => row.the_geom),
