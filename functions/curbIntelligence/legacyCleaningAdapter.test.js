@@ -27,6 +27,7 @@ describe('structured legacy cleaning adapter', () => {
       availability: 'USABLE',
       confidence: 'SUPPORTED',
       fingerprint: 'Mon,Thu|08:00|09:00',
+      fingerprintsBySide: { West: 'Mon,Thu|08:00|09:00' },
       sourceFamily: 'nyc_open_data',
     });
     expect(result).not.toHaveProperty('safeUntil');
@@ -50,11 +51,64 @@ describe('structured legacy cleaning adapter', () => {
       .toEqual({ availability: 'UNAVAILABLE', confidence: 'UNKNOWN', fingerprint: null, sourceFamily: null });
   });
 
-  it('fails closed when schedules cover different curb sides', () => {
+  it('preserves valid West and East schedules by side instead of marking them malformed', () => {
     const result = adaptLegacyCleaningEvidence({
       segment: segment(),
       activeRules: [rule([schedule(), schedule({ side: 'East' })])],
     });
-    expect(result).toMatchObject({ availability: 'MALFORMED', confidence: 'UNKNOWN' });
+    expect(result).toMatchObject({
+      availability: 'USABLE', confidence: 'SUPPORTED', fingerprint: null,
+      fingerprintsBySide: {
+        East: 'Mon,Thu|08:00|09:00', West: 'Mon,Thu|08:00|09:00',
+      },
+    });
+  });
+
+  it('does not treat opposite-side schedules from one source as a conflict', () => {
+    const result = adaptLegacyCleaningEvidence({
+      segment: segment(),
+      activeRules: [rule([
+        schedule(), schedule({ side: 'East', days: ['Tue'], startTime: '10:00', endTime: '11:00' }),
+      ])],
+    });
+    expect(result).toMatchObject({ availability: 'USABLE', confidence: 'SUPPORTED' });
+  });
+
+  it('keeps identical complete same-side sets from two sources supported', () => {
+    const result = adaptLegacyCleaningEvidence({
+      segment: segment(),
+      activeRules: [
+        rule([schedule()], { source: 'sweepnyc' }),
+        rule([schedule({ days: ['Mon', 'Thu'] })], { source: 'admin' }),
+      ],
+    });
+    expect(result).toMatchObject({ availability: 'USABLE', confidence: 'SUPPORTED' });
+  });
+
+  it('downgrades different complete same-side source sets to caution', () => {
+    const result = adaptLegacyCleaningEvidence({
+      segment: segment(),
+      activeRules: [
+        rule([schedule()], { source: 'sweepnyc' }),
+        rule([schedule({ startTime: '11:00', endTime: '12:00' })], { source: 'admin' }),
+      ],
+    });
+    expect(result).toMatchObject({ availability: 'USABLE', confidence: 'CAUTION' });
+  });
+
+  it('ignores schedule and day ordering when detecting same-side conflicts', () => {
+    const morning = schedule();
+    const afternoon = schedule({ days: ['Fri', 'Tue'], startTime: '13:00', endTime: '14:00' });
+    const result = adaptLegacyCleaningEvidence({
+      segment: segment(),
+      activeRules: [
+        rule([morning, afternoon], { source: 'sweepnyc' }),
+        rule([
+          { ...afternoon, days: ['Tue', 'Fri'] },
+          { ...morning, days: ['Mon', 'Thu'] },
+        ], { source: 'admin' }),
+      ],
+    });
+    expect(result).toMatchObject({ availability: 'USABLE', confidence: 'SUPPORTED' });
   });
 });

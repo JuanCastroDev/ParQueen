@@ -5,7 +5,7 @@ const COMPARISON_CATEGORIES = new Set([
   'exact_agreement', 'both_no_usable_cleaning', 'legacy_cleaning_only',
   'curb_intelligence_cleaning_only', 'cleaning_schedule_differs',
   'same_schedule_confidence_differs', 'new_more_cautious', 'new_more_supported',
-  'legacy_unavailable',
+  'legacy_unavailable', 'legacy_side_context_unavailable',
 ]);
 const REASON_BUCKETS = new Set([
   'competing_roadways', 'side_uncertain', 'endpoint_ambiguity', 'missing_bfi',

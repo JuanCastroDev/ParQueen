@@ -31,24 +31,27 @@ function policyOf(value = {}) {
 }
 
 function bounded(operation, timeoutMs, parentSignal) {
+  if (parentSignal?.aborted) {
+    return Promise.resolve({ ok: false, reason: 'execution_timeout' });
+  }
   const controller = new AbortController();
-  let timedOut = false;
-  const abort = () => controller.abort();
-  if (parentSignal?.aborted) controller.abort();
-  else parentSignal?.addEventListener('abort', abort, { once: true });
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
-  const task = Promise.resolve().then(() => operation(controller.signal))
-    .then(value => ({ ok: true, value }), () => ({ ok: false, reason: 'source_unavailable' }));
-  const timeout = new Promise(resolve => {
-    controller.signal.addEventListener('abort', () => resolve({
-      ok: false,
-      reason: timedOut || parentSignal?.aborted ? 'execution_timeout' : 'source_unavailable',
-    }), { once: true });
-  });
-  return Promise.race([task, timeout]).finally(() => {
+  let resolveAbort;
+  const aborted = new Promise(resolve => { resolveAbort = resolve; });
+  const abort = () => {
+    if (!controller.signal.aborted) controller.abort();
+    resolveAbort({ ok: false, reason: 'execution_timeout' });
+  };
+  parentSignal?.addEventListener('abort', abort, { once: true });
+  const timer = setTimeout(abort, timeoutMs);
+  const skipped = Symbol('bounded-operation-skipped');
+  const task = Promise.resolve().then(() => {
+    if (controller.signal.aborted) throw skipped;
+    return operation(controller.signal);
+  }).then(value => ({ ok: true, value }), error => ({
+    ok: false,
+    reason: error === skipped || controller.signal.aborted ? 'execution_timeout' : 'source_unavailable',
+  }));
+  return Promise.race([task, aborted]).finally(() => {
     clearTimeout(timer);
     parentSignal?.removeEventListener('abort', abort);
   });
@@ -291,4 +294,4 @@ async function finish(context) {
   };
 }
 
-module.exports = { DEFAULT_EXECUTION_POLICY, runCurbIntelligenceShadow };
+module.exports = { DEFAULT_EXECUTION_POLICY, bounded, runCurbIntelligenceShadow };

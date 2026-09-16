@@ -5,7 +5,8 @@ const require = createRequire(import.meta.url);
 const { compareCleaningEvidence } = require('./cleaningComparison');
 
 const legacy = (overrides = {}) => ({
-  availability: 'USABLE', confidence: 'SUPPORTED', fingerprint: 'Mon|08:00|09:00', ...overrides,
+  availability: 'USABLE', confidence: 'SUPPORTED', fingerprint: 'Mon|08:00|09:00',
+  fingerprintsBySide: { West: 'Mon|08:00|09:00' }, ...overrides,
 });
 const current = (overrides = {}) => ({
   confidence: 'SUPPORTED', fingerprint: 'Mon|08:00|09:00', rules: [{}], ...overrides,
@@ -32,5 +33,16 @@ describe('neutral cleaning comparison', () => {
       current({ fingerprint: 'Mon,Thu|08:00|09:00', meterState: 'UNKNOWN' }),
     );
     expect(result).toEqual({ category: 'exact_agreement' });
+  });
+
+  it('fails comparison closed when multiple legacy sides lack a trustworthy selector', () => {
+    const result = compareCleaningEvidence(
+      legacy({
+        fingerprint: null,
+        fingerprintsBySide: { West: 'Mon|08:00|09:00', East: 'Tue|10:00|11:00' },
+      }),
+      current(),
+    );
+    expect(result).toEqual({ category: 'legacy_side_context_unavailable' });
   });
 });

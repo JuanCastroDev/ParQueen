@@ -99,4 +99,20 @@ describe('ephemeral curb resolution runtime evidence', () => {
       candidateCompleteness: { state: 'INCOMPLETE', reason: 'candidate_limit_reached' },
     });
   });
+
+  it('passes the runtime AbortSignal through to the CSCL candidate store', async () => {
+    const controller = new AbortController();
+    let observedSignal = null;
+    const sourceStore = {
+      async queryCandidates(query) {
+        observedSignal = query.signal;
+        return { candidates: [record()], completeness: { state: 'COMPLETE', reason: null } };
+      },
+    };
+    await resolveOfficialCurbRuntime(
+      { lat: 40.70005, lng: -74, accuracyMeters: 1 },
+      { candidateStore: sourceStore, modelErrorMeters: 1, signal: controller.signal },
+    );
+    expect(observedSignal).toBe(controller.signal);
+  });
 });

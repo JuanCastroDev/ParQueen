@@ -6,6 +6,11 @@ function compareCleaningEvidence(legacy, current) {
   if (!legacy || ['UNAVAILABLE', 'MALFORMED'].includes(legacy.availability)) {
     return { category: 'legacy_unavailable' };
   }
+  if (legacy.availability === 'USABLE'
+    && legacy.fingerprintsBySide
+    && Object.keys(legacy.fingerprintsBySide).length !== 1) {
+    return { category: 'legacy_side_context_unavailable' };
+  }
   const oldFingerprint = legacy.fingerprint || null;
   const newFingerprint = current?.fingerprint || null;
   if (!oldFingerprint && !newFingerprint) return { category: 'both_no_usable_cleaning' };

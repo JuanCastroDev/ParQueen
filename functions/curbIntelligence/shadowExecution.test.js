@@ -7,7 +7,7 @@ const { createMemoryCandidateStore } = require('./candidateStore');
 const { normalizeDotSignRow } = require('./dotSignNormalizer');
 const { normalizeParkNycRow } = require('./parkNycNormalizer');
 const { createMemoryAggregateShadowSink } = require('./shadowTelemetry');
-const { runCurbIntelligenceShadow } = require('./shadowExecution');
+const { bounded, runCurbIntelligenceShadow } = require('./shadowExecution');
 
 const CSCL_VERSION = { resourceId: 'inkn-q76z', version: 'fixture-v1' };
 const DOT_VERSION = { resourceId: 'nfid-uabd', rowsUpdatedAt: '2026-09-15T10:04:47Z', viewLastModified: '2026-09-15T10:00:16Z' };
@@ -108,7 +108,7 @@ const policy = {
 async function run(extra = {}) {
   return runCurbIntelligenceShadow({
     location: { lat: 40.70005, lng: -74, accuracyMeters: 1 },
-    legacyEvidence,
+    legacyEvidence: extra.legacyEvidence || legacyEvidence,
     dependencies: dependencies(extra.dependencies),
     executionPolicy: { ...policy, ...extra.executionPolicy },
   });
@@ -128,6 +128,26 @@ describe('standalone Curb Intelligence shadow execution', () => {
     });
     expect(JSON.stringify(result.persistableComparison)).not.toMatch(/latitude|longitude|coordinates|zoneId|orderNumber/i);
     expect(sink.snapshot()).toHaveLength(1);
+  });
+
+  it('fails comparison closed when legacy evidence spans multiple sides', async () => {
+    const multiSide = {
+      ...legacyEvidence,
+      activeRules: [{
+        ...legacyEvidence.activeRules[0],
+        schedules: [
+          ...legacyEvidence.activeRules[0].schedules,
+          { side: 'East', days: ['Tue'], startTime: '10:00', endTime: '11:00' },
+        ],
+      }],
+    };
+    const result = await run({ legacyEvidence: multiSide });
+    expect(result.runtimeResult.legacyEvidence).toMatchObject({
+      availability: 'USABLE', fingerprint: null,
+      fingerprintsBySide: { East: 'Tue|10:00|11:00', West: 'Mon|08:00|09:00' },
+    });
+    expect(result.persistableComparison.cleaningComparisonCategory)
+      .toBe('legacy_side_context_unavailable');
   });
 
   it.each([
@@ -196,6 +216,65 @@ describe('standalone Curb Intelligence shadow execution', () => {
     expect(observedAbort).toBe(true);
     expect(result.runtimeResult.states.meter).toBe('UNKNOWN');
     expect(result.diagnostics).toEqual(expect.arrayContaining(['execution_timeout', 'park_nyc_unavailable']));
+  });
+
+  it('does not invoke a bounded operation when its parent is already aborted', async () => {
+    const parent = new AbortController();
+    parent.abort();
+    let calls = 0;
+    const result = await bounded(() => { calls += 1; }, 100, parent.signal);
+    expect(result).toEqual({ ok: false, reason: 'execution_timeout' });
+    expect(calls).toBe(0);
+  });
+
+  it('propagates curb timeout abort and does not start downstream work', async () => {
+    let curbObservedAbort = false;
+    let downstreamSourceCalls = 0;
+    const result = await run({
+      dependencies: {
+        curbCandidateStore: {
+          queryCandidates({ signal }) {
+            return new Promise(resolve => signal.addEventListener('abort', () => {
+              curbObservedAbort = true;
+              resolve({ candidates: [], completeness: { state: 'INCOMPLETE', reason: 'aborted' } });
+            }, { once: true }));
+          },
+        },
+        dotSource: { async query() { downstreamSourceCalls += 1; } },
+        parkNycSource: { async query() { downstreamSourceCalls += 1; } },
+        officialRelationshipProvider: { async resolve() { downstreamSourceCalls += 1; } },
+      },
+      executionPolicy: { ...policy, sourceDeadlineMs: { ...policy.sourceDeadlineMs, curb: 10 } },
+    });
+    expect(curbObservedAbort).toBe(true);
+    expect(downstreamSourceCalls).toBe(0);
+    expect(result.diagnostics).toContain('execution_timeout');
+  });
+
+  it('starts no later operation after the shared overall deadline expires', async () => {
+    let downstreamCalls = 0;
+    const result = await run({
+      dependencies: {
+        curbCandidateStore: {
+          queryCandidates({ signal }) {
+            return new Promise(resolve => signal.addEventListener('abort', () => resolve({
+              candidates: [], completeness: { state: 'INCOMPLETE', reason: 'aborted' },
+            }), { once: true }));
+          },
+        },
+        dotSource: { async query() { downstreamCalls += 1; } },
+        parkNycSource: { async query() { downstreamCalls += 1; } },
+        officialRelationshipProvider: { async resolve() { downstreamCalls += 1; } },
+        sink: { async record() { downstreamCalls += 1; } },
+      },
+      executionPolicy: {
+        ...policy,
+        overallDeadlineMs: 10,
+        sourceDeadlineMs: { ...policy.sourceDeadlineMs, curb: 100 },
+      },
+    });
+    expect(downstreamCalls).toBe(0);
+    expect(result.diagnostics).toContain('execution_timeout');
   });
 
   it('does not throw when the aggregate sink fails', async () => {

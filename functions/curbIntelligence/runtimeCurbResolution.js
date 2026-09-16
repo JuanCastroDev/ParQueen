@@ -15,7 +15,7 @@ async function resolveOfficialCurbRuntime(location, options = {}) {
   const sourceStore = options.candidateStore;
   const candidateStore = sourceStore && typeof sourceStore.queryCandidates === 'function' ? {
     async queryCandidates(query) {
-      retrieved = await sourceStore.queryCandidates(query);
+      retrieved = await sourceStore.queryCandidates({ ...query, signal: options.signal });
       if (Number.isInteger(options.maxCandidates) && options.maxCandidates > 0
         && Array.isArray(retrieved?.candidates)
         && retrieved.candidates.length > options.maxCandidates) {
