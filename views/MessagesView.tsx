@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { resolveMessagesAndroidBack } from '../utils/androidBackNavigation';
 import { AccessibleModal } from '../components/AccessibleModal';
 import { Send, ChevronLeft, MoreVertical, Sparkles, ArrowLeft, MapPin, MessageSquare, CheckCheck } from 'lucide-react';
 import { generateSmartReplies, createSmartReplyRequestKey } from '../services/geminiService';
@@ -14,6 +15,10 @@ import { AppView } from '../types';
 import { NavigationBar } from './street-parking/NavigationBar';
 import { notifyChatRead } from './street-parking/useUnreadMessages';
 
+export type MessagesAndroidBackHandle = {
+  handleAndroidBack: () => void;
+};
+
 interface MessagesViewProps {
   user: any;
   activeChatContext: { userId: string; context: string } | null;
@@ -21,6 +26,8 @@ interface MessagesViewProps {
   setView?: (view: AppView) => void;
   unreadMessagesCount?: number;
   pendingUpdatesCount?: number;
+  /** Optional ref so App can mirror visible Messages Back for Android system Back. */
+  androidBackRef?: React.MutableRefObject<MessagesAndroidBackHandle | null>;
 }
 
 // Realtime window size for the newest messages in an open conversation —
@@ -101,6 +108,7 @@ const Avatar: React.FC<{ name: string; url?: string | null; size: number; radius
 
 export const MessagesView: React.FC<MessagesViewProps> = ({
   user, activeChatContext, onBack, setView, unreadMessagesCount = 0, pendingUpdatesCount = 0,
+  androidBackRef,
 }) => {
   const lang = useLang();
   const locale = lang === 'es' ? 'es-US' : 'en-US';
@@ -110,6 +118,28 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
   // against a nonexistent chats/{chatId} and receive permission-denied.
   // initChat confirms/creates the shell first, then sets the id.
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+
+  // Expose Android system-Back handling that mirrors the visible Back controls.
+  useEffect(() => {
+    if (!androidBackRef) return;
+    androidBackRef.current = {
+      handleAndroidBack: () => {
+        const action = resolveMessagesAndroidBack({
+          activeConversationId,
+          openedFromPing: Boolean(activeChatContext),
+        });
+        if (action === 'closeThread') {
+          setActiveConversationId(null);
+          return;
+        }
+        onBack();
+      },
+    };
+    return () => {
+      androidBackRef.current = null;
+    };
+  }, [androidBackRef, activeConversationId, activeChatContext, onBack]);
+
   const [messages, setMessages] = useState<any[]>([]);
   const [inputText, setInputText] = useState('');
   const [moderationError, setModerationError] = useState('');

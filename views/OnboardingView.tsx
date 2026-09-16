@@ -1,10 +1,24 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { resolveOnboardingAndroidBack } from '../utils/androidBackNavigation';
 import Logo from '../assets/Parqueen_Logo.png';
 import { t, useLang } from '../i18n';
 
 const SLIDE_COUNT = 3;
 
-export const OnboardingView = ({ onComplete, initialSlide = 0 }: { onComplete: () => void; initialSlide?: number }) => {
+export type OnboardingAndroidBackHandle = {
+  /** Returns whether Back was handled inside onboarding, or root minimize is needed. */
+  handleAndroidBack: () => 'handled' | 'minimize';
+};
+
+export const OnboardingView = ({
+  onComplete,
+  initialSlide = 0,
+  androidBackRef,
+}: {
+  onComplete: () => void;
+  initialSlide?: number;
+  androidBackRef?: React.MutableRefObject<OnboardingAndroidBackHandle | null>;
+}) => {
     useLang();
     const [current, setCurrent] = useState(initialSlide);
     const [animating, setAnimating] = useState(false);
@@ -64,6 +78,30 @@ export const OnboardingView = ({ onComplete, initialSlide = 0 }: { onComplete: (
     const goBack = () => {
         if (current > 0) goTo(current - 1);
     };
+
+    // Live slide index for Android Back without re-binding every animation frame.
+    const currentSlideRef = useRef(current);
+    currentSlideRef.current = current;
+
+    // Android system Back: previous slide when not on the first; otherwise ask App to minimize.
+    // Uses setCurrent directly so a Back press is never dropped while goTo's animating lock is set.
+    useEffect(() => {
+        if (!androidBackRef) return;
+        androidBackRef.current = {
+            handleAndroidBack: () => {
+                const action = resolveOnboardingAndroidBack(currentSlideRef.current);
+                if (action === 'previousSlide') {
+                    setCurrent((slide) => Math.max(0, slide - 1));
+                    return 'handled';
+                }
+                return 'minimize';
+            },
+        };
+        return () => {
+            androidBackRef.current = null;
+        };
+    }, [androidBackRef]);
+
 
     const handleTouchStart = (e: React.TouchEvent) => {
         touchStartX.current = e.touches[0].clientX;
