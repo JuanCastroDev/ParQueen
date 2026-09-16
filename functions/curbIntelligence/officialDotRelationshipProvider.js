@@ -7,6 +7,11 @@ const APPLICABILITY = Object.freeze({
   UNKNOWN: 'UNKNOWN',
 });
 
+// Reviewed NYC Geosupport Function 3C failure return codes. Other codes are
+// not guessed to be failures because documented success/warning semantics may
+// exist outside this audited boundary.
+const REVIEWED_LOOKUP_FAILURE_CODES = new Set(['09', '39', '40', '44', '50']);
+
 const text = value => typeof value === 'string' && value.trim()
   ? value.trim().toUpperCase() : null;
 
@@ -108,11 +113,15 @@ function normalizedResolverNames(value) {
 }
 
 function resolverFailureReason(value) {
-  if (String(value?.returnCode || '').trim() === '46'
+  const returnCode = String(value?.returnCode || '').trim();
+  if (returnCode === '46'
     || String(value?.reasonCode || '').toLowerCase().includes('ambig')) {
     return 'official_blockface_ambiguous';
   }
-  return 'official_blockface_lookup_failed';
+  if (REVIEWED_LOOKUP_FAILURE_CODES.has(returnCode) || value?.ok !== true) {
+    return 'official_blockface_lookup_failed';
+  }
+  return null;
 }
 
 function createOfficialDotRelationshipProvider(options = {}) {
@@ -137,10 +146,13 @@ function createOfficialDotRelationshipProvider(options = {}) {
         crossStreetTwo: new Set(),
       };
 
-      for (const [orderNumber, rows] of groups) {
-        const context = orderContext(rows[0]);
+      for (const [orderNumber] of groups) {
         orderApplicability[orderNumber] = APPLICABILITY.UNKNOWN;
         orderReasons[orderNumber] = [];
+      }
+
+      for (const [orderNumber, rows] of groups) {
+        const context = orderContext(rows[0]);
 
         const reason = globalReason || baseReason(rows, context);
         if (reason) {
@@ -153,6 +165,10 @@ function createOfficialDotRelationshipProvider(options = {}) {
         }
         if (!blockfaceResolver || typeof blockfaceResolver.resolve !== 'function') {
           orderReasons[orderNumber].push('official_blockface_lookup_unavailable');
+          continue;
+        }
+        if (input.signal?.aborted) {
+          orderReasons[orderNumber].push('official_blockface_lookup_failed');
           continue;
         }
 
@@ -170,13 +186,14 @@ function createOfficialDotRelationshipProvider(options = {}) {
           orderReasons[orderNumber].push('official_blockface_lookup_failed');
           continue;
         }
-
-        if (resolverFailureReason(resolved) === 'official_blockface_ambiguous') {
-          orderReasons[orderNumber].push('official_blockface_ambiguous');
+        if (input.signal?.aborted) {
+          orderReasons[orderNumber].push('official_blockface_lookup_failed');
           continue;
         }
-        if (resolved?.ok !== true) {
-          orderReasons[orderNumber].push(resolverFailureReason(resolved));
+
+        const failureReason = resolverFailureReason(resolved);
+        if (failureReason) {
+          orderReasons[orderNumber].push(failureReason);
           continue;
         }
         const returnedFace = normalizeBlockFaceId(resolved.officialBlockFaceId);

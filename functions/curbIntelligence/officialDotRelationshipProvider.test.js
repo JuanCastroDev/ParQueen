@@ -117,6 +117,24 @@ describe('official DOT order relationship provider', () => {
     expect(result.diagnostics.orderReasons[candidateOverrides.orderNumber || 'P-01775228']).toContain(reason);
   });
 
+  it.each([
+    ['09', 'official_blockface_lookup_failed'],
+    ['39', 'official_blockface_lookup_failed'],
+    ['40', 'official_blockface_lookup_failed'],
+    ['44', 'official_blockface_lookup_failed'],
+    ['46', 'official_blockface_ambiguous'],
+    ['50', 'official_blockface_lookup_failed'],
+  ])('lets reviewed Function 3C failure code %s override contradictory success metadata', async (returnCode, reason) => {
+    const result = await provider({
+      resolve: vi.fn(async () => success({ returnCode })),
+    }).resolve(input());
+
+    expect(result.faceContext.officialRelationship.orderApplicability).toEqual({
+      'P-01775228': 'UNKNOWN',
+    });
+    expect(result.diagnostics.orderReasons['P-01775228']).toContain(reason);
+  });
+
   it('classifies geometry from documented order_type semantics, not a similar order-number prefix', async () => {
     const result = await provider().resolve(input([candidate({
       orderNumber: 'P-01775228',
@@ -212,6 +230,73 @@ describe('official DOT order relationship provider', () => {
     expect(result.faceContext.officialRelationship.orderApplicability['P-01775228']).toBe('UNKNOWN');
     expect(result.diagnostics.orderReasons['P-01775228']).toContain('official_blockface_lookup_failed');
     expect(JSON.stringify(result)).not.toContain('aborted details');
+  });
+
+  it('makes zero lookups for a pre-aborted signal while retaining every order as explicit UNKNOWN', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const blockfaceResolver = { resolve: vi.fn(async () => success()) };
+    const result = await provider(blockfaceResolver).resolve(input([
+      candidate(),
+      candidate({ orderNumber: 'S-00000001', orderType: 'S-' }),
+    ], { signal: controller.signal }));
+
+    expect(blockfaceResolver.resolve).not.toHaveBeenCalled();
+    expect(result.faceContext.officialRelationship.orderApplicability).toEqual({
+      'P-01775228': 'UNKNOWN',
+      'S-00000001': 'UNKNOWN',
+    });
+  });
+
+  it('does not promote or start later lookups when the signal aborts during the first lookup', async () => {
+    const controller = new AbortController();
+    const blockfaceResolver = { resolve: vi.fn(async () => {
+      controller.abort();
+      return success();
+    }) };
+    const result = await provider(blockfaceResolver).resolve(input([
+      candidate(),
+      candidate({ orderNumber: 'S-00000001', orderType: 'S-' }),
+    ], { signal: controller.signal }));
+
+    expect(blockfaceResolver.resolve).toHaveBeenCalledTimes(1);
+    expect(result.faceContext.officialRelationship.orderApplicability).toEqual({
+      'P-01775228': 'UNKNOWN',
+      'S-00000001': 'UNKNOWN',
+    });
+  });
+
+  it('does not start later lookups or retain raw text when the first lookup throws after abort', async () => {
+    const controller = new AbortController();
+    const blockfaceResolver = { resolve: vi.fn(async () => {
+      controller.abort();
+      throw new DOMException('private abort detail', 'AbortError');
+    }) };
+    const result = await provider(blockfaceResolver).resolve(input([
+      candidate(),
+      candidate({ orderNumber: 'S-00000001', orderType: 'S-' }),
+    ], { signal: controller.signal }));
+
+    expect(blockfaceResolver.resolve).toHaveBeenCalledTimes(1);
+    expect(result.faceContext.officialRelationship.orderApplicability).toEqual({
+      'P-01775228': 'UNKNOWN',
+      'S-00000001': 'UNKNOWN',
+    });
+    expect(JSON.stringify(result)).not.toContain('private abort detail');
+  });
+
+  it('resolves every valid order when the signal remains active', async () => {
+    const blockfaceResolver = { resolve: vi.fn(async () => success()) };
+    const result = await provider(blockfaceResolver).resolve(input([
+      candidate(),
+      candidate({ orderNumber: 'S-00000001', orderType: 'S-' }),
+    ]));
+
+    expect(blockfaceResolver.resolve).toHaveBeenCalledTimes(2);
+    expect(result.faceContext.officialRelationship.orderApplicability).toEqual({
+      'P-01775228': 'WHOLE_FACE',
+      'S-00000001': 'WHOLE_FACE',
+    });
   });
 
   it('fails every relevant order closed for incomplete snapshots and source-version disagreement', async () => {
