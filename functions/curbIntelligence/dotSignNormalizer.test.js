@@ -27,11 +27,26 @@ describe('official DOT sign normalization', () => {
     expect(result.record).toMatchObject({
       orderNumber: 'P-01775228', recordType: 'Current', borough: 'MANHATTAN',
       onStreet: 'GOLD STREET', fromStreet: 'BEEKMAN STREET', toStreet: 'ANN STREET',
+      onStreetSuffix: null, fromStreetSuffix: null, toStreetSuffix: null,
       side: 'W', signCode: 'PS-246B', distanceFromIntersection: 36,
       projectedSignCoordinate: { x: 982905, y: 197775, crs: null },
       sourceVersion: VERSION,
     });
     expect(result.record.sourceNative).toEqual(ROW);
+  });
+
+  it('exposes but does not discard all official roadbed/intersection suffix evidence', () => {
+    const result = normalizeDotSignRow({
+      ...ROW,
+      on_street_suffix: 'W RDWY',
+      from_street_suffix: 'N S/R',
+      to_street_suffix: 'E RDWY',
+    }, VERSION);
+    expect(result.record).toMatchObject({
+      onStreetSuffix: 'W RDWY',
+      fromStreetSuffix: 'N S/R',
+      toStreetSuffix: 'E RDWY',
+    });
   });
 
   it.each([

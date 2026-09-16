@@ -7,6 +7,7 @@ const { createMemoryCandidateStore } = require('./candidateStore');
 const { normalizeDotSignRow } = require('./dotSignNormalizer');
 const { normalizeParkNycRow } = require('./parkNycNormalizer');
 const { classifyStreetCleaningSign } = require('./cleaningClassifier');
+const { createOfficialDotRelationshipProvider } = require('./officialDotRelationshipProvider');
 const { runCurbIntelligenceShadow } = require('./shadowExecution');
 const { CSCL_FIXTURE_VERSION, NYC_RESOLVER_FIXTURES } = require('./fixtures/nycResolverFixtures');
 const { DOT_VERSION, PARK_NYC_VERSION, NYC_RULE_FIXTURES } = require('./fixtures/nycRuleFixtures');
@@ -41,6 +42,20 @@ describe('nine public NYC Phase 2A end-to-end shadow replays', () => {
       const csclRecords = resolverFixture.rows.map(row => normalizeCsclRow(row, CSCL_FIXTURE_VERSION).record);
       const dotCandidates = fixture.dotRows.map(row => normalizeDotSignRow(row, DOT_VERSION).record);
       const parkCandidates = fixture.parkRows.map(row => normalizeParkNycRow(row, PARK_NYC_VERSION).record);
+      const officialRelationshipProvider = createOfficialDotRelationshipProvider({
+        providerId: 'deterministic-public-fixture-function-3c',
+        blockfaceResolver: {
+          async resolve({ onStreet, crossStreetOne, crossStreetTwo }) {
+            return {
+              ok: true,
+              officialBlockFaceId: resolverFixture.expected.face,
+              normalizedStreetNames: { onStreet, crossStreetOne, crossStreetTwo },
+              returnCode: '00', reasonCode: null,
+              sourceVersion: { release: 'fixture-26c' },
+            };
+          },
+        },
+      });
       const delta = 0.02;
       const result = await runCurbIntelligenceShadow({
         location: {
@@ -72,23 +87,7 @@ describe('nine public NYC Phase 2A end-to-end shadow replays', () => {
               },
             };
           } },
-          officialRelationshipProvider: {
-            fixtureOnly: true,
-            async resolve({ resolution }) {
-              return {
-                ok: true,
-                faceContext: {
-                  curbIdentityState: resolution.state, borough: fixture.borough,
-                  streetNames: fixture.streetNames, fromNames: [fixture.bounds[0]],
-                  toNames: [fixture.bounds[1]], side: fixture.side,
-                  officialRelationship: {
-                    providerId: 'test-only-reviewed-public-fixtures', version: '2026-09-15',
-                    orderApplicability: Object.fromEntries(dotCandidates.map(candidate => [candidate.orderNumber, fixture.dotApplicability])),
-                  },
-                },
-              };
-            },
-          },
+          officialRelationshipProvider,
         },
       });
       outcomes[fixture.id] = result.runtimeResult.states;
