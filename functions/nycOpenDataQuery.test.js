@@ -186,14 +186,14 @@ describe('NYC Open Data fallback — when Socrata is reached at all', () => {
     expect(cfIdx).toBeLessThan(nearestIdx); // call sits inside the guarded block
   });
 
-  it('8. a successful SweepNYC lookup returns before the Socrata fallback runs', () => {
+  it('8. a successful SweepNYC lookup bypasses the Socrata fallback', () => {
     const start = INDEX_SRC.indexOf('exports.createSegmentFromSweepNYC');
     const seg = INDEX_SRC.slice(start, start + 2000);
-    const successReturn = seg.indexOf('if (sweepResult.success) return sweepResult;');
+    const successGate = seg.indexOf('if (sweepResult.success || !_SWEEPNYC_FALLBACK_REASONS.has(sweepResult.reason))');
     const reasonGate = seg.indexOf('_SWEEPNYC_FALLBACK_REASONS.has(sweepResult.reason)');
     const fallbackCall = seg.indexOf('_fallbackToNYCOpenData(lat, lng)');
-    expect(successReturn).toBeGreaterThan(-1);
-    expect(reasonGate).toBeGreaterThan(successReturn);
+    expect(successGate).toBeGreaterThan(-1);
+    expect(reasonGate).toBeGreaterThanOrEqual(successGate);
     expect(fallbackCall).toBeGreaterThan(reasonGate);
   });
 
