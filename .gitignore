@@ -52,6 +52,9 @@ android/.idea/
 android/*.iml
 android/app/*.keystore
 android/app/*.jks
+# Exact local signing-properties filename used by Android release signing.
+# Production file lives at ~/.android-keys/; this only blocks accidental copies.
+parqueen-signing.properties
 ios/App/Pods/
 ios/App/Podfile.lock
 ios/DerivedData/

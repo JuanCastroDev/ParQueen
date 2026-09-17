@@ -58,6 +58,18 @@ On Windows the default debug keystore is `%USERPROFILE%\.android\debug.keystore`
 4. Rebuild: `npx cap sync` then Android Studio / `./gradlew :app:assembleDebug`.
 5. Keep Phone sign-in enabled. Do **not** disable app verification. Do **not** use `VITE_QA_AUTH=true` as a workaround.
 
+## Android release signing (upload key)
+
+Production `bundleRelease` / `assembleRelease` uses an **external** properties file. It is not in git.
+
+- **Default path:** `~/.android-keys/parqueen-signing.properties` (`user.home`, not a machine-specific path)
+- **Override:** nonblank `PARQUEEN_SIGNING_PROPERTIES` (for CI/tests pointing at missing or malformed config)
+- **Required fields:** `storeFile`, `storePassword`, `keyAlias`, `keyPassword`
+- Never commit the keystore, this properties file, or passwords
+- Release packaging **fails closed** if the file, a required field, or the keystore is missing/invalid. `release.signingConfig` is always assigned; AGP then signs via `validateSigningRelease` (APK) or `signReleaseBundle` (AAB). Missing config is rejected when those signing tasks are in the task graph. There is no debug-key, unsigned, or placeholder fallback
+- Debug tasks (`assembleDebug`, `installDebug`, `tasks`) do **not** need release credentials
+- Google Play App Signing: this is the **upload** key. Play may re-sign what users install; register Play’s app-signing cert in Firebase when store builds are used
+
 ## Keyboard / window
 
 `MainActivity` sets `android:windowSoftInputMode="adjustResize"` explicitly so the WebView height follows the Samsung keyboard. Signup uses `min-h-full` + `shrink-0` content and the app shell uses `h-full` / `min-h-0` so short viewports **scroll** instead of compressing. `@capacitor/keyboard` was not added. Validated on SM-G981U1.
