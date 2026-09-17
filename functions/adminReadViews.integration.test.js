@@ -569,8 +569,18 @@ describe('adminReadView — coordinated read-side session hardening', () => {
         // parqueen-user identity — see DC-07. checkHydrantDistance (NYC DEP
         // hydrant lookup) likewise reuses parqueen-user: it needs the Socrata
         // secret and nothing else, which is the identity that already has it.
+        // The marketing waitlist intentionally added two `serviceAccount:`
+        // declarations, which is why this count moved from 42 to 44. Both
+        // reuse existing identities (see docs/WAITLIST.md):
+        //   - parqueen-email@... on the two HTTP endpoints, joinWaitlist and
+        //     confirmWaitlist, declared once in their shared options object
+        //     (they send the SendGrid confirmation email, the job that
+        //     identity already does);
+        //   - parqueen-cleanup@... on the expireStaleWaitlistSignups scheduled
+        //     job, alongside the other scheduled deletion jobs.
+        // This counts serviceAccount declarations, not exported functions.
         const allServiceAccountMatches = indexSrc.match(/serviceAccount:\s*'[^']+'/g) || [];
-        expect(allServiceAccountMatches).toHaveLength(42);
+        expect(allServiceAccountMatches).toHaveLength(44);
     });
 
     it("AR-29: Runtime-IAM canary config-contract — moderateAvatarUpload's serviceAccount is the dedicated avatar-moderator identity, Storage-trigger config unaffected", () => {
