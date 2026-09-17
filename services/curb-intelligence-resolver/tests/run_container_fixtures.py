@@ -24,7 +24,7 @@ def fetch_json(path, payload=None):
 
 
 def main():
-    health_status, health = fetch_json("/healthz")
+    health_status, health = fetch_json("/health")
     if health_status != 200 or health.get("ok") is not True:
         raise AssertionError("resolver health check failed")
 
