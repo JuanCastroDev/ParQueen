@@ -2,6 +2,9 @@
 
 const { createHash } = require('crypto');
 const waitlist = require('./waitlist');
+// Loaded here, not inside a test: it pulls in firebase-functions, whose first
+// load can exceed a synchronous test's timeout on a cold disk.
+const { canonicalizeEmail } = require('./emailAddress');
 
 const PEPPER = 'unit-test-pepper';
 
@@ -79,7 +82,6 @@ describe('WL-U — waitlist pure helpers', () => {
     });
 
     it('WL-U13 canonical email is deterministic across case and whitespace', () => {
-        const { canonicalizeEmail } = require('./emailAddress');
         const forms = ['Driver@Example.com', '  driver@example.com', 'DRIVER@EXAMPLE.COM  '];
         const canon = forms.map(canonicalizeEmail);
         expect(new Set(canon)).toEqual(new Set(['driver@example.com']));
@@ -191,7 +193,7 @@ describe('WL-H — handler protection order (no emulator)', () => {
             db: untouchableDb,
             FieldValue: {},
             Timestamp: {},
-            canonicalizeEmail: require('./emailAddress').canonicalizeEmail,
+            canonicalizeEmail,
             checkRateLimit: vi.fn(async () => {}),
             verifyTurnstile: vi.fn(async () => false),
             deliver: vi.fn(async () => {}),
