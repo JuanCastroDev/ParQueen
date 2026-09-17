@@ -1,5 +1,80 @@
 apply plugin: 'com.android.application'
 
+def parqueenReleaseSigningPropertiesFile() {
+    def override = System.getenv('PARQUEEN_SIGNING_PROPERTIES')
+    if (override != null && !override.trim().isEmpty()) {
+        return new File(override.trim())
+    }
+    return new File(System.getProperty('user.home'), '.android-keys/parqueen-signing.properties')
+}
+
+def loadParqueenReleaseSigning() {
+    def requiredKeys = ['storeFile', 'storePassword', 'keyAlias', 'keyPassword']
+    def propsFile = parqueenReleaseSigningPropertiesFile()
+    def errors = []
+    if (!propsFile.exists()) {
+        errors << "Release signing properties file is missing: ${propsFile.absolutePath}"
+        return [errors: errors, values: null]
+    }
+    if (!propsFile.isFile() || !propsFile.canRead()) {
+        errors << "Release signing properties file is unreadable: ${propsFile.absolutePath}"
+        return [errors: errors, values: null]
+    }
+
+    def props = new Properties()
+    try {
+        propsFile.withInputStream { stream -> props.load(stream) }
+    } catch (Exception ignored) {
+        errors << "Release signing properties file could not be parsed or read: ${propsFile.absolutePath}"
+        return [errors: errors, values: null]
+    }
+
+    def values = [:]
+    requiredKeys.each { key ->
+        if (!props.containsKey(key)) {
+            errors << "Release signing property '${key}' is missing in ${propsFile.absolutePath}"
+            return
+        }
+        def raw = props.getProperty(key)
+        if (raw == null || raw.trim().isEmpty()) {
+            errors << "Release signing property '${key}' is blank in ${propsFile.absolutePath}"
+            return
+        }
+        if (key == 'storePassword' || key == 'keyPassword') {
+            values[key] = raw
+        } else {
+            values[key] = raw.trim()
+        }
+    }
+    if (!errors.isEmpty()) {
+        return [errors: errors, values: null]
+    }
+
+    def store = new File(values.storeFile)
+    if (!store.isAbsolute()) {
+        store = new File(propsFile.parentFile, values.storeFile)
+    }
+    if (!store.isFile()) {
+        errors << "Release keystore file does not exist: ${store.absolutePath} (storeFile from ${propsFile.absolutePath})"
+        return [errors: errors, values: null]
+    }
+    values.storeFile = store
+    return [errors: errors, values: values]
+}
+
+def parqueenReleaseSigningFailure(errors) {
+    def header = [
+        'ParQueen release builds fail closed without valid production signing.',
+        'Debug/development tasks do not require this configuration.',
+        'Provide storeFile, storePassword, keyAlias, and keyPassword in ~/.android-keys/parqueen-signing.properties',
+        'or set PARQUEEN_SIGNING_PROPERTIES to that file. Never commit the keystore or passwords.',
+        'Errors:'
+    ]
+    return (header + errors.collect { " - ${it}" }).join('\n')
+}
+
+def configuredReleaseSigning = loadParqueenReleaseSigning()
+
 android {
     namespace = "app.parqueen"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -19,11 +94,41 @@ android {
     buildFeatures {
         buildConfig = true
     }
+    signingConfigs {
+        release {
+            if (configuredReleaseSigning.errors.isEmpty()) {
+                def signingValues = configuredReleaseSigning.values
+                storeFile signingValues.storeFile
+                storePassword signingValues.storePassword
+                keyAlias signingValues.keyAlias
+                keyPassword signingValues.keyPassword
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
         }
+    }
+}
+
+// Always assign release.signingConfig so AGP never treats release as unsigned.
+// APK signing goes through validateSigningRelease; AAB signing goes through
+// signReleaseBundle and does not always schedule validateSigningRelease.
+// taskGraph.whenReady runs even when those tasks are UP-TO-DATE.
+gradle.taskGraph.whenReady { graph ->
+    def releaseSigningRequested = graph.allTasks.any { task ->
+        def n = task.name
+        n == 'validateSigningRelease' || n == 'signReleaseBundle' || n == 'packageRelease'
+    }
+    if (!releaseSigningRequested) {
+        return
+    }
+    def loaded = loadParqueenReleaseSigning()
+    if (!loaded.errors.isEmpty()) {
+        throw new GradleException(parqueenReleaseSigningFailure(loaded.errors))
     }
 }
 

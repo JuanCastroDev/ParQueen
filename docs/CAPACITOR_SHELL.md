@@ -33,7 +33,8 @@ npm run cap:open:ios   # macOS only
 - `VITE_FIREBASE_APPCHECK_SITE_KEY` is not required to build Android web assets; native App Check uses Play Integrity / Debug.
 - Do **not** set `server.url` in `capacitor.config.ts`.
 - Do **not** set `VITE_QA_AUTH=true` for store/native release builds.
-- Do not commit `GoogleService-Info.plist`, `google-services.json`, keystores, or provisioning profiles.
+- Do not commit `GoogleService-Info.plist`, `google-services.json`, keystores, signing properties, or provisioning profiles.
+- Android release AABs are signed from `~/.android-keys/parqueen-signing.properties` (or `PARQUEEN_SIGNING_PROPERTIES`). See `docs/ANDROID_PHASE_2A.md`. Debug builds do not need that file.
 
 ## Phase 2A (Android signup)
 
@@ -57,4 +58,4 @@ See `docs/ANDROID_PHASE_2E.md` for the narrow native App Check Capacitor bridge,
 
 ## Out of scope (later phases)
 
-iOS native push / APNs, iOS native camera, iOS App Attest, iOS native auth, Mapbox native SDK, store signing, background location, multi-device FCM token lists.
+iOS native push / APNs, iOS native camera, iOS App Attest, iOS native auth, Mapbox native SDK, Play Console upload, background location, multi-device FCM token lists.
