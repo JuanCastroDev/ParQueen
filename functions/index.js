@@ -5489,7 +5489,8 @@ exports.generateListingDescription = onCall(
 
 // ─── Marketing-site waitlist (double opt-in) ─────────────────────────────────
 // Public HTTP endpoints reached same-origin through the marketing site's
-// Firebase Hosting rewrites (/api/waitlist, /api/waitlist/confirm). Logic and
+// Firebase Hosting rewrites (/api/waitlist, /api/waitlist/confirm,
+// /api/waitlist/unsubscribe). Logic and
 // the privacy contract live in ./waitlist.js; see docs/WAITLIST.md.
 //
 // Operator actions before deploy (random 32-byte hex for the peppers):
@@ -5585,8 +5586,13 @@ exports.confirmWaitlist = onRequest(
   _waitlistEndpoint(waitlist.handleConfirm)
 );
 
+exports.unsubscribeWaitlist = onRequest(
+  { ...WAITLIST_HTTP_OPTIONS, secrets: [waitlistRateLimitPepper] },
+  _waitlistEndpoint(waitlist.handleUnsubscribe)
+);
+
 // Unconfirmed signups are personal data we have no consent to keep: remove
-// them 30 days after creation.
+// them 30 days after creation. Also drops expired unsubscribe tokens.
 exports.expireStaleWaitlistSignups = onSchedule(
   {
     schedule: "every day 04:30",
@@ -5599,8 +5605,15 @@ exports.expireStaleWaitlistSignups = onSchedule(
     const deleted = await waitlist.expireStalePending({
       db,
       Timestamp,
+      FieldValue,
       now: () => _waitlistHooks.now?.() ?? Date.now(),
     });
-    if (deleted > 0) console.log(`expireStaleWaitlistSignups: removed ${deleted} unconfirmed signup(s)`);
+    if (deleted > 0) console.log(`expireStaleWaitlistSignups: expired ${deleted} unconfirmed signup(s)`);
+    const tokens = await waitlist.expireUnsubscribeTokens({
+      db,
+      Timestamp,
+      now: () => _waitlistHooks.now?.() ?? Date.now(),
+    });
+    if (tokens > 0) console.log(`expireStaleWaitlistSignups: removed ${tokens} expired unsubscribe token(s)`);
   }
 );

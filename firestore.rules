@@ -570,6 +570,12 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Unsubscribe-token hashes for waitlist emails. No client SDK access, even
+    // with an admin claim; the Functions use the Admin SDK, which bypasses Rules.
+    match /waitlistUnsubscribeTokens/{tokenHash} {
+      allow read, write: if false;
+    }
+
     match /adminBootstrap/{docId} {
       // Direct admin read removed: never read by any client — confirmed via
       // full-repo search. Admin identity/singleton-ownership data must not

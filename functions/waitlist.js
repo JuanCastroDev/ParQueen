@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Marketing-site waitlist: double opt-in signup and confirmation.
+ * Marketing-site waitlist: double opt-in signup, confirmation and unsubscribe.
  *
  * Privacy contract (see docs/WAITLIST.md):
  * - Email only. No IP address, name, device or location is written to
@@ -13,6 +13,8 @@
  *   its SHA-256 hash, which is deleted once the token is used.
  * - Every well-formed signup gets the same response whether the address is
  *   new, pending or already subscribed.
+ * - Unsubscribe tokens follow the same rule: raw only in the email, SHA-256
+ *   hash as the waitlistUnsubscribeTokens document ID, removed once used.
  *
  * The handlers here take their collaborators as arguments so the integration
  * tests can drive them against the emulator without real email or Turnstile.
@@ -49,6 +51,12 @@ const RESEND_COOLDOWN_MS = 60 * 1000;
 
 const JOIN_LIMIT = { limit: 5, windowSec: 600 };
 const CONFIRM_LIMIT = { limit: 20, windowSec: 600 };
+const UNSUBSCRIBE_LIMIT = { limit: 20, windowSec: 600 };
+
+const UNSUBSCRIBE_TOKEN_COLLECTION = 'waitlistUnsubscribeTokens';
+// Commercial email must keep its opt-out working for at least 30 days after
+// sending; 60 leaves margin for late reads.
+const UNSUBSCRIBE_TOKEN_TTL_MS = 60 * 24 * 60 * 60 * 1000;
 const ADDRESS_EMAIL_LIMIT = { limit: 3, windowSec: 3600 };
 
 const TURNSTILE_ACTION = 'waitlist';
@@ -109,6 +117,11 @@ async function withinClientLimit(checkRateLimit, headers, pepper, operation, lim
     const key = clientRateLimitKey(headers, pepper);
     if (key === null) return true;
     return withinLimit(checkRateLimit, key, operation, limits);
+}
+
+function buildUnsubscribeUrl(baseUrl, token) {
+    const base = String(baseUrl || '').replace(/\/+$/, '');
+    return `${base}/unsubscribe#t=${token}`;
 }
 
 function buildConfirmUrl(baseUrl, token) {
@@ -302,12 +315,12 @@ async function handleJoin({ body, headers }, deps) {
         }
 
         // Previously unsubscribed: only an explicit new confirmation resubscribes.
+        // source, createdAt, confirmedAt and lastUnsubscribedAt stay as history;
+        // confirmation then overwrites confirmedAt with the new consent.
         tx.update(ref, {
             status: STATUS.PENDING,
             optInMethod: OPT_IN.DOUBLE,
-            source: SOURCE.SITE,
             consentVersion: CONSENT_VERSION,
-            confirmedAt: null,
             ...tokenFields,
         });
         return true;
@@ -376,10 +389,131 @@ async function handleConfirm({ body, headers }, deps) {
 }
 
 /**
+ * For a future launch/marketing sender: issues a fresh unsubscribe token for
+ * one subscribed record and returns the raw token (put it only in that
+ * message). Returns null when the record is not subscribed; such records must
+ * never be emailed.
+ *
+ * The token lives in waitlistUnsubscribeTokens/{sha256(token)}, valid for
+ * UNSUBSCRIBE_TOKEN_TTL_MS, and is tied to the subscription it was issued
+ * for through subscriptionConfirmedAt. Neither the raw token nor the email
+ * is stored there.
+ *
+ * deps: { db, FieldValue, Timestamp, newToken, now }
+ */
+async function issueUnsubscribeToken(ref, deps) {
+    const token = deps.newToken();
+    const tokenRef = deps.db.collection(UNSUBSCRIBE_TOKEN_COLLECTION).doc(hashConfirmToken(token));
+    const issued = await deps.db.runTransaction(async tx => {
+        const snap = await tx.get(ref);
+        if (!snap.exists || snap.data().status !== STATUS.SUBSCRIBED) return false;
+        tx.create(tokenRef, {
+            waitlistId: ref.id,
+            issuedAt: deps.FieldValue.serverTimestamp(),
+            validUntil: deps.Timestamp.fromMillis(deps.now() + UNSUBSCRIBE_TOKEN_TTL_MS),
+            subscriptionConfirmedAt: snap.data().confirmedAt ?? null,
+        });
+        return true;
+    });
+    return issued ? token : null;
+}
+
+/** Legacy imports have confirmedAt null; null matches null. */
+function sameInstant(a, b) {
+    if (a == null || b == null) return a == null && b == null;
+    return typeof a.isEqual === 'function' && a.isEqual(b);
+}
+
+/**
+ * Shared unsubscribe primitive: resolves a raw token and, if it is valid for
+ * the record's current subscription, unsubscribes that record. Returns true
+ * only when this call performed the opt-out. Meant for both the page's JSON
+ * endpoint and a future RFC 8058 one-click endpoint; callers check the token
+ * shape first.
+ *
+ * deps: { db, FieldValue, now }
+ */
+async function unsubscribeWithToken(token, deps) {
+    const tokenRef = deps.db.collection(UNSUBSCRIBE_TOKEN_COLLECTION).doc(hashConfirmToken(token));
+    return deps.db.runTransaction(async tx => {
+        const tokenSnap = await tx.get(tokenRef);
+        if (!tokenSnap.exists) return false;
+        const grant = tokenSnap.data();
+        if ((grant.validUntil?.toMillis?.() ?? 0) <= deps.now()) return false;
+
+        const ref = deps.db.collection(WAITLIST_COLLECTION).doc(grant.waitlistId);
+        const snap = await tx.get(ref);
+        if (!snap.exists) return false;
+        const data = snap.data();
+        if (data.status !== STATUS.SUBSCRIBED) return false;
+        // A token from an earlier subscription cannot end a newer one.
+        if (!sameInstant(grant.subscriptionConfirmedAt ?? null, data.confirmedAt ?? null)) return false;
+
+        // source, optInMethod, consentVersion, createdAt and confirmedAt are
+        // provenance: untouched.
+        tx.update(ref, {
+            status: STATUS.UNSUBSCRIBED,
+            lastUnsubscribedAt: deps.FieldValue.serverTimestamp(),
+            updatedAt: deps.FieldValue.serverTimestamp(),
+        });
+        // Other tokens for this subscription are now harmless: the record is
+        // no longer subscribed, and a later confirmation changes confirmedAt.
+        tx.delete(tokenRef);
+        return true;
+    });
+}
+
+/**
+ * POST /api/waitlist/unsubscribe  { token }
+ *
+ * No login, email or Turnstile: holding the 256-bit token is the
+ * authorization. Opening the emailed link changes nothing; only this POST,
+ * sent by the page's "Unsubscribe me" button, mutates. Every failure
+ * (malformed, unknown, expired, already used, wrong subscription, record not
+ * subscribed) gets the same 410 as confirmation.
+ *
+ * deps: { db, FieldValue, now, checkRateLimit, rateLimitPepper }
+ */
+async function handleUnsubscribe({ body, headers }, deps) {
+    const token = body?.token;
+    // Malformed tokens are rejected before any read, so they cost nothing.
+    if (!isWellFormedToken(token)) return INVALID_OR_EXPIRED;
+
+    if (!await withinClientLimit(deps.checkRateLimit, headers, deps.rateLimitPepper, 'waitlistUnsubscribe', UNSUBSCRIBE_LIMIT)) {
+        return reply(429, { status: 'rate_limited' });
+    }
+
+    return await unsubscribeWithToken(token, deps)
+        ? reply(200, { status: 'unsubscribed' })
+        : INVALID_OR_EXPIRED;
+}
+
+/**
+ * Deletes unsubscribe tokens past validUntil. Bounded per run like
+ * expireStalePending.
+ *
+ * deps: { db, Timestamp, now }
+ */
+async function expireUnsubscribeTokens(deps, batchLimit = 400) {
+    const expired = await deps.db.collection(UNSUBSCRIBE_TOKEN_COLLECTION)
+        .where('validUntil', '<=', deps.Timestamp.fromMillis(deps.now()))
+        .limit(batchLimit)
+        .get();
+    if (expired.empty) return 0;
+    const batch = deps.db.batch();
+    for (const doc of expired.docs) batch.delete(doc.ref);
+    await batch.commit();
+    return expired.size;
+}
+
+/**
  * Deletes pending signups older than the retention window. Bounded per run;
  * a backlog drains over successive daily runs.
  *
- * deps: { db, Timestamp, now }
+ * A former subscriber who is rejoining is never deleted: their record holds
+ * the opt-out. Once the new link has expired it returns to unsubscribed.
+ *
+ * deps: { db, Timestamp, FieldValue, now }
  */
 async function expireStalePending(deps, batchLimit = 200) {
     const cutoff = deps.Timestamp.fromMillis(deps.now() - PENDING_RETENTION_MS);
@@ -396,8 +530,20 @@ async function expireStalePending(deps, batchLimit = 200) {
             const fresh = await tx.get(doc.ref);
             // Re-check: the visitor may have confirmed since the query ran.
             if (!fresh.exists || fresh.data().status !== STATUS.PENDING) return false;
-            const createdMs = fresh.data().createdAt?.toMillis?.() ?? Infinity;
+            const data = fresh.data();
+            const createdMs = data.createdAt?.toMillis?.() ?? Infinity;
             if (createdMs >= cutoff.toMillis()) return false;
+            if (data.lastUnsubscribedAt) {
+                const expiresMs = data.confirmTokenExpiresAt?.toMillis?.() ?? 0;
+                if (expiresMs > deps.now()) return false;
+                tx.update(doc.ref, {
+                    status: STATUS.UNSUBSCRIBED,
+                    confirmTokenHash: deps.FieldValue.delete(),
+                    confirmTokenExpiresAt: deps.FieldValue.delete(),
+                    lastConfirmEmailAt: deps.FieldValue.delete(),
+                });
+                return true;
+            }
             tx.delete(doc.ref);
             return true;
         });
@@ -418,6 +564,9 @@ module.exports = {
     RESEND_COOLDOWN_MS,
     JOIN_LIMIT,
     CONFIRM_LIMIT,
+    UNSUBSCRIBE_LIMIT,
+    UNSUBSCRIBE_TOKEN_COLLECTION,
+    UNSUBSCRIBE_TOKEN_TTL_MS,
     ADDRESS_EMAIL_LIMIT,
     TURNSTILE_ACTION,
     waitlistDocId,
@@ -426,11 +575,16 @@ module.exports = {
     isWellFormedToken,
     clientRateLimitKey,
     buildConfirmUrl,
+    buildUnsubscribeUrl,
     confirmationEmail,
     sendConfirmationEmail,
     verifyTurnstileToken,
     parseHostnameList,
     handleJoin,
     handleConfirm,
+    handleUnsubscribe,
+    issueUnsubscribeToken,
+    unsubscribeWithToken,
+    expireUnsubscribeTokens,
     expireStalePending,
 };

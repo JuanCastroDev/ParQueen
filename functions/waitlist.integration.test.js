@@ -15,7 +15,7 @@ process.env.WAITLIST_ALLOWED_HOSTNAMES = 'parqueen-marketing.web.app';
 
 const crypto = require('crypto');
 const { initializeApp, getApps } = require('firebase-admin/app');
-const { getFirestore, Timestamp } = require('firebase-admin/firestore');
+const { getFirestore, Timestamp, FieldValue } = require('firebase-admin/firestore');
 
 const PROJECT_ID = 'parkqueen-46475363-ccf36';
 const APP_NAME = '__waitlist_intg__';
@@ -252,7 +252,8 @@ describe('WL-I — join', () => {
         });
         await join(email);
         const data = await readDoc(email);
-        expect(data).toMatchObject({ status: 'pending_confirmation', optInMethod: 'double-opt-in', source: 'marketing-site' });
+        // New consent is double opt-in; where the address came from is history and stays.
+        expect(data).toMatchObject({ status: 'pending_confirmation', optInMethod: 'double-opt-in', source: 'squarespace-import' });
         expect(sent).toHaveLength(1);
     });
 
@@ -348,5 +349,247 @@ describe('WL-X — expireStaleWaitlistSignups', () => {
         expect(await readDoc(stale)).toBeUndefined();
         expect(await readDoc(fresh)).toBeDefined();
         expect(await readDoc(oldSubscriber)).toBeDefined();
+    });
+});
+
+describe('WL-UN — unsubscribe', () => {
+    const unsubscribe = (token, opts) => post(indexModule.unsubscribeWaitlist, { token }, opts);
+    const refFor = email => db.collection('waitlist').doc(docIdFor(email));
+    const sha = token => crypto.createHash('sha256').update(token).digest('hex');
+    const tokenDoc = async token => (await db.collection('waitlistUnsubscribeTokens').doc(sha(token)).get()).data();
+    const issue = email => waitlist.issueUnsubscribeToken(refFor(email), {
+        db, FieldValue, Timestamp, newToken: () => waitlist.newConfirmToken(), now: () => clock,
+    });
+    const LEGACY = {
+        optInMethod: 'legacy-squarespace', source: 'squarespace-import',
+        consentVersion: 'squarespace-legacy', confirmedAt: null,
+    };
+    const seedSubscriber = async (label, extra = {}) => {
+        const email = nextEmail(label);
+        await refFor(email).set({
+            email, status: 'subscribed', optInMethod: 'double-opt-in', source: 'marketing-site',
+            consentVersion: 'waitlist-2026-09-v1', createdAt: Timestamp.fromMillis(clock - 5000),
+            confirmedAt: Timestamp.fromMillis(clock - 4000), ...extra,
+        });
+        return email;
+    };
+    const INVALID = { status: 'invalid_or_expired' };
+
+    let logs;
+    beforeEach(() => {
+        logs = [];
+        for (const level of ['log', 'info', 'warn', 'error', 'debug']) {
+            vi.spyOn(console, level).mockImplementation((...args) => { logs.push(args.map(String).join(' ')); });
+        }
+    });
+
+    it('WL-UN1 keys the token doc by SHA-256 of the raw token and stores neither the token nor the email', async () => {
+        const email = await seedSubscriber('hash');
+        const token = await issue(email);
+        expect(waitlist.isWellFormedToken(token)).toBe(true);
+
+        const grant = await tokenDoc(token);
+        expect(Object.keys(grant).sort()).toEqual(['issuedAt', 'subscriptionConfirmedAt', 'validUntil', 'waitlistId']);
+        expect(grant.waitlistId).toBe(docIdFor(email));
+        expect(grant.issuedAt).toBeInstanceOf(Timestamp);
+        expect(grant.validUntil.toMillis()).toBe(clock + waitlist.UNSUBSCRIBE_TOKEN_TTL_MS);
+        expect(waitlist.UNSUBSCRIBE_TOKEN_TTL_MS).toBe(60 * 24 * 60 * 60 * 1000);
+        expect(grant.subscriptionConfirmedAt.toMillis()).toBe(clock - 4000);
+
+        const stored = JSON.stringify([grant, await readDoc(email)]);
+        expect(stored).not.toContain(token);
+        expect(JSON.stringify(grant)).not.toContain(email);
+        expect(waitlist.buildUnsubscribeUrl(process.env.WAITLIST_CONFIRM_BASE_URL, token))
+            .toBe(`https://parqueen-marketing.web.app/unsubscribe#t=${token}`);
+    });
+
+    it('WL-UN2 refuses to issue a token for a record that is not subscribed', async () => {
+        const email = nextEmail('pendingissue');
+        await join(email);
+        expect(await issue(email)).toBeNull();
+        const grants = await db.collection('waitlistUnsubscribeTokens').where('waitlistId', '==', docIdFor(email)).get();
+        expect(grants.empty).toBe(true);
+    });
+
+    it('WL-UN3 unsubscribes, stamps lastUnsubscribedAt, spends the token and keeps provenance', async () => {
+        const email = await seedSubscriber('valid');
+        const token = await issue(email);
+        const other = await issue(email);
+        const before = await readDoc(email);
+
+        const res = await unsubscribe(token);
+        expect(res.statusCode).toBe(200);
+        expect(res.body).toEqual({ status: 'unsubscribed' });
+        expect(res.headers['cache-control']).toBe('no-store');
+
+        const data = await readDoc(email);
+        expect(data.status).toBe('unsubscribed');
+        expect(data.lastUnsubscribedAt).toBeInstanceOf(Timestamp);
+        expect(data).not.toHaveProperty('unsubscribedAt');
+        for (const field of ['email', 'optInMethod', 'source', 'consentVersion', 'createdAt', 'confirmedAt']) {
+            expect(data[field]).toEqual(before[field]);
+        }
+        expect(await tokenDoc(token)).toBeUndefined();
+        // Single use; another token for the same subscription is now harmless.
+        expect(await unsubscribe(token)).toMatchObject({ statusCode: 410, body: INVALID });
+        expect(await unsubscribe(other)).toMatchObject({ statusCode: 410, body: INVALID });
+        expect((await readDoc(email)).lastUnsubscribedAt).toEqual(data.lastUnsubscribedAt);
+    });
+
+    it('WL-UN4 an early token still works after many later sends, until validUntil', async () => {
+        const email = await seedSubscriber('many');
+        const first = await issue(email);
+        for (let i = 0; i < 8; i++) {
+            clock += 24 * 60 * 60 * 1000;
+            await issue(email);
+        }
+        // Day 59 after the first send: still valid.
+        clock = (await tokenDoc(first)).validUntil.toMillis() - 1;
+        expect((await unsubscribe(first)).statusCode).toBe(200);
+    });
+
+    it('WL-UN5 a token stops working once its validity window ends', async () => {
+        const email = await seedSubscriber('expired');
+        const token = await issue(email);
+        clock += waitlist.UNSUBSCRIBE_TOKEN_TTL_MS;
+        expect(await unsubscribe(token)).toMatchObject({ statusCode: 410, body: INVALID });
+        expect((await readDoc(email)).status).toBe('subscribed');
+    });
+
+    it('WL-UN6 answers malformed and unknown tokens with the generic 410', async () => {
+        for (const token of ['nope', '', 42, waitlist.newConfirmToken()]) {
+            const res = await unsubscribe(token);
+            expect(res.statusCode).toBe(410);
+            expect(res.body).toEqual(INVALID);
+        }
+    });
+
+    it('WL-UN7 a confirmation token cannot unsubscribe, and a pending record stays pending', async () => {
+        const email = nextEmail('pending');
+        await join(email);
+        expect(await unsubscribe(tokenFrom(sent[0].url))).toMatchObject({ statusCode: 410, body: INVALID });
+
+        // Even a token document aimed at a pending record does nothing.
+        const stray = waitlist.newConfirmToken();
+        await db.collection('waitlistUnsubscribeTokens').doc(sha(stray)).set({
+            waitlistId: docIdFor(email), issuedAt: Timestamp.fromMillis(clock),
+            validUntil: Timestamp.fromMillis(clock + 60_000), subscriptionConfirmedAt: null,
+        });
+        expect(await unsubscribe(stray)).toMatchObject({ statusCode: 410, body: INVALID });
+        const data = await readDoc(email);
+        expect(data.status).toBe('pending_confirmation');
+        expect(data).not.toHaveProperty('lastUnsubscribedAt');
+    });
+
+    it('WL-UN8 an already-unsubscribed record gets the generic 410', async () => {
+        const email = await seedSubscriber('twice');
+        const token = await issue(email);
+        await refFor(email).update({ status: 'unsubscribed', lastUnsubscribedAt: Timestamp.fromMillis(clock) });
+        expect(await unsubscribe(token)).toMatchObject({ statusCode: 410, body: INVALID });
+        expect((await readDoc(email)).lastUnsubscribedAt.toMillis()).toBe(clock);
+    });
+
+    it('WL-UN9 a legacy subscriber (confirmedAt null) can unsubscribe and keeps its provenance', async () => {
+        const email = await seedSubscriber('legacy', LEGACY);
+        const token = await issue(email);
+        expect((await tokenDoc(token)).subscriptionConfirmedAt).toBeNull();
+        expect((await unsubscribe(token)).statusCode).toBe(200);
+        expect(await readDoc(email)).toMatchObject({ status: 'unsubscribed', ...LEGACY });
+    });
+
+    it('WL-UN10 rejoining needs a fresh confirmation, and old-subscription tokens cannot end the new one', async () => {
+        const email = await seedSubscriber('rejoin', LEGACY);
+        const used = await issue(email);
+        const leftover = await issue(email);
+        expect((await unsubscribe(used)).statusCode).toBe(200);
+        const optedOutAt = (await readDoc(email)).lastUnsubscribedAt.toMillis();
+
+        expect((await join(email)).statusCode).toBe(202);
+        expect(sent).toHaveLength(1);
+        let data = await readDoc(email);
+        expect(data).toMatchObject({
+            status: 'pending_confirmation', optInMethod: 'double-opt-in',
+            consentVersion: 'waitlist-2026-09-v1', source: 'squarespace-import', confirmedAt: null,
+        });
+        expect(data.lastUnsubscribedAt.toMillis()).toBe(optedOutAt);
+        expect(await issue(email)).toBeNull();
+
+        expect((await confirm(tokenFrom(sent[0].url))).statusCode).toBe(200);
+        data = await readDoc(email);
+        expect(data).toMatchObject({ status: 'subscribed', optInMethod: 'double-opt-in', source: 'squarespace-import' });
+        expect(data.confirmedAt).toBeInstanceOf(Timestamp);
+        expect(data.lastUnsubscribedAt.toMillis()).toBe(optedOutAt);
+
+        // The leftover token belongs to the legacy subscription (null/null) and
+        // is still inside its window, but cannot end the new subscription.
+        expect(await unsubscribe(leftover)).toMatchObject({ statusCode: 410, body: INVALID });
+        expect((await readDoc(email)).status).toBe('subscribed');
+
+        // A token issued for the new subscription works.
+        expect((await unsubscribe(await issue(email))).statusCode).toBe(200);
+    });
+
+    it('WL-UN11 a GET (page load or link scanner) changes nothing', async () => {
+        const email = await seedSubscriber('scanner');
+        const token = await issue(email);
+        const res = await post(indexModule.unsubscribeWaitlist, { token }, { method: 'GET' });
+        expect(res.statusCode).toBe(405);
+        expect((await post(indexModule.unsubscribeWaitlist, 't=x', { json: false })).statusCode).toBe(400);
+        expect((await readDoc(email)).status).toBe('subscribed');
+        expect(await tokenDoc(token)).toBeDefined();
+        expect((await unsubscribe(token)).statusCode).toBe(200);
+    });
+
+    it('WL-UN12 never logs the address or a token', async () => {
+        const email = await seedSubscriber('logs');
+        const token = await issue(email);
+        await unsubscribe(token);
+        await unsubscribe(token);
+        await join(email);
+        const confirmToken = tokenFrom(sent[0].url);
+        await confirm(confirmToken);
+        const all = logs.join('\n');
+        for (const secret of [email, token, sha(token), confirmToken]) expect(all).not.toContain(secret);
+    });
+});
+
+describe('WL-XR — scheduled cleanup and former subscribers', () => {
+    it('WL-XR1 keeps a rejoining record while its link is live, then returns it to unsubscribed', async () => {
+        const email = nextEmail('xrejoin');
+        const old = Timestamp.fromMillis(Date.now() - waitlist.PENDING_RETENTION_MS - 60_000);
+        const ref = db.collection('waitlist').doc(docIdFor(email));
+        await ref.set({
+            email, status: 'unsubscribed', optInMethod: 'legacy-squarespace', source: 'squarespace-import',
+            consentVersion: 'squarespace-legacy', createdAt: old, confirmedAt: null, lastUnsubscribedAt: old,
+        });
+        indexModule._waitlistHooks.now = null;
+        await join(email);
+
+        await indexModule.expireStaleWaitlistSignups.run({});
+        expect((await readDoc(email)).status).toBe('pending_confirmation');
+
+        await ref.update({ confirmTokenExpiresAt: Timestamp.fromMillis(Date.now() - 1000) });
+        await indexModule.expireStaleWaitlistSignups.run({});
+        const data = await readDoc(email);
+        expect(data).toMatchObject({ status: 'unsubscribed', source: 'squarespace-import' });
+        expect(data.lastUnsubscribedAt.toMillis()).toBe(old.toMillis());
+        expect(data).not.toHaveProperty('confirmTokenHash');
+    });
+
+    it('WL-XR2 deletes expired unsubscribe tokens and keeps valid ones', async () => {
+        const tokens = db.collection('waitlistUnsubscribeTokens');
+        const expiredId = crypto.randomBytes(32).toString('hex');
+        const validId = crypto.randomBytes(32).toString('hex');
+        const grant = validUntil => ({
+            waitlistId: 'x'.repeat(64), issuedAt: Timestamp.now(), validUntil, subscriptionConfirmedAt: null,
+        });
+        await tokens.doc(expiredId).set(grant(Timestamp.fromMillis(Date.now() - 1000)));
+        await tokens.doc(validId).set(grant(Timestamp.fromMillis(Date.now() + 60_000)));
+
+        indexModule._waitlistHooks.now = null;
+        await indexModule.expireStaleWaitlistSignups.run({});
+
+        expect((await tokens.doc(expiredId).get()).exists).toBe(false);
+        expect((await tokens.doc(validId).get()).exists).toBe(true);
     });
 });

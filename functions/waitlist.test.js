@@ -276,3 +276,34 @@ afterAll(() => {
     globalThis.fetch = realFetch;
     expect(leakedCalls).toEqual([]);
 });
+
+describe('WL-UU — unsubscribe helpers (no emulator)', () => {
+    it('WL-UU1 puts the unsubscribe token in the URL fragment only', () => {
+        expect(waitlist.buildUnsubscribeUrl('https://parqueen-marketing.web.app/', 'abc'))
+            .toBe('https://parqueen-marketing.web.app/unsubscribe#t=abc');
+    });
+
+    it.each([undefined, null, '', 'short', 'x'.repeat(44), { token: 'x' }])(
+        'WL-UU2 answers malformed token %j with the generic 410 before touching Firestore or the throttle', async token => {
+            const fail = () => { throw new Error('must not be called'); };
+            const res = await waitlist.handleUnsubscribe(
+                { body: { token }, headers: { 'fastly-client-ip': '203.0.113.9' } },
+                { db: { collection: fail, runTransaction: fail }, checkRateLimit: fail, rateLimitPepper: PEPPER },
+            );
+            expect(res).toEqual({ status: 410, body: { status: 'invalid_or_expired' } });
+        });
+
+    it('WL-UU3 never asks for Turnstile', async () => {
+        const verifyTurnstile = vi.fn();
+        const db = {
+            collection: () => ({ doc: id => ({ id }) }),
+            runTransaction: fn => fn({ get: async () => ({ exists: false }) }),
+        };
+        const res = await waitlist.handleUnsubscribe(
+            { body: { token: waitlist.newConfirmToken() }, headers: {} },
+            { db, now: () => 0, checkRateLimit: vi.fn(), rateLimitPepper: PEPPER, verifyTurnstile },
+        );
+        expect(res.status).toBe(410);
+        expect(verifyTurnstile).not.toHaveBeenCalled();
+    });
+});

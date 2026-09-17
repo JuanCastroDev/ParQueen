@@ -3115,6 +3115,26 @@ describe('WL-R — waitlist collection Rules (server-only)', () => {
         await assertFails(deleteDoc(doc(anonDb(), 'waitlist', WL_DOC)));
         await assertFails(deleteDoc(doc(adminDb(), 'waitlist', WL_DOC)));
     });
+
+    // adminDb() is a client SDK context with an admin role claim, not the Admin SDK.
+    it('WL-R5: no client SDK user (anon, signed-in, admin-claim) can read, list, write or delete an unsubscribe token', async () => {
+        const TOKEN_DOC = 'd'.repeat(64);
+        await seed('waitlistUnsubscribeTokens', TOKEN_DOC, {
+            waitlistId: WL_DOC,
+            issuedAt: Timestamp.now(),
+            validUntil: FUTURE,
+            subscriptionConfirmedAt: null,
+        });
+        const { deleteDoc } = await import('firebase/firestore');
+        for (const db of [anonDb(), ownerDb(), adminDb()]) {
+            await assertFails(getDoc(doc(db, 'waitlistUnsubscribeTokens', TOKEN_DOC)));
+            await assertFails(getDocs(collection(db, 'waitlistUnsubscribeTokens')));
+            await assertFails(getDocs(query(collection(db, 'waitlistUnsubscribeTokens'), where('waitlistId', '==', WL_DOC))));
+            await assertFails(setDoc(doc(db, 'waitlistUnsubscribeTokens', 'e'.repeat(64)), { waitlistId: WL_DOC }));
+            await assertFails(setDoc(doc(db, 'waitlistUnsubscribeTokens', TOKEN_DOC), { validUntil: FUTURE }, { merge: true }));
+            await assertFails(deleteDoc(doc(db, 'waitlistUnsubscribeTokens', TOKEN_DOC)));
+        }
+    });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
