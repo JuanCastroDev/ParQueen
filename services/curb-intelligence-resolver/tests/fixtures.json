@@ -1,0 +1,68 @@
+[
+  {
+    "name": "Gold Street",
+    "request": {
+      "borough": "MANHATTAN",
+      "onStreet": "GOLD STREET",
+      "crossStreetOne": "BEEKMAN STREET",
+      "crossStreetTwo": "ANN STREET",
+      "compassDirection": "W"
+    },
+    "expectedBlockFaceId": "0212261301"
+  },
+  {
+    "name": "Prince Street",
+    "request": {
+      "borough": "QUEENS",
+      "onStreet": "PRINCE STREET",
+      "crossStreetOne": "ROOSEVELT AVENUE",
+      "crossStreetTwo": "40 ROAD",
+      "compassDirection": "E"
+    },
+    "expectedBlockFaceId": "0112269669"
+  },
+  {
+    "name": "Pierrepont Street",
+    "request": {
+      "borough": "BROOKLYN",
+      "onStreet": "PIERREPONT STREET",
+      "crossStreetOne": "CLINTON STREET",
+      "crossStreetTwo": "CADMAN PLAZA WEST",
+      "compassDirection": "N"
+    },
+    "expectedBlockFaceId": "0212261098"
+  },
+  {
+    "name": "Chatham Square",
+    "request": {
+      "borough": "MANHATTAN",
+      "onStreet": "CHATHAM SQUARE",
+      "crossStreetOne": "DOYERS STREET",
+      "crossStreetTwo": "MOTT STREET",
+      "compassDirection": "W"
+    },
+    "expectedBlockFaceId": "0212261085"
+  },
+  {
+    "name": "33 Street",
+    "request": {
+      "borough": "QUEENS",
+      "onStreet": "33 STREET",
+      "crossStreetOne": "DITMARS BOULEVARD",
+      "crossStreetTwo": "23 AVENUE",
+      "compassDirection": "W"
+    },
+    "expectedBlockFaceId": "0102267042"
+  },
+  {
+    "name": "St James Place",
+    "request": {
+      "borough": "MANHATTAN",
+      "onStreet": "ST JAMES PLACE",
+      "crossStreetOne": "CHATHAM SQUARE",
+      "crossStreetTwo": "MADISON STREET",
+      "compassDirection": "W"
+    },
+    "expectedUnknown": true
+  }
+]
