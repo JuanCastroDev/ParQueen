@@ -208,7 +208,7 @@ git cherry-pick <dependency-fix-commit>
 npm ci                     # must succeed without flags
 npx tsc --noEmit           # must pass
 npm test                   # must pass all tests
-npm run build              # must produce dist/
+npm run build              # must produce dist/; fails closed without VITE_MAPBOX_TOKEN
 npm run test:rules         # must pass all 70 tests
 ```
 

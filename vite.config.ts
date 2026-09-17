@@ -4,18 +4,29 @@ import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { sentryVitePlugin } from '@sentry/vite-plugin';
 import { resolveAppRelease, hasSentryUploadConfig } from './sentryRelease';
+import {
+  applyProductionBuildConfigGuard,
+  resolveViteEnvDir,
+} from './productionBuildConfig';
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ command, mode }) => {
     // Third argument '' loads every env var regardless of VITE_ prefix — Vite
     // only auto-exposes VITE_-prefixed vars to client code (import.meta.env)
     // on its own; this is purely so this Node-side config can read the
     // build-only Sentry credentials (SENTRY_AUTH_TOKEN/ORG/PROJECT), which
     // must never reach the client bundle or `define`.
-    const env = loadEnv(mode, process.cwd(), '');
+    //
+    // Env-dir isolation is test-only: both PARQUEEN_CONFIG_CONTRACT_TEST=1 and
+    // PARQUEEN_VITE_ENV_DIR must be set. Ordinary release builds ignore them.
+    // Neither name is VITE_-prefixed, so Vite does not expose them to the client.
+    const envDir = resolveViteEnvDir();
+    const env = loadEnv(mode, envDir, '');
+    applyProductionBuildConfigGuard(command, env);
     const release = resolveAppRelease(env);
     const uploadConfigPresent = hasSentryUploadConfig(env);
 
     return {
+      envDir,
       server: {
         port: 3000,
         host: '0.0.0.0',

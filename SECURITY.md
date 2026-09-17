@@ -1,6 +1,6 @@
 # Browser credential configuration
 
-ParQueen requires one intentionally public browser mapping credential. Never commit its value.
+ParQueen requires one intentionally public browser mapping credential. Never commit its value. Production `vite build` fails closed if `VITE_MAPBOX_TOKEN` is missing, empty, or whitespace-only.
 
 ## Local development
 
