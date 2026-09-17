@@ -16,7 +16,7 @@ def create_app(resolver_service) -> Flask:
         log_lookup("invalid_request", "NA", 0)
         return jsonify({"ok": False, "failureClass": "INVALID_REQUEST"}), 400
 
-    @app.get("/healthz")
+    @app.get("/health")
     def health():
         ready = resolver_service.ready
         return (

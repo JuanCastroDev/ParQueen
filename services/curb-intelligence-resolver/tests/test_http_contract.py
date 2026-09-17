@@ -137,10 +137,19 @@ def test_printable_ascii_punctuation_is_accepted():
     assert adapter.calls[0].on_street == "ST. JOHN'S PLACE-WEST"
 
 
-def test_health_is_compact_and_does_not_call_native_lookup():
+def test_reserved_healthz_path_is_not_supported():
     client, adapter = make_client()
 
     response = client.get("/healthz")
+
+    assert response.status_code == 404
+    assert adapter.calls == []
+
+
+def test_cloud_run_safe_health_path_is_compact_and_does_not_call_native_lookup():
+    client, adapter = make_client()
+
+    response = client.get("/health")
 
     assert response.status_code == 200
     assert response.get_json() == {

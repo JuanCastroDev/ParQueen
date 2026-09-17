@@ -30,7 +30,7 @@ The native sizes and offsets are release-specific observations, not a universal 
 
 Canonical boroughs are `MANHATTAN`, `BRONX`, `BROOKLYN`, `QUEENS`, and `STATEN ISLAND`. Street fields must be non-empty ASCII and no more than 32 bytes. Compass direction must be `N`, `S`, `E`, or `W`. Extra fields are rejected.
 
-`GET /healthz` reports only readiness and compact provider version metadata.
+`GET /health` reports only readiness and compact provider version metadata.
 
 Access logging is disabled. Operational logs contain only a stable event name, outcome, sanitized return code, latency, and service version.
 
