@@ -103,10 +103,9 @@ Turnstile `siteverify` call per request; it is not the primary control.
 
 ## Marketing-site copy constraints
 
-- Privacy link under the form: **`https://parqueen.app/privacy-policy`**
-  (verified live). Do not use `/privacy`, which redirects to the web app.
-- Before public domain cutover the marketing site needs its own stable privacy
-  route under the ParQueen domain.
+- Privacy link under the form: the marketing site's own relative
+  `/privacy-policy` (Website Privacy Notice). The marketing site also serves
+  the App Privacy Policy at `/privacy`.
 - The form does not promise "Unsubscribe anytime" yet. It can once the
   marketing `/unsubscribe` page and its rewrite ship.
 
@@ -270,8 +269,8 @@ RFC 8058 one-click unsubscribe:
 | `WAITLIST_ID_PEPPER` | secret | new, random 32-byte hex — **never rotate** without re-keying records |
 | `WAITLIST_RATE_LIMIT_PEPPER` | secret | new, random 32-byte hex |
 | `TURNSTILE_SECRET_KEY` | secret | Cloudflare Turnstile secret |
-| `WAITLIST_CONFIRM_BASE_URL` | param | `https://parqueen-marketing.web.app` (staging, pre-launch) |
-| `WAITLIST_ALLOWED_HOSTNAMES` | param | `parqueen-marketing.web.app` (staging, pre-launch) |
+| `WAITLIST_CONFIRM_BASE_URL` | param | `https://parqueen-marketing.web.app` (still staging during cutover) |
+| `WAITLIST_ALLOWED_HOSTNAMES` | param | `parqueen-marketing.web.app,parqueen.app` (cutover: both hosts) |
 
 The two params have **no code default**. Their values live in the tracked
 `functions/.env.parkqueen-46475363-ccf36`, which the Functions emulator (with or
@@ -281,9 +280,20 @@ suggestion, so an unset value still stops non-interactive runs. That file holds
 public configuration only — never secrets. `functions/.env.local` stays
 ignored and is only for personal local overrides.
 
-At domain cutover, change both values to the final host in one reviewed commit
-(e.g. `https://parqueen.app` and `parqueen.app`) and repeat the confirmation
-test.
+Domain cutover happens in two reviewed commits:
+
+1. **Current (transitional) state:** `WAITLIST_ALLOWED_HOSTNAMES` accepts both
+   `parqueen-marketing.web.app` and `parqueen.app`, so signups verify on either
+   host. `WAITLIST_CONFIRM_BASE_URL` stays on staging, so confirmation links
+   still open `https://parqueen-marketing.web.app/confirm`. The Cloudflare
+   Turnstile widget must list both hostnames too.
+2. **After `parqueen.app` serves the marketing site:** set
+   `WAITLIST_CONFIRM_BASE_URL=https://parqueen.app`, deploy, and repeat the
+   confirmation test. Remove `parqueen-marketing.web.app` from the allowed
+   hostnames only once staging should stop accepting signups.
+
+Parameter changes take effect only after the waitlist functions are
+redeployed.
 
 ## Deploy checklist (not yet approved)
 
@@ -297,9 +307,9 @@ test.
    Hosting (log presence only — never the value), then remove the check.
 6. One real signup and confirmation to our own inbox.
 7. Verify unsubscribe end to end with our own inbox before public launch.
-8. At domain cutover, update both values in
-   `functions/.env.parkqueen-46475363-ccf36` in a reviewed commit and repeat
-   step 6.
+8. At domain cutover, follow the two-step parameter change under
+   Configuration, redeploying the waitlist functions after each step and
+   repeating step 6.
 
 ## Tests
 
