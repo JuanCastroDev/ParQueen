@@ -55,6 +55,8 @@ def parse_lookup_request(payload: Any) -> LookupRequest:
             encoded = value.encode("ascii")
         except UnicodeEncodeError as error:
             raise ValidationError("street encoding") from error
+        if any(byte < 0x20 or byte > 0x7E for byte in encoded):
+            raise ValidationError("street characters")
         if len(encoded) > STREET_BYTE_LIMIT:
             raise ValidationError("street length")
         streets.append(value)

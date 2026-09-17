@@ -101,6 +101,11 @@ def test_canonical_borough_mapping(borough, code):
         {**VALID_REQUEST, "onStreet": ""},
         {**VALID_REQUEST, "onStreet": "   "},
         {**VALID_REQUEST, "onStreet": "CAFÉ STREET"},
+        {**VALID_REQUEST, "onStreet": "GOLD\x00STREET"},
+        {**VALID_REQUEST, "onStreet": "GOLD\nSTREET"},
+        {**VALID_REQUEST, "onStreet": "GOLD\rSTREET"},
+        {**VALID_REQUEST, "onStreet": "GOLD\tSTREET"},
+        {**VALID_REQUEST, "onStreet": "GOLD\x7fSTREET"},
         {**VALID_REQUEST, "onStreet": "A" * 33},
         {**VALID_REQUEST, "onStreet": 7},
         {**VALID_REQUEST, "compassDirection": "NW"},
@@ -120,6 +125,16 @@ def test_invalid_requests_are_rejected_without_native_call(payload):
     assert response.status_code == 400
     assert response.get_json() == {"ok": False, "failureClass": "INVALID_REQUEST"}
     assert adapter.calls == []
+
+
+def test_printable_ascii_punctuation_is_accepted():
+    client, adapter = make_client()
+    payload = {**VALID_REQUEST, "onStreet": "ST. JOHN'S PLACE-WEST"}
+
+    response = client.post("/resolve-blockface", json=payload)
+
+    assert response.status_code == 200
+    assert adapter.calls[0].on_street == "ST. JOHN'S PLACE-WEST"
 
 
 def test_health_is_compact_and_does_not_call_native_lookup():

@@ -37,8 +37,11 @@ def test_nonzero_return_code_is_fail_closed_and_discards_stale_identity(return_c
     assert "SECRET" not in response.get_data(as_text=True)
 
 
-@pytest.mark.parametrize("block_face_id", [None, "", "123", "ABCDEFGHIJ", "12345678901"])
-def test_grc_00_requires_exact_ten_digit_identity(block_face_id):
+@pytest.mark.parametrize(
+    "block_face_id",
+    [None, "", "123", "ABCDEFGHIJ", "12345678901", "0000000000", 212261301],
+)
+def test_grc_00_rejects_malformed_or_all_zero_identity(block_face_id):
     adapter = RecordingAdapter(
         NativeResult(
             return_code="00",
@@ -57,6 +60,39 @@ def test_grc_00_requires_exact_ten_digit_identity(block_face_id):
         "ok": False,
         "failureClass": "NATIVE_CONTRACT_FAILURE",
     }
+    assert "officialBlockFaceId" not in response.get_data(as_text=True)
+
+
+@pytest.mark.parametrize(
+    "normalized_name",
+    [
+        "GOLD\x00STREET",
+        "GOLD\nSTREET",
+        "GOLD\rSTREET",
+        "GOLD\tSTREET",
+        "GOLD\x7fSTREET",
+    ],
+)
+def test_grc_00_rejects_control_characters_in_normalized_names(normalized_name):
+    adapter = RecordingAdapter(
+        NativeResult(
+            return_code="00",
+            reason_code=" ",
+            block_face_id="0212261301",
+            normalized_street_names=(normalized_name, "TWO", "THREE"),
+        )
+    )
+    app = create_app(ResolverService(adapter))
+    app.config.update(TESTING=True)
+
+    response = app.test_client().post("/resolve-blockface", json=VALID_REQUEST)
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "ok": False,
+        "failureClass": "NATIVE_CONTRACT_FAILURE",
+    }
+    assert "officialBlockFaceId" not in response.get_data(as_text=True)
 
 
 def test_native_exception_is_sanitized():

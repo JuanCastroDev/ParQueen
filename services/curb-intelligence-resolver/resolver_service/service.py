@@ -58,8 +58,10 @@ class ResolverService:
                 return_code=native_result.return_code,
             )
 
-        if not native_result.block_face_id or not BLOCK_FACE_ID_PATTERN.fullmatch(
-            native_result.block_face_id
+        if (
+            not isinstance(native_result.block_face_id, str)
+            or not BLOCK_FACE_ID_PATTERN.fullmatch(native_result.block_face_id)
+            or native_result.block_face_id == "0000000000"
         ):
             return self._failure("NATIVE_CONTRACT_FAILURE", 503, "native_contract_failure")
         if not self._valid_normalized_names(native_result.normalized_street_names):
@@ -95,8 +97,10 @@ class ResolverService:
             if not isinstance(name, str) or not name or len(name) > 32:
                 return False
             try:
-                name.encode("ascii")
+                encoded = name.encode("ascii")
             except UnicodeEncodeError:
+                return False
+            if any(byte < 0x20 or byte > 0x7E for byte in encoded):
                 return False
         return True
 
