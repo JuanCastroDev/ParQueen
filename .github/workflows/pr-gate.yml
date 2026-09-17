@@ -185,6 +185,8 @@ jobs:
       - name: CLIENT — Production build
         if: steps.classify.outputs.run_client == 'true'
         run: npm run build
+        env:
+          VITE_MAPBOX_TOKEN: ${{ vars.VITE_MAPBOX_TOKEN }}
 
       # ── FUNCTIONS ───────────────────────────────────────────────────────
       # npm 10 for cross-platform lockfile compatibility (consistent with
