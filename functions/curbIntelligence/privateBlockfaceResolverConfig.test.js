@@ -3,6 +3,7 @@
 const {
   curbResolverMode,
   curbResolverUrl,
+  curbShadowSamplePermille,
   readPrivateResolverConfig,
 } = require('./privateBlockfaceResolverConfig');
 
@@ -12,6 +13,8 @@ describe('private resolver backend configuration', () => {
     expect(curbResolverMode.options.default).toBe('off');
     expect(curbResolverUrl.name).toBe('CURB_RESOLVER_URL');
     expect(curbResolverUrl.options.default).toBe('');
+    expect(curbShadowSamplePermille.name).toBe('CURB_SHADOW_SAMPLE_PERMILLE');
+    expect(curbShadowSamplePermille.options.default).toBe('0');
   });
 
   it.each([undefined, '', 'OFF', 'enabled', 'invalid'])('keeps unsupported mode %s disabled', mode => {
@@ -19,7 +22,7 @@ describe('private resolver backend configuration', () => {
       mode: { value: () => mode },
       url: { value: () => 'https://example.run.app' },
     });
-    expect(config).toEqual({ mode: 'off', serviceUrl: '' });
+    expect(config).toEqual({ mode: 'off', serviceUrl: '', samplePermille: 0 });
   });
 
   it('exposes the URL only when shadow is explicitly selected', () => {
@@ -27,6 +30,25 @@ describe('private resolver backend configuration', () => {
       mode: { value: () => 'shadow' },
       url: { value: () => 'https://example.run.app' },
     });
-    expect(config).toEqual({ mode: 'shadow', serviceUrl: 'https://example.run.app' });
+    expect(config).toEqual({ mode: 'shadow', serviceUrl: 'https://example.run.app', samplePermille: 0 });
+  });
+
+  it.each([
+    ['0', 0], ['1', 1], ['500', 500], ['1000', 1000],
+    ['', 0], ['-1', 0], ['1001', 0], ['1.5', 0], ['abc', 0], [undefined, 0],
+  ])('parses sample value %s safely', (value, expected) => {
+    const config = readPrivateResolverConfig({
+      mode: { value: () => 'shadow' },
+      url: { value: () => 'https://example.run.app' },
+      samplePermille: { value: () => value },
+    });
+    expect(config.samplePermille).toBe(expected);
+  });
+
+  it('does not read URL or sampling configuration while mode is off', () => {
+    const unread = { value: vi.fn(() => { throw new Error('must stay unread'); }) };
+    expect(readPrivateResolverConfig({ mode: { value: () => 'off' }, url: unread, samplePermille: unread }))
+      .toEqual({ mode: 'off', serviceUrl: '', samplePermille: 0 });
+    expect(unread.value).not.toHaveBeenCalled();
   });
 });

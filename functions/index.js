@@ -31,6 +31,7 @@ const {
 } = require('./streetIntelligenceLegacy');
 const { ADMIN_READ_VIEWS } = require('./adminReadViews');
 const { observePrivateResolverShadow } = require('./curbIntelligence/privateResolverComposition');
+const { createFallbackShadowEvidence } = require('./curbIntelligence/fallbackShadowEvidence');
 const { haversineDistMiles, filterCandidates, buildMessages, collectStaleTokens, MAX_CANDIDATES, FCM_BATCH } = require('./notifyFanout');
 const { createHash, createHmac, randomInt: secureRandomInt, randomUUID, timingSafeEqual } = require('crypto');
 
@@ -4023,10 +4024,14 @@ const _SWEEPNYC_FALLBACK_REASONS = new Set([
   'no_sweepnyc_data', 'no_sweepnyc_notes', 'no_signs', 'parse_failed',
 ]);
 
-async function _observeCurbIntelligenceShadow(productionResult, lat, lng) {
+async function _observeCurbIntelligenceShadow(productionResult, lat, lng, accuracyMeters, shadowEvidence) {
   const observer = _callableHooks.curbShadowObserver || observePrivateResolverShadow;
   try {
-    await observer({ productionResult, location: { lat, lng } });
+    await observer({
+      productionResult,
+      location: { lat, lng, accuracyMeters },
+      ...(shadowEvidence || {}),
+    }, { getSocrataToken: _socrataToken });
   } catch {
     // Shadow execution must never affect the established callable behavior.
   }
@@ -4195,7 +4200,7 @@ exports.createSegmentFromSweepNYC = onCall(
     const uid = request.auth.uid;
     await checkRateLimit(uid, 'createSegmentFromSweepNYC', { limit: 30, windowSec: 3600 });
 
-    const { lat, lng, revalidateSegmentId } = request.data || {};
+    const { lat, lng, accuracyMeters, revalidateSegmentId } = request.data || {};
     if (typeof lat !== 'number' || typeof lng !== 'number')
       throw new HttpsError('invalid-argument', 'lat and lng must be numbers.');
     if (lat < 40.4 || lat > 40.95 || lng < -74.3 || lng > -73.65)
@@ -4209,6 +4214,7 @@ exports.createSegmentFromSweepNYC = onCall(
     }
 
     let productionResult;
+    let shadowEvidence = null;
     try {
       if (revalidateSegmentId) {
         productionResult = await _revalidateLegacyNYCOpenDataSegment(revalidateSegmentId, lat, lng);
@@ -4220,14 +4226,19 @@ exports.createSegmentFromSweepNYC = onCall(
           productionResult = sweepResult;
         } else {
           console.log('[SweepNYC→NYCOpenData] falling back, sweepReason:', sweepResult.reason);
-          productionResult = await _fallbackToNYCOpenData(lat, lng);
+          productionResult = await _fallbackToNYCOpenData(
+            lat,
+            lng,
+            null,
+            evidence => { shadowEvidence = evidence; },
+          );
         }
       }
     } catch (err) {
       console.error('[createSegmentFromSweepNYC] top-level error:', sanitizeError(err));
       productionResult = { success: false, reason: 'unknown_error', _diag: { error: sanitizeError(err) } };
     }
-    return _observeCurbIntelligenceShadow(productionResult, lat, lng);
+    return _observeCurbIntelligenceShadow(productionResult, lat, lng, accuracyMeters, shadowEvidence);
   }
 );
 
@@ -4508,7 +4519,12 @@ function _socrataToken() {
  * Queries NYC Open Data nfid-uabd for sign records matching a LIKE street pattern in a borough.
  * Paginates up to 3000 rows to handle long avenues (Broadway, 3rd Ave, Grand Concourse).
  */
-async function _queryNYCOpenData(likePattern, borough, strictOperationalFailures = false) {
+async function _queryNYCOpenData(
+  likePattern,
+  borough,
+  strictOperationalFailures = false,
+  captureEvidence = null,
+) {
   const BASE = 'https://data.cityofnewyork.us/resource/nfid-uabd.json';
   const token = _socrataToken();
   if (!token) console.warn('[NYCOpenData] SOCRATA_APP_TOKEN not set — using unauthenticated rate limit');
@@ -4516,6 +4532,9 @@ async function _queryNYCOpenData(likePattern, borough, strictOperationalFailures
   const PAGE = 1000;
   const MAX_PAGES = 3;
   const rows = [];
+  let complete = false;
+  let responseVersion = null;
+  let versionConsistent = true;
 
   for (let page = 0; page < MAX_PAGES; page++) {
     const params = new URLSearchParams({
@@ -4542,10 +4561,19 @@ async function _queryNYCOpenData(likePattern, borough, strictOperationalFailures
         if (strictOperationalFailures) throw new Error('nyc_open_data_unavailable');
         break;
       }
+      const lastModified = res.headers?.get?.('last-modified');
+      const parsedLastModified = typeof lastModified === 'string' && Number.isFinite(Date.parse(lastModified))
+        ? new Date(lastModified).toISOString() : null;
+      if (!parsedLastModified || (responseVersion && responseVersion !== parsedLastModified)) {
+        versionConsistent = false;
+      } else if (!responseVersion) {
+        responseVersion = parsedLastModified;
+      }
       const batch = await res.json();
-      if (!Array.isArray(batch) || !batch.length) break;
+      if (!Array.isArray(batch)) break;
+      if (!batch.length) { complete = true; break; }
       rows.push(...batch);
-      if (batch.length < PAGE) break;
+      if (batch.length < PAGE) { complete = true; break; }
     } catch (err) {
       console.warn('[NYCOpenData] fetch error page', page, ':', sanitizeError(err));
       if (strictOperationalFailures) throw err;
@@ -4554,6 +4582,22 @@ async function _queryNYCOpenData(likePattern, borough, strictOperationalFailures
   }
 
   console.log('[NYCOpenData] fetched row count:', rows.length);
+  if (typeof captureEvidence === 'function') {
+    const evidenceComplete = complete && versionConsistent && Boolean(responseVersion);
+    try {
+      captureEvidence({
+        rows,
+        complete: evidenceComplete,
+        sourceVersion: evidenceComplete ? {
+          resourceId: 'nfid-uabd',
+          rowsUpdatedAt: responseVersion,
+          viewLastModified: responseVersion,
+        } : null,
+      });
+    } catch {
+      // Shadow capture is in-memory and observational only.
+    }
+  }
   return rows;
 }
 
@@ -4561,7 +4605,7 @@ async function _queryNYCOpenData(likePattern, borough, strictOperationalFailures
  * Main NYC Open Data fallback orchestrator.
  * Called when SweepNYC has no usable data for lat/lng.
  */
-async function _fallbackToNYCOpenData(lat, lng, revalidation = null) {
+async function _fallbackToNYCOpenData(lat, lng, revalidation = null, captureShadowEvidence = null) {
   try {
     const strictOperationalFailures = Boolean(revalidation);
     const geocode = await _reverseGeocodeStreet(lat, lng, strictOperationalFailures);
@@ -4586,7 +4630,13 @@ async function _fallbackToNYCOpenData(lat, lng, revalidation = null) {
     }
     console.log('[NYCOpenData] street context normalized; borough source:', boroughSource);
 
-    const rows = await _queryNYCOpenData(likePattern, borough, strictOperationalFailures);
+    let queryEvidence = null;
+    const rows = await _queryNYCOpenData(
+      likePattern,
+      borough,
+      strictOperationalFailures,
+      evidence => { queryEvidence = evidence; },
+    );
     const aspRows = rows.filter(r => _isASPSign(r.sign_description));
     console.log('[NYCOpenData] ASP rows:', aspRows.length, '/ total:', rows.length);
     if (!aspRows.length) {
@@ -4808,6 +4858,19 @@ async function _fallbackToNYCOpenData(lat, lng, revalidation = null) {
     } else {
       await segRef.set(segmentWrite);
       await ruleRef.set(ruleWrite);
+    }
+
+    if (!revalidation && typeof captureShadowEvidence === 'function') {
+      try {
+        captureShadowEvidence(createFallbackShadowEvidence({
+          selectedRows: bestGroup,
+          queryEvidence,
+          segment: segmentWrite,
+          rule: ruleWrite,
+        }));
+      } catch {
+        // In-memory shadow evidence cannot affect established writes or response.
+      }
     }
 
     console.log('[NYCOpenData] wrote segment', {

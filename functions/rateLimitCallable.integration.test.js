@@ -29,7 +29,8 @@ try {
     console.warn('[rateLimit.callable] Could not load index.js:', e.message);
 }
 
-const PROJECT_ID = 'parkqueen-46475363-ccf36';
+const { requireEmulatorProjectId } = require('./emulatorProjectId');
+const PROJECT_ID = requireEmulatorProjectId();
 const APP_NAME = '__rateLimit_callable_intg__';
 
 const testApp =

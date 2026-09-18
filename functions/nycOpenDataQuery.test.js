@@ -56,7 +56,12 @@ function loadQueryFn(fetchImpl, warn, token) {
   );
 }
 
-const okPage = (rows) => ({ ok: true, status: 200, json: async () => rows });
+const okPage = (rows, lastModified = 'Wed, 02 Jan 2026 00:00:00 GMT') => ({
+  ok: true,
+  status: 200,
+  headers: { get: (name) => name.toLowerCase() === 'last-modified' ? lastModified : null },
+  json: async () => rows,
+});
 const row = (i) => ({
   order_number: 'P-' + i, record_type: 'Current', borough: 'Manhattan', on_street: 'BROADWAY',
   from_street: 'PRINCE STREET', to_street: 'SPRING STREET', side_of_street: 'W',
@@ -148,6 +153,41 @@ describe('NYC Open Data fallback — query correctness', () => {
     expect(orders[0]).toBe(':id');
   });
 
+  it('5d. exposes the already-fetched rows and bounded response version without another request', async () => {
+    const rows = [row(1), row(2)];
+    const fn = loadQueryFn(capture(okPage(rows)));
+    const evidence = [];
+    const out = await fn('%BROADWAY%', 'Manhattan', false, value => evidence.push(value));
+
+    expect(out).toEqual(rows);
+    expect(urls).toHaveLength(1);
+    expect(evidence).toEqual([{
+      rows: out,
+      complete: true,
+      sourceVersion: {
+        resourceId: 'nfid-uabd',
+        rowsUpdatedAt: '2026-01-02T00:00:00.000Z',
+        viewLastModified: '2026-01-02T00:00:00.000Z',
+      },
+    }]);
+    expect(evidence[0].rows).toBe(out);
+  });
+
+  it('5e. marks capped pages and inconsistent/missing response versions incomplete', async () => {
+    const full = Array.from({ length: 1000 }, (_, i) => row(i));
+    const captures = [];
+    const capped = loadQueryFn(capture(okPage(full)));
+    await capped('%BROADWAY%', 'Manhattan', false, value => captures.push(value));
+
+    urls = [];
+    const mismatched = loadQueryFn(capture((n) => okPage(n === 0 ? full : [row(1001)],
+      n === 0 ? 'Wed, 02 Jan 2026 00:00:00 GMT' : 'Thu, 03 Jan 2026 00:00:00 GMT')));
+    await mismatched('%BROADWAY%', 'Manhattan', false, value => captures.push(value));
+
+    expect(captures[0]).toEqual(expect.objectContaining({ complete: false, sourceVersion: null }));
+    expect(captures[1]).toEqual(expect.objectContaining({ complete: false, sourceVersion: null }));
+  });
+
   for (const status of [400, 429, 500, 503]) {
     it('6. HTTP ' + status + ' degrades to zero rows without throwing or retrying', async () => {
       const warnings = [];
@@ -191,7 +231,7 @@ describe('NYC Open Data fallback — when Socrata is reached at all', () => {
     const seg = INDEX_SRC.slice(start, start + 2000);
     const successGate = seg.indexOf('if (sweepResult.success || !_SWEEPNYC_FALLBACK_REASONS.has(sweepResult.reason))');
     const reasonGate = seg.indexOf('_SWEEPNYC_FALLBACK_REASONS.has(sweepResult.reason)');
-    const fallbackCall = seg.indexOf('_fallbackToNYCOpenData(lat, lng)');
+    const fallbackCall = seg.search(/_fallbackToNYCOpenData\(\s*lat,\s*lng/);
     expect(successGate).toBeGreaterThan(-1);
     expect(reasonGate).toBeGreaterThanOrEqual(successGate);
     expect(fallbackCall).toBeGreaterThan(reasonGate);

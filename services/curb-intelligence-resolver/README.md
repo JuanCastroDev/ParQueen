@@ -14,6 +14,12 @@ Local Phase 2A.8 spike for a private NYC Geosupport Function 3C boundary. This d
 
 The native sizes and offsets are release-specific observations, not a universal Geosupport ABI. Any Geosupport release or image change requires a fresh contract review and full fixture validation.
 
+## Attribution and release review
+
+Geosupport Desktop Edition™ copyrighted by the New York City Department of City Planning.
+
+This attribution does not imply NYC DCP endorsement. Every quarterly Geosupport release upgrade requires native ABI/contract revalidation, fixture validation, a resolver image rebuild and review, and separate rollout approval. Written NYC DCP confirmation concerning long-running private cloud-container use remains recommended before broad reliance.
+
 ## HTTP API
 
 `POST /resolve-blockface` accepts exactly:

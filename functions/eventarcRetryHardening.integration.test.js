@@ -24,7 +24,8 @@ const path = require('path');
 const { initializeApp, getApps } = require('firebase-admin/app');
 const { getFirestore, Timestamp } = require('firebase-admin/firestore');
 
-const PROJECT_ID = 'parkqueen-46475363-ccf36';
+const { requireEmulatorProjectId } = require('./emulatorProjectId');
+const PROJECT_ID = requireEmulatorProjectId();
 const APP_NAME = '__eventarc_retry_hardening_intg__';
 const testApp = getApps().find(app => app.name === APP_NAME) ?? initializeApp({ projectId: PROJECT_ID }, APP_NAME);
 const db = getFirestore(testApp);
