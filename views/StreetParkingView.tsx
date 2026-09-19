@@ -2475,7 +2475,7 @@ export const MapView: React.FC<MapViewProps> = ({
                             </div>
                         ) : mapReady && !spotData.activeSpots.find(s => s.finderId === user?.id) && (
                             <div className="map-status-chip is-empty inline-flex items-center gap-2.5 text-[12px] font-medium">
-                                <div className="map-status-dot bg-rose-500/80 shrink-0" />
+                                <div className="map-status-dot bg-[#9bb0c7]/80 shrink-0" />
                                 {t('map.no_spots_nearby')}
                             </div>
                         )}

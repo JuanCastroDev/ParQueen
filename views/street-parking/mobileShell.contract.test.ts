@@ -102,7 +102,7 @@ describe('mobile shell layout contract', () => {
     const css = read('index.css');
 
     expect(css).toContain('--mobile-map-header-width: min(86vw, 372px)');
-    expect(css).toMatch(/\.map-search-shell\s*\{[^}]*width:\s*var\(--mobile-map-header-width\)[^}]*height:\s*54px/s);
+    expect(css).toMatch(/\.map-search-shell\s*\{[^}]*width:\s*var\(--mobile-map-header-width\)[^}]*height:\s*51px/s);
     expect(css).toMatch(/\.map-status-row\s*\{[^}]*width:\s*var\(--mobile-map-header-width\)/s);
     expect(css).toMatch(/\.map-ai-action\s*\{[^}]*height:\s*44px[^}]*min-height:\s*44px/s);
     expect(css).toMatch(/@media \(orientation: landscape\)[\s\S]*?\.map-search-shell\s*\{[^}]*height:\s*52px/s);

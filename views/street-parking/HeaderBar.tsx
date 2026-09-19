@@ -72,7 +72,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
                     <UserAvatar user={user} onClick={() => setView(AppView.PROFILE)} />
                 </span>
 
-                <div className="map-search-content flex-1 min-w-0 mx-2.5 flex items-center gap-3.5">
+                <div className="map-search-content flex-1 min-w-0 mx-2.5 flex items-center gap-2">
                     <Search size={20} strokeWidth={2} className="map-search-icon" />
                     <input
                         ref={inputRef}
@@ -96,10 +96,10 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
                         aria-label="AI Sign Scanner"
                         title="AI Sign Scanner"
                         onClick={() => setView(AppView.AI_ASSISTANT)}
-                        className="map-ai-action flex items-center justify-center gap-2 rounded-full px-4 text-[#75b8ff] active:scale-95 transition-all shrink-0"
+                        className="map-ai-action flex items-center justify-center gap-1.5 rounded-full px-3 text-[#75b8ff] active:scale-95 transition-all shrink-0"
                     >
-                        <Camera size={16} strokeWidth={2.05} />
-                        <span className="text-[12px] font-semibold tracking-tight">AI</span>
+                        <Camera size={14} strokeWidth={2.05} />
+                        <span className="text-[11px] font-semibold tracking-tight">AI</span>
                     </button>
 
                     <button
