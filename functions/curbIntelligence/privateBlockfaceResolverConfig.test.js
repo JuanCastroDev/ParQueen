@@ -54,8 +54,11 @@ describe('private resolver backend configuration', () => {
     for (const name of [curbResolverMode.name, curbResolverUrl.name, curbShadowSamplePermille.name]) {
       expect(dotenv).toMatch(new RegExp(`^${name}=`, 'm'));
     }
-    expect(dotenv).toMatch(/^CURB_RESOLVER_MODE=off$/m);
+    expect(dotenv).toMatch(/^CURB_RESOLVER_MODE=shadow$/m);
     expect(dotenv).toMatch(/^CURB_SHADOW_SAMPLE_PERMILLE=0$/m);
+    expect(dotenv).toMatch(
+      /^CURB_RESOLVER_URL=https:\/\/parqueen-curb-resolver-spike-oxbozdhlwa-uc\.a\.run\.app$/m,
+    );
   });
 
   it('does not read URL or sampling configuration while mode is off', () => {

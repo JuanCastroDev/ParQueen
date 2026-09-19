@@ -27,4 +27,15 @@ describe('createSegmentFromSweepNYC private resolver composition boundary', () =
     expect(callable).toContain('_observeCurbIntelligenceShadow(productionResult, lat, lng, accuracyMeters, shadowEvidence)');
     expect(callable).not.toMatch(/accuracyMeters\s*[,}][\s\S]*?\.set\(/);
   });
+
+  it('does not supply operatorAuthorized to the shadow observer', () => {
+    const observerStart = source.indexOf('async function _observeCurbIntelligenceShadow');
+    const observerEnd = source.indexOf('// ─── Hydrant proximity', observerStart);
+    const observer = source.slice(observerStart, observerEnd);
+    expect(observerStart).toBeGreaterThan(-1);
+    expect(observerEnd).toBeGreaterThan(observerStart);
+    expect(observer).toContain('}, { getSocrataToken: _socrataToken });');
+    expect(observer).not.toMatch(/operatorAuthorized/);
+    expect(observer).not.toMatch(/\boperator\s*:/);
+  });
 });

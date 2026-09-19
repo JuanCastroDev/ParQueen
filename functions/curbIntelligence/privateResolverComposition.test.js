@@ -147,6 +147,7 @@ describe('private resolver minimum-shadow composition', () => {
 
   it.each([
     ['ordinary sample-zero request', { operatorAuthorized: false }],
+    ['omitted operatorAuthorized option', { operatorAuthorized: undefined }],
     ['missing accuracy', {}, { location: { lat: 40.712, lng: -74.006 } }],
     ['SweepNYC success', {}, { productionPath: 'sweepnyc' }],
     ['missing legacy evidence', {}, { legacyEvidence: null }],
