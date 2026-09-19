@@ -15,7 +15,7 @@ const {
 
 const DEFAULT_EXECUTION_POLICY = Object.freeze({
   overallDeadlineMs: 8000,
-  sourceDeadlineMs: Object.freeze({ curb: 2500, dot: 2500, parkNyc: 2500, relationship: 1500, sink: 500 }),
+  sourceDeadlineMs: Object.freeze({ curb: 2500, dot: 2500, parkNyc: 2500, relationship: 3000, sink: 500 }),
   maxCandidates: Object.freeze({ curb: 100, dot: 100, parkNyc: 50 }),
   maxRetries: 0,
 });

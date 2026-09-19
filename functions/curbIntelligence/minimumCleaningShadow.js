@@ -8,7 +8,7 @@ const { adaptLegacyCleaningEvidence } = require('./legacyCleaningAdapter');
 const { compareCleaningEvidence } = require('./cleaningComparison');
 
 const ENGINE_VERSION = '2a15-local-1';
-const RELATIONSHIP_TIMEOUT_MS = 1500;
+const RELATIONSHIP_TIMEOUT_MS = 3000;
 
 function comparisonCategory(value) {
   if (['exact_agreement', 'both_no_usable_cleaning', 'new_more_cautious'].includes(value)) return 'agreement';
@@ -220,4 +220,4 @@ async function runMinimumCleaningShadow(input = {}) {
   }
 }
 
-module.exports = { comparisonCategory, runMinimumCleaningShadow };
+module.exports = { comparisonCategory, runMinimumCleaningShadow, RELATIONSHIP_TIMEOUT_MS };

@@ -3,7 +3,9 @@
 const {
   comparisonCategory,
   runMinimumCleaningShadow,
+  RELATIONSHIP_TIMEOUT_MS,
 } = require('./minimumCleaningShadow');
+const { DEFAULT_EXECUTION_POLICY } = require('./shadowExecution');
 
 const DOT_VERSION = Object.freeze({
   resourceId: 'nfid-uabd',
@@ -170,7 +172,14 @@ describe('minimum cleaning-only shadow experiment', () => {
     expect(sink.record).toHaveBeenCalledTimes(1);
   });
 
-  it('bounds the relationship provider to the reviewed 1.5-second budget without retrying', async () => {
+  it('keeps the official relationship budget aligned with standalone shadow execution', () => {
+    expect(RELATIONSHIP_TIMEOUT_MS).toBe(3000);
+    expect(RELATIONSHIP_TIMEOUT_MS).toBe(DEFAULT_EXECUTION_POLICY.sourceDeadlineMs.relationship);
+    expect(DEFAULT_EXECUTION_POLICY.overallDeadlineMs).toBe(8000);
+    expect(DEFAULT_EXECUTION_POLICY.maxRetries).toBe(0);
+  });
+
+  it('bounds the relationship provider to the reviewed 3-second budget without retrying', async () => {
     let receivedSignal;
     const resolve = vi.fn(input => {
       receivedSignal = input.signal;
@@ -187,5 +196,105 @@ describe('minimum cleaning-only shadow experiment', () => {
     expect(result).toEqual(expect.objectContaining({ outcome: 'UNKNOWN', skipOrFailureClass: 'relationship_unknown' }));
     expect(resolve).toHaveBeenCalledTimes(1);
     expect(receivedSignal.aborted).toBe(true);
+  });
+
+  it('completes a 2700ms official relationship inside the 3000ms budget', async () => {
+    vi.useFakeTimers();
+    try {
+      let receivedSignal;
+      const resolve = vi.fn(async ({ signal }) => {
+        receivedSignal = signal;
+        await new Promise(done => setTimeout(done, 2700));
+        expect(signal.aborted).toBe(false);
+        return dependencies().officialRelationshipProvider.resolve();
+      });
+      const deps = dependencies({ officialRelationshipProvider: { resolve } });
+      const pending = runMinimumCleaningShadow({
+        location: { lat: 40.712, lng: -74.006, accuracyMeters: 12 },
+        legacyEvidence,
+        dependencies: deps,
+        resolveCurbRuntime: vi.fn(async () => runtimeResult),
+      });
+      await vi.advanceTimersByTimeAsync(2700);
+      const result = await pending;
+      expect(result).toEqual(expect.objectContaining({
+        outcome: 'COMPLETED',
+        skipOrFailureClass: 'none',
+        parkNycState: 'NOT_EVALUATED',
+      }));
+      expect(result.skipOrFailureClass).not.toBe('relationship_unknown');
+      expect(resolve).toHaveBeenCalledTimes(1);
+      expect(receivedSignal).toBeInstanceOf(AbortSignal);
+      expect(JSON.stringify(result)).not.toContain('0212261301');
+      expect(JSON.stringify(deps.sink.record.mock.calls[0][0])).not.toContain('0212261301');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts a relationship that exceeds 3000ms as UNKNOWN with zero retry', async () => {
+    vi.useFakeTimers();
+    try {
+      let receivedSignal;
+      const resolve = vi.fn(({ signal }) => {
+        receivedSignal = signal;
+        return new Promise(() => {});
+      });
+      const deps = dependencies({ officialRelationshipProvider: { resolve } });
+      const pending = runMinimumCleaningShadow({
+        location: { lat: 40.712, lng: -74.006, accuracyMeters: 12 },
+        legacyEvidence,
+        dependencies: deps,
+        resolveCurbRuntime: vi.fn(async () => runtimeResult),
+      });
+      await vi.advanceTimersByTimeAsync(2999);
+      expect(receivedSignal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await pending;
+      expect(result).toEqual(expect.objectContaining({
+        outcome: 'UNKNOWN',
+        skipOrFailureClass: 'relationship_unknown',
+        parkNycState: 'NOT_EVALUATED',
+      }));
+      expect(resolve).toHaveBeenCalledTimes(1);
+      expect(receivedSignal.aborted).toBe(true);
+      expect(JSON.stringify(result)).not.toContain('0212261301');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts an in-flight relationship when the parent overall signal fires before 3000ms', async () => {
+    vi.useFakeTimers();
+    try {
+      const parent = new AbortController();
+      let receivedSignal;
+      const resolve = vi.fn(({ signal }) => {
+        receivedSignal = signal;
+        return new Promise(() => {});
+      });
+      const deps = dependencies({ officialRelationshipProvider: { resolve } });
+      const pending = runMinimumCleaningShadow({
+        location: { lat: 40.712, lng: -74.006, accuracyMeters: 12 },
+        legacyEvidence,
+        dependencies: deps,
+        signal: parent.signal,
+        resolveCurbRuntime: vi.fn(async () => runtimeResult),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(resolve).toHaveBeenCalledTimes(1);
+      expect(receivedSignal.aborted).toBe(false);
+      parent.abort();
+      expect(receivedSignal.aborted).toBe(true);
+      await vi.advanceTimersByTimeAsync(3000);
+      const result = await pending;
+      expect(result).toEqual(expect.objectContaining({
+        outcome: 'UNKNOWN',
+        skipOrFailureClass: 'relationship_unknown',
+      }));
+      expect(resolve).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

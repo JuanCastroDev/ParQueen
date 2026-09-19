@@ -1,7 +1,13 @@
 'use strict';
 
+const { readFileSync } = require('fs');
+const { join } = require('path');
 const { observePrivateResolverShadow } = require('./privateResolverComposition');
 const { createStructuredCloudLoggingSink } = require('./structuredShadowTelemetry');
+const { runMinimumCleaningShadow } = require('./minimumCleaningShadow');
+const { DEFAULT_EXECUTION_POLICY } = require('./shadowExecution');
+
+const COMPOSITION_SOURCE = readFileSync(join(__dirname, 'privateResolverComposition.js'), 'utf8');
 
 const SERVICE_URL = 'https://parqueen-curb-resolver-spike-oxbozdhlwa-uc.a.run.app';
 const TUPLE = Object.freeze({
@@ -60,6 +66,46 @@ function reviewedSources() {
   };
 }
 
+const DOT_SNAPSHOT = Object.freeze({
+  candidates: [{
+    orderNumber: 'P-100', recordType: 'Current', orderType: 'P-', borough: 'MANHATTAN',
+    onStreet: 'GOLD STREET', fromStreet: 'BEEKMAN STREET', toStreet: 'ANN STREET', side: 'W',
+    signCode: 'PS-1', signDescription: 'NO PARKING (SANITATION BROOM SYMBOL) TUESDAY 8:30AM-10AM',
+    sourceVersion: DOT_VERSION,
+    sourceNative: {
+      record_type: 'Current', sign_code: 'PS-1',
+      sign_description: 'NO PARKING (SANITATION BROOM SYMBOL) TUESDAY 8:30AM-10AM',
+    },
+  }],
+  completeness: { state: 'COMPLETE', reason: null },
+  sourceVersion: DOT_VERSION,
+});
+const RUNTIME = Object.freeze({
+  resolution: { state: 'SUPPORTED', reasons: [], officialIdentity: { officialBlockFaceId: '0212261301' } },
+  runtimeEvidence: {
+    nonPersistable: true,
+    officialBlockFaceId: '0212261301',
+    sourceVersion: { resourceId: 'inkn-q76z', version: '1:2' },
+    candidateCoverageComplete: true,
+    candidateCompleteness: { state: 'COMPLETE', reason: null },
+  },
+});
+
+function runBoundedCleaningShadow({ signal, dependencies }) {
+  return runMinimumCleaningShadow({
+    location: ELIGIBLE_INPUT.location,
+    legacyEvidence: ELIGIBLE_INPUT.legacyEvidence,
+    signal,
+    dependencies: {
+      ...dependencies,
+      candidateStore: { queryCandidates: vi.fn() },
+      dotSource: { query: vi.fn(async () => DOT_SNAPSHOT) },
+      sink: { record: vi.fn(async () => ({ accepted: true })) },
+    },
+    resolveCurbRuntime: vi.fn(async () => RUNTIME),
+  });
+}
+
 function shadowOptions(overrides = {}) {
   return {
     readConfig: () => ({ mode: 'shadow', serviceUrl: SERVICE_URL, samplePermille: 0 }),
@@ -72,6 +118,14 @@ function shadowOptions(overrides = {}) {
 }
 
 describe('private resolver minimum-shadow composition', () => {
+  it('keeps the overall shadow deadline at 8000ms above the 3000ms relationship budget', () => {
+    expect(COMPOSITION_SOURCE).toMatch(/const OVERALL_DEADLINE_MS = 8000;/);
+    expect(DEFAULT_EXECUTION_POLICY.overallDeadlineMs).toBe(8000);
+    expect(DEFAULT_EXECUTION_POLICY.sourceDeadlineMs.relationship).toBe(3000);
+    expect(DEFAULT_EXECUTION_POLICY.sourceDeadlineMs.relationship)
+      .toBeLessThan(DEFAULT_EXECUTION_POLICY.overallDeadlineMs);
+  });
+
   it('keeps a populated resolver URL and zero sample inert when mode is off', async () => {
     const productionResult = { success: true, segmentId: 'existing-segment' };
     const counters = { resolver: 0, sources: 0, auth: 0, transport: 0, shadow: 0, telemetry: 0 };
@@ -199,11 +253,106 @@ describe('private resolver minimum-shadow composition', () => {
   it('returns the original result after the fixed eight-second overall shadow deadline', async () => {
     vi.useFakeTimers();
     try {
+      let settled = false;
       const pending = observePrivateResolverShadow(ELIGIBLE_INPUT, shadowOptions({
         runShadow: () => new Promise(() => {}),
-      }));
-      await vi.advanceTimersByTimeAsync(8000);
+      })).then(result => {
+        settled = true;
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(7999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
       await expect(pending).resolves.toBe(ELIGIBLE_INPUT.productionResult);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('forwards the overall AbortSignal to resolver transport without retrying', async () => {
+    const transport = vi.fn(async ({ signal }) => {
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal.aborted).toBe(false);
+      return httpResponse(SUCCESS);
+    });
+    const result = await observePrivateResolverShadow(ELIGIBLE_INPUT, shadowOptions({
+      transport,
+      runShadow: async ({ signal, dependencies }) => {
+        await dependencies.blockfaceResolver.resolve({ ...TUPLE, signal });
+      },
+    }));
+    expect(result).toBe(ELIGIBLE_INPUT.productionResult);
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(transport.mock.calls[0][0].signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('keeps a 2700ms resolver completion inside the relationship budget and unchanged production result', async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = vi.fn(async ({ signal }) => {
+        await new Promise(done => setTimeout(done, 2700));
+        expect(signal.aborted).toBe(false);
+        return httpResponse(SUCCESS);
+      });
+      const pending = observePrivateResolverShadow(ELIGIBLE_INPUT, shadowOptions({
+        transport,
+        runShadow: runBoundedCleaningShadow,
+      }));
+      await vi.advanceTimersByTimeAsync(2700);
+      await expect(pending).resolves.toBe(ELIGIBLE_INPUT.productionResult);
+      expect(transport).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('times out a hanging resolver POST at 3000ms with one request and unchanged production result', async () => {
+    vi.useFakeTimers();
+    try {
+      let transportSignal;
+      const transport = vi.fn(({ signal }) => {
+        transportSignal = signal;
+        return new Promise(() => {});
+      });
+      const pending = observePrivateResolverShadow(ELIGIBLE_INPUT, shadowOptions({
+        transport,
+        runShadow: runBoundedCleaningShadow,
+      }));
+      await vi.advanceTimersByTimeAsync(2999);
+      expect(transport).toHaveBeenCalledTimes(1);
+      expect(transportSignal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toBe(ELIGIBLE_INPUT.productionResult);
+      expect(transport).toHaveBeenCalledTimes(1);
+      expect(transportSignal.aborted).toBe(true);
+      expect(JSON.stringify(ELIGIBLE_INPUT.productionResult)).not.toContain(SUCCESS.officialBlockFaceId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets the overall 8000ms deadline abort a nested relationship before 3000ms when less time remains', async () => {
+    vi.useFakeTimers();
+    try {
+      let transportSignal;
+      const transport = vi.fn(({ signal }) => {
+        transportSignal = signal;
+        return new Promise(() => {});
+      });
+      const pending = observePrivateResolverShadow(ELIGIBLE_INPUT, shadowOptions({
+        transport,
+        runShadow: async (input) => {
+          await new Promise(done => setTimeout(done, 5500));
+          return runBoundedCleaningShadow(input);
+        },
+      }));
+      await vi.advanceTimersByTimeAsync(5500);
+      expect(transport).toHaveBeenCalledTimes(1);
+      expect(transportSignal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(2500);
+      await expect(pending).resolves.toBe(ELIGIBLE_INPUT.productionResult);
+      expect(transportSignal.aborted).toBe(true);
+      expect(transport).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
