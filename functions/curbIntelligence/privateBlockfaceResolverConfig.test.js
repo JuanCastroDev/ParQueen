@@ -1,11 +1,15 @@
 'use strict';
 
+const { readFileSync } = require('fs');
+const { join } = require('path');
 const {
   curbResolverMode,
   curbResolverUrl,
   curbShadowSamplePermille,
   readPrivateResolverConfig,
 } = require('./privateBlockfaceResolverConfig');
+
+const PROJECT_DOTENV = join(__dirname, '..', '.env.parkqueen-46475363-ccf36');
 
 describe('private resolver backend configuration', () => {
   it('registers server-controlled Gen 2 parameters with resolver mode off by default', () => {
@@ -43,6 +47,15 @@ describe('private resolver backend configuration', () => {
       samplePermille: { value: () => value },
     });
     expect(config.samplePermille).toBe(expected);
+  });
+
+  it('lists every curb string param in the project dotenv so the emulator cannot prompt', () => {
+    const dotenv = readFileSync(PROJECT_DOTENV, 'utf8');
+    for (const name of [curbResolverMode.name, curbResolverUrl.name, curbShadowSamplePermille.name]) {
+      expect(dotenv).toMatch(new RegExp(`^${name}=`, 'm'));
+    }
+    expect(dotenv).toMatch(/^CURB_RESOLVER_MODE=off$/m);
+    expect(dotenv).toMatch(/^CURB_SHADOW_SAMPLE_PERMILLE=0$/m);
   });
 
   it('does not read URL or sampling configuration while mode is off', () => {
