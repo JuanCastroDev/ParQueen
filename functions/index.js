@@ -4193,7 +4193,7 @@ exports.checkHydrantDistance = onCall(
 );
 
 exports.createSegmentFromSweepNYC = onCall(
-  { region: 'us-central1', secrets: [socrataAppToken], serviceAccount: 'parqueen-user@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
+  { region: 'us-central1', secrets: [socrataAppToken], serviceAccount: 'parqueen-curb-caller@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
   async (request) => {
     if (!request.auth) throw new HttpsError('unauthenticated', 'Must be signed in.');
 

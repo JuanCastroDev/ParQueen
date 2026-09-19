@@ -9,6 +9,11 @@ const end = source.indexOf('function _existingNYCOpenDataResult', start);
 const callable = source.slice(start, end);
 
 describe('createSegmentFromSweepNYC private resolver composition boundary', () => {
+  it('declares the dedicated curb caller runtime identity on this function only', () => {
+    expect(callable).toContain("serviceAccount: 'parqueen-curb-caller@parkqueen-46475363-ccf36.iam.gserviceaccount.com'");
+    expect(callable).not.toContain("serviceAccount: 'parqueen-user@parkqueen-46475363-ccf36.iam.gserviceaccount.com'");
+  });
+
   it('observes the established result without exposing BFI or changing response/write construction', () => {
     expect(callable).toContain('_observeCurbIntelligenceShadow(productionResult, lat, lng, accuracyMeters, shadowEvidence)');
     expect(callable).not.toMatch(/officialBlockFaceId|blockFaceId|blockfaceId/);
