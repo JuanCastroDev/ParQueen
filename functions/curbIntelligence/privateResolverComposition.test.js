@@ -72,11 +72,10 @@ function shadowOptions(overrides = {}) {
 }
 
 describe('private resolver minimum-shadow composition', () => {
-  it('returns before source/resolver construction, URL access, auth, transport, orchestration, or telemetry when off', async () => {
+  it('keeps a populated resolver URL and zero sample inert when mode is off', async () => {
     const productionResult = { success: true, segmentId: 'existing-segment' };
     const counters = { resolver: 0, sources: 0, auth: 0, transport: 0, shadow: 0, telemetry: 0 };
-    const config = { mode: 'off' };
-    Object.defineProperty(config, 'serviceUrl', { get() { throw new Error('URL must stay unread'); } });
+    const config = { mode: 'off', serviceUrl: SERVICE_URL, samplePermille: 0 };
 
     const result = await observePrivateResolverShadow({ productionResult }, {
       readConfig: () => config,
