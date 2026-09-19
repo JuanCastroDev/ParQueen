@@ -91,6 +91,7 @@ describe('mobile shell layout contract', () => {
     expect(css).toContain('.map-control-button');
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.map-primary-cta/s);
 
+    expect(header).toContain('map-header-search-row');
     expect(header).toContain('map-search-shell');
     expect(header).toContain('map-ai-action');
     expect(map).toContain('map-status-chip');
@@ -102,7 +103,8 @@ describe('mobile shell layout contract', () => {
     const css = read('index.css');
 
     expect(css).toContain('--mobile-map-header-width: min(86vw, 372px)');
-    expect(css).toMatch(/\.map-search-shell\s*\{[^}]*width:\s*var\(--mobile-map-header-width\)[^}]*height:\s*51px/s);
+    expect(css).toMatch(/\.map-header-search-row\s*\{[^}]*width:\s*var\(--mobile-map-header-width\)/s);
+    expect(css).toMatch(/\.map-search-shell\s*\{[^}]*flex:\s*1 1 auto[^}]*height:\s*51px/s);
     expect(css).toMatch(/\.map-status-row\s*\{[^}]*width:\s*var\(--mobile-map-header-width\)/s);
     expect(css).toMatch(/\.map-ai-action\s*\{[^}]*height:\s*44px[^}]*min-height:\s*44px/s);
     expect(css).toMatch(/@media \(orientation: landscape\)[\s\S]*?\.map-search-shell\s*\{[^}]*height:\s*52px/s);
