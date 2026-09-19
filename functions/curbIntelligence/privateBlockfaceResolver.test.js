@@ -5,7 +5,7 @@ const { createPrivateBlockfaceResolver } = require('./privateBlockfaceResolver')
 const SERVICE_URL = 'https://parqueen-curb-resolver-spike-oxbozdhlwa-uc.a.run.app';
 const VALID_TUPLE = Object.freeze({
   borough: 'MANHATTAN', onStreet: 'GOLD STREET', crossStreetOne: 'BEEKMAN STREET',
-  crossStreetTwo: 'ANN STREET', compassDirection: 'E',
+  crossStreetTwo: 'ANN STREET', compassDirection: 'W', // mocked sample matches reviewed live Gold/W resolver fixture
 });
 const VALID_SUCCESS = Object.freeze({
   ok: true,
@@ -196,7 +196,7 @@ describe('private blockface resolver request scope', () => {
 
   it('does not deduplicate distinct tuples', async () => {
     const { resolver, transport } = harness();
-    await Promise.all([resolver.resolve(VALID_TUPLE), resolver.resolve({ ...VALID_TUPLE, compassDirection: 'W' })]);
+    await Promise.all([resolver.resolve(VALID_TUPLE), resolver.resolve({ ...VALID_TUPLE, compassDirection: 'E' })]);
     expect(transport).toHaveBeenCalledTimes(2);
   });
 

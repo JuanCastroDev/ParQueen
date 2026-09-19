@@ -6,7 +6,7 @@ const { createStructuredCloudLoggingSink } = require('./structuredShadowTelemetr
 const SERVICE_URL = 'https://parqueen-curb-resolver-spike-oxbozdhlwa-uc.a.run.app';
 const TUPLE = Object.freeze({
   borough: 'MANHATTAN', onStreet: 'GOLD STREET', crossStreetOne: 'BEEKMAN STREET',
-  crossStreetTwo: 'ANN STREET', compassDirection: 'E',
+  crossStreetTwo: 'ANN STREET', compassDirection: 'W', // mocked sample matches reviewed live Gold/W resolver fixture
 });
 const SUCCESS = Object.freeze({
   ok: true,
@@ -32,7 +32,7 @@ const ELIGIBLE_INPUT = Object.freeze({
     selectedRows: [{
       order_number: 'P-100', record_type: 'Current', order_type: 'P-', borough: 'MANHATTAN',
       on_street: 'GOLD STREET', from_street: 'BEEKMAN STREET', to_street: 'ANN STREET',
-      side_of_street: 'E', sign_code: 'PS-1',
+      side_of_street: 'W', sign_code: 'PS-1',
       sign_description: 'NO PARKING (SANITATION BROOM SYMBOL) TUESDAY 8:30AM-10AM',
     }],
     sourceVersion: DOT_VERSION,
