@@ -244,8 +244,9 @@ describe('wiring and non-regression', () => {
     expect(INDEX_SRC).toMatch(/\(\?:\\s\+\\\(Side:\\s\*\(\\w\+\)\\\)\)\?\$/);
   });
 
-  it('unparsed signs are surfaced rather than silently dropped', () => {
-    expect(INDEX_SRC).toMatch(/unparsed sign text/);
+  it('unparsed signs are surfaced by count without logging their text', () => {
+    expect(INDEX_SRC).toMatch(/unparsed sign count/);
+    expect(INDEX_SRC).not.toMatch(/unparsed sign text/);
   });
 
   it('an empty parse still yields the existing failure behaviour', () => {

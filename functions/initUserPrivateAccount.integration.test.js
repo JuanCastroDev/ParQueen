@@ -17,7 +17,8 @@ const { initializeApp, getApps } = require('firebase-admin/app');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 const { getAuth } = require('firebase-admin/auth');
 
-const PROJECT_ID = 'parkqueen-46475363-ccf36';
+const { requireEmulatorProjectId } = require('./emulatorProjectId');
+const PROJECT_ID = requireEmulatorProjectId();
 const APP_NAME = '__initUserPrivateAccount_intg__';
 
 const testApp =

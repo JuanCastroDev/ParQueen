@@ -137,7 +137,8 @@ function decodeEmulatorIdTokenPayload(idToken) {
     return payload;
 }
 
-const PROJECT_ID = 'parkqueen-46475363-ccf36';
+const { requireEmulatorProjectId } = require('./emulatorProjectId');
+const PROJECT_ID = requireEmulatorProjectId();
 const REGION = 'us-central1';
 const FUNCTIONS_BASE = `http://localhost:5001/${PROJECT_ID}/${REGION}`;
 const AUTH_EMULATOR = 'http://localhost:9099';

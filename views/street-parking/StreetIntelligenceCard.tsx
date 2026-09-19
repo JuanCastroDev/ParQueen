@@ -131,7 +131,7 @@ export const StreetIntelligenceCard = ({
     setPresentation({ state: 'unknown', source: null, lastSourceSync: null, reasons: [] });
 
     const load = async () => {
-      cdbg(`load — segmentId:${segmentId} parkingSide:${parkingSide} sideConfidence:${sideConfidence} confirmedParkingSide:${confirmedParkingSide ?? 'null'} effectiveSide:${effectiveSide ?? 'null'} streetName:${streetName}`);
+      cdbg(`load — sideConfidence:${sideConfidence} hasEffectiveSide:${Boolean(effectiveSide)}`);
       try {
         // Suspension matching (computeSafeUntil) only ever inspects today
         // through today + MAX_FORWARD_SEARCH_DAYS_AHEAD (NYC civil dates) —
@@ -156,7 +156,7 @@ export const StreetIntelligenceCard = ({
         if (cancelled) return;
 
         const rules = rulesSnap.docs.map(d => ({ id: d.id, ...d.data() } as StreetRuleDoc));
-        cdbg(`streetRules docs: ${rules.length} | ids: ${rules.map(r => r.id).join(', ')}`);
+        cdbg(`streetRules count: ${rules.length}`);
         const segment = segSnap.exists() ? segSnap.data() : null;
         const nextPresentation = classifyStreetIntelligence(segment, rules);
         cdbg(`presentation state: ${nextPresentation.state} | source: ${nextPresentation.source ?? 'none'}`);
@@ -168,10 +168,6 @@ export const StreetIntelligenceCard = ({
         const allSchedules: CleaningSchedule[] = rules.flatMap(r => r.schedules || []);
 
         cdbg(`total schedules: ${allSchedules.length}`);
-        allSchedules.forEach((s, i) =>
-          cdbg(`  schedule[${i}]: side="${s.side}" days=${JSON.stringify(s.days)} start=${s.startTime} end=${s.endTime}`)
-        );
-
         setScheduleCount(allSchedules.length);
 
         if (nextPresentation.state === 'unknown') {
@@ -182,15 +178,15 @@ export const StreetIntelligenceCard = ({
 
         if (!effectiveSide) {
           const sides = [...new Set(allSchedules.map(s => s.side))].filter(Boolean);
-          cdbg(`UI branch: side-picker (availableSides=${JSON.stringify(sides)} schedules=${allSchedules.length})`);
+          cdbg(`UI branch: side-picker schedules=${allSchedules.length}`);
           setAvailableSides(sides);
           onResult?.(null);
           return;
         }
 
-        cdbg(`computeSafeUntil input: effectiveSide="${effectiveSide}" scheduleCount=${allSchedules.length} suspensionCount=${suspensions.length}`);
+        cdbg(`computeSafeUntil input: scheduleCount=${allSchedules.length} suspensionCount=${suspensions.length}`);
         const r = computeSafeUntil(allSchedules, effectiveSide, suspensions);
-        cdbg(`computeSafeUntil result: activeNow=${r.activeNow} safeUntil=${r.safeUntil?.toISOString() ?? 'null'} nextDay=${r.nextDay ?? 'null'} nextTime=${r.nextTime ?? 'null'} scheduleDescription=${r.scheduleDescription ?? 'null'}`);
+        cdbg(`computeSafeUntil result: activeNow=${r.activeNow} hasUpcoming=${Boolean(r.nextDay)} hasDescription=${Boolean(r.scheduleDescription)}`);
 
         const branch = r.scheduleDescription === null
           ? (allSchedules.length > 0 ? 'side-mismatch' : 'no-schedule')
@@ -201,9 +197,9 @@ export const StreetIntelligenceCard = ({
 
         setResult(r);
         onResult?.(r);
-      } catch (e) {
-        cdbg(`load error: ${(e as any)?.message ?? String(e)}`);
-        console.warn('StreetIntelligenceCard load error:', e);
+      } catch {
+        cdbg('load failed');
+        console.warn('StreetIntelligenceCard load failed');
         setLoadError(true);
       } finally {
         if (!cancelled) setLoading(false);

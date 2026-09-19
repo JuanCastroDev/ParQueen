@@ -100,7 +100,8 @@ try {
     console.warn('[adminAuth.revocation] Could not load index.js:', e.message);
 }
 
-const PROJECT_ID = 'parkqueen-46475363-ccf36';
+const { requireEmulatorProjectId } = require('./emulatorProjectId');
+const PROJECT_ID = requireEmulatorProjectId();
 const APP_NAME = '__adminAuthRevocation_intg__';
 
 const testApp =
