@@ -244,6 +244,7 @@ export const MapView: React.FC<MapViewProps> = ({
     const [reminderAmPm, setReminderAmPm] = useState<'AM' | 'PM'>(new Date().getHours() < 12 ? 'AM' : 'PM');
     const [reminderHour, setReminderHour] = useState('');
     const [reminderMinute, setReminderMinute] = useState('');
+    const [reminderDate, setReminderDate] = useState(() => localDateStr());
     const reminderMinuteRef = useRef<HTMLInputElement>(null);
     const reminderSlots = useMemo(() => {
         const now = new Date();
@@ -1760,75 +1761,71 @@ export const MapView: React.FC<MapViewProps> = ({
                                     </div>
                                 ) : showCustomReminder ? (
                                     <div>
-                                        <div className="grid grid-cols-2 divide-x divide-[var(--color-border)]">
-                                            <div className="px-4 py-3">
-                                                <p className="text-[10px] font-bold text-[var(--color-text-secondary)] uppercase tracking-widest mb-1">{t('ping_modal.date')}</p>
-                                                <input
-                                                    type="date"
-                                                    id="pq-reminder-date"
-                                                    defaultValue={new Date().toISOString().split('T')[0]}
-                                                    min={new Date().toISOString().split('T')[0]}
-                                                    className="w-full bg-transparent text-sm font-semibold text-white focus:outline-none"
-                                                    style={{ colorScheme: 'dark' }}
-                                                />
-                                            </div>
-                                            <div className="px-4 py-3">
-                                                <p className="text-[10px] font-bold text-[var(--color-text-secondary)] uppercase tracking-widest mb-1">{t('ping_modal.time')}</p>
-                                                <div className="flex items-center gap-2">
-                                                    <div className="flex items-center gap-0.5 flex-1 min-w-0">
-                                                        <input
-                                                            type="text"
-                                                            inputMode="numeric"
-                                                            placeholder="12"
-                                                            value={reminderHour}
-                                                            maxLength={2}
-                                                            autoFocus
-                                                            className="w-7 bg-transparent text-sm font-semibold text-white text-center focus:outline-none"
-                                                            onFocus={(e) => e.target.select()}
-                                                            onChange={(e) => {
-                                                                const raw = e.target.value.replace(/\D/g, '');
-                                                                if (!raw) { setReminderHour(''); return; }
-                                                                const n = parseInt(raw);
-                                                                if (n > 12) { setReminderHour('12'); reminderMinuteRef.current?.focus(); return; }
-                                                                if (n === 0) { setReminderHour('1'); return; }
-                                                                setReminderHour(raw);
-                                                                if (raw.length === 2 || (raw.length === 1 && n >= 2)) {
-                                                                    reminderMinuteRef.current?.focus();
-                                                                }
-                                                            }}
-                                                        />
-                                                        <span className="text-sm font-bold text-[var(--color-text-secondary)] select-none">:</span>
-                                                        <input
-                                                            ref={reminderMinuteRef}
-                                                            type="text"
-                                                            inputMode="numeric"
-                                                            placeholder="00"
-                                                            value={reminderMinute}
-                                                            maxLength={2}
-                                                            className="w-7 bg-transparent text-sm font-semibold text-white text-center focus:outline-none"
-                                                            onFocus={(e) => e.target.select()}
-                                                            onChange={(e) => {
-                                                                const raw = e.target.value.replace(/\D/g, '');
-                                                                if (!raw) { setReminderMinute(''); return; }
-                                                                const n = parseInt(raw);
-                                                                if (n > 59) { setReminderMinute('59'); return; }
-                                                                setReminderMinute(raw);
-                                                            }}
-                                                        />
-                                                    </div>
-                                                    <div className="flex rounded-lg overflow-hidden border border-[var(--color-border)] shrink-0">
-                                                        {(['AM', 'PM'] as const).map(period => (
-                                                            <button key={period} type="button"
-                                                                onClick={() => setReminderAmPm(period)}
-                                                                className={`px-2.5 py-1 text-xs font-bold transition-colors ${
-                                                                    reminderAmPm === period
-                                                                        ? 'bg-[var(--color-brand)] text-white'
-                                                                        : 'bg-transparent text-[var(--color-text-secondary)] hover:text-[var(--color-text)]'
-                                                                }`}>
-                                                                {period}
-                                                            </button>
-                                                        ))}
-                                                    </div>
+                                        <div className="px-4 pt-3 pb-2">
+                                            <p className="text-[10px] font-bold text-[var(--color-text-secondary)] uppercase tracking-widest mb-1.5">{t('ping_modal.date')}</p>
+                                            <GlassDatePicker
+                                                id="pq-reminder-date"
+                                                value={reminderDate}
+                                                min={localDateStr()}
+                                                onChange={setReminderDate}
+                                            />
+                                        </div>
+                                        <div className="px-4 pb-3">
+                                            <p className="text-[10px] font-bold text-[var(--color-text-secondary)] uppercase tracking-widest mb-1.5">{t('ping_modal.time')}</p>
+                                            <div className="flex items-center gap-2">
+                                                <div className="flex items-center gap-0.5 flex-1 min-w-0">
+                                                    <input
+                                                        type="text"
+                                                        inputMode="numeric"
+                                                        placeholder="12"
+                                                        value={reminderHour}
+                                                        maxLength={2}
+                                                        autoFocus
+                                                        className="w-7 bg-transparent text-sm font-semibold text-white text-center focus:outline-none"
+                                                        onFocus={(e) => e.target.select()}
+                                                        onChange={(e) => {
+                                                            const raw = e.target.value.replace(/\D/g, '');
+                                                            if (!raw) { setReminderHour(''); return; }
+                                                            const n = parseInt(raw);
+                                                            if (n > 12) { setReminderHour('12'); reminderMinuteRef.current?.focus(); return; }
+                                                            if (n === 0) { setReminderHour('1'); return; }
+                                                            setReminderHour(raw);
+                                                            if (raw.length === 2 || (raw.length === 1 && n >= 2)) {
+                                                                reminderMinuteRef.current?.focus();
+                                                            }
+                                                        }}
+                                                    />
+                                                    <span className="text-sm font-bold text-[var(--color-text-secondary)] select-none">:</span>
+                                                    <input
+                                                        ref={reminderMinuteRef}
+                                                        type="text"
+                                                        inputMode="numeric"
+                                                        placeholder="00"
+                                                        value={reminderMinute}
+                                                        maxLength={2}
+                                                        className="w-7 bg-transparent text-sm font-semibold text-white text-center focus:outline-none"
+                                                        onFocus={(e) => e.target.select()}
+                                                        onChange={(e) => {
+                                                            const raw = e.target.value.replace(/\D/g, '');
+                                                            if (!raw) { setReminderMinute(''); return; }
+                                                            const n = parseInt(raw);
+                                                            if (n > 59) { setReminderMinute('59'); return; }
+                                                            setReminderMinute(raw);
+                                                        }}
+                                                    />
+                                                </div>
+                                                <div className="flex rounded-lg overflow-hidden border border-[var(--color-border)] shrink-0">
+                                                    {(['AM', 'PM'] as const).map(period => (
+                                                        <button key={period} type="button"
+                                                            onClick={() => setReminderAmPm(period)}
+                                                            className={`px-2.5 py-1 text-xs font-bold transition-colors ${
+                                                                reminderAmPm === period
+                                                                    ? 'bg-[var(--color-brand)] text-white'
+                                                                    : 'bg-transparent text-[var(--color-text-secondary)] hover:text-[var(--color-text)]'
+                                                            }`}>
+                                                            {period}
+                                                        </button>
+                                                    ))}
                                                 </div>
                                             </div>
                                         </div>
@@ -1840,12 +1837,11 @@ export const MapView: React.FC<MapViewProps> = ({
                                             </button>
                                             <button
                                                 onClick={() => {
-                                                    const dateEl = document.getElementById('pq-reminder-date') as HTMLInputElement;
                                                     const hRaw = parseInt(reminderHour) || 12;
                                                     const m = parseInt(reminderMinute) || 0;
                                                     let h = hRaw % 12;
                                                     if (reminderAmPm === 'PM') h += 12;
-                                                    const dateStr = dateEl.value || new Date().toISOString().split('T')[0];
+                                                    const dateStr = reminderDate || localDateStr();
                                                     const target = new Date(`${dateStr}T${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`);
                                                     const minutes = Math.round((target.getTime() - Date.now()) / 60000);
                                                     if (minutes > 0) {
@@ -1864,7 +1860,7 @@ export const MapView: React.FC<MapViewProps> = ({
                                         {[{ label: '15m', minutes: 15 }, { label: '30m', minutes: 30 }, { label: '1 hr', minutes: 60 }, { label: 'Custom', minutes: -1 }].map(opt => (
                                             <button key={opt.minutes}
                                                 onClick={() => {
-                                                    if (opt.minutes === -1) { setReminderHour(''); setReminderMinute(''); setShowCustomReminder(true); return; }
+                                                    if (opt.minutes === -1) { setReminderHour(''); setReminderMinute(''); setReminderDate(localDateStr()); setShowCustomReminder(true); return; }
                                                     parkingTimer.startTimer(opt.minutes, savedSpot.address || '', () => setShowSessionSheet(true));
                                                     setShowRemindPanel(false);
                                                 }}
