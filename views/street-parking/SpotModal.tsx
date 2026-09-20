@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { MapPin, Zap, Clock, Check, ChevronLeft, Calendar, ChevronRight } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { MapPin, Zap, Clock, Check, ChevronLeft } from 'lucide-react';
 import { StreetSpot } from '../../types';
 import { TimePicker } from './TimePicker';
+import { GlassDatePicker } from './GlassDatePicker';
 import { BottomSheet } from './BottomSheet';
 import { localDateStr, combineDateAndTime } from './dateUtils';
 import { t, useLang } from '../../i18n';
@@ -22,7 +23,6 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
     const [selectedDateStr, setSelectedDateStr] = useState(() => localDateStr());
     const [pingType, setPingType] = useState<'now' | 'later'>('now');
     const [timeError, setTimeError] = useState<string | null>(null);
-    const dateInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         if (isOpen) {
@@ -52,12 +52,6 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
     };
 
     const isEditing = !!spot;
-    const scheduledDate = new Date(selectedDateStr + 'T12:00:00');
-    const isScheduledToday = selectedDateStr === localDateStr();
-    const scheduledDayLabel = isScheduledToday
-        ? t('ping_modal.today')
-        : scheduledDate.toLocaleDateString([], { weekday: 'long' });
-    const scheduledDateFull = scheduledDate.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
 
     return (
         <BottomSheet isOpen={isOpen} onClose={onClose} ariaLabel={t('ping_modal.sheet_label')}>
@@ -159,36 +153,14 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
                         </div>
                     </div>
 
-                    {/* Date */}
+                    {/* Date — shared GlassDatePicker (same as Set Departure Time) */}
                     <p className="text-[10px] font-semibold text-[var(--color-text-secondary)] uppercase tracking-widest mb-2">{t('ping_modal.date')}</p>
                     <div className="mb-5">
-                        <button
-                            type="button"
-                            onClick={() => {
-                                const input = dateInputRef.current;
-                                if (!input) return;
-                                if (input.showPicker) { input.showPicker(); } else { input.click(); }
-                            }}
-                            className="w-full flex items-center gap-3 bg-[var(--color-card)] border border-[var(--color-border)] rounded-2xl px-4 py-3.5 text-left"
-                        >
-                            <div className="w-8 h-8 rounded-xl bg-blue-500/15 border border-blue-400/20 flex items-center justify-center shrink-0">
-                                <Calendar size={15} className="text-[var(--color-info)]" />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                                <p className="text-[11px] text-[var(--color-text-secondary)]">{scheduledDayLabel}</p>
-                                <p className="text-[14px] font-semibold text-[var(--color-text)] truncate">{scheduledDateFull}</p>
-                            </div>
-                            <ChevronRight size={16} className="text-[var(--color-text-secondary)] shrink-0" />
-                        </button>
-                        <input
-                            ref={dateInputRef}
-                            type="date"
-                            aria-label="Departure date"
+                        <GlassDatePicker
+                            id="pq-ping-later-date"
                             value={selectedDateStr}
                             min={localDateStr()}
-                            onChange={e => { if (e.target.value) setSelectedDateStr(e.target.value); }}
-                            className="absolute w-0 h-0 opacity-0 pointer-events-none"
-                            style={{ colorScheme: 'dark' }}
+                            onChange={setSelectedDateStr}
                         />
                     </div>
 
