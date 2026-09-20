@@ -3073,16 +3073,16 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.02) 45%, rgba(0, 0, 0, 0.16) 100%),
     linear-gradient(165deg, rgba(20, 48, 92, 0.88) 0%, rgba(10, 22, 44, 0.94) 100%);
-  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 26%, rgba(110, 160, 220, 0.18));
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 40%, rgba(56, 149, 255, 0.36));
   box-shadow:
-    inset 0 1px 0 rgba(230, 242, 255, 0.16),
+    inset 0 1px 0 rgba(170, 210, 255, 0.14),
     0 3px 10px rgba(0, 4, 14, 0.24),
     0 0 12px rgba(56, 140, 255, 0.12);
   transition: transform 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
 }
 .pq-mycar-nav:active { transform: scale(0.95); }
 .pq-mycar-nav:hover {
-  border-color: color-mix(in srgb, var(--mobile-shell-accent) 38%, rgba(120, 170, 230, 0.24));
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 48%, rgba(56, 149, 255, 0.42));
   box-shadow:
     inset 0 1px 0 rgba(230, 242, 255, 0.20),
     0 5px 12px rgba(0, 4, 14, 0.28),
@@ -3139,7 +3139,7 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   font-weight: 550;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: color-mix(in srgb, var(--color-text-secondary) 62%, transparent);
+  color: color-mix(in srgb, var(--color-text-secondary) 68%, transparent);
   line-height: 1.25;
 }
 .pq-mycar-intel-hero {
