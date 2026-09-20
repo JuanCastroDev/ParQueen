@@ -3865,14 +3865,14 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
 .pq-depart-header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
+  gap: 10px;
+  margin-bottom: 10px;
 }
 .pq-depart-back {
   flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-  border-radius: 12px;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3907,10 +3907,10 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   color: color-mix(in srgb, var(--color-text-secondary) 88%, transparent);
 }
 .pq-depart-section {
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 .pq-depart-label {
-  margin: 0 0 7px;
+  margin: 0 0 5px;
   font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: -0.01em;
@@ -3966,8 +3966,8 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
 }
 .pq-depart-time-card {
   width: 100%;
-  padding: 14px 12px 12px;
-  border-radius: 16px;
+  padding: 10px 10px 8px;
+  border-radius: 14px;
   background:
     radial-gradient(120% 90% at 50% 0%, rgba(56, 140, 255, 0.1) 0%, transparent 55%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.01) 40%, rgba(0, 0, 0, 0.16) 100%),
@@ -3986,13 +3986,13 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
 }
 .pq-depart-cta {
   width: 100%;
-  min-height: 50px;
-  margin-top: 4px;
+  min-height: 46px;
+  margin-top: 2px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 12px 16px;
+  padding: 10px 16px;
   border-radius: 14px;
   border: 1px solid color-mix(in srgb, var(--mobile-shell-accent, #3b8cff) 34%, rgba(100, 150, 210, 0.16));
   font-size: 0.875rem;
@@ -4024,7 +4024,7 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 10px;
 }
 .pq-time-wheel {
   display: flex;
@@ -4038,9 +4038,9 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   gap: 2px;
 }
 .pq-time-chevron {
-  width: 36px;
-  height: 28px;
-  border-radius: 10px;
+  width: 34px;
+  height: 24px;
+  border-radius: 9px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4055,10 +4055,10 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   border-color: color-mix(in srgb, var(--mobile-shell-accent, #3b8cff) 28%, transparent);
 }
 .pq-time-digit {
-  width: 52px;
-  height: 44px;
+  width: 48px;
+  height: 38px;
   text-align: center;
-  font-size: 1.75rem;
+  font-size: 1.625rem;
   font-weight: 750;
   letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
@@ -4082,16 +4082,16 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
 .pq-time-period {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 4px;
-  border-radius: 12px;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 11px;
   background: rgba(0, 0, 0, 0.22);
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 .pq-time-period-btn {
-  min-width: 48px;
-  padding: 8px 10px;
-  border-radius: 9px;
+  min-width: 44px;
+  padding: 6px 9px;
+  border-radius: 8px;
   border: 1px solid transparent;
   background: transparent;
   color: color-mix(in srgb, var(--color-text-secondary) 85%, transparent);
@@ -4196,8 +4196,8 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   justify-content: space-between;
   gap: 10px;
   width: 100%;
-  min-height: 44px;
-  padding: 10px 14px;
+  min-height: 40px;
+  padding: 8px 12px;
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(255, 255, 255, 0.06);
@@ -4230,9 +4230,9 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   opacity: 0.9;
 }
 .pq-gdate-panel {
-  margin-top: 8px;
-  padding: 8px 10px 8px;
-  border-radius: 16px;
+  margin-top: 6px;
+  padding: 6px 8px 6px;
+  border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background:
     linear-gradient(165deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.04)),
@@ -4247,8 +4247,8 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
-  margin-bottom: 6px;
+  gap: 4px;
+  margin-bottom: 4px;
 }
 .pq-gdate-month-label {
   margin: 0;
@@ -4263,9 +4263,9 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.06);
   color: rgba(226, 232, 240, 0.95);
@@ -4284,8 +4284,8 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
 .pq-gdate-weekdays {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  gap: 1px;
-  margin-bottom: 2px;
+  gap: 0;
+  margin-bottom: 1px;
 }
 .pq-gdate-weekday {
   text-align: center;
@@ -4294,7 +4294,7 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: rgba(148, 163, 184, 0.85);
-  padding: 2px 0;
+  padding: 1px 0;
 }
 .pq-gdate-grid {
   display: grid;
@@ -4302,8 +4302,8 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   gap: 1px;
 }
 .pq-gdate-day {
-  aspect-ratio: 1.15;
-  min-height: 34px;
+  aspect-ratio: 1.22;
+  min-height: 30px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4340,15 +4340,15 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
 .pq-gdate-footer {
   display: flex;
   justify-content: space-between;
-  gap: 8px;
-  margin-top: 6px;
-  padding-top: 6px;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 4px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 .pq-gdate-action {
   flex: 1;
-  min-height: 36px;
-  border-radius: 10px;
+  min-height: 32px;
+  border-radius: 9px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.05);
   color: rgba(226, 232, 240, 0.92);

@@ -138,7 +138,7 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
             ) : (
                 <>
                     {/* Header */}
-                    <div className="flex items-center gap-3 mb-6">
+                    <div className="flex items-center gap-3 mb-4">
                         <button
                             onClick={() => setView('main')}
                             aria-label={t('ping_modal.back')}
@@ -154,8 +154,8 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
                     </div>
 
                     {/* Date — shared GlassDatePicker (same as Set Departure Time) */}
-                    <p className="text-[10px] font-semibold text-[var(--color-text-secondary)] uppercase tracking-widest mb-2">{t('ping_modal.date')}</p>
-                    <div className="mb-5">
+                    <p className="text-[10px] font-semibold text-[var(--color-text-secondary)] uppercase tracking-widest mb-1.5">{t('ping_modal.date')}</p>
+                    <div className="mb-3">
                         <GlassDatePicker
                             id="pq-ping-later-date"
                             value={selectedDateStr}
@@ -165,13 +165,13 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
                     </div>
 
                     {/* Time */}
-                    <p className="text-[10px] font-semibold text-[var(--color-text-secondary)] uppercase tracking-widest mb-2">{t('ping_modal.time')}</p>
-                    <div className="mb-5 rounded-2xl bg-[var(--color-card)] border border-[var(--color-border)] px-4 py-4">
-                        <TimePicker initialTime={departureTime} onTimeChange={setDepartureTime} />
+                    <p className="text-[10px] font-semibold text-[var(--color-text-secondary)] uppercase tracking-widest mb-1.5">{t('ping_modal.time')}</p>
+                    <div className="mb-3 rounded-2xl bg-[var(--color-card)] border border-[var(--color-border)] px-3 py-2">
+                        <TimePicker initialTime={departureTime} onTimeChange={setDepartureTime} variant="glass" />
                     </div>
 
                     {/* Helper */}
-                    <p className="text-[11px] text-[var(--color-text-secondary)] text-center mb-5 px-2 leading-relaxed">{t('ping_modal.schedule_helper')}</p>
+                    <p className="text-[11px] text-[var(--color-text-secondary)] text-center mb-3 px-2 leading-relaxed">{t('ping_modal.schedule_helper')}</p>
 
                     {timeError && (
                         <p className="mb-3 text-sm text-[var(--color-danger)] font-semibold text-center">{t('ping_modal.future_time_error')}</p>
