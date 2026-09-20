@@ -1698,7 +1698,7 @@ export const MapView: React.FC<MapViewProps> = ({
                                 <div className="pq-mycar-remind-tile-icon">
                                     <Bell size={16} />
                                 </div>
-                                <span className="pq-mycar-remind-tile-label">Cleaning<br/>alert</span>
+                                <span className="pq-mycar-remind-tile-label">Cleaning alert</span>
                             </button>
                             <button
                                 onClick={() => setShowRemindPanel(v => !v)}
@@ -1709,7 +1709,7 @@ export const MapView: React.FC<MapViewProps> = ({
                                     <Clock size={16} />
                                 </div>
                                 <span className="pq-mycar-remind-tile-label">
-                                    {parkingTimer.timer ? <>{parkingTimer.minutesRemaining}m left</> : <>Move<br/>reminder</>}
+                                    {parkingTimer.timer ? <>{parkingTimer.minutesRemaining}m left</> : <>Move reminder</>}
                                 </span>
                             </button>
                         </div>
@@ -1913,7 +1913,8 @@ export const MapView: React.FC<MapViewProps> = ({
                                     }}
                                     className="pq-mycar-ping-cta">
                                     <Clock size={14} />
-                                    {t('my_car.ping_when_leaving')}
+                                    <span className="pq-mycar-ping-cta-label">{t('my_car.ping_when_leaving')}</span>
+                                    <ChevronRight size={14} className="pq-mycar-ping-cta-chevron" aria-hidden="true" />
                                 </button>
                                 <p className="pq-mycar-ping-hint">{t('my_car.community_hint')}</p>
                             </>
