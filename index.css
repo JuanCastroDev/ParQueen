@@ -177,18 +177,21 @@ html, body, #root {
 
 .map-search-input {
   min-width: 0;
+  box-sizing: border-box;
+  height: 32px;
+  min-height: 32px;
   padding-right: 4px;
-  padding-top: 1px;
-  padding-bottom: 2px;
+  padding-top: 0;
+  padding-bottom: 0;
   color: var(--mobile-shell-text);
-  line-height: normal;
+  line-height: 1.4;
   letter-spacing: -0.018em;
   overflow: visible;
 }
 
 .map-search-input::placeholder {
   color: color-mix(in srgb, var(--mobile-shell-text-muted) 72%, var(--mobile-shell-text) 28%);
-  line-height: normal;
+  line-height: 1.4;
   overflow: visible;
 }
 
