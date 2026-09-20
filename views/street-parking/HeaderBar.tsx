@@ -73,7 +73,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
                         <UserAvatar user={user} onClick={() => setView(AppView.PROFILE)} />
                     </span>
 
-                    <div className="map-search-content flex-1 min-w-0 mx-2.5 flex items-center gap-2">
+                    <div className="map-search-content flex-1 min-w-0 ml-2.5 mr-4 flex items-center gap-2">
                         <Search size={20} strokeWidth={2} className="map-search-icon" />
                         <input
                             ref={inputRef}
