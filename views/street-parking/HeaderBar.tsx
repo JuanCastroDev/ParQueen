@@ -112,13 +112,12 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
                 <button
                     data-tour="ai"
                     type="button"
-                    aria-label="Scan street signs"
-                    title="Scan"
+                    aria-label="Read street sign"
+                    title="Read street sign"
                     onClick={() => setView(AppView.AI_ASSISTANT)}
-                    className="map-ai-action flex items-center justify-center gap-1.5 rounded-full px-3 text-[#9ec4ff] active:scale-95 transition-all shrink-0"
+                    className="map-ai-action flex items-center justify-center rounded-full text-[#9ec4ff] active:scale-95 transition-all shrink-0"
                 >
-                    <Camera size={15} strokeWidth={2.05} />
-                    <span className="text-[11px] font-semibold tracking-tight">Scan</span>
+                    <Camera size={18} strokeWidth={2.05} aria-hidden="true" />
                 </button>
 
                 <button

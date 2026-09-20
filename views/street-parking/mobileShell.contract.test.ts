@@ -106,9 +106,9 @@ describe('mobile shell layout contract', () => {
     expect(css).toMatch(/\.map-header-search-row\s*\{[^}]*width:\s*var\(--mobile-map-header-width\)/s);
     expect(css).toMatch(/\.map-search-shell\s*\{[^}]*flex:\s*1 1 auto[^}]*height:\s*51px/s);
     expect(css).toMatch(/\.map-status-row\s*\{[^}]*width:\s*var\(--mobile-map-header-width\)/s);
-    expect(css).toMatch(/\.map-ai-action\s*\{[^}]*height:\s*44px[^}]*min-height:\s*44px/s);
+    expect(css).toMatch(/\.map-ai-action\s*\{[^}]*height:\s*51px[^}]*min-height:\s*44px/s);
     expect(css).toMatch(/@media \(orientation: landscape\)[\s\S]*?\.map-search-shell\s*\{[^}]*height:\s*52px/s);
-    expect(css).toMatch(/@media \(orientation: landscape\)[\s\S]*?\.map-ai-action\s*\{[^}]*height:\s*44px[^}]*min-height:\s*44px/s);
+    expect(css).toMatch(/@media \(orientation: landscape\)[\s\S]*?\.map-ai-action\s*\{[^}]*height:\s*52px[^}]*min-height:\s*44px/s);
     expect(css).toMatch(/@media \(min-width: 768px\)[\s\S]*?\.map-search-shell\s*\{[^}]*height:\s*50px/s);
   });
 
