@@ -599,7 +599,7 @@ html, body, #root {
 
 /* Brand mark inside the Ping core. The logo is cyan on transparent, which
    would read blue-on-blue against the core's gradient, so it is rendered as a
-   white silhouette — same visual weight as the icon it replaces. */
+   white silhouette â€” same visual weight as the icon it replaces. */
 .mobile-primary-nav-ping-mark {
   position: absolute;
   left: 50%;
@@ -1089,7 +1089,7 @@ html, body, #root {
 }
 
 
-/* Crown entrance animation — Screen 1 of onboarding */
+/* Crown entrance animation â€” Screen 1 of onboarding */
 @keyframes crown-drop {
   0%   { transform: translateY(-28px) scale(0.75); opacity: 0; }
   60%  { transform: translateY(5px) scale(1.05); opacity: 1; }
@@ -1103,25 +1103,25 @@ html, body, #root {
   .crown-drop { animation: none; }
 }
 
-/* ── THE ROYAL BEACON — Screen 1 onboarding animations ── */
+/* â”€â”€ THE ROYAL BEACON â€” Screen 1 onboarding animations â”€â”€ */
 
-/* Text — 4px max rise for all staggered copy */
+/* Text â€” 4px max rise for all staggered copy */
 @keyframes hero-fade-up {
   0%   { transform: translateY(4px); opacity: 0; }
   100% { transform: translateY(0);   opacity: 1; }
 }
-/* Supporting copy + CTA — fade only, no movement */
+/* Supporting copy + CTA â€” fade only, no movement */
 @keyframes hero-fade {
   from { opacity: 0; }
   to   { opacity: 1; }
 }
-/* Logo: rise 10px, scale 0.96→1.01 settle→1 */
+/* Logo: rise 10px, scale 0.96â†’1.01 settleâ†’1 */
 @keyframes logo-rise {
   0%   { transform: translateY(10px) scale(0.96); opacity: 0; }
   78%  { transform: translateY(-1px) scale(1.01); opacity: 1; }
   100% { transform: translateY(0)    scale(1);    opacity: 1; }
 }
-/* One beacon broadcast ring — expands once, fades completely */
+/* One beacon broadcast ring â€” expands once, fades completely */
 @keyframes beacon-ring {
   0%   { transform: scale(0.35); opacity: 0; }
   8%   { opacity: 0.48; }
@@ -1133,7 +1133,7 @@ html, body, #root {
   35%  { opacity: 1;    box-shadow: 0 0 14px 5px rgba(96,165,250,0.70); }
   100% { opacity: 0.60; box-shadow: 0 0 8px 2px rgba(96,165,250,0.28); }
 }
-/* Crown shimmer — animates background-position so the div stays fixed */
+/* Crown shimmer â€” animates background-position so the div stays fixed */
 @keyframes crown-shimmer {
   0%   { background-position: -100% center; }
   100% { background-position: 200% center; }
@@ -1151,14 +1151,14 @@ html, body, #root {
 .logo-rise {
   animation: logo-rise 650ms cubic-bezier(0.22, 1, 0.36, 1) 100ms both;
 }
-/* One ring only — broadcast at 320ms, done by ~720ms */
+/* One ring only â€” broadcast at 320ms, done by ~720ms */
 .beacon-ring-1 {
   animation: beacon-ring 960ms cubic-bezier(0.16, 0.84, 0.44, 1) 320ms both;
 }
 .beacon-dot-anim {
   animation: beacon-dot-pulse 680ms ease-out 320ms both;
 }
-/* Shimmer overlay on logo wrapper — single pass, not looped */
+/* Shimmer overlay on logo wrapper â€” single pass, not looped */
 .logo-shimmer-once {
   position: absolute;
   inset: 0;
@@ -1198,7 +1198,7 @@ html, body, #root {
   .logo-shimmer-once { opacity: 0; }
 }
 
-/* ── LIVE MAP REVEAL — Screen 2 entrance sequence ── */
+/* â”€â”€ LIVE MAP REVEAL â€” Screen 2 entrance sequence â”€â”€ */
 @keyframes onb2-map-in {
   from { opacity: 0; transform: scale(1.016); }
   to   { opacity: 1; transform: scale(1); }
@@ -1266,7 +1266,7 @@ html, body, #root {
   .onb2-preview-in  { animation: none; opacity: 1; transform: none; }
 }
 
-/* ── MY CAR, REMEMBERED — Screen 3 entrance sequence ── */
+/* â”€â”€ MY CAR, REMEMBERED â€” Screen 3 entrance sequence â”€â”€ */
 @keyframes onb3-marker-drop {
   /* Circle marker: centered via translate(-50%,-50%) */
   from { opacity: 0; transform: translate(-50%, -50%) scale(0.62); }
@@ -1328,7 +1328,7 @@ html, body, #root {
   .loc-map-in, .loc-dot-in, .loc-ring, .loc-ping-in, .loc-sheet-in { animation: none; }
 }
 
-/* Country selector bottom sheet — transition-based enter/exit */
+/* Country selector bottom sheet â€” transition-based enter/exit */
 .cs-overlay {
   background: rgba(2, 8, 20, 0);
   transition: background-color 220ms ease-out;
@@ -1445,7 +1445,7 @@ html, body, #root {
   -webkit-overflow-scrolling: touch;
 }
 
-/* ── Sign Scanner (ParQueen Assistant) ───────────────────────────────────────
+/* â”€â”€ Sign Scanner (ParQueen Assistant) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    Scoped to .pq-assist. Colours come from the theme variables so the screen
    reads as premium NYC-night in dark mode without breaking light mode, where
    the same structure renders on light surfaces. Motion is transform/opacity
@@ -1455,7 +1455,7 @@ html, body, #root {
   padding-top: max(1rem, env(safe-area-inset-top, 0px));
 }
 
-/* Hero — atmospheric but compact. */
+/* Hero â€” atmospheric but compact. */
 .pq-assist-hero {
   background:
     radial-gradient(120% 140% at 85% 0%, rgba(30, 117, 255, 0.20), transparent 60%),
@@ -1464,7 +1464,7 @@ html, body, #root {
   border: 1px solid var(--color-border);
 }
 
-/* A hint of skyline, drawn with gradients only — no images, no extra requests. */
+/* A hint of skyline, drawn with gradients only â€” no images, no extra requests. */
 .pq-assist-skyline {
   position: absolute;
   right: -8%;
@@ -1523,7 +1523,7 @@ html, body, #root {
 .pq-cta:hover { filter: brightness(1.06); }
 .pq-cta:active { transform: scale(0.985); }
 
-/* "Soon" cards — intentionally designed, not broken-looking. */
+/* "Soon" cards â€” intentionally designed, not broken-looking. */
 .pq-soon-card {
   background: var(--color-card);
   border: 1px dashed var(--color-border);
@@ -1617,14 +1617,14 @@ html, body, #root {
   .pq-scan-card:active, .pq-cta:active { transform: none; }
 }
 
-/* ── AI Parking Assistant — tool cards & results ─────────────────────────────
+/* â”€â”€ AI Parking Assistant â€” tool cards & results â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    One visual family for all three tools. Material language matches map-search-
    shell / map-ai-action / mobile-shell: deep navy glass, soft blue rim, restrained
    ambient glow. Featured Scan relates to map-ai-action but stays quieter than Ping.
    Colours come from theme / shell variables. Sits above the @tailwind directives
-   with the rest of the semantic rules — see the banner below, and
+   with the rest of the semantic rules â€” see the banner below, and
    utils/tailwindCascade.test.ts.
-   ───────────────────────────────────────────────────────────────────────── */
+   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .pq-tools-hub {
   position: relative;
   display: flex;
@@ -1651,7 +1651,7 @@ html, body, #root {
   z-index: 1;
 }
 
-/* Floating-glass hub / tool back control — dark navy glass, soft rim, no neon */
+/* Floating-glass hub / tool back control â€” dark navy glass, soft rim, no neon */
 .pq-assist-back {
   width: 2.75rem;
   height: 2.75rem;
@@ -1686,7 +1686,7 @@ html, body, #root {
   outline-offset: 2px;
 }
 
-/* Featured Scan — richer navy glass like map-ai-action; quieter glow than Ping */
+/* Featured Scan â€” richer navy glass like map-ai-action; quieter glow than Ping */
 .pq-tool-featured {
   position: relative;
   display: flex;
@@ -1733,7 +1733,7 @@ html, body, #root {
 }
 .pq-tool-featured:active { transform: scale(0.985); }
 
-/* Luminous glass well — translucent blue glass holding bright shell-accent icon */
+/* Luminous glass well â€” translucent blue glass holding bright shell-accent icon */
 .pq-tool-featured-icon {
   position: relative;
   z-index: 1;
@@ -1777,7 +1777,7 @@ html, body, #root {
   color: color-mix(in srgb, var(--color-text-secondary) 78%, transparent);
 }
 
-/* Secondary 2-col dashboard tiles — same navy glass family as Scan */
+/* Secondary 2-col dashboard tiles â€” same navy glass family as Scan */
 .pq-tools-secondary {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1931,7 +1931,7 @@ html, body, #root {
   text-transform: none;
   color: color-mix(in srgb, var(--color-text-secondary) 78%, transparent);
 }
-/* Quieter than tool cards — darker translucent navy, minimal glow */
+/* Quieter than tool cards â€” darker translucent navy, minimal glow */
 .pq-tools-recent-empty-panel {
   display: flex;
   flex-direction: column;
@@ -2159,7 +2159,7 @@ html, body, #root {
   align-items: center;
   justify-content: center;
 }
-/* 11–12px helper lines under the location CTA. --color-text-secondary is only
+/* 11â€“12px helper lines under the location CTA. --color-text-secondary is only
    3.7:1 on the light ground; 66% of the theme text colour is 5.2:1 light and
    8.6:1 dark, yet still quieter than full-strength text. The first line is the
    fallback for browsers without color-mix. */
@@ -2203,7 +2203,7 @@ html, body, #root {
 
 /* Radius sheet. The primary bottom nav is position:fixed at z-index 35, so the
    sheet sits above it explicitly. Its surface is opaque rather than
-   var(--color-card), which is 60% transparent — the nav bar was showing
+   var(--color-card), which is 60% transparent â€” the nav bar was showing
    straight through the modal. Bottom clearance is applied in the JSX, because
    Tailwind's padding utility is emitted after these rules and would win. */
 .pq-sheet-overlay { z-index: 60; }
@@ -2701,7 +2701,7 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   color: var(--color-text-secondary);
   background: var(--color-overlay);
 }
-/* Legal: the lightest group — bare icons, tighter rows. */
+/* Legal: the lightest group â€” bare icons, tighter rows. */
 .pq-row-icon--bare {
   width: 24px;
   height: 24px;
@@ -2805,20 +2805,20 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   }
 }
 
-/* ─────────────────────────────────────────────────────────────────────────────
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    TAILWIND MUST STAY LAST IN THIS FILE. DO NOT MOVE IT ABOVE THE RULES ABOVE.
 
    The Tailwind Play CDN used to append its compiled <style> to document.head at
    runtime, which put base + components + utilities AFTER the bundled stylesheet
    this file becomes. Utilities therefore won every equal-specificity conflict
    with the semantic classes above (.sp-overlay vs p-0/md:p-3, .map-status-row
-   vs md:w-full, and others). Emitting these directives here — at the bottom of
-   the last stylesheet in <head> — reproduces that exact cascade position.
+   vs md:w-full, and others). Emitting these directives here â€” at the bottom of
+   the last stylesheet in <head> â€” reproduces that exact cascade position.
 
    Putting `@tailwind base` at the top of this file instead would flip every one
    of those conflicts and silently change the layout. Guarded by
    utils/tailwindCascade.test.ts.
-   ───────────────────────────────────────────────────────────────────────────── */
+   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -2948,10 +2948,10 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
 }
 
 
-/* ── My Car session sheet — four-section premium glass ─────────────────────
+/* â”€â”€ My Car session sheet â€” four-section premium glass â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    Same deep-navy glass family as Parking Tools / map-search / Ping.
    Soft blue rim + restrained glow; Safe Until is the visual hero.
-   ───────────────────────────────────────────────────────────────────────── */
+   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .pq-mycar {
   display: flex;
   flex-direction: column;
@@ -2980,13 +2980,13 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   background: linear-gradient(90deg, color-mix(in srgb, var(--mobile-shell-accent) 22%, transparent), transparent 88%);
 }
 
-/* 1 — Car identity hero */
+/* 1 â€” Car identity hero */
 .pq-mycar-hero {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px 14px 14px 12px;
+  gap: 11px;
+  padding: 11px 12px 11px 11px;
   border-radius: 20px;
   overflow: hidden;
   background:
@@ -3090,7 +3090,7 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
     0 0 18px rgba(56, 140, 255, 0.18);
 }
 
-/* 2 — Safety / Street Intelligence glass shell (shared by card variants) */
+/* 2 â€” Safety / Street Intelligence glass shell (shared by card variants) */
 .pq-mycar-intel,
 .pq-mycar-intel-unavailable {
   position: relative;
@@ -3215,22 +3215,22 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
 }
 .pq-mycar-intel-chip {
   font-size: 10px;
-  font-weight: 650;
+  font-weight: 600;
   padding: 3px 8px;
   border-radius: 9999px;
-  color: color-mix(in srgb, var(--color-text-secondary) 88%, transparent);
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: color-mix(in srgb, var(--color-text-secondary) 78%, transparent);
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 .pq-mycar-intel-chip.is-accent {
-  color: #7eb8ff;
-  background: rgba(56, 140, 255, 0.08);
-  border-color: rgba(56, 140, 255, 0.18);
+  color: color-mix(in srgb, #7eb8ff 82%, transparent);
+  background: rgba(56, 140, 255, 0.05);
+  border-color: rgba(56, 140, 255, 0.12);
 }
 .pq-mycar-intel-chip.is-warning {
-  color: #f5b942;
-  background: rgba(245, 185, 66, 0.08);
-  border-color: rgba(245, 185, 66, 0.18);
+  color: color-mix(in srgb, #f5b942 82%, transparent);
+  background: rgba(245, 185, 66, 0.05);
+  border-color: rgba(245, 185, 66, 0.12);
 }
 .pq-mycar-intel-meta {
   margin-top: 10px;
@@ -3268,7 +3268,7 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
 }
 .pq-mycar-intel-retry:disabled { opacity: 0.5; }
 
-/* 3 — Reminders */
+/* 3 â€” Reminders */
 .pq-mycar-remind-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -3279,9 +3279,9 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 10px;
-  min-height: 92px;
-  padding: 14px 13px 13px;
+  gap: 8px;
+  min-height: 74px;
+  padding: 11px 12px 10px;
   border-radius: 18px;
   text-align: left;
   overflow: hidden;
@@ -3300,6 +3300,19 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   color: color-mix(in srgb, var(--color-text-secondary) 90%, transparent);
 }
 .pq-mycar-remind-tile:active { transform: scale(0.97); }
+.pq-mycar-remind-tile:not(.is-on):not(:disabled) {
+  color: color-mix(in srgb, var(--color-text) 78%, var(--color-text-secondary) 22%);
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 22%, rgba(110, 150, 200, 0.16));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.14),
+    0 8px 18px rgba(0, 4, 14, 0.26),
+    0 0 10px rgba(56, 140, 255, 0.06);
+}
+.pq-mycar-remind-tile:not(.is-on):not(:disabled) .pq-mycar-remind-tile-icon {
+  color: #9ec8ff;
+  background: rgba(56, 140, 255, 0.08);
+  border-color: rgba(56, 140, 255, 0.18);
+}
 .pq-mycar-remind-tile:disabled {
   opacity: 0.4;
   pointer-events: none;
@@ -3317,9 +3330,9 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
     linear-gradient(165deg, #0e1e36 0%, #0a1528 52%, #0c1a30 100%);
 }
 .pq-mycar-remind-tile-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3338,11 +3351,11 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   letter-spacing: -0.01em;
 }
 .pq-mycar-remind-note {
-  margin-top: 10px;
+  margin-top: 14px;
   padding: 0 2px;
   font-size: 11px;
-  line-height: 1.45;
-  color: color-mix(in srgb, var(--color-text-secondary) 78%, transparent);
+  line-height: 1.6;
+  color: color-mix(in srgb, var(--color-text-secondary) 68%, transparent);
 }
 .pq-mycar-remind-note strong {
   color: var(--color-text);
@@ -3366,21 +3379,26 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 14px 16px;
+  padding: 13px 16px;
   border-radius: 16px;
   font-size: 14px;
   font-weight: 750;
-  color: #d9ecff;
+  color: #dceeff;
   background:
-    radial-gradient(120% 90% at 50% 0%, rgba(77, 148, 255, 0.14) 0%, transparent 55%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.015) 42%, rgba(0, 0, 0, 0.16) 100%),
+    radial-gradient(120% 100% at 50% 0%, rgba(77, 148, 255, 0.22) 0%, rgba(56, 140, 255, 0.06) 42%, transparent 68%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.015) 42%, rgba(0, 0, 0, 0.16) 100%),
     linear-gradient(165deg, #0c1a30 0%, #08111f 52%, #0a1730 100%);
-  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 26%, rgba(100, 140, 190, 0.16));
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 32%, rgba(100, 140, 190, 0.18));
   box-shadow:
-    inset 0 1px 0 rgba(230, 242, 255, 0.14),
+    inset 0 1px 0 rgba(230, 242, 255, 0.16),
+    inset 0 0 24px rgba(56, 140, 255, 0.06),
     0 8px 20px rgba(0, 4, 14, 0.28),
-    0 0 16px rgba(56, 140, 255, 0.08);
+    0 0 22px rgba(56, 140, 255, 0.14);
   transition: transform 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+.pq-mycar-ping-cta svg {
+  color: #7eb8ff;
+  filter: drop-shadow(0 0 6px rgba(56, 189, 248, 0.35));
 }
 .pq-mycar-ping-cta:active { transform: scale(0.985); }
 .pq-mycar-ping-hint {
@@ -3432,8 +3450,8 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
 .pq-mycar-btn-danger:disabled { opacity: 0.5; }
 
 .pq-mycar-danger {
-  margin-top: 6px;
-  padding-top: 18px;
+  margin-top: 14px;
+  padding-top: 22px;
   border-top: 1px solid color-mix(in srgb, var(--color-border) 55%, transparent);
 }
 .pq-mycar-danger-trigger {
