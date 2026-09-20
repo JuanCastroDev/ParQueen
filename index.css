@@ -2934,6 +2934,17 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
 .pq-bottom-sheet.is-open {
   transform: translateY(0);
 }
+/* bottom-sheet drag performance */
+.pq-bottom-sheet.is-dragging {
+  transition: none !important;
+}
+.pq-bottom-sheet-backdrop.is-dragging {
+  transition: none !important;
+  /* Freeze expensive blur repaints while the finger is down */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 
 .pq-bottom-sheet-handle-row {
   display: flex;
