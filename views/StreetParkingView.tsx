@@ -2070,7 +2070,7 @@ export const MapView: React.FC<MapViewProps> = ({
                                     <span className="pq-leave-hero-glow" />
                                     <div className="pq-leave-hero-ring">
                                         <div className="pq-leave-hero-icon">
-                                            <Car size={24} strokeWidth={1.85} />
+                                            <Car size={20} strokeWidth={1.85} />
                                         </div>
                                     </div>
                                 </div>

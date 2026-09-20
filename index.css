@@ -3764,57 +3764,57 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   flex-direction: column;
   align-items: stretch;
   text-align: center;
-  padding: 2px 0 2px;
+  padding: 0 0 2px;
   gap: 0;
 }
 .pq-leave-hero {
   align-self: center;
   position: relative;
-  width: 72px;
-  height: 72px;
+  width: 56px;
+  height: 56px;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin: 2px 0 14px;
+  margin: 0 0 8px;
 }
 .pq-leave-hero-glow {
   position: absolute;
-  inset: -6px;
+  inset: -4px;
   border-radius: 50%;
-  background: radial-gradient(circle at 50% 45%, rgba(56, 140, 255, 0.4) 0%, rgba(56, 140, 255, 0.1) 42%, transparent 70%);
-  filter: blur(6px);
+  background: radial-gradient(circle at 50% 45%, rgba(56, 140, 255, 0.26) 0%, rgba(56, 140, 255, 0.06) 45%, transparent 70%);
+  filter: blur(5px);
   pointer-events: none;
 }
 .pq-leave-hero-ring {
   position: relative;
   z-index: 1;
-  width: 58px;
-  height: 58px;
-  border-radius: 18px;
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
   background:
-    radial-gradient(120% 100% at 30% 15%, rgba(120, 180, 255, 0.26) 0%, transparent 55%),
+    radial-gradient(120% 100% at 30% 15%, rgba(120, 180, 255, 0.2) 0%, transparent 55%),
     linear-gradient(165deg, #132848 0%, #0a1528 48%, #0c1c38 100%);
-  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent, #3b8cff) 28%, rgba(120, 160, 210, 0.14));
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent, #3b8cff) 24%, rgba(120, 160, 210, 0.12));
   box-shadow:
-    inset 0 1px 0 rgba(230, 242, 255, 0.2),
-    inset 0 -10px 24px rgba(30, 90, 200, 0.16),
-    0 8px 22px rgba(0, 6, 20, 0.32),
-    0 0 26px rgba(56, 140, 255, 0.2);
+    inset 0 1px 0 rgba(230, 242, 255, 0.16),
+    inset 0 -8px 18px rgba(30, 90, 200, 0.12),
+    0 4px 14px rgba(0, 6, 20, 0.24),
+    0 0 14px rgba(56, 140, 255, 0.12);
 }
 .pq-leave-hero-icon {
   display: flex;
   align-items: center;
   justify-content: center;
   color: #e8f3ff;
-  filter: drop-shadow(0 0 8px rgba(90, 170, 255, 0.5));
+  filter: drop-shadow(0 0 5px rgba(90, 170, 255, 0.35));
 }
 .pq-leave-title {
   align-self: center;
-  margin: 0 0 6px;
-  font-size: 1.2rem;
+  margin: 0 0 4px;
+  font-size: 1.125rem;
   font-weight: 750;
   letter-spacing: -0.02em;
   line-height: 1.2;
@@ -3822,22 +3822,22 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
 }
 .pq-leave-sub {
   align-self: center;
-  margin: 0 0 16px;
+  margin: 0 0 12px;
   max-width: 17rem;
-  font-size: 0.8125rem;
+  font-size: 0.78125rem;
   font-weight: 450;
-  line-height: 1.4;
+  line-height: 1.35;
   color: color-mix(in srgb, var(--color-text-secondary) 88%, transparent);
 }
 .pq-leave-error {
-  margin: 0 0 12px;
+  margin: 0 0 10px;
   width: 100%;
   font-size: 0.8125rem;
   font-weight: 600;
   color: var(--color-danger);
 }
 .pq-leave-primary {
-  min-height: 54px;
+  min-height: 52px;
   box-sizing: border-box;
   flex-shrink: 0;
   width: 100%;
@@ -3845,23 +3845,23 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 13px 16px;
-  margin-bottom: 10px;
+  padding: 12px 16px;
+  margin-bottom: 8px;
   border-radius: 14px;
-  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent, #3b8cff) 34%, rgba(100, 150, 210, 0.16));
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent, #3b8cff) 32%, rgba(100, 150, 210, 0.14));
   font-size: 0.875rem;
   font-weight: 700;
   letter-spacing: -0.01em;
   color: #eaf4ff;
   background:
-    radial-gradient(120% 140% at 50% -10%, rgba(90, 160, 255, 0.38) 0%, rgba(40, 110, 230, 0.12) 45%, transparent 70%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.02) 40%, rgba(0, 0, 0, 0.18) 100%),
+    radial-gradient(120% 140% at 50% -10%, rgba(90, 160, 255, 0.3) 0%, rgba(40, 110, 230, 0.1) 45%, transparent 70%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.02) 40%, rgba(0, 0, 0, 0.16) 100%),
     linear-gradient(165deg, #12305a 0%, #0a1a36 50%, #0c2248 100%);
   box-shadow:
-    inset 0 1px 0 rgba(230, 242, 255, 0.2),
-    inset 0 0 28px rgba(56, 140, 255, 0.14),
-    0 8px 18px rgba(0, 6, 18, 0.28),
-    0 0 22px rgba(56, 140, 255, 0.2);
+    inset 0 1px 0 rgba(230, 242, 255, 0.18),
+    inset 0 0 22px rgba(56, 140, 255, 0.1),
+    0 6px 14px rgba(0, 6, 18, 0.24),
+    0 0 14px rgba(56, 140, 255, 0.14);
   transition: transform 150ms ease-out, box-shadow 150ms ease-out, border-color 150ms ease-out, opacity 150ms ease-out;
 }
 .pq-leave-primary svg {
@@ -3872,7 +3872,7 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
 .pq-leave-primary:active:not(:disabled) { transform: scale(0.985); }
 .pq-leave-primary:disabled { opacity: 0.5; }
 .pq-leave-secondary {
-  min-height: 54px;
+  min-height: 52px;
   box-sizing: border-box;
   flex-shrink: 0;
   width: 100%;
@@ -3881,7 +3881,7 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   justify-content: center;
   gap: 8px;
   padding: 12px 16px;
-  margin-bottom: 12px;
+  margin-bottom: 4px;
   border-radius: 14px;
   border: 1px solid color-mix(in srgb, var(--mobile-shell-accent, #3b8cff) 14%, rgba(120, 150, 190, 0.12));
   font-size: 0.875rem;
@@ -3893,7 +3893,7 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
     linear-gradient(165deg, #0f1c32 0%, #0a121f 55%, #0c182c 100%);
   box-shadow:
     inset 0 1px 0 rgba(230, 242, 255, 0.1),
-    0 4px 12px rgba(0, 4, 14, 0.2);
+    0 4px 12px rgba(0, 4, 14, 0.18);
   transition: transform 150ms ease-out, background 150ms ease-out, border-color 150ms ease-out, opacity 150ms ease-out;
 }
 .pq-leave-secondary svg {
@@ -3905,15 +3905,17 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
 .pq-leave-secondary:disabled { opacity: 0.5; }
 .pq-leave-tertiary {
   width: 100%;
-  margin-top: 2px;
-  padding: 10px 12px;
+  margin-top: 0;
+  padding: 12px 12px 8px;
   border: none;
+  border-radius: 0;
   background: transparent;
+  box-shadow: none;
   font-size: 0.8125rem;
   font-weight: 600;
   letter-spacing: -0.01em;
-  color: color-mix(in srgb, var(--color-text-secondary) 72%, transparent);
-  transition: color 150ms ease-out, transform 150ms ease-out;
+  color: color-mix(in srgb, var(--color-text-secondary) 78%, transparent);
+  transition: color 150ms ease-out, opacity 150ms ease-out;
 }
 .pq-leave-tertiary:active {
   transform: scale(0.98);
@@ -4487,11 +4489,7 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   border-color: var(--pq-elev-border);
 }
 
-:root:not(.dark) .pq-leave-hero {
-  background: var(--pq-elev-card);
-  border-color: var(--pq-elev-border);
-  box-shadow: var(--pq-elev-inset), var(--pq-elev-shadow);
-}
+
 :root:not(.dark) .pq-leave-title { color: var(--pq-elev-text); }
 :root:not(.dark) .pq-leave-sub,
 :root:not(.dark) .pq-leave-error { color: var(--pq-elev-text-muted); }
@@ -4501,11 +4499,16 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   border-color: var(--pq-elev-border-strong);
   box-shadow: var(--pq-elev-inset), var(--pq-elev-glow);
 }
-:root:not(.dark) .pq-leave-secondary,
-:root:not(.dark) .pq-leave-tertiary {
+:root:not(.dark) .pq-leave-secondary {
   color: var(--pq-elev-text);
   background: var(--pq-elev-well);
   border-color: var(--pq-elev-border);
+}
+:root:not(.dark) .pq-leave-tertiary {
+  color: var(--pq-elev-text-muted);
+  background: transparent;
+  border: none;
+  box-shadow: none;
 }
 
 :root:not(.dark) .pq-postsave-hero {
