@@ -63,13 +63,13 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
         <BottomSheet isOpen={isOpen} onClose={onClose} ariaLabel={t('ping_modal.sheet_label')}>
             {view === 'main' ? (
                 <div>
-                    <div className="flex flex-col items-center text-center mb-6">
-                        <p className="text-[10px] font-semibold tracking-widest uppercase text-[var(--color-info)] mb-1">{t('ping_modal.eyebrow')}</p>
-                        <h2 className="text-lg font-bold text-[var(--color-text)] leading-snug">
+                    <div className="pq-ping-sheet-header flex flex-col items-center text-center mb-6">
+                        <p className="pq-ping-sheet-eyebrow text-[10px] font-semibold tracking-widest uppercase text-[var(--color-info)] mb-1">{t('ping_modal.eyebrow')}</p>
+                        <h2 className="pq-ping-sheet-title text-[17px] font-bold text-[var(--color-text)] leading-snug">
                             {isEditing ? t('ping_modal.title_edit') : t('ping_modal.title_new')}
                         </h2>
-                        <p className="text-[12px] text-[var(--color-text-secondary)] mt-0.5">{t('ping_modal.subtitle')}</p>
-                        <div className="flex items-center gap-1.5 mt-3 px-3 py-1.5 rounded-xl bg-[#1e75ff]/10 border border-[#1e75ff]/20 max-w-full">
+                        <p className="pq-ping-sheet-subtitle text-[12px] text-[var(--color-text-secondary)] mt-1">{t('ping_modal.subtitle')}</p>
+                        <div className="pq-ping-sheet-location flex items-center gap-1.5 mt-3.5 px-3 py-1.5 rounded-xl max-w-full">
                             <MapPin size={12} className="text-[var(--color-info)] shrink-0" />
                             <p className="text-[12px] font-semibold text-[var(--color-text)] truncate">{spotAddress || t('ping_modal.locating')}</p>
                         </div>
@@ -78,14 +78,12 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
                     <div className="space-y-3">
                         <button
                             onClick={() => setPingType('now')}
-                            className={`w-full rounded-2xl p-3.5 flex items-center gap-3 transition-all ${
-                                pingType === 'now'
-                                    ? 'bg-blue-500/15 border border-blue-400/40 shadow-md'
-                                    : 'bg-[var(--color-card)] border border-[var(--color-border)] hover:bg-white/8'
+                            className={`pq-ping-option w-full p-3.5 flex items-center gap-3 transition-all ${
+                                pingType === 'now' ? 'is-selected' : ''
                             }`}
                         >
-                            <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                                pingType === 'now' ? 'bg-blue-500/20 text-[var(--color-accent)]' : 'bg-[var(--color-overlay)] text-[var(--color-text-secondary)]'
+                            <div className={`pq-ping-option-icon w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                                pingType === 'now' ? 'is-selected' : ''
                             }`}>
                                 <Zap size={18} />
                             </div>
@@ -94,7 +92,7 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
                                 <div className="text-[11px] text-[var(--color-text-secondary)]">{t('ping_modal.spot_opens')}</div>
                             </div>
                             <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 ${
-                                pingType === 'now' ? 'border-blue-400 bg-blue-500' : 'border-[var(--color-border)]'
+                                pingType === 'now' ? 'pq-ping-option-radio is-selected border-transparent' : 'pq-ping-option-radio border-[var(--color-border)]'
                             }`}>
                                 {pingType === 'now' && <Check size={12} className="text-white" />}
                             </div>
@@ -102,14 +100,12 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
 
                         <button
                             onClick={() => { setPingType('later'); setView('timePicker'); }}
-                            className={`w-full rounded-2xl p-3.5 flex items-center gap-3 transition-all ${
-                                pingType === 'later'
-                                    ? 'bg-blue-500/15 border border-blue-400/40 shadow-md'
-                                    : 'bg-[var(--color-card)] border border-[var(--color-border)] hover:bg-white/8'
+                            className={`pq-ping-option w-full p-3.5 flex items-center gap-3 transition-all ${
+                                pingType === 'later' ? 'is-selected' : ''
                             }`}
                         >
-                            <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                                pingType === 'later' ? 'bg-blue-500/20 text-[var(--color-accent)]' : 'bg-[var(--color-overlay)] text-[var(--color-text-secondary)]'
+                            <div className={`pq-ping-option-icon w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                                pingType === 'later' ? 'is-selected' : ''
                             }`}>
                                 <Clock size={18} />
                             </div>
@@ -127,7 +123,7 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
                                 </div>
                             </div>
                             <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 ${
-                                pingType === 'later' ? 'border-blue-400 bg-blue-500' : 'border-[var(--color-border)]'
+                                pingType === 'later' ? 'pq-ping-option-radio is-selected border-transparent' : 'pq-ping-option-radio border-[var(--color-border)]'
                             }`}>
                                 {pingType === 'later' && <Check size={12} className="text-white" />}
                             </div>
@@ -139,8 +135,7 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
                     )}
                     <button
                         onClick={handleSetTime}
-                        className="w-full mt-4 font-bold py-3.5 rounded-full flex items-center justify-center gap-2 text-white active:scale-95 transition-transform"
-                        style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}
+                        className="pq-ping-sheet-cta w-full mt-4 font-bold py-3.5 rounded-full flex items-center justify-center gap-2 text-white active:scale-[0.98] transition-transform"
                     >
                         <MapPin size={18} />
                         <span>{isEditing ? t('ping_modal.update') : pingType === 'later' ? t('ping_modal.schedule_ping') : t('ping_modal.ping_now')}</span>
@@ -218,8 +213,7 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
                             }
                             onSave(combined);
                         }}
-                        className="w-full font-bold py-3.5 rounded-full flex items-center justify-center gap-2 text-white active:scale-95 transition-transform"
-                        style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}
+                        className="pq-ping-sheet-cta w-full font-bold py-3.5 rounded-full flex items-center justify-center gap-2 text-white active:scale-[0.98] transition-transform"
                     >
                         <MapPin size={18} />
                         {isEditing ? t('ping_modal.update') : t('ping_modal.schedule_ping')}

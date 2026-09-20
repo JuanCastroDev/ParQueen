@@ -8,6 +8,8 @@ interface BottomSheetProps {
     ariaLabel: string;
 }
 
+const SHEET_MS = 280;
+
 export const BottomSheet: React.FC<BottomSheetProps> = ({ isOpen, onClose, children, ariaLabel }) => {
     const [visible, setVisible] = useState(false);
     const dragStartY = useRef<number | null>(null);
@@ -24,7 +26,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({ isOpen, onClose, child
 
     const dismiss = useCallback(() => {
         setVisible(false);
-        setTimeout(onClose, 300);
+        setTimeout(onClose, SHEET_MS);
     }, [onClose]);
 
     useModalAccessibility({ isOpen, dialogRef: sheetRef, onEscape: dismiss });
@@ -48,9 +50,11 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({ isOpen, onClose, child
     if (!isOpen) return null;
 
     return (
-        <div data-modal-root="" className="absolute inset-0 z-30">
+        <div data-modal-root="" className="pq-bottom-sheet-root absolute inset-0 z-30">
             <div
-                className={`absolute inset-0 bg-black/50 transition-opacity duration-300 ${visible ? 'opacity-100' : 'opacity-0'}`}
+                className={`pq-bottom-sheet-backdrop absolute inset-0 ${
+                    visible ? 'is-open' : ''
+                }`}
                 onClick={dismiss}
             />
             <div
@@ -58,16 +62,18 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({ isOpen, onClose, child
                 role="dialog"
                 aria-modal="true"
                 aria-label={ariaLabel}
-                className="absolute bottom-0 left-0 right-0 bg-[var(--color-surface)] rounded-t-3xl shadow-2xl transition-transform duration-300 ease-out max-h-[85vh] overflow-y-auto"
-                style={{ transform: visible ? `translateY(${dragOffset}px)` : 'translateY(100%)' }}
+                className={`pq-bottom-sheet absolute bottom-0 left-0 right-0 max-h-[85vh] overflow-y-auto ${
+                    visible ? 'is-open' : ''
+                }`}
+                style={{ transform: visible ? `translateY(${dragOffset}px)` : undefined }}
                 onTouchStart={handleTouchStart}
                 onTouchMove={handleTouchMove}
                 onTouchEnd={handleTouchEnd}
             >
-                <div className="flex justify-center pt-3 pb-2">
-                    <div className="w-10 h-1 rounded-full bg-[var(--color-border)]" />
+                <div className="pq-bottom-sheet-handle-row">
+                    <div className="pq-bottom-sheet-handle" />
                 </div>
-                <div className="px-5 pb-8">
+                <div className="pq-bottom-sheet-body px-5 pb-8">
                     {children}
                 </div>
             </div>
