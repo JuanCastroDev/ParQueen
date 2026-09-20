@@ -240,6 +240,7 @@ const en: Record<string, string> = {
     'my_car.min_remaining': '{min} min remaining',
     'my_car.set_reminder': 'Set Reminder',
     'my_car.cancel': 'Cancel',
+    'my_car.section_reminders': 'Reminders',
     'my_car.section_community': 'Community',
     'my_car.spot_shared': 'Spot shared',
     'my_car.sharing_at': 'Sharing at {time}',

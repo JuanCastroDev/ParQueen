@@ -1593,19 +1593,18 @@ export const MapView: React.FC<MapViewProps> = ({
             {/* My Car — Parking Session sheet (personal only) */}
             <BottomSheet isOpen={showSessionSheet} ariaLabel="My Car session" onClose={() => { setShowSessionSheet(false); setShowCustomReminder(false); setShowRemindPanel(false); }}>
                 {savedSpot && (
-                    <div>
-                        {/* Header */}
-                        <div className="flex items-center gap-3 mb-5 pb-4 border-b border-[var(--color-border)]">
-                            <div className="w-12 h-12 rounded-[14px] flex items-center justify-center shrink-0"
-                                style={{ background: 'linear-gradient(135deg, var(--color-brand), var(--color-brand-2))' }}>
+                    <div className="pq-mycar">
+                        {/* 1 — Car summary hero */}
+                        <section className="pq-mycar-hero" aria-label={t('common.my_car')}>
+                            <div className="pq-mycar-hero-icon">
                                 <VehicleIcon type={user?.vehicleType} color={user?.vehicleColor} size={22} />
                             </div>
-                            <div className="flex-1 min-w-0">
-                                <p className="text-[10px] font-bold text-[var(--color-info)] uppercase tracking-widest mb-0.5">{t('common.my_car')}</p>
+                            <div className="pq-mycar-hero-body">
+                                <p className="pq-mycar-hero-kicker">{t('common.my_car')}</p>
                                 {savedSpot.address && (
-                                    <p className="text-[15px] font-bold text-[var(--color-text)] leading-tight truncate">{savedSpot.address}</p>
+                                    <p className="pq-mycar-hero-address">{savedSpot.address}</p>
                                 )}
-                                <p className="text-xs text-[var(--color-text-secondary)]">{parkedDuration || t('my_car.just_parked')}</p>
+                                <p className="pq-mycar-hero-status">{parkedDuration || t('my_car.just_parked')}</p>
                             </div>
                             <button
                                 onClick={() => {
@@ -1617,14 +1616,15 @@ export const MapView: React.FC<MapViewProps> = ({
                                     setShowSessionSheet(false);
                                 }}
                                 aria-label="Navigate to my car"
-                                className="flex items-center gap-1.5 px-3 py-2 rounded-full shrink-0 border border-[#1e75ff]/40 bg-[#1e75ff]/15 text-[var(--color-info)] active:scale-95 transition-all"
+                                className="pq-mycar-nav"
                             >
                                 <Navigation size={14} />
-                                <span className="text-[11px] font-bold">Navigate</span>
+                                <span>Navigate</span>
                             </button>
-                        </div>
+                        </section>
 
-                        {/* Street Intelligence */}
+                        {/* 2 — Safety / status hero */}
+                        <section className="pq-mycar-safety" aria-label="Street intelligence">
                         {savedSpot.segmentId && savedSpot.segmentStreetName ? (
                             <StreetIntelligenceCard
                                 segmentId={savedSpot.segmentId}
@@ -1640,29 +1640,29 @@ export const MapView: React.FC<MapViewProps> = ({
                                 }}
                             />
                         ) : savedSpot.streetIntelStatus === 'unavailable' || savedSpot.streetIntelStatus === 'failed' ? (
-                            <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-card)] px-4 py-4 mb-4">
-                                <div className="flex items-center gap-2 mb-2">
+                            <div className="pq-mycar-intel-unavailable">
+                                <div className="pq-mycar-intel-street">
                                     <MapPin size={14} className="text-[var(--color-text-secondary)]" />
-                                    <p className="text-[11px] font-bold text-[var(--color-text-secondary)] uppercase tracking-widest">
+                                    <p>
                                         {savedSpot.streetIntelStatus === 'failed' ? t('street_intel.failed_title') :
                                          savedSpot.streetIntelReason === 'no_sweepnyc_notes' || savedSpot.streetIntelReason === 'no_signs' ? t('street_intel.unavailable_title_no_data') :
                                          t('street_intel.unavailable_title_general')}
                                     </p>
                                 </div>
-                                <p className="text-sm text-[var(--color-text-secondary)] mb-1">
+                                <p className="pq-mycar-intel-reason">
                                     {savedSpot.streetIntelStatus === 'failed'
                                         ? t('street_intel.failed_body')
                                         : savedSpot.streetIntelReason === 'no_sweepnyc_notes' || savedSpot.streetIntelReason === 'no_signs'
                                         ? t('street_intel.unavailable_body_no_data')
                                         : t('street_intel.unavailable_body_general')}
                                 </p>
-                                <p className="text-xs text-[var(--color-text-secondary)]">
+                                <p className="pq-mycar-intel-reason" style={{ marginBottom: 0 }}>
                                     {t('street_intel.check_signs')}
                                 </p>
                                 <button
                                     onClick={handleRetryStreetIntel}
                                     disabled={retryingStreetIntel}
-                                    className="mt-2 text-xs font-semibold text-[var(--color-accent)] disabled:opacity-50"
+                                    className="pq-mycar-intel-retry"
                                 >
                                     {retryingStreetIntel
                                         ? t('street_intel.trying')
@@ -1674,9 +1674,14 @@ export const MapView: React.FC<MapViewProps> = ({
                         ) : (
                             <StreetIntelligenceUnavailableCard />
                         )}
+                        </section>
 
-                        {/* Compact action row: cleaning alert / move reminder */}
-                        <div className="grid grid-cols-2 gap-2 mb-3">
+                        {/* 3 — Reminders */}
+                        <section className="pq-mycar-reminders" aria-label={t('my_car.section_reminders')}>
+                        <div className="pq-mycar-section-label">
+                            <span>{t('my_car.section_reminders')}</span>
+                        </div>
+                        <div className="pq-mycar-remind-grid">
                             <button
                                 onClick={() => {
                                     const next = !reminderEnabled;
@@ -1688,44 +1693,35 @@ export const MapView: React.FC<MapViewProps> = ({
                                 }}
                                 disabled={!savedSpot.segmentId}
                                 aria-pressed={reminderEnabled}
-                                className={`flex flex-col items-center gap-1.5 py-3 rounded-2xl border transition-all active:scale-95 disabled:opacity-40 disabled:pointer-events-none ${
-                                    reminderEnabled
-                                        ? 'border-[#1e75ff]/60 bg-[#1e75ff]/25'
-                                        : 'border-[var(--color-border)] bg-white/5'
-                                }`}
+                                className={`pq-mycar-remind-tile${reminderEnabled ? ' is-on' : ''}`}
                             >
-                                <Bell size={18} className={reminderEnabled ? 'text-[var(--color-info)]' : 'text-[var(--color-text-secondary)]'} />
-                                <span className={`text-[10px] font-bold leading-tight text-center ${reminderEnabled ? 'text-white' : 'text-[var(--color-text-secondary)]'}`}>Cleaning<br/>alert</span>
+                                <div className="pq-mycar-remind-tile-icon">
+                                    <Bell size={16} />
+                                </div>
+                                <span className="pq-mycar-remind-tile-label">Cleaning<br/>alert</span>
                             </button>
                             <button
                                 onClick={() => setShowRemindPanel(v => !v)}
                                 aria-expanded={showRemindPanel || !!parkingTimer.timer}
-                                className={`flex flex-col items-center gap-1.5 py-3 rounded-2xl border transition-all active:scale-95 ${
-                                    parkingTimer.timer || showRemindPanel
-                                        ? 'border-[#1e75ff]/60 bg-[#1e75ff]/25'
-                                        : 'border-[var(--color-border)] bg-white/5'
-                                }`}
+                                className={`pq-mycar-remind-tile${parkingTimer.timer || showRemindPanel ? ' is-on' : ''}`}
                             >
-                                <Clock size={18} className={parkingTimer.timer || showRemindPanel ? 'text-[var(--color-info)]' : 'text-[var(--color-text-secondary)]'} />
-                                <span className={`text-[10px] font-bold leading-tight text-center ${parkingTimer.timer || showRemindPanel ? 'text-white' : 'text-[var(--color-text-secondary)]'}`}>
+                                <div className="pq-mycar-remind-tile-icon">
+                                    <Clock size={16} />
+                                </div>
+                                <span className="pq-mycar-remind-tile-label">
                                     {parkingTimer.timer ? <>{parkingTimer.minutesRemaining}m left</> : <>Move<br/>reminder</>}
                                 </span>
                             </button>
                         </div>
 
-                        {/* Cleaning alert info strip */}
                         {reminderEnabled && (
-                            <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-[#1e75ff]/10 border border-[#1e75ff]/25 mb-3">
-                                <Bell size={13} className="text-[var(--color-info)] shrink-0" />
-                                <p className="text-[11px] text-[var(--color-text-secondary)] leading-snug">
-                                    We'll remind you <span className="text-white font-semibold">1 hour before</span> cleaning, and again at <span className="text-white font-semibold">30 minutes before</span> street cleaning starts
-                                </p>
-                            </div>
+                            <p className="pq-mycar-remind-note">
+                                We'll remind you <strong>1 hour before</strong> cleaning, and again at <strong>30 minutes before</strong> street cleaning starts
+                            </p>
                         )}
 
-                        {/* Move reminder expandable panel */}
                         {(showRemindPanel || !!parkingTimer.timer) && (
-                            <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-card)] overflow-hidden mb-4">
+                            <div className="pq-mycar-remind-panel">
                                 {parkingTimer.timer ? (
                                     <div className="flex items-center gap-2.5 px-4 py-3">
                                         <Clock size={14} className="text-[var(--color-info)] shrink-0" />
@@ -1852,11 +1848,12 @@ export const MapView: React.FC<MapViewProps> = ({
                                 )}
                             </div>
                         )}
+                        </section>
 
-                        {/* Community: share this spot */}
-                        <div className="flex items-center gap-2 mb-2">
-                            <span className="text-[10px] font-semibold text-[var(--color-text-secondary)]/50 uppercase tracking-widest shrink-0">{t('my_car.section_community')}</span>
-                            <div className="flex-1 h-px bg-[var(--color-border)]/40" />
+                        {/* 4 — Community + danger zone */}
+                        <section className="pq-mycar-community" aria-label={t('my_car.section_community')}>
+                        <div className="pq-mycar-section-label">
+                            <span>{t('my_car.section_community')}</span>
                         </div>
                         {savedSpot.linkedPingId ? (() => {
                             const linkedSpot = spotData.activeSpots.find(s => s.id === savedSpot.linkedPingId);
@@ -1878,7 +1875,7 @@ export const MapView: React.FC<MapViewProps> = ({
                                 return t('my_car.drivers_see_date', { date: depTime.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }), time });
                             })();
                             return (
-                                <div className="rounded-2xl border border-[#1e75ff]/25 bg-[#1e75ff]/8 px-4 py-3 mb-3">
+                                <div className="pq-mycar-ping-active">
                                     <div className="flex items-center gap-2 mb-1">
                                         <div className="w-2 h-2 rounded-full bg-[#38bdf8] shrink-0" />
                                         <p className="text-sm font-bold text-[var(--color-text)]">
@@ -1887,16 +1884,16 @@ export const MapView: React.FC<MapViewProps> = ({
                                                 : t('my_car.spot_shared')}
                                         </p>
                                     </div>
-                                    <p className="text-xs text-[var(--color-text-secondary)] mb-3">{depText}</p>
-                                    <div className="flex gap-2">
+                                    <p className="text-xs text-[var(--color-text-secondary)]">{depText}</p>
+                                    <div className="pq-mycar-ping-actions">
                                         <button
                                             onClick={changeLinkedPingTime}
-                                            className="flex-1 py-2 rounded-xl text-xs font-bold border border-[var(--color-border)] bg-white/5 hover:bg-white/10 text-[var(--color-text)] transition-all active:scale-95">
+                                            className="pq-mycar-btn-ghost">
                                             {t('my_car.change_time')}
                                         </button>
                                         <button
                                             onClick={cancelLinkedPing}
-                                            className="flex-1 py-2 rounded-xl text-xs font-bold border border-red-500/25 bg-red-500/8 hover:bg-red-500/15 text-[var(--color-danger)] transition-all active:scale-95">
+                                            className="pq-mycar-btn-danger">
                                             {t('my_car.stop_sharing')}
                                         </button>
                                     </div>
@@ -1914,58 +1911,58 @@ export const MapView: React.FC<MapViewProps> = ({
                                         setShowSessionSheet(false);
                                         setShowDepartureSheet(true);
                                     }}
-                                    className="w-full mb-1.5 py-3 rounded-2xl text-sm font-bold border border-[#1e75ff]/40 bg-[#1e75ff]/12 hover:bg-[#1e75ff]/20 transition-all active:scale-95 text-[var(--color-info)] flex items-center justify-center gap-2">
+                                    className="pq-mycar-ping-cta">
                                     <Clock size={14} />
                                     {t('my_car.ping_when_leaving')}
                                 </button>
-                                <p className="text-[10px] text-[var(--color-text-secondary)]/60 text-center mb-3">{t('my_car.community_hint')}</p>
+                                <p className="pq-mycar-ping-hint">{t('my_car.community_hint')}</p>
                             </>
                         )}
+                        </section>
 
-                        {/* Remove saved car */}
-                        <div className="pt-3 border-t border-[var(--color-border)]">
+                        <section className="pq-mycar-danger" aria-label={t('my_car.remove_saved_car')}>
                             {!showRemoveCarConfirm ? (
                                 <button
                                     onClick={() => setShowRemoveCarConfirm(true)}
-                                    className="w-full py-2.5 text-sm font-semibold text-[var(--color-danger)] hover:text-[var(--color-danger)] transition-colors">
+                                    className="pq-mycar-danger-trigger">
                                     {t('my_car.remove_saved_car')}
                                 </button>
                             ) : savedSpot?.linkedPingId ? (
-                                <div className="space-y-2">
-                                    <p className="text-xs text-[var(--color-text-secondary)] text-center leading-snug">{t('my_car.remove_with_ping')}</p>
+                                <div className="pq-mycar-danger-confirm">
+                                    <p>{t('my_car.remove_with_ping')}</p>
                                     {linkedPingError && <p className="text-xs text-[var(--color-danger)] text-center font-semibold">{linkedPingError}</p>}
-                                    <div className="flex gap-2">
+                                    <div className="pq-mycar-ping-actions">
                                         <button
                                             onClick={() => { setShowRemoveCarConfirm(false); setLinkedPingError(null); }}
-                                            className="flex-1 py-2 rounded-xl text-xs font-bold border border-[var(--color-border)] bg-white/5 hover:bg-white/10 text-[var(--color-text)] transition-all active:scale-95">
+                                            className="pq-mycar-btn-ghost">
                                             {t('my_car.keep_it')}
                                         </button>
                                         <button
                                             onClick={handleRemoveCar}
                                             disabled={removeCarLoading}
-                                            className="flex-1 py-2 rounded-xl text-xs font-bold border border-red-500/25 bg-red-500/8 hover:bg-red-500/15 text-[var(--color-danger)] transition-all active:scale-95 disabled:opacity-50">
+                                            className="pq-mycar-btn-danger">
                                             {removeCarLoading ? t('my_car.removing') : t('my_car.cancel_and_remove')}
                                         </button>
                                     </div>
                                 </div>
                             ) : (
-                                <div className="space-y-2">
-                                    <p className="text-xs text-[var(--color-text-secondary)] text-center">{t('my_car.remove_confirm')}</p>
-                                    <div className="flex gap-2">
+                                <div className="pq-mycar-danger-confirm">
+                                    <p>{t('my_car.remove_confirm')}</p>
+                                    <div className="pq-mycar-ping-actions">
                                         <button
                                             onClick={() => setShowRemoveCarConfirm(false)}
-                                            className="flex-1 py-2 rounded-xl text-xs font-bold border border-[var(--color-border)] bg-white/5 hover:bg-white/10 text-[var(--color-text)] transition-all active:scale-95">
+                                            className="pq-mycar-btn-ghost">
                                             {t('my_car.keep_it')}
                                         </button>
                                         <button
                                             onClick={endSession}
-                                            className="flex-1 py-2 rounded-xl text-xs font-bold border border-red-500/25 bg-red-500/8 hover:bg-red-500/15 text-[var(--color-danger)] transition-all active:scale-95">
+                                            className="pq-mycar-btn-danger">
                                             {t('my_car.remove')}
                                         </button>
                                     </div>
                                 </div>
                             )}
-                        </div>
+                        </section>
                     </div>
                 )}
             </BottomSheet>

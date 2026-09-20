@@ -2947,6 +2947,532 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   box-shadow: none;
 }
 
+
+/* ── My Car session sheet — four-section premium glass ─────────────────────
+   Same deep-navy glass family as Parking Tools / map-search / Ping.
+   Soft blue rim + restrained glow; Safe Until is the visual hero.
+   ───────────────────────────────────────────────────────────────────────── */
+.pq-mycar {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding-top: 2px;
+}
+
+.pq-mycar-section-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.pq-mycar-section-label > span {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text-secondary) 72%, transparent);
+  flex-shrink: 0;
+}
+.pq-mycar-section-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--mobile-shell-accent) 22%, transparent), transparent 88%);
+}
+
+/* 1 — Car identity hero */
+.pq-mycar-hero {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 14px 14px 12px;
+  border-radius: 20px;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 90% at 12% 8%, rgba(77, 148, 255, 0.12) 0%, rgba(77, 148, 255, 0.02) 44%, transparent 68%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.015) 40%, rgba(0, 0, 0, 0.18) 100%),
+    linear-gradient(165deg, #0c1a30 0%, #08111f 50%, #0a1730 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 20%, rgba(90, 130, 180, 0.14));
+  box-shadow:
+    inset 0 1px 0 rgba(236, 246, 255, 0.16),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.26),
+    0 10px 24px rgba(0, 4, 14, 0.34),
+    0 0 18px rgba(77, 148, 255, 0.08);
+  backdrop-filter: blur(20px) saturate(1.1);
+  -webkit-backdrop-filter: blur(20px) saturate(1.1);
+}
+.pq-mycar-hero::before {
+  content: '';
+  position: absolute;
+  left: 14%;
+  right: 14%;
+  top: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(200, 230, 255, 0.36), transparent);
+  pointer-events: none;
+}
+.pq-mycar-hero-icon {
+  position: relative;
+  z-index: 1;
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background:
+    radial-gradient(120% 100% at 50% 18%, rgba(77, 148, 255, 0.22) 0%, rgba(77, 148, 255, 0.05) 48%, transparent 72%),
+    linear-gradient(160deg, rgba(12, 28, 52, 0.92) 0%, rgba(6, 14, 28, 0.96) 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 28%, rgba(100, 140, 190, 0.18));
+  box-shadow:
+    inset 0 1px 0 rgba(236, 246, 255, 0.2),
+    0 0 14px rgba(56, 189, 248, 0.14);
+}
+.pq-mycar-hero-body {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 0;
+}
+.pq-mycar-hero-kicker {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #7eb8ff;
+  margin-bottom: 2px;
+}
+.pq-mycar-hero-address {
+  font-size: 15px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pq-mycar-hero-status {
+  font-size: 12px;
+  color: color-mix(in srgb, var(--color-text-secondary) 82%, transparent);
+  margin-top: 2px;
+}
+.pq-mycar-nav {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 14px;
+  border-radius: 9999px;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 750;
+  color: #d9ecff;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.02) 45%, rgba(0, 0, 0, 0.18) 100%),
+    linear-gradient(165deg, rgba(20, 48, 92, 0.88) 0%, rgba(10, 22, 44, 0.94) 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 32%, rgba(110, 160, 220, 0.22));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.18),
+    0 4px 12px rgba(0, 4, 14, 0.28),
+    0 0 14px rgba(56, 140, 255, 0.14);
+  transition: transform 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+.pq-mycar-nav:active { transform: scale(0.95); }
+.pq-mycar-nav:hover {
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 42%, rgba(120, 170, 230, 0.28));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.22),
+    0 6px 14px rgba(0, 4, 14, 0.32),
+    0 0 18px rgba(56, 140, 255, 0.18);
+}
+
+/* 2 — Safety / Street Intelligence glass shell (shared by card variants) */
+.pq-mycar-intel,
+.pq-mycar-intel-unavailable {
+  position: relative;
+  padding: 16px 16px 14px;
+  border-radius: 20px;
+  overflow: hidden;
+  background:
+    radial-gradient(110% 80% at 18% 0%, rgba(52, 211, 153, 0.07) 0%, transparent 52%),
+    radial-gradient(100% 70% at 88% 12%, rgba(77, 148, 255, 0.08) 0%, transparent 48%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.015) 40%, rgba(0, 0, 0, 0.18) 100%),
+    linear-gradient(165deg, #0b182c 0%, #07101e 52%, #0a1628 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 18%, rgba(90, 130, 180, 0.14));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.14),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.24),
+    0 10px 26px rgba(0, 4, 14, 0.36),
+    0 0 20px rgba(56, 140, 255, 0.06);
+  backdrop-filter: blur(20px) saturate(1.1);
+  -webkit-backdrop-filter: blur(20px) saturate(1.1);
+}
+.pq-mycar-intel--safe {
+  border-color: color-mix(in srgb, #34d399 28%, rgba(90, 130, 180, 0.12));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.14),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.24),
+    0 10px 26px rgba(0, 4, 14, 0.36),
+    0 0 22px rgba(52, 211, 153, 0.10);
+}
+.pq-mycar-intel--danger {
+  border-color: color-mix(in srgb, #f87171 30%, rgba(90, 130, 180, 0.12));
+  background:
+    radial-gradient(110% 80% at 18% 0%, rgba(248, 113, 113, 0.10) 0%, transparent 52%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.015) 40%, rgba(0, 0, 0, 0.18) 100%),
+    linear-gradient(165deg, #1a1018 0%, #0c0a12 52%, #140e14 100%);
+}
+.pq-mycar-intel--caution {
+  border-color: color-mix(in srgb, #f5b942 28%, rgba(90, 130, 180, 0.12));
+}
+.pq-mycar-intel-street {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.pq-mycar-intel-street p {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text-secondary) 88%, transparent);
+  line-height: 1.25;
+}
+.pq-mycar-intel-hero {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.pq-mycar-intel-hero-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, rgba(0, 0, 0, 0.16) 100%),
+    rgba(8, 18, 34, 0.7);
+  border: 1px solid rgba(120, 160, 210, 0.16);
+}
+.pq-mycar-intel-hero-icon.is-safe {
+  color: #34d399;
+  border-color: rgba(52, 211, 153, 0.28);
+  box-shadow: 0 0 14px rgba(52, 211, 153, 0.16);
+}
+.pq-mycar-intel-hero-icon.is-danger {
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.30);
+  box-shadow: 0 0 14px rgba(248, 113, 113, 0.14);
+}
+.pq-mycar-intel-hero-icon.is-caution {
+  color: #f5b942;
+  border-color: rgba(245, 185, 66, 0.28);
+}
+.pq-mycar-intel-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text-secondary) 78%, transparent);
+  margin-bottom: 4px;
+}
+.pq-mycar-intel-datetime {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+  color: var(--color-text);
+  text-shadow: 0 0 24px rgba(52, 211, 153, 0.12);
+}
+.pq-mycar-intel-datetime.is-danger { color: #fca5a5; text-shadow: none; }
+.pq-mycar-intel-datetime.is-caution { color: #fde68a; text-shadow: none; }
+.pq-mycar-intel-reason {
+  font-size: 12px;
+  line-height: 1.4;
+  color: color-mix(in srgb, var(--color-text-secondary) 90%, transparent);
+  margin-bottom: 12px;
+}
+.pq-mycar-intel-caution-banner {
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: rgba(245, 185, 66, 0.08);
+  border: 1px solid rgba(245, 185, 66, 0.22);
+}
+.pq-mycar-intel-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+.pq-mycar-intel-chip {
+  font-size: 10px;
+  font-weight: 650;
+  padding: 3px 8px;
+  border-radius: 9999px;
+  color: color-mix(in srgb, var(--color-text-secondary) 88%, transparent);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.pq-mycar-intel-chip.is-accent {
+  color: #7eb8ff;
+  background: rgba(56, 140, 255, 0.08);
+  border-color: rgba(56, 140, 255, 0.18);
+}
+.pq-mycar-intel-chip.is-warning {
+  color: #f5b942;
+  background: rgba(245, 185, 66, 0.08);
+  border-color: rgba(245, 185, 66, 0.18);
+}
+.pq-mycar-intel-meta {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 10px;
+  color: color-mix(in srgb, var(--color-text-secondary) 62%, transparent);
+}
+.pq-mycar-intel-side-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.pq-mycar-intel-side-btn {
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 12px;
+  color: var(--color-text);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  transition: transform 150ms ease-out, background 150ms ease-out;
+}
+.pq-mycar-intel-side-btn:active { transform: scale(0.95); }
+.pq-mycar-intel-retry {
+  margin-top: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #7eb8ff;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.pq-mycar-intel-retry:disabled { opacity: 0.5; }
+
+/* 3 — Reminders */
+.pq-mycar-remind-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.pq-mycar-remind-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 92px;
+  padding: 14px 13px 13px;
+  border-radius: 18px;
+  text-align: left;
+  overflow: hidden;
+  background:
+    radial-gradient(110% 80% at 20% 0%, rgba(77, 148, 255, 0.06) 0%, transparent 55%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.015) 42%, rgba(0, 0, 0, 0.16) 100%),
+    linear-gradient(165deg, #0c182c 0%, #08111f 52%, #0a1528 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 16%, rgba(90, 130, 180, 0.14));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.12),
+    0 8px 18px rgba(0, 4, 14, 0.28),
+    0 0 12px rgba(56, 140, 255, 0.04);
+  backdrop-filter: blur(16px) saturate(1.08);
+  -webkit-backdrop-filter: blur(16px) saturate(1.08);
+  transition: transform 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
+  color: color-mix(in srgb, var(--color-text-secondary) 90%, transparent);
+}
+.pq-mycar-remind-tile:active { transform: scale(0.97); }
+.pq-mycar-remind-tile:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+.pq-mycar-remind-tile.is-on {
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 36%, rgba(110, 160, 220, 0.22));
+  color: var(--color-text);
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.16),
+    0 8px 18px rgba(0, 4, 14, 0.30),
+    0 0 18px rgba(56, 140, 255, 0.12);
+  background:
+    radial-gradient(110% 80% at 20% 0%, rgba(77, 148, 255, 0.16) 0%, transparent 55%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.02) 42%, rgba(0, 0, 0, 0.16) 100%),
+    linear-gradient(165deg, #0e1e36 0%, #0a1528 52%, #0c1a30 100%);
+}
+.pq-mycar-remind-tile-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.pq-mycar-remind-tile.is-on .pq-mycar-remind-tile-icon {
+  color: #7eb8ff;
+  background: rgba(56, 140, 255, 0.12);
+  border-color: rgba(56, 140, 255, 0.24);
+}
+.pq-mycar-remind-tile-label {
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+.pq-mycar-remind-note {
+  margin-top: 10px;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: color-mix(in srgb, var(--color-text-secondary) 78%, transparent);
+}
+.pq-mycar-remind-note strong {
+  color: var(--color-text);
+  font-weight: 700;
+}
+.pq-mycar-remind-panel {
+  margin-top: 10px;
+  border-radius: 16px;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(0, 0, 0, 0.12) 100%),
+    linear-gradient(165deg, #0c182c 0%, #08111f 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 14%, rgba(90, 130, 180, 0.12));
+  box-shadow: inset 0 1px 0 rgba(230, 242, 255, 0.08);
+}
+
+/* 4 — Community + danger */
+.pq-mycar-ping-cta {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  font-size: 14px;
+  font-weight: 750;
+  color: #d9ecff;
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(77, 148, 255, 0.14) 0%, transparent 55%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.015) 42%, rgba(0, 0, 0, 0.16) 100%),
+    linear-gradient(165deg, #0c1a30 0%, #08111f 52%, #0a1730 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 26%, rgba(100, 140, 190, 0.16));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.14),
+    0 8px 20px rgba(0, 4, 14, 0.28),
+    0 0 16px rgba(56, 140, 255, 0.08);
+  transition: transform 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+.pq-mycar-ping-cta:active { transform: scale(0.985); }
+.pq-mycar-ping-hint {
+  margin-top: 8px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.4;
+  color: color-mix(in srgb, var(--color-text-secondary) 68%, transparent);
+}
+.pq-mycar-ping-active {
+  padding: 14px;
+  border-radius: 16px;
+  background:
+    radial-gradient(110% 80% at 20% 0%, rgba(77, 148, 255, 0.10) 0%, transparent 55%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(0, 0, 0, 0.14) 100%),
+    linear-gradient(165deg, #0c182c 0%, #08111f 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 22%, rgba(90, 130, 180, 0.14));
+  box-shadow: inset 0 1px 0 rgba(230, 242, 255, 0.10);
+}
+.pq-mycar-ping-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.pq-mycar-btn-ghost {
+  flex: 1;
+  padding: 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 750;
+  color: var(--color-text);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  transition: transform 150ms ease-out, background 150ms ease-out;
+}
+.pq-mycar-btn-ghost:active { transform: scale(0.97); }
+.pq-mycar-btn-danger {
+  flex: 1;
+  padding: 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 750;
+  color: #fca5a5;
+  background: rgba(248, 113, 113, 0.08);
+  border: 1px solid rgba(248, 113, 113, 0.22);
+  transition: transform 150ms ease-out, background 150ms ease-out;
+}
+.pq-mycar-btn-danger:active { transform: scale(0.97); }
+.pq-mycar-btn-danger:disabled { opacity: 0.5; }
+
+.pq-mycar-danger {
+  margin-top: 6px;
+  padding-top: 18px;
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 55%, transparent);
+}
+.pq-mycar-danger-trigger {
+  width: 100%;
+  padding: 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 650;
+  color: #f87171;
+  background: transparent;
+  border: none;
+  transition: background 150ms ease-out, color 150ms ease-out;
+}
+.pq-mycar-danger-trigger:hover {
+  background: rgba(248, 113, 113, 0.06);
+}
+.pq-mycar-danger-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pq-mycar-danger-confirm > p {
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+  color: color-mix(in srgb, var(--color-text-secondary) 88%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pq-mycar-nav,
+  .pq-mycar-remind-tile,
+  .pq-mycar-ping-cta,
+  .pq-mycar-btn-ghost,
+  .pq-mycar-btn-danger,
+  .pq-mycar-intel-side-btn {
+    transition: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pq-bottom-sheet-backdrop,
   .pq-bottom-sheet {

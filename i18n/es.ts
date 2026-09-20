@@ -240,6 +240,7 @@ const es: Record<string, string> = {
     'my_car.min_remaining': '{min} min restantes',
     'my_car.set_reminder': 'Poner recordatorio',
     'my_car.cancel': 'Cancelar',
+    'my_car.section_reminders': 'Recordatorios',
     'my_car.section_community': 'Comunidad',
     'my_car.spot_shared': 'Lugar compartido',
     'my_car.sharing_at': 'Compartiendo a las {time}',
