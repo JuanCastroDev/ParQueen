@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { AppView } from '../types';
-import { MapPin, Check, Locate, X, Bell, Clock, ChevronRight, ChevronLeft, Users, Car, Navigation, CheckCircle2 } from 'lucide-react';
+import { MapPin, Check, Locate, X, Bell, Clock, ChevronRight, ChevronLeft, Users, Car, Navigation, CheckCircle2, Calendar } from 'lucide-react';
 import { db } from '../firebase';
 import { collection, addDoc, Timestamp, doc, deleteDoc, writeBatch, updateDoc, getDocs, getDoc, setDoc, where, query, orderBy, startAt, endAt, serverTimestamp, limit } from 'firebase/firestore';
 import { auth } from '../firebaseConfig';
@@ -2118,9 +2118,10 @@ export const MapView: React.FC<MapViewProps> = ({
 
                         {/* Time picker view */}
                         {!myCarPingSuccess && myCarDepartureView === 'timePicker' && (
-                            <div>
-                                <div className="flex items-center gap-3 mb-5">
+                            <div className="pq-depart">
+                                <div className="pq-depart-header">
                                     <button
+                                        type="button"
                                         onClick={() => {
                                             setMyCarDepartureError(null);
                                             if (departureSheetOriginRef.current === 'prompt') {
@@ -2130,37 +2131,48 @@ export const MapView: React.FC<MapViewProps> = ({
                                                 setShowSessionSheet(true);
                                             }
                                         }}
-                                        className="w-9 h-9 rounded-full flex items-center justify-center bg-white/5 border border-[var(--color-border)] shrink-0">
-                                        <ChevronLeft size={18} className="text-[var(--color-text-secondary)]" />
+                                        className="pq-depart-back"
+                                        aria-label={t('ping_modal.back')}
+                                    >
+                                        <ChevronLeft size={18} strokeWidth={2.2} />
                                     </button>
-                                    <div>
-                                        <p className="text-base font-extrabold text-[var(--color-text)]">{t('ping_modal.set_departure')}</p>
-                                        <p className="text-xs text-[var(--color-text-secondary)]">{t('my_car.planning_to_leave')}</p>
+                                    <div className="pq-depart-heading">
+                                        <h2 className="pq-depart-title">{t('ping_modal.set_departure')}</h2>
+                                        <p className="pq-depart-sub">{t('my_car.planning_to_leave')}</p>
                                     </div>
                                 </div>
 
-                                <div className="mb-4">
-                                    <p className="text-[11px] font-bold text-[var(--color-text-secondary)] uppercase tracking-widest mb-2">{t('ping_modal.date')}</p>
-                                    <input
-                                        type="date"
-                                        value={myCarDepartureDate}
-                                        min={localDateStr()}
-                                        onChange={e => { if (e.target.value) setMyCarDepartureDate(e.target.value); }}
-                                        className="w-full bg-[var(--color-card)] border border-[var(--color-border)] rounded-2xl px-4 py-3 text-sm font-semibold text-white focus:outline-none"
-                                        style={{ colorScheme: 'dark' }}
-                                    />
+                                <div className="pq-depart-section">
+                                    <p className="pq-depart-label">{t('ping_modal.date')}</p>
+                                    <label className="pq-depart-date">
+                                        <input
+                                            type="date"
+                                            value={myCarDepartureDate}
+                                            min={localDateStr()}
+                                            onChange={e => { if (e.target.value) setMyCarDepartureDate(e.target.value); }}
+                                            className="pq-depart-date-input"
+                                        />
+                                        <Calendar size={16} strokeWidth={2} className="pq-depart-date-icon" aria-hidden="true" />
+                                    </label>
                                 </div>
-                                <p className="text-[11px] font-bold text-[var(--color-text-secondary)] uppercase tracking-widest mb-2">{t('ping_modal.time')}</p>
-                                <TimePicker
-                                    initialTime={myCarDepartureTime}
-                                    onTimeChange={setMyCarDepartureTime}
-                                />
+
+                                <div className="pq-depart-section">
+                                    <p className="pq-depart-label">{t('ping_modal.time')}</p>
+                                    <div className="pq-depart-time-card">
+                                        <TimePicker
+                                            initialTime={myCarDepartureTime}
+                                            onTimeChange={setMyCarDepartureTime}
+                                            variant="glass"
+                                        />
+                                    </div>
+                                </div>
 
                                 {myCarDepartureError && (
-                                    <p className="mt-3 text-sm text-[var(--color-danger)] font-semibold text-center">{myCarDepartureError}</p>
+                                    <p className="pq-depart-error">{myCarDepartureError}</p>
                                 )}
 
                                 <button
+                                    type="button"
                                     onClick={() => {
                                         const combined = combineDateAndTime(myCarDepartureDate, myCarDepartureTime);
                                         if (combined.getTime() <= Date.now()) {
@@ -2170,10 +2182,10 @@ export const MapView: React.FC<MapViewProps> = ({
                                         handleMyCarPing(combined);
                                     }}
                                     disabled={myCarDepartureLoading}
-                                    className="w-full mt-4 font-bold py-3.5 rounded-full flex items-center justify-center gap-2 text-white active:scale-95 transition-transform disabled:opacity-50"
-                                    style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>
-                                    <MapPin size={18} />
-                                    {myCarDepartureLoading ? t('my_car.scheduling') : t('my_car.schedule_spot')}
+                                    className="pq-depart-cta"
+                                >
+                                    <MapPin size={16} strokeWidth={2.2} />
+                                    <span>{myCarDepartureLoading ? t('my_car.scheduling') : t('my_car.schedule_spot')}</span>
                                 </button>
                             </div>
                         )}
