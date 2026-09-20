@@ -67,7 +67,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
     useLang();
     return (
         <header style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }} className="map-mobile-header w-full flex flex-col gap-2.5 pointer-events-auto">
-            <div className="map-header-search-row max-w-none md:max-w-[380px] mx-auto px-3 md:px-3.5 flex items-center gap-2.5">
+            <div className="map-header-search-row max-w-none md:max-w-[380px] mx-auto flex items-center gap-2.5">
                 <div data-tour="search" className="map-search-shell relative flex-1 min-w-0 flex items-center transition-all duration-300">
                     <span data-tour="profile" className="hidden md:inline-flex shrink-0 ml-1">
                         <UserAvatar user={user} onClick={() => setView(AppView.PROFILE)} />
@@ -115,7 +115,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
                     aria-label="Read street sign"
                     title="Read street sign"
                     onClick={() => setView(AppView.AI_ASSISTANT)}
-                    className="map-ai-action flex items-center justify-center rounded-full text-[#9ec4ff] active:scale-95 transition-all shrink-0"
+                    className="map-ai-action flex items-center justify-center rounded-full active:scale-95 transition-all shrink-0"
                 >
                     <Camera size={18} strokeWidth={2.05} aria-hidden="true" />
                 </button>
