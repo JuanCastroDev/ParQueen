@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { MapPin, Zap, Clock, Check, ChevronLeft, Calendar, ChevronRight } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { MapPin, Zap, Clock, Check, ChevronLeft } from 'lucide-react';
 import { StreetSpot } from '../../types';
 import { TimePicker } from './TimePicker';
+import { GlassDatePicker } from './GlassDatePicker';
 import { BottomSheet } from './BottomSheet';
 import { localDateStr, combineDateAndTime } from './dateUtils';
 import { t, useLang } from '../../i18n';
@@ -22,7 +23,6 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
     const [selectedDateStr, setSelectedDateStr] = useState(() => localDateStr());
     const [pingType, setPingType] = useState<'now' | 'later'>('now');
     const [timeError, setTimeError] = useState<string | null>(null);
-    const dateInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         if (isOpen) {
@@ -52,24 +52,22 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
     };
 
     const isEditing = !!spot;
-    const scheduledDate = new Date(selectedDateStr + 'T12:00:00');
-    const isScheduledToday = selectedDateStr === localDateStr();
-    const scheduledDayLabel = isScheduledToday
-        ? t('ping_modal.today')
-        : scheduledDate.toLocaleDateString([], { weekday: 'long' });
-    const scheduledDateFull = scheduledDate.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
 
     return (
-        <BottomSheet isOpen={isOpen} onClose={onClose} ariaLabel={t('ping_modal.sheet_label')}>
+        <BottomSheet isOpen={isOpen} onClose={onClose} ariaLabel={t('ping_modal.sheet_label')} onNestedBack={() => {
+            if (view !== 'timePicker') return false;
+            setView('main');
+            return true;
+        }}>
             {view === 'main' ? (
                 <div>
-                    <div className="flex flex-col items-center text-center mb-6">
-                        <p className="text-[10px] font-semibold tracking-widest uppercase text-[var(--color-info)] mb-1">{t('ping_modal.eyebrow')}</p>
-                        <h2 className="text-lg font-bold text-[var(--color-text)] leading-snug">
+                    <div className="pq-ping-sheet-header flex flex-col items-center text-center mb-6">
+                        <p className="pq-ping-sheet-eyebrow text-[10px] font-semibold tracking-widest uppercase text-[var(--color-info)] mb-1">{t('ping_modal.eyebrow')}</p>
+                        <h2 className="pq-ping-sheet-title text-[17px] font-bold text-[var(--color-text)] leading-snug">
                             {isEditing ? t('ping_modal.title_edit') : t('ping_modal.title_new')}
                         </h2>
-                        <p className="text-[12px] text-[var(--color-text-secondary)] mt-0.5">{t('ping_modal.subtitle')}</p>
-                        <div className="flex items-center gap-1.5 mt-3 px-3 py-1.5 rounded-xl bg-[#1e75ff]/10 border border-[#1e75ff]/20 max-w-full">
+                        <p className="pq-ping-sheet-subtitle text-[12px] text-[var(--color-text-secondary)] mt-1">{t('ping_modal.subtitle')}</p>
+                        <div className="pq-ping-sheet-location flex items-center gap-1.5 mt-3.5 px-3 py-1.5 rounded-xl max-w-full">
                             <MapPin size={12} className="text-[var(--color-info)] shrink-0" />
                             <p className="text-[12px] font-semibold text-[var(--color-text)] truncate">{spotAddress || t('ping_modal.locating')}</p>
                         </div>
@@ -78,14 +76,12 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
                     <div className="space-y-3">
                         <button
                             onClick={() => setPingType('now')}
-                            className={`w-full rounded-2xl p-3.5 flex items-center gap-3 transition-all ${
-                                pingType === 'now'
-                                    ? 'bg-blue-500/15 border border-blue-400/40 shadow-md'
-                                    : 'bg-[var(--color-card)] border border-[var(--color-border)] hover:bg-white/8'
+                            className={`pq-ping-option w-full p-3.5 flex items-center gap-3 transition-all ${
+                                pingType === 'now' ? 'is-selected' : ''
                             }`}
                         >
-                            <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                                pingType === 'now' ? 'bg-blue-500/20 text-[var(--color-accent)]' : 'bg-[var(--color-overlay)] text-[var(--color-text-secondary)]'
+                            <div className={`pq-ping-option-icon w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                                pingType === 'now' ? 'is-selected' : ''
                             }`}>
                                 <Zap size={18} />
                             </div>
@@ -94,7 +90,7 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
                                 <div className="text-[11px] text-[var(--color-text-secondary)]">{t('ping_modal.spot_opens')}</div>
                             </div>
                             <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 ${
-                                pingType === 'now' ? 'border-blue-400 bg-blue-500' : 'border-[var(--color-border)]'
+                                pingType === 'now' ? 'pq-ping-option-radio is-selected border-transparent' : 'pq-ping-option-radio border-[var(--color-border)]'
                             }`}>
                                 {pingType === 'now' && <Check size={12} className="text-white" />}
                             </div>
@@ -102,14 +98,12 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
 
                         <button
                             onClick={() => { setPingType('later'); setView('timePicker'); }}
-                            className={`w-full rounded-2xl p-3.5 flex items-center gap-3 transition-all ${
-                                pingType === 'later'
-                                    ? 'bg-blue-500/15 border border-blue-400/40 shadow-md'
-                                    : 'bg-[var(--color-card)] border border-[var(--color-border)] hover:bg-white/8'
+                            className={`pq-ping-option w-full p-3.5 flex items-center gap-3 transition-all ${
+                                pingType === 'later' ? 'is-selected' : ''
                             }`}
                         >
-                            <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                                pingType === 'later' ? 'bg-blue-500/20 text-[var(--color-accent)]' : 'bg-[var(--color-overlay)] text-[var(--color-text-secondary)]'
+                            <div className={`pq-ping-option-icon w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                                pingType === 'later' ? 'is-selected' : ''
                             }`}>
                                 <Clock size={18} />
                             </div>
@@ -127,7 +121,7 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
                                 </div>
                             </div>
                             <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 ${
-                                pingType === 'later' ? 'border-blue-400 bg-blue-500' : 'border-[var(--color-border)]'
+                                pingType === 'later' ? 'pq-ping-option-radio is-selected border-transparent' : 'pq-ping-option-radio border-[var(--color-border)]'
                             }`}>
                                 {pingType === 'later' && <Check size={12} className="text-white" />}
                             </div>
@@ -139,8 +133,7 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
                     )}
                     <button
                         onClick={handleSetTime}
-                        className="w-full mt-4 font-bold py-3.5 rounded-full flex items-center justify-center gap-2 text-white active:scale-95 transition-transform"
-                        style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}
+                        className="pq-ping-sheet-cta w-full mt-4 font-bold py-3.5 rounded-full flex items-center justify-center gap-2 text-white active:scale-[0.98] transition-transform"
                     >
                         <MapPin size={18} />
                         <span>{isEditing ? t('ping_modal.update') : pingType === 'later' ? t('ping_modal.schedule_ping') : t('ping_modal.ping_now')}</span>
@@ -149,7 +142,7 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
             ) : (
                 <>
                     {/* Header */}
-                    <div className="flex items-center gap-3 mb-6">
+                    <div className="flex items-center gap-3 mb-4">
                         <button
                             onClick={() => setView('main')}
                             aria-label={t('ping_modal.back')}
@@ -164,47 +157,25 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
                         </div>
                     </div>
 
-                    {/* Date */}
-                    <p className="text-[10px] font-semibold text-[var(--color-text-secondary)] uppercase tracking-widest mb-2">{t('ping_modal.date')}</p>
-                    <div className="mb-5">
-                        <button
-                            type="button"
-                            onClick={() => {
-                                const input = dateInputRef.current;
-                                if (!input) return;
-                                if (input.showPicker) { input.showPicker(); } else { input.click(); }
-                            }}
-                            className="w-full flex items-center gap-3 bg-[var(--color-card)] border border-[var(--color-border)] rounded-2xl px-4 py-3.5 text-left"
-                        >
-                            <div className="w-8 h-8 rounded-xl bg-blue-500/15 border border-blue-400/20 flex items-center justify-center shrink-0">
-                                <Calendar size={15} className="text-[var(--color-info)]" />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                                <p className="text-[11px] text-[var(--color-text-secondary)]">{scheduledDayLabel}</p>
-                                <p className="text-[14px] font-semibold text-[var(--color-text)] truncate">{scheduledDateFull}</p>
-                            </div>
-                            <ChevronRight size={16} className="text-[var(--color-text-secondary)] shrink-0" />
-                        </button>
-                        <input
-                            ref={dateInputRef}
-                            type="date"
-                            aria-label="Departure date"
+                    {/* Date — shared GlassDatePicker (same as Set Departure Time) */}
+                    <p className="text-[10px] font-semibold text-[var(--color-text-secondary)] uppercase tracking-widest mb-1.5">{t('ping_modal.date')}</p>
+                    <div className="mb-3">
+                        <GlassDatePicker
+                            id="pq-ping-later-date"
                             value={selectedDateStr}
                             min={localDateStr()}
-                            onChange={e => { if (e.target.value) setSelectedDateStr(e.target.value); }}
-                            className="absolute w-0 h-0 opacity-0 pointer-events-none"
-                            style={{ colorScheme: 'dark' }}
+                            onChange={setSelectedDateStr}
                         />
                     </div>
 
                     {/* Time */}
-                    <p className="text-[10px] font-semibold text-[var(--color-text-secondary)] uppercase tracking-widest mb-2">{t('ping_modal.time')}</p>
-                    <div className="mb-5 rounded-2xl bg-[var(--color-card)] border border-[var(--color-border)] px-4 py-4">
-                        <TimePicker initialTime={departureTime} onTimeChange={setDepartureTime} />
+                    <p className="text-[10px] font-semibold text-[var(--color-text-secondary)] uppercase tracking-widest mb-1.5">{t('ping_modal.time')}</p>
+                    <div className="mb-3 rounded-2xl bg-[var(--color-card)] border border-[var(--color-border)] px-3 py-2">
+                        <TimePicker initialTime={departureTime} onTimeChange={setDepartureTime} variant="glass" />
                     </div>
 
                     {/* Helper */}
-                    <p className="text-[11px] text-[var(--color-text-secondary)] text-center mb-5 px-2 leading-relaxed">{t('ping_modal.schedule_helper')}</p>
+                    <p className="text-[11px] text-[var(--color-text-secondary)] text-center mb-3 px-2 leading-relaxed">{t('ping_modal.schedule_helper')}</p>
 
                     {timeError && (
                         <p className="mb-3 text-sm text-[var(--color-danger)] font-semibold text-center">{t('ping_modal.future_time_error')}</p>
@@ -218,8 +189,7 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
                             }
                             onSave(combined);
                         }}
-                        className="w-full font-bold py-3.5 rounded-full flex items-center justify-center gap-2 text-white active:scale-95 transition-transform"
-                        style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}
+                        className="pq-ping-sheet-cta w-full font-bold py-3.5 rounded-full flex items-center justify-center gap-2 text-white active:scale-[0.98] transition-transform"
                     >
                         <MapPin size={18} />
                         {isEditing ? t('ping_modal.update') : t('ping_modal.schedule_ping')}

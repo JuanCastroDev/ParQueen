@@ -8,6 +8,7 @@ import { HydrantDistanceTool } from './assistant/HydrantDistanceTool';
 import { ParkingCheckTool } from './assistant/ParkingCheckTool';
 import { HydrantIcon } from './assistant/HydrantIcon';
 import { analyzeParkingSign, SignAnalysisResult } from '../services/geminiService';
+import { resolveAssistantAndroidBack } from '../utils/androidBackNavigation';
 import { useParkingTimer } from './street-parking/useParkingTimer';
 import { t, useLang } from '../i18n';
 import { loadRecentScans, recordScan, RecentScan } from '../utils/recentScans';
@@ -44,14 +45,20 @@ function splitExplanation(text: string): { headline: string | null; body: string
 
 type ToolMode = 'hub' | 'scan' | 'hydrant' | 'check';
 
+export type AssistantAndroidBackHandle = {
+  handleAndroidBack: () => 'handled' | 'leave';
+};
+
 interface AssistantViewProps {
   /** Leaves the assistant entirely. The hub's back control calls this. */
   onBack?: () => void;
   /** Opens the map's My Car flow, for the empty states that need a saved spot. */
   onOpenMyCar?: () => void;
+  /** Optional ref so App can mirror visible Parking Tools Back for Android system Back. */
+  androidBackRef?: React.MutableRefObject<AssistantAndroidBackHandle | null>;
 }
 
-export const AssistantView = ({ onBack, onOpenMyCar }: AssistantViewProps = {}) => {
+export const AssistantView = ({ onBack, onOpenMyCar, androidBackRef }: AssistantViewProps = {}) => {
   useLang();
   const [mode, setMode] = useState<ToolMode>('hub');
   const [scanState, setScanState] = useState<ScanState>('idle');
@@ -152,6 +159,31 @@ export const AssistantView = ({ onBack, onOpenMyCar }: AssistantViewProps = {}) 
     setRecent(loadRecentScans());
   };
 
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const backToHubRef = useRef(backToHub);
+  backToHubRef.current = backToHub;
+  const onBackRef = useRef(onBack);
+  onBackRef.current = onBack;
+
+  useEffect(() => {
+    if (!androidBackRef) return;
+    androidBackRef.current = {
+      handleAndroidBack: () => {
+        const action = resolveAssistantAndroidBack(modeRef.current === 'hub');
+        if (action === 'backToHub') {
+          backToHubRef.current();
+          return 'handled';
+        }
+        onBackRef.current?.();
+        return 'leave';
+      },
+    };
+    return () => {
+      androidBackRef.current = null;
+    };
+  }, [androidBackRef]);
+
   const reminderSet = !!timer;
 
   const setReminder = () => {
@@ -175,21 +207,21 @@ export const AssistantView = ({ onBack, onOpenMyCar }: AssistantViewProps = {}) 
            subtitles and two back affordances stacked. AssistantView now owns the
            header outright and App.tsx renders none. */}
       <header
-        className="flex items-center gap-3 mb-5 -mx-1"
+        className="flex items-center gap-3 mb-4 -mx-1"
         style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top, 0px))' }}
       >
         <button
           type="button"
           onClick={mode === 'hub' ? (onBack ?? (() => {})) : backToHub}
           aria-label={mode === 'hub' ? t('assistant.back_map_aria') : t('assistant.back_hub_aria')}
-          className="w-11 h-11 rounded-full flex items-center justify-center bg-[var(--color-overlay)] border border-[var(--color-border)] text-[var(--color-text)] hover:bg-white/10 active:scale-95 focus-visible:ring-2 focus-visible:ring-[#38bdf8] focus-visible:outline-none transition-all shrink-0"
+          className="pq-assist-back focus-visible:outline-none"
         >
           <ChevronLeft size={20} />
         </button>
         <h1
           ref={headingRef}
           tabIndex={-1}
-          className="text-xl font-extrabold text-[var(--color-text)] tracking-tight truncate focus:outline-none"
+          className="text-[19px] font-bold text-[var(--color-text)] tracking-tight truncate focus:outline-none"
         >
           {mode === 'hub' ? t('assistant.hub_title')
             : mode === 'scan' ? t('assistant.scan_title')
@@ -200,68 +232,63 @@ export const AssistantView = ({ onBack, onOpenMyCar }: AssistantViewProps = {}) 
 
       {/* ── Hub ────────────────────────────────────────────────────────────── */}
       {mode === 'hub' && (
-        <div className="space-y-3.5">
-          {/* Three tools, one visual family. Each is a real destination — there
-              are no disabled cards and no "Soon" badges on this screen. */}
-          {([
-            {
-              key: 'scan',
-              title: t('assistant.scan_title'),
-              desc: t('assistant.scan_desc_long'),
-              tag: t('assistant.tag_ai_vision'),
-              icon: <ScanLine size={22} aria-hidden="true" />,
-              tone: 'pq-tool--scan',
-              go: openScanner,
-            },
-            {
-              key: 'hydrant',
-              title: t('assistant.hydrant_title'),
-              desc: t('assistant.hydrant_desc'),
-              tag: t('assistant.tag_15ft'),
-              icon: <HydrantIcon />,
-              tone: 'pq-tool--hydrant',
-              go: () => setMode('hydrant'),
-            },
-            {
-              key: 'check',
-              title: t('assistant.check_title'),
-              desc: t('assistant.check_desc'),
-              tag: t('assistant.tag_parking_check'),
-              icon: <ShieldCheck size={22} aria-hidden="true" />,
-              tone: 'pq-tool--check',
-              go: () => setMode('check'),
-            },
-          ] as const).map(tool => (
-            <button
-              key={tool.key}
-              type="button"
-              onClick={tool.go}
-              aria-label={tool.title}
-              className={`pq-tool-card ${tool.tone} w-full text-left rounded-[22px] p-4 flex items-center gap-4 focus-visible:ring-2 focus-visible:ring-[#38bdf8] focus-visible:outline-none`}
-            >
-              <span className="pq-tool-icon shrink-0" aria-hidden="true">{tool.icon}</span>
-              <span className="block flex-1 min-w-0">
-                <span className="block text-[9.5px] font-bold tracking-[0.16em] text-[var(--color-info)] mb-1">
-                  {tool.tag}
-                </span>
-                <span className="block font-extrabold text-[15px] text-[var(--color-text)] leading-tight">
-                  {tool.title}
-                </span>
-                <span className="block text-xs text-[var(--color-text-secondary)] mt-1 leading-snug">
-                  {tool.desc}
-                </span>
-              </span>
-              <ChevronRight size={18} aria-hidden="true" className="shrink-0 text-[var(--color-text-secondary)]" />
-            </button>
-          ))}
+        <div className="pq-tools-hub">
+          {/* Featured primary: Scan a Parking Sign */}
+          <button
+            type="button"
+            onClick={openScanner}
+            aria-label={t('assistant.scan_title')}
+            className="pq-tool-featured pq-tool--scan w-full text-left focus-visible:ring-2 focus-visible:ring-[#38bdf8] focus-visible:outline-none"
+          >
+            <span className="pq-tool-featured-icon" aria-hidden="true">
+              <ScanLine size={26} />
+            </span>
+            <span className="pq-tool-featured-body">
+              <span className="pq-tool-featured-title">{t('assistant.scan_title')}</span>
+              <span className="pq-tool-featured-desc">{t('assistant.scan_desc_long')}</span>
+            </span>
+            <ChevronRight size={16} aria-hidden="true" className="pq-tool-chevron shrink-0" />
+          </button>
 
-          {/* Recent scans — real local history only */}
-          <section className="rounded-3xl p-5 bg-[var(--color-card)] border border-[var(--color-border)]">
-            <h2 className="text-[10px] font-bold tracking-[0.18em] text-[var(--color-text-secondary)] mb-3">
+          {/* Secondary tools — equal dashboard tiles */}
+          <div className="pq-tools-secondary">
+            <button
+              type="button"
+              onClick={() => setMode('hydrant')}
+              aria-label={t('assistant.hydrant_title')}
+              className="pq-tool-tile pq-tool--hydrant focus-visible:ring-2 focus-visible:ring-[#38bdf8] focus-visible:outline-none"
+            >
+              <span className="pq-tool-tile-icon" aria-hidden="true">
+                <HydrantIcon />
+              </span>
+              <span className="pq-tool-tile-label">{t('assistant.hydrant_short')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('check')}
+              aria-label={t('assistant.check_title')}
+              className="pq-tool-tile pq-tool--check focus-visible:ring-2 focus-visible:ring-[#38bdf8] focus-visible:outline-none"
+            >
+              <span className="pq-tool-tile-icon" aria-hidden="true">
+                <ShieldCheck size={22} />
+              </span>
+              <span className="pq-tool-tile-label">{t('assistant.check_title')}</span>
+            </button>
+          </div>
+
+          {/* Recent — real local history only */}
+          <section className="pq-tools-recent">
+            <h2 className="pq-tools-recent-title">
               {t('assistant.recent_title')}
             </h2>
             {recent.length === 0 ? (
-              <p className="text-sm text-[var(--color-text-secondary)] py-2">{t('assistant.recent_empty')}</p>
+              <div className="pq-tools-recent-empty-panel">
+                <span className="pq-tools-recent-empty-icon" aria-hidden="true">
+                  <Clock size={18} />
+                </span>
+                <p className="pq-tools-recent-empty-title">{t('assistant.recent_empty_title')}</p>
+                <p className="pq-tools-recent-empty">{t('assistant.recent_empty')}</p>
+              </div>
             ) : (
               <ul className="space-y-2.5">
                 {recent.map(scan => (

@@ -32,6 +32,7 @@ const reverseGeocode = async (lng: number, lat: number): Promise<string> => {
 import { MapItem, MapViewProps } from './street-parking/types';
 import { SpotModal } from './street-parking/SpotModal';
 import { TimePicker } from './street-parking/TimePicker';
+import { GlassDatePicker } from './street-parking/GlassDatePicker';
 import { localDateStr, combineDateAndTime } from './street-parking/dateUtils';
 import { useSearch } from './street-parking/useSearch';
 import { useSpotData } from './street-parking/useSpotData';
@@ -243,6 +244,7 @@ export const MapView: React.FC<MapViewProps> = ({
     const [reminderAmPm, setReminderAmPm] = useState<'AM' | 'PM'>(new Date().getHours() < 12 ? 'AM' : 'PM');
     const [reminderHour, setReminderHour] = useState('');
     const [reminderMinute, setReminderMinute] = useState('');
+    const [reminderDate, setReminderDate] = useState(() => localDateStr());
     const reminderMinuteRef = useRef<HTMLInputElement>(null);
     const reminderSlots = useMemo(() => {
         const now = new Date();
@@ -1033,17 +1035,42 @@ export const MapView: React.FC<MapViewProps> = ({
         if (!loc?.lat || !loc?.lng) return;
 
         const el = document.createElement('div');
-        el.style.cssText = 'position:relative;display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:10;overflow:visible';
+        el.className = 'pq-mycar-map-marker';
+        el.setAttribute('role', 'img');
+        el.setAttribute('aria-label', loc.address || t('my_car.last_parked_here'));
         el.innerHTML = `
-            <div style="width:46px;height:46px;flex-shrink:0;pointer-events:none;">
-              <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%;filter:drop-shadow(0px 4px 10px rgba(30,117,255,0.5));">
-                <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" fill="#1e75ff"/>
-                <g transform="translate(12,10) scale(0.38) translate(-12,-12)">
-                  <path d="m2 4 3 12h14l3-12-6 5-4-5-4 5-6-5z" fill="none" stroke="#facc15" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
-                  <line x1="5" y1="16" x2="19" y2="16" stroke="#facc15" stroke-width="2.2" stroke-linecap="round"/>
-                </g>
-              </svg>
-            </div>
+            <span class="pq-mycar-map-marker-halo" aria-hidden="true"></span>
+            <svg class="pq-mycar-map-marker-svg" viewBox="0 0 48 62" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <defs>
+                <linearGradient id="pqMycarPinBody" x1="24" y1="4" x2="24" y2="48" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#5aa8ff"/>
+                  <stop offset="48%" stop-color="#2f7fff"/>
+                  <stop offset="100%" stop-color="#1659d8"/>
+                </linearGradient>
+                <linearGradient id="pqMycarPinSheen" x1="14" y1="6" x2="34" y2="34" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#ffffff" stop-opacity="0.38"/>
+                  <stop offset="55%" stop-color="#ffffff" stop-opacity="0.06"/>
+                  <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+                </linearGradient>
+                <filter id="pqMycarPinSoft" x="-40%" y="-40%" width="180%" height="180%">
+                  <feDropShadow dx="0" dy="4" stdDeviation="3.5" flood-color="#1e75ff" flood-opacity="0.45"/>
+                </filter>
+              </defs>
+              <!-- unified pin + tip -->
+              <path filter="url(#pqMycarPinSoft)" fill="url(#pqMycarPinBody)" d="M24 3.5c-9.2 0-16.6 7.4-16.6 16.5 0 11.8 14.2 28.2 15.8 30 0.4 0.45 1.2 0.45 1.6 0 1.6-1.8 15.8-18.2 15.8-30C40.6 10.9 33.2 3.5 24 3.5z"/>
+              <path fill="url(#pqMycarPinSheen)" d="M24 3.5c-9.2 0-16.6 7.4-16.6 16.5 0 11.8 14.2 28.2 15.8 30 0.4 0.45 1.2 0.45 1.6 0 1.6-1.8 15.8-18.2 15.8-30C40.6 10.9 33.2 3.5 24 3.5z" opacity="0.9"/>
+              <circle cx="24" cy="20" r="10.2" fill="rgba(6,18,40,0.28)" stroke="rgba(210,235,255,0.28)" stroke-width="1"/>
+              <!-- car glyph -->
+              <g fill="none" stroke="#eaf6ff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M15.6 22.2h16.8l-1.4-4.1c-0.3-0.9-1.1-1.5-2.1-1.5H19.1c-0.9 0-1.8 0.6-2.1 1.5l-1.4 4.1z"/>
+                <path d="M14.4 22.2h19.2v3.4c0 0.7-0.6 1.3-1.3 1.3h-1.1c-0.5 0-0.9-0.3-1.1-0.7l-0.2-0.5H18.1l-0.2 0.5c-0.2 0.4-0.6 0.7-1.1 0.7h-1.1c-0.7 0-1.3-0.6-1.3-1.3v-3.4z" fill="rgba(234,246,255,0.12)"/>
+                <circle cx="18.2" cy="26.8" r="1.15" fill="#eaf6ff" stroke="none"/>
+                <circle cx="29.8" cy="26.8" r="1.15" fill="#eaf6ff" stroke="none"/>
+              </g>
+              <!-- ground anchor -->
+              <ellipse cx="24" cy="57.2" rx="5.2" ry="2.1" fill="rgba(30,117,255,0.35)"/>
+              <ellipse cx="24" cy="57.2" rx="2.4" ry="1.05" fill="rgba(210,235,255,0.85)"/>
+            </svg>
         `;
         el.title = loc.address || t('my_car.last_parked_here');
 
@@ -1550,7 +1577,13 @@ export const MapView: React.FC<MapViewProps> = ({
             />
 
             {/* Spot details bottom sheet */}
-            <BottomSheet isOpen={!!selectedItem && !isSpotModalOpen} ariaLabel="Spot details" onClose={() => { setSelectedItem(null); setSelectedItemManageMode(false); setSpotDetailsBackStack(null); }}>
+            <BottomSheet isOpen={!!selectedItem && !isSpotModalOpen} ariaLabel="Spot details" onClose={() => { setSelectedItem(null); setSelectedItemManageMode(false); setSpotDetailsBackStack(null); }} onNestedBack={() => {
+                if (!spotDetailsBackStack) return false;
+                setSelectedItem(null);
+                setStackGroup(spotDetailsBackStack);
+                setSpotDetailsBackStack(null);
+                return true;
+            }}>
                 <SpotDetailsCard
                     selectedItem={selectedItem}
                     backLabel={spotDetailsBackStack ? `Back to ${spotDetailsBackStack.length} spots` : undefined}
@@ -1587,19 +1620,18 @@ export const MapView: React.FC<MapViewProps> = ({
             {/* My Car — Parking Session sheet (personal only) */}
             <BottomSheet isOpen={showSessionSheet} ariaLabel="My Car session" onClose={() => { setShowSessionSheet(false); setShowCustomReminder(false); setShowRemindPanel(false); }}>
                 {savedSpot && (
-                    <div>
-                        {/* Header */}
-                        <div className="flex items-center gap-3 mb-5 pb-4 border-b border-[var(--color-border)]">
-                            <div className="w-12 h-12 rounded-[14px] flex items-center justify-center shrink-0"
-                                style={{ background: 'linear-gradient(135deg, var(--color-brand), var(--color-brand-2))' }}>
+                    <div className="pq-mycar">
+                        {/* 1 — Car summary hero */}
+                        <section className="pq-mycar-hero" aria-label={t('common.my_car')}>
+                            <div className="pq-mycar-hero-icon">
                                 <VehicleIcon type={user?.vehicleType} color={user?.vehicleColor} size={22} />
                             </div>
-                            <div className="flex-1 min-w-0">
-                                <p className="text-[10px] font-bold text-[var(--color-info)] uppercase tracking-widest mb-0.5">{t('common.my_car')}</p>
+                            <div className="pq-mycar-hero-body">
+                                <p className="pq-mycar-hero-kicker">{t('common.my_car')}</p>
                                 {savedSpot.address && (
-                                    <p className="text-[15px] font-bold text-[var(--color-text)] leading-tight truncate">{savedSpot.address}</p>
+                                    <p className="pq-mycar-hero-address">{savedSpot.address}</p>
                                 )}
-                                <p className="text-xs text-[var(--color-text-secondary)]">{parkedDuration || t('my_car.just_parked')}</p>
+                                <p className="pq-mycar-hero-status">{parkedDuration || t('my_car.just_parked')}</p>
                             </div>
                             <button
                                 onClick={() => {
@@ -1611,14 +1643,15 @@ export const MapView: React.FC<MapViewProps> = ({
                                     setShowSessionSheet(false);
                                 }}
                                 aria-label="Navigate to my car"
-                                className="flex items-center gap-1.5 px-3 py-2 rounded-full shrink-0 border border-[#1e75ff]/40 bg-[#1e75ff]/15 text-[var(--color-info)] active:scale-95 transition-all"
+                                className="pq-mycar-nav"
                             >
                                 <Navigation size={14} />
-                                <span className="text-[11px] font-bold">Navigate</span>
+                                <span>Navigate</span>
                             </button>
-                        </div>
+                        </section>
 
-                        {/* Street Intelligence */}
+                        {/* 2 — Safety / status hero */}
+                        <section className="pq-mycar-safety" aria-label="Street intelligence">
                         {savedSpot.segmentId && savedSpot.segmentStreetName ? (
                             <StreetIntelligenceCard
                                 segmentId={savedSpot.segmentId}
@@ -1634,29 +1667,29 @@ export const MapView: React.FC<MapViewProps> = ({
                                 }}
                             />
                         ) : savedSpot.streetIntelStatus === 'unavailable' || savedSpot.streetIntelStatus === 'failed' ? (
-                            <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-card)] px-4 py-4 mb-4">
-                                <div className="flex items-center gap-2 mb-2">
+                            <div className="pq-mycar-intel-unavailable">
+                                <div className="pq-mycar-intel-street">
                                     <MapPin size={14} className="text-[var(--color-text-secondary)]" />
-                                    <p className="text-[11px] font-bold text-[var(--color-text-secondary)] uppercase tracking-widest">
+                                    <p>
                                         {savedSpot.streetIntelStatus === 'failed' ? t('street_intel.failed_title') :
                                          savedSpot.streetIntelReason === 'no_sweepnyc_notes' || savedSpot.streetIntelReason === 'no_signs' ? t('street_intel.unavailable_title_no_data') :
                                          t('street_intel.unavailable_title_general')}
                                     </p>
                                 </div>
-                                <p className="text-sm text-[var(--color-text-secondary)] mb-1">
+                                <p className="pq-mycar-intel-reason">
                                     {savedSpot.streetIntelStatus === 'failed'
                                         ? t('street_intel.failed_body')
                                         : savedSpot.streetIntelReason === 'no_sweepnyc_notes' || savedSpot.streetIntelReason === 'no_signs'
                                         ? t('street_intel.unavailable_body_no_data')
                                         : t('street_intel.unavailable_body_general')}
                                 </p>
-                                <p className="text-xs text-[var(--color-text-secondary)]">
+                                <p className="pq-mycar-intel-reason" style={{ marginBottom: 0 }}>
                                     {t('street_intel.check_signs')}
                                 </p>
                                 <button
                                     onClick={handleRetryStreetIntel}
                                     disabled={retryingStreetIntel}
-                                    className="mt-2 text-xs font-semibold text-[var(--color-accent)] disabled:opacity-50"
+                                    className="pq-mycar-intel-retry"
                                 >
                                     {retryingStreetIntel
                                         ? t('street_intel.trying')
@@ -1668,9 +1701,14 @@ export const MapView: React.FC<MapViewProps> = ({
                         ) : (
                             <StreetIntelligenceUnavailableCard />
                         )}
+                        </section>
 
-                        {/* Compact action row: cleaning alert / move reminder */}
-                        <div className="grid grid-cols-2 gap-2 mb-3">
+                        {/* 3 — Reminders */}
+                        <section className="pq-mycar-reminders" aria-label={t('my_car.section_reminders')}>
+                        <div className="pq-mycar-section-label">
+                            <span>{t('my_car.section_reminders')}</span>
+                        </div>
+                        <div className="pq-mycar-remind-grid">
                             <button
                                 onClick={() => {
                                     const next = !reminderEnabled;
@@ -1682,44 +1720,37 @@ export const MapView: React.FC<MapViewProps> = ({
                                 }}
                                 disabled={!savedSpot.segmentId}
                                 aria-pressed={reminderEnabled}
-                                className={`flex flex-col items-center gap-1.5 py-3 rounded-2xl border transition-all active:scale-95 disabled:opacity-40 disabled:pointer-events-none ${
-                                    reminderEnabled
-                                        ? 'border-[#1e75ff]/60 bg-[#1e75ff]/25'
-                                        : 'border-[var(--color-border)] bg-white/5'
-                                }`}
+                                className={`pq-mycar-remind-tile${reminderEnabled ? ' is-on' : ''}`}
                             >
-                                <Bell size={18} className={reminderEnabled ? 'text-[var(--color-info)]' : 'text-[var(--color-text-secondary)]'} />
-                                <span className={`text-[10px] font-bold leading-tight text-center ${reminderEnabled ? 'text-white' : 'text-[var(--color-text-secondary)]'}`}>Cleaning<br/>alert</span>
+                                <span className="pq-mycar-remind-on" aria-hidden="true">On</span>
+                                <div className="pq-mycar-remind-tile-icon">
+                                    <Bell size={16} />
+                                </div>
+                                <span className="pq-mycar-remind-tile-label">Cleaning alert</span>
                             </button>
                             <button
                                 onClick={() => setShowRemindPanel(v => !v)}
                                 aria-expanded={showRemindPanel || !!parkingTimer.timer}
-                                className={`flex flex-col items-center gap-1.5 py-3 rounded-2xl border transition-all active:scale-95 ${
-                                    parkingTimer.timer || showRemindPanel
-                                        ? 'border-[#1e75ff]/60 bg-[#1e75ff]/25'
-                                        : 'border-[var(--color-border)] bg-white/5'
-                                }`}
+                                className={`pq-mycar-remind-tile${parkingTimer.timer || showRemindPanel ? ' is-on' : ''}`}
                             >
-                                <Clock size={18} className={parkingTimer.timer || showRemindPanel ? 'text-[var(--color-info)]' : 'text-[var(--color-text-secondary)]'} />
-                                <span className={`text-[10px] font-bold leading-tight text-center ${parkingTimer.timer || showRemindPanel ? 'text-white' : 'text-[var(--color-text-secondary)]'}`}>
-                                    {parkingTimer.timer ? <>{parkingTimer.minutesRemaining}m left</> : <>Move<br/>reminder</>}
+                                <span className="pq-mycar-remind-on" aria-hidden="true">On</span>
+                                <div className="pq-mycar-remind-tile-icon">
+                                    <Clock size={16} />
+                                </div>
+                                <span className="pq-mycar-remind-tile-label">
+                                    {parkingTimer.timer ? <>{parkingTimer.minutesRemaining}m left</> : <>Move reminder</>}
                                 </span>
                             </button>
                         </div>
 
-                        {/* Cleaning alert info strip */}
                         {reminderEnabled && (
-                            <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-[#1e75ff]/10 border border-[#1e75ff]/25 mb-3">
-                                <Bell size={13} className="text-[var(--color-info)] shrink-0" />
-                                <p className="text-[11px] text-[var(--color-text-secondary)] leading-snug">
-                                    We'll remind you <span className="text-white font-semibold">1 hour before</span> cleaning, and again at <span className="text-white font-semibold">30 minutes before</span> street cleaning starts
-                                </p>
-                            </div>
+                            <p className="pq-mycar-remind-note">
+                                We'll remind you <strong>1 hour before</strong> cleaning, and again at <strong>30 minutes before</strong> street cleaning starts
+                            </p>
                         )}
 
-                        {/* Move reminder expandable panel */}
                         {(showRemindPanel || !!parkingTimer.timer) && (
-                            <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-card)] overflow-hidden mb-4">
+                            <div className="pq-mycar-remind-panel">
                                 {parkingTimer.timer ? (
                                     <div className="flex items-center gap-2.5 px-4 py-3">
                                         <Clock size={14} className="text-[var(--color-info)] shrink-0" />
@@ -1730,75 +1761,71 @@ export const MapView: React.FC<MapViewProps> = ({
                                     </div>
                                 ) : showCustomReminder ? (
                                     <div>
-                                        <div className="grid grid-cols-2 divide-x divide-[var(--color-border)]">
-                                            <div className="px-4 py-3">
-                                                <p className="text-[10px] font-bold text-[var(--color-text-secondary)] uppercase tracking-widest mb-1">{t('ping_modal.date')}</p>
-                                                <input
-                                                    type="date"
-                                                    id="pq-reminder-date"
-                                                    defaultValue={new Date().toISOString().split('T')[0]}
-                                                    min={new Date().toISOString().split('T')[0]}
-                                                    className="w-full bg-transparent text-sm font-semibold text-white focus:outline-none"
-                                                    style={{ colorScheme: 'dark' }}
-                                                />
-                                            </div>
-                                            <div className="px-4 py-3">
-                                                <p className="text-[10px] font-bold text-[var(--color-text-secondary)] uppercase tracking-widest mb-1">{t('ping_modal.time')}</p>
-                                                <div className="flex items-center gap-2">
-                                                    <div className="flex items-center gap-0.5 flex-1 min-w-0">
-                                                        <input
-                                                            type="text"
-                                                            inputMode="numeric"
-                                                            placeholder="12"
-                                                            value={reminderHour}
-                                                            maxLength={2}
-                                                            autoFocus
-                                                            className="w-7 bg-transparent text-sm font-semibold text-white text-center focus:outline-none"
-                                                            onFocus={(e) => e.target.select()}
-                                                            onChange={(e) => {
-                                                                const raw = e.target.value.replace(/\D/g, '');
-                                                                if (!raw) { setReminderHour(''); return; }
-                                                                const n = parseInt(raw);
-                                                                if (n > 12) { setReminderHour('12'); reminderMinuteRef.current?.focus(); return; }
-                                                                if (n === 0) { setReminderHour('1'); return; }
-                                                                setReminderHour(raw);
-                                                                if (raw.length === 2 || (raw.length === 1 && n >= 2)) {
-                                                                    reminderMinuteRef.current?.focus();
-                                                                }
-                                                            }}
-                                                        />
-                                                        <span className="text-sm font-bold text-[var(--color-text-secondary)] select-none">:</span>
-                                                        <input
-                                                            ref={reminderMinuteRef}
-                                                            type="text"
-                                                            inputMode="numeric"
-                                                            placeholder="00"
-                                                            value={reminderMinute}
-                                                            maxLength={2}
-                                                            className="w-7 bg-transparent text-sm font-semibold text-white text-center focus:outline-none"
-                                                            onFocus={(e) => e.target.select()}
-                                                            onChange={(e) => {
-                                                                const raw = e.target.value.replace(/\D/g, '');
-                                                                if (!raw) { setReminderMinute(''); return; }
-                                                                const n = parseInt(raw);
-                                                                if (n > 59) { setReminderMinute('59'); return; }
-                                                                setReminderMinute(raw);
-                                                            }}
-                                                        />
-                                                    </div>
-                                                    <div className="flex rounded-lg overflow-hidden border border-[var(--color-border)] shrink-0">
-                                                        {(['AM', 'PM'] as const).map(period => (
-                                                            <button key={period} type="button"
-                                                                onClick={() => setReminderAmPm(period)}
-                                                                className={`px-2.5 py-1 text-xs font-bold transition-colors ${
-                                                                    reminderAmPm === period
-                                                                        ? 'bg-[var(--color-brand)] text-white'
-                                                                        : 'bg-transparent text-[var(--color-text-secondary)] hover:text-[var(--color-text)]'
-                                                                }`}>
-                                                                {period}
-                                                            </button>
-                                                        ))}
-                                                    </div>
+                                        <div className="px-4 pt-3 pb-2">
+                                            <p className="text-[10px] font-bold text-[var(--color-text-secondary)] uppercase tracking-widest mb-1.5">{t('ping_modal.date')}</p>
+                                            <GlassDatePicker
+                                                id="pq-reminder-date"
+                                                value={reminderDate}
+                                                min={localDateStr()}
+                                                onChange={setReminderDate}
+                                            />
+                                        </div>
+                                        <div className="px-4 pb-3">
+                                            <p className="text-[10px] font-bold text-[var(--color-text-secondary)] uppercase tracking-widest mb-1.5">{t('ping_modal.time')}</p>
+                                            <div className="flex items-center gap-2">
+                                                <div className="flex items-center gap-0.5 flex-1 min-w-0">
+                                                    <input
+                                                        type="text"
+                                                        inputMode="numeric"
+                                                        placeholder="12"
+                                                        value={reminderHour}
+                                                        maxLength={2}
+                                                        autoFocus
+                                                        className="w-7 bg-transparent text-sm font-semibold text-white text-center focus:outline-none"
+                                                        onFocus={(e) => e.target.select()}
+                                                        onChange={(e) => {
+                                                            const raw = e.target.value.replace(/\D/g, '');
+                                                            if (!raw) { setReminderHour(''); return; }
+                                                            const n = parseInt(raw);
+                                                            if (n > 12) { setReminderHour('12'); reminderMinuteRef.current?.focus(); return; }
+                                                            if (n === 0) { setReminderHour('1'); return; }
+                                                            setReminderHour(raw);
+                                                            if (raw.length === 2 || (raw.length === 1 && n >= 2)) {
+                                                                reminderMinuteRef.current?.focus();
+                                                            }
+                                                        }}
+                                                    />
+                                                    <span className="text-sm font-bold text-[var(--color-text-secondary)] select-none">:</span>
+                                                    <input
+                                                        ref={reminderMinuteRef}
+                                                        type="text"
+                                                        inputMode="numeric"
+                                                        placeholder="00"
+                                                        value={reminderMinute}
+                                                        maxLength={2}
+                                                        className="w-7 bg-transparent text-sm font-semibold text-white text-center focus:outline-none"
+                                                        onFocus={(e) => e.target.select()}
+                                                        onChange={(e) => {
+                                                            const raw = e.target.value.replace(/\D/g, '');
+                                                            if (!raw) { setReminderMinute(''); return; }
+                                                            const n = parseInt(raw);
+                                                            if (n > 59) { setReminderMinute('59'); return; }
+                                                            setReminderMinute(raw);
+                                                        }}
+                                                    />
+                                                </div>
+                                                <div className="flex rounded-lg overflow-hidden border border-[var(--color-border)] shrink-0">
+                                                    {(['AM', 'PM'] as const).map(period => (
+                                                        <button key={period} type="button"
+                                                            onClick={() => setReminderAmPm(period)}
+                                                            className={`px-2.5 py-1 text-xs font-bold transition-colors ${
+                                                                reminderAmPm === period
+                                                                    ? 'bg-[var(--color-brand)] text-white'
+                                                                    : 'bg-transparent text-[var(--color-text-secondary)] hover:text-[var(--color-text)]'
+                                                            }`}>
+                                                            {period}
+                                                        </button>
+                                                    ))}
                                                 </div>
                                             </div>
                                         </div>
@@ -1810,12 +1837,11 @@ export const MapView: React.FC<MapViewProps> = ({
                                             </button>
                                             <button
                                                 onClick={() => {
-                                                    const dateEl = document.getElementById('pq-reminder-date') as HTMLInputElement;
                                                     const hRaw = parseInt(reminderHour) || 12;
                                                     const m = parseInt(reminderMinute) || 0;
                                                     let h = hRaw % 12;
                                                     if (reminderAmPm === 'PM') h += 12;
-                                                    const dateStr = dateEl.value || new Date().toISOString().split('T')[0];
+                                                    const dateStr = reminderDate || localDateStr();
                                                     const target = new Date(`${dateStr}T${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`);
                                                     const minutes = Math.round((target.getTime() - Date.now()) / 60000);
                                                     if (minutes > 0) {
@@ -1834,7 +1860,7 @@ export const MapView: React.FC<MapViewProps> = ({
                                         {[{ label: '15m', minutes: 15 }, { label: '30m', minutes: 30 }, { label: '1 hr', minutes: 60 }, { label: 'Custom', minutes: -1 }].map(opt => (
                                             <button key={opt.minutes}
                                                 onClick={() => {
-                                                    if (opt.minutes === -1) { setReminderHour(''); setReminderMinute(''); setShowCustomReminder(true); return; }
+                                                    if (opt.minutes === -1) { setReminderHour(''); setReminderMinute(''); setReminderDate(localDateStr()); setShowCustomReminder(true); return; }
                                                     parkingTimer.startTimer(opt.minutes, savedSpot.address || '', () => setShowSessionSheet(true));
                                                     setShowRemindPanel(false);
                                                 }}
@@ -1846,11 +1872,12 @@ export const MapView: React.FC<MapViewProps> = ({
                                 )}
                             </div>
                         )}
+                        </section>
 
-                        {/* Community: share this spot */}
-                        <div className="flex items-center gap-2 mb-2">
-                            <span className="text-[10px] font-semibold text-[var(--color-text-secondary)]/50 uppercase tracking-widest shrink-0">{t('my_car.section_community')}</span>
-                            <div className="flex-1 h-px bg-[var(--color-border)]/40" />
+                        {/* 4 — Community + danger zone */}
+                        <section className="pq-mycar-community" aria-label={t('my_car.section_community')}>
+                        <div className="pq-mycar-section-label">
+                            <span>{t('my_car.section_community')}</span>
                         </div>
                         {savedSpot.linkedPingId ? (() => {
                             const linkedSpot = spotData.activeSpots.find(s => s.id === savedSpot.linkedPingId);
@@ -1872,7 +1899,7 @@ export const MapView: React.FC<MapViewProps> = ({
                                 return t('my_car.drivers_see_date', { date: depTime.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }), time });
                             })();
                             return (
-                                <div className="rounded-2xl border border-[#1e75ff]/25 bg-[#1e75ff]/8 px-4 py-3 mb-3">
+                                <div className="pq-mycar-ping-active">
                                     <div className="flex items-center gap-2 mb-1">
                                         <div className="w-2 h-2 rounded-full bg-[#38bdf8] shrink-0" />
                                         <p className="text-sm font-bold text-[var(--color-text)]">
@@ -1881,16 +1908,16 @@ export const MapView: React.FC<MapViewProps> = ({
                                                 : t('my_car.spot_shared')}
                                         </p>
                                     </div>
-                                    <p className="text-xs text-[var(--color-text-secondary)] mb-3">{depText}</p>
-                                    <div className="flex gap-2">
+                                    <p className="text-xs text-[var(--color-text-secondary)]">{depText}</p>
+                                    <div className="pq-mycar-ping-actions">
                                         <button
                                             onClick={changeLinkedPingTime}
-                                            className="flex-1 py-2 rounded-xl text-xs font-bold border border-[var(--color-border)] bg-white/5 hover:bg-white/10 text-[var(--color-text)] transition-all active:scale-95">
+                                            className="pq-mycar-btn-ghost">
                                             {t('my_car.change_time')}
                                         </button>
                                         <button
                                             onClick={cancelLinkedPing}
-                                            className="flex-1 py-2 rounded-xl text-xs font-bold border border-red-500/25 bg-red-500/8 hover:bg-red-500/15 text-[var(--color-danger)] transition-all active:scale-95">
+                                            className="pq-mycar-btn-danger">
                                             {t('my_car.stop_sharing')}
                                         </button>
                                     </div>
@@ -1908,58 +1935,59 @@ export const MapView: React.FC<MapViewProps> = ({
                                         setShowSessionSheet(false);
                                         setShowDepartureSheet(true);
                                     }}
-                                    className="w-full mb-1.5 py-3 rounded-2xl text-sm font-bold border border-[#1e75ff]/40 bg-[#1e75ff]/12 hover:bg-[#1e75ff]/20 transition-all active:scale-95 text-[var(--color-info)] flex items-center justify-center gap-2">
+                                    className="pq-mycar-ping-cta">
                                     <Clock size={14} />
-                                    {t('my_car.ping_when_leaving')}
+                                    <span className="pq-mycar-ping-cta-label">{t('my_car.ping_when_leaving')}</span>
+                                    <ChevronRight size={14} className="pq-mycar-ping-cta-chevron" aria-hidden="true" />
                                 </button>
-                                <p className="text-[10px] text-[var(--color-text-secondary)]/60 text-center mb-3">{t('my_car.community_hint')}</p>
+                                <p className="pq-mycar-ping-hint">{t('my_car.community_hint')}</p>
                             </>
                         )}
+                        </section>
 
-                        {/* Remove saved car */}
-                        <div className="pt-3 border-t border-[var(--color-border)]">
+                        <section className="pq-mycar-danger" aria-label={t('my_car.remove_saved_car')}>
                             {!showRemoveCarConfirm ? (
                                 <button
                                     onClick={() => setShowRemoveCarConfirm(true)}
-                                    className="w-full py-2.5 text-sm font-semibold text-[var(--color-danger)] hover:text-[var(--color-danger)] transition-colors">
+                                    className="pq-mycar-danger-trigger">
                                     {t('my_car.remove_saved_car')}
                                 </button>
                             ) : savedSpot?.linkedPingId ? (
-                                <div className="space-y-2">
-                                    <p className="text-xs text-[var(--color-text-secondary)] text-center leading-snug">{t('my_car.remove_with_ping')}</p>
+                                <div className="pq-mycar-danger-confirm">
+                                    <p>{t('my_car.remove_with_ping')}</p>
                                     {linkedPingError && <p className="text-xs text-[var(--color-danger)] text-center font-semibold">{linkedPingError}</p>}
-                                    <div className="flex gap-2">
+                                    <div className="pq-mycar-ping-actions">
                                         <button
                                             onClick={() => { setShowRemoveCarConfirm(false); setLinkedPingError(null); }}
-                                            className="flex-1 py-2 rounded-xl text-xs font-bold border border-[var(--color-border)] bg-white/5 hover:bg-white/10 text-[var(--color-text)] transition-all active:scale-95">
+                                            className="pq-mycar-btn-ghost">
                                             {t('my_car.keep_it')}
                                         </button>
                                         <button
                                             onClick={handleRemoveCar}
                                             disabled={removeCarLoading}
-                                            className="flex-1 py-2 rounded-xl text-xs font-bold border border-red-500/25 bg-red-500/8 hover:bg-red-500/15 text-[var(--color-danger)] transition-all active:scale-95 disabled:opacity-50">
+                                            className="pq-mycar-btn-danger">
                                             {removeCarLoading ? t('my_car.removing') : t('my_car.cancel_and_remove')}
                                         </button>
                                     </div>
                                 </div>
                             ) : (
-                                <div className="space-y-2">
-                                    <p className="text-xs text-[var(--color-text-secondary)] text-center">{t('my_car.remove_confirm')}</p>
-                                    <div className="flex gap-2">
+                                <div className="pq-mycar-danger-confirm">
+                                    <p>{t('my_car.remove_confirm')}</p>
+                                    <div className="pq-mycar-ping-actions">
                                         <button
                                             onClick={() => setShowRemoveCarConfirm(false)}
-                                            className="flex-1 py-2 rounded-xl text-xs font-bold border border-[var(--color-border)] bg-white/5 hover:bg-white/10 text-[var(--color-text)] transition-all active:scale-95">
+                                            className="pq-mycar-btn-ghost">
                                             {t('my_car.keep_it')}
                                         </button>
                                         <button
                                             onClick={endSession}
-                                            className="flex-1 py-2 rounded-xl text-xs font-bold border border-red-500/25 bg-red-500/8 hover:bg-red-500/15 text-[var(--color-danger)] transition-all active:scale-95">
+                                            className="pq-mycar-btn-danger">
                                             {t('my_car.remove')}
                                         </button>
                                     </div>
                                 </div>
                             )}
-                        </div>
+                        </section>
                     </div>
                 )}
             </BottomSheet>
@@ -1967,30 +1995,35 @@ export const MapView: React.FC<MapViewProps> = ({
             {/* Post-save offer — shown once after saveMySpot() succeeds */}
             <BottomSheet isOpen={showPostSaveOffer} ariaLabel="Ping your spot" onClose={() => { setShowPostSaveOffer(false); setShowSessionSheet(true); }}>
                 {savedSpot && (
-                    <div className="text-center">
-                        <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4"
-                            style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>
-                            <Car size={26} className="text-white" />
+                    <div className="pq-postsave">
+                        <div className="pq-postsave-hero" aria-hidden="true">
+                            <span className="pq-postsave-hero-glow" />
+                            <div className="pq-postsave-hero-ring">
+                                <div className="pq-postsave-hero-icon">
+                                    <Car size={26} strokeWidth={1.85} />
+                                </div>
+                            </div>
                         </div>
-                        <p className="text-xl font-extrabold text-[var(--color-text)] mb-1">{t('my_car.car_saved')}</p>
-                        <p className="text-sm text-[var(--color-text-secondary)] mb-6">
-                            {t('my_car.help_another_driver')}
-                        </p>
+                        <h2 className="pq-postsave-title">{t('my_car.car_saved')}</h2>
+                        <p className="pq-postsave-sub">{t('my_car.help_another_driver')}</p>
                         <button
+                            type="button"
                             onClick={() => {
                                 departureSheetOriginRef.current = 'post_save';
                                 departureSheetInitialViewRef.current = 'timePicker';
                                 setShowPostSaveOffer(false);
                                 setShowDepartureSheet(true);
                             }}
-                            className="w-full py-3.5 rounded-full text-white font-bold text-sm flex items-center justify-center gap-2 active:scale-95 transition-transform mb-2"
-                            style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>
-                            <Clock size={16} />
-                            {t('my_car.share_when_leaving')}
+                            className="pq-postsave-cta"
+                        >
+                            <Clock size={16} strokeWidth={2.2} />
+                            <span>{t('my_car.share_when_leaving')}</span>
                         </button>
                         <button
+                            type="button"
                             onClick={() => { setShowPostSaveOffer(false); setShowSessionSheet(true); }}
-                            className="w-full py-2.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-all">
+                            className="pq-postsave-dismiss"
+                        >
                             {t('my_car.not_now')}
                         </button>
                     </div>
@@ -1998,7 +2031,17 @@ export const MapView: React.FC<MapViewProps> = ({
             </BottomSheet>
 
             {/* Departure prompt — inline, no SpotModal required */}
-            <BottomSheet isOpen={showDepartureSheet} ariaLabel="Set departure time" onClose={() => setShowDepartureSheet(false)}>
+            <BottomSheet isOpen={showDepartureSheet} ariaLabel="Set departure time" onClose={() => setShowDepartureSheet(false)} onNestedBack={() => {
+                if (myCarPingSuccess || myCarDepartureView !== 'timePicker') return false;
+                setMyCarDepartureError(null);
+                if (departureSheetOriginRef.current === 'prompt') {
+                    setMyCarDepartureView('prompt');
+                } else {
+                    setShowDepartureSheet(false);
+                    setShowSessionSheet(true);
+                }
+                return true;
+            }}>
                 {savedSpot && (
                     <div>
                         {/* Success / already-shared state */}
@@ -2032,40 +2075,49 @@ export const MapView: React.FC<MapViewProps> = ({
 
                         {/* Prompt view */}
                         {!myCarPingSuccess && myCarDepartureView === 'prompt' && (
-                            <div className="text-center">
-                                <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4"
-                                    style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>
-                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#facc15" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m2 4 3 12h14l3-12-6 5-4-5-4 5-6-5zm3 16h14"/></svg>
+                            <div className="pq-leave">
+                                <div className="pq-leave-hero" aria-hidden="true">
+                                    <span className="pq-leave-hero-glow" />
+                                    <div className="pq-leave-hero-ring">
+                                        <div className="pq-leave-hero-icon">
+                                            <Car size={20} strokeWidth={1.85} />
+                                        </div>
+                                    </div>
                                 </div>
-                                <p className="text-xl font-extrabold text-[var(--color-text)] mb-1">{t('my_car.leaving_this_spot')}</p>
-                                <p className="text-sm text-[var(--color-text-secondary)] mb-6">{t('my_car.share_with_drivers')}</p>
+                                <h2 className="pq-leave-title">{t('my_car.leaving_this_spot')}</h2>
+                                <p className="pq-leave-sub">{t('my_car.share_with_drivers')}</p>
 
                                 {myCarDepartureError && (
-                                    <p className="text-sm text-[var(--color-danger)] font-semibold text-center mb-4">{myCarDepartureError}</p>
+                                    <p className="pq-leave-error">{myCarDepartureError}</p>
                                 )}
 
                                 <button
+                                    type="button"
                                     onClick={() => handleMyCarPing(null)}
                                     disabled={myCarDepartureLoading}
-                                    className="w-full py-3.5 rounded-full text-white font-bold text-sm flex items-center justify-center gap-2 active:scale-95 transition-transform mb-2 disabled:opacity-50"
-                                    style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>
-                                    <MapPin size={16} />
-                                    {myCarDepartureLoading ? t('my_car.sharing') : t('ping_modal.leaving_now')}
+                                    className="pq-leave-primary"
+                                >
+                                    <MapPin size={16} strokeWidth={2.2} />
+                                    <span>{myCarDepartureLoading ? t('my_car.sharing') : t('ping_modal.leaving_now')}</span>
                                 </button>
                                 <button
+                                    type="button"
                                     onClick={() => {
                                         setMyCarDepartureTime(new Date(Date.now() + 2 * 60_000));
                                         setMyCarDepartureError(null);
                                         setMyCarDepartureView('timePicker');
                                     }}
                                     disabled={myCarDepartureLoading}
-                                    className="w-full py-3 rounded-full text-sm font-bold border border-[var(--color-border)] bg-white/5 hover:bg-white/10 transition-all active:scale-95 text-[var(--color-text)] flex items-center justify-center gap-2 mb-3 disabled:opacity-50">
-                                    <Clock size={15} />
-                                    {t('ping_modal.leaving_later')}
+                                    className="pq-leave-secondary"
+                                >
+                                    <Clock size={15} strokeWidth={2.1} />
+                                    <span>{t('ping_modal.leaving_later')}</span>
                                 </button>
                                 <button
+                                    type="button"
                                     onClick={() => setShowDepartureSheet(false)}
-                                    className="w-full py-2.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-all">
+                                    className="pq-leave-tertiary"
+                                >
                                     {t('my_car.keep_saved')}
                                 </button>
                             </div>
@@ -2073,9 +2125,10 @@ export const MapView: React.FC<MapViewProps> = ({
 
                         {/* Time picker view */}
                         {!myCarPingSuccess && myCarDepartureView === 'timePicker' && (
-                            <div>
-                                <div className="flex items-center gap-3 mb-5">
+                            <div className="pq-depart">
+                                <div className="pq-depart-header">
                                     <button
+                                        type="button"
                                         onClick={() => {
                                             setMyCarDepartureError(null);
                                             if (departureSheetOriginRef.current === 'prompt') {
@@ -2085,37 +2138,44 @@ export const MapView: React.FC<MapViewProps> = ({
                                                 setShowSessionSheet(true);
                                             }
                                         }}
-                                        className="w-9 h-9 rounded-full flex items-center justify-center bg-white/5 border border-[var(--color-border)] shrink-0">
-                                        <ChevronLeft size={18} className="text-[var(--color-text-secondary)]" />
+                                        className="pq-depart-back"
+                                        aria-label={t('ping_modal.back')}
+                                    >
+                                        <ChevronLeft size={18} strokeWidth={2.2} />
                                     </button>
-                                    <div>
-                                        <p className="text-base font-extrabold text-[var(--color-text)]">{t('ping_modal.set_departure')}</p>
-                                        <p className="text-xs text-[var(--color-text-secondary)]">{t('my_car.planning_to_leave')}</p>
+                                    <div className="pq-depart-heading">
+                                        <h2 className="pq-depart-title">{t('ping_modal.set_departure')}</h2>
+                                        <p className="pq-depart-sub">{t('my_car.planning_to_leave')}</p>
                                     </div>
                                 </div>
 
-                                <div className="mb-4">
-                                    <p className="text-[11px] font-bold text-[var(--color-text-secondary)] uppercase tracking-widest mb-2">{t('ping_modal.date')}</p>
-                                    <input
-                                        type="date"
-                                        value={myCarDepartureDate}
-                                        min={localDateStr()}
-                                        onChange={e => { if (e.target.value) setMyCarDepartureDate(e.target.value); }}
-                                        className="w-full bg-[var(--color-card)] border border-[var(--color-border)] rounded-2xl px-4 py-3 text-sm font-semibold text-white focus:outline-none"
-                                        style={{ colorScheme: 'dark' }}
-                                    />
+                                <div className="pq-depart-section">
+                                    <p className="pq-depart-label">{t('ping_modal.date')}</p>
+                                    <GlassDatePicker
+                                            id="pq-depart-date"
+                                            value={myCarDepartureDate}
+                                            min={localDateStr()}
+                                            onChange={setMyCarDepartureDate}
+                                        />
                                 </div>
-                                <p className="text-[11px] font-bold text-[var(--color-text-secondary)] uppercase tracking-widest mb-2">{t('ping_modal.time')}</p>
-                                <TimePicker
-                                    initialTime={myCarDepartureTime}
-                                    onTimeChange={setMyCarDepartureTime}
-                                />
+
+                                <div className="pq-depart-section">
+                                    <p className="pq-depart-label">{t('ping_modal.time')}</p>
+                                    <div className="pq-depart-time-card">
+                                        <TimePicker
+                                            initialTime={myCarDepartureTime}
+                                            onTimeChange={setMyCarDepartureTime}
+                                            variant="glass"
+                                        />
+                                    </div>
+                                </div>
 
                                 {myCarDepartureError && (
-                                    <p className="mt-3 text-sm text-[var(--color-danger)] font-semibold text-center">{myCarDepartureError}</p>
+                                    <p className="pq-depart-error">{myCarDepartureError}</p>
                                 )}
 
                                 <button
+                                    type="button"
                                     onClick={() => {
                                         const combined = combineDateAndTime(myCarDepartureDate, myCarDepartureTime);
                                         if (combined.getTime() <= Date.now()) {
@@ -2125,10 +2185,10 @@ export const MapView: React.FC<MapViewProps> = ({
                                         handleMyCarPing(combined);
                                     }}
                                     disabled={myCarDepartureLoading}
-                                    className="w-full mt-4 font-bold py-3.5 rounded-full flex items-center justify-center gap-2 text-white active:scale-95 transition-transform disabled:opacity-50"
-                                    style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>
-                                    <MapPin size={18} />
-                                    {myCarDepartureLoading ? t('my_car.scheduling') : t('my_car.schedule_spot')}
+                                    className="pq-depart-cta"
+                                >
+                                    <MapPin size={16} strokeWidth={2.2} />
+                                    <span>{myCarDepartureLoading ? t('my_car.scheduling') : t('my_car.schedule_spot')}</span>
                                 </button>
                             </div>
                         )}
@@ -2469,7 +2529,7 @@ export const MapView: React.FC<MapViewProps> = ({
                             </div>
                         ) : mapReady && !spotData.activeSpots.find(s => s.finderId === user?.id) && (
                             <div className="map-status-chip is-empty inline-flex items-center gap-2.5 text-[12px] font-medium">
-                                <div className="map-status-dot bg-rose-500/80 shrink-0" />
+                                <div className="map-status-dot bg-[#9bb0c7]/80 shrink-0" />
                                 {t('map.no_spots_nearby')}
                             </div>
                         )}

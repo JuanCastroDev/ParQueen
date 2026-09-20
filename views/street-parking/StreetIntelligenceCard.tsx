@@ -55,14 +55,14 @@ const sourceLabel = (source: StreetIntelligenceSource) => {
 };
 
 export const StreetIntelligenceUnavailableCard = () => (
-  <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-card)] px-4 py-4 mb-4">
-    <div className="flex items-center gap-2 mb-2">
-      <AlertTriangle size={16} className="text-[var(--color-text-secondary)] shrink-0" />
-      <p className="text-sm font-semibold text-[var(--color-text)]">
+  <div className="pq-mycar-intel-unavailable">
+    <div className="pq-mycar-intel-street">
+      <AlertTriangle size={14} className="text-[var(--color-text-secondary)] shrink-0" />
+      <p className="text-sm font-semibold text-[var(--color-text)]" style={{ textTransform: 'none', letterSpacing: '-0.01em', fontSize: 14 }}>
         {t('street_intel.data_unavailable')}
       </p>
     </div>
-    <p className="text-xs text-[var(--color-text-secondary)]">
+    <p className="pq-mycar-intel-reason" style={{ marginBottom: 0 }}>
       {t('street_intel.decision_caution')}
     </p>
   </div>
@@ -225,7 +225,7 @@ export const StreetIntelligenceCard = ({
     ? fmtSourceDate(presentation.lastSourceSync, locale)
     : null;
   const metadataBlock = presentation.source ? (
-    <div className="mt-3 text-[11px] text-[var(--color-text-secondary)]">
+    <div className="pq-mycar-intel-meta">
       <p>{t('street_intel.source_label', { source: sourceLabel(presentation.source) })}</p>
       {freshnessDate && <p>{t('street_intel.data_updated', { date: freshnessDate })}</p>}
     </div>
@@ -233,18 +233,19 @@ export const StreetIntelligenceCard = ({
 
   if (loading) {
     return (
-      <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-card)] px-4 py-4 mb-4 animate-pulse">
-        <div className="h-3 w-24 bg-white/10 rounded mb-2" />
-        <div className="h-6 w-40 bg-white/10 rounded" />
+      <div className="pq-mycar-intel animate-pulse">
+        <div className="h-3 w-24 bg-white/10 rounded mb-3" />
+        <div className="h-7 w-48 bg-white/10 rounded mb-2" />
+        <div className="h-3 w-36 bg-white/10 rounded" />
       </div>
     );
   }
 
   if (loadError) {
     return (
-      <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-card)] px-4 py-4 mb-4">
+      <div className="pq-mycar-intel-unavailable">
         <p className="text-sm text-[var(--color-text-secondary)] mb-2">{t('street_intel.load_error')}</p>
-        <p className="text-xs text-[var(--color-text-secondary)]">{t('street_intel.decision_caution')}</p>
+        <p className="pq-mycar-intel-reason" style={{ marginBottom: 0 }}>{t('street_intel.decision_caution')}</p>
       </div>
     );
   }
@@ -254,10 +255,10 @@ export const StreetIntelligenceCard = ({
   if (!effectiveSide) {
     if (availableSides.length === 0) return null;
     return (
-      <div className="rounded-2xl border border-amber-500/25 bg-amber-950/20 px-4 py-4 mb-4">
-        <div className="flex items-center gap-2 mb-2">
+      <div className="pq-mycar-intel pq-mycar-intel--caution">
+        <div className="pq-mycar-intel-street">
           <AlertTriangle size={14} className="text-[var(--color-warning)] shrink-0" />
-          <p className="text-[11px] font-bold text-[var(--color-warning)]/70 uppercase tracking-widest">
+          <p style={{ color: 'var(--color-warning)' }}>
             {presentation.state === 'caution'
               ? t('street_intel.needs_review')
               : t('street_intel.info_available')}
@@ -266,17 +267,17 @@ export const StreetIntelligenceCard = ({
         <p className="text-sm text-white font-semibold mb-1">
           {t('street_intel.which_side')}
         </p>
-        <p className="text-xs text-[var(--color-text-secondary)] mb-3">
+        <p className="pq-mycar-intel-reason">
           {presentation.state === 'caution'
             ? t('street_intel.schedules_found_estimate', { street: streetName })
             : t('street_intel.schedules_found_street', { street: streetName })}
         </p>
-        <div className="flex gap-2 flex-wrap">
+        <div className="pq-mycar-intel-side-btns">
           {availableSides.map(side => (
             <button
               key={side}
               onClick={() => onConfirmSide(side)}
-              className="px-3 py-1.5 text-xs font-semibold rounded-xl border border-white/20 bg-white/5 text-white active:scale-95 transition-transform"
+              className="pq-mycar-intel-side-btn"
             >
               {sideLabel(side)}
             </button>
@@ -295,21 +296,19 @@ export const StreetIntelligenceCard = ({
 
   if (!result.scheduleDescription) {
     return (
-      <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-card)] px-4 py-4 mb-4">
-        <div className="flex items-center gap-2 mb-1">
+      <div className="pq-mycar-intel">
+        <div className="pq-mycar-intel-street">
           <Leaf size={14} className="text-[var(--color-text-secondary)]" />
-          <p className="text-[11px] font-bold text-[var(--color-text-secondary)] uppercase tracking-widest">
-            {sideHeader}
-          </p>
+          <p>{sideHeader}</p>
         </div>
-        <p className="text-sm text-[var(--color-text-secondary)]">
+        <p className="pq-mycar-intel-reason" style={{ marginBottom: presentation.state === 'caution' ? 12 : 0 }}>
           {confirmedParkingSide
             ? t('street_intel.no_schedule_for_side', { side: effectiveSideLabel.toLowerCase() })
             : t('street_intel.no_schedule_unknown')}
         </p>
         {metadataBlock}
         {presentation.state === 'caution' && (
-          <p className="text-xs text-[var(--color-text-secondary)] mt-3">
+          <p className="pq-mycar-intel-reason" style={{ marginBottom: 0, marginTop: 8 }}>
             {cautionCopy(presentation.reasons) ?? t('street_intel.decision_caution')}
           </p>
         )}
@@ -318,17 +317,31 @@ export const StreetIntelligenceCard = ({
     );
   }
 
+  const toneClass = result.activeNow
+    ? 'pq-mycar-intel--danger'
+    : presentation.state === 'caution'
+    ? 'pq-mycar-intel--caution'
+    : 'pq-mycar-intel--safe';
+  const iconTone = result.activeNow
+    ? 'is-danger'
+    : presentation.state === 'caution'
+    ? 'is-caution'
+    : 'is-safe';
+  const datetimeTone = result.activeNow
+    ? 'is-danger'
+    : presentation.state === 'caution'
+    ? 'is-caution'
+    : '';
+
   return (
-    <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-card)] px-4 py-4 mb-4">
-      <div className="flex items-center gap-2 mb-3">
+    <div className={`pq-mycar-intel ${toneClass}`}>
+      <div className="pq-mycar-intel-street">
         <Leaf size={14} className="text-[var(--color-text-secondary)]" />
-        <p className="text-[11px] font-bold text-[var(--color-text-secondary)] uppercase tracking-widest">
-          {sideHeader}
-        </p>
+        <p>{sideHeader}</p>
       </div>
 
       {presentation.state === 'caution' && (
-        <div className="rounded-xl border border-yellow-500/25 bg-yellow-500/10 px-3 py-2 mb-3">
+        <div className="pq-mycar-intel-caution-banner">
           <div className="flex items-center gap-2 mb-1">
             <AlertTriangle size={16} className="text-[var(--color-warning)] shrink-0" />
             <p className="text-sm font-bold text-[var(--color-warning)]">{t('street_intel.needs_review')}</p>
@@ -340,15 +353,17 @@ export const StreetIntelligenceCard = ({
       )}
 
       {result.activeNow ? (
-        <div className="flex items-center gap-2 mb-2">
-          <AlertTriangle size={18} className="text-[var(--color-danger)] shrink-0" />
+        <div className="pq-mycar-intel-hero">
+          <div className={`pq-mycar-intel-hero-icon ${iconTone}`}>
+            <AlertTriangle size={18} />
+          </div>
           <div>
-            <p className="text-base font-extrabold text-[var(--color-danger)] leading-tight">
+            <p className={`pq-mycar-intel-datetime ${datetimeTone}`}>
               {presentation.state === 'caution'
                 ? t('street_intel.may_be_active_now')
                 : t('street_intel.active_now')}
             </p>
-            <p className="text-xs text-[var(--color-text-secondary)]">
+            <p className="pq-mycar-intel-reason" style={{ marginTop: 4, marginBottom: 0 }}>
               {presentation.state === 'caution'
                 ? t('street_intel.may_be_active_now_body')
                 : t('street_intel.active_now_body')}
@@ -356,58 +371,62 @@ export const StreetIntelligenceCard = ({
           </div>
         </div>
       ) : result.nextDay ? (
-        <div className="flex items-center gap-2 mb-2">
-          {presentation.state === 'caution'
-            ? <AlertTriangle size={18} className="text-[var(--color-warning)] shrink-0" />
-            : <CheckCircle size={18} className="text-[var(--color-success)] shrink-0" />}
+        <div className="pq-mycar-intel-hero">
+          <div className={`pq-mycar-intel-hero-icon ${iconTone}`}>
+            {presentation.state === 'caution'
+              ? <AlertTriangle size={18} />
+              : <CheckCircle size={18} />}
+          </div>
           <div>
-            <p className="text-[11px] font-bold text-[var(--color-text-secondary)] uppercase tracking-widest leading-none mb-0.5">
+            <p className="pq-mycar-intel-label">
               {presentation.state === 'caution'
                 ? t('street_intel.estimated_window')
                 : t('street_intel.safe_until_label')}
             </p>
-            <p className="text-base font-extrabold text-white leading-tight">
+            <p className={`pq-mycar-intel-datetime ${datetimeTone}`}>
               {result.safeUntil ? fmtSafeUntil(result.safeUntil) : `${result.nextDay} ${result.nextTime}`}
             </p>
           </div>
         </div>
       ) : (
-        <div className="flex items-center gap-2 mb-2">
-          {presentation.state === 'caution'
-            ? <AlertTriangle size={18} className="text-[var(--color-warning)] shrink-0" />
-            : <CheckCircle size={18} className="text-[var(--color-success)] shrink-0" />}
+        <div className="pq-mycar-intel-hero">
+          <div className={`pq-mycar-intel-hero-icon ${iconTone}`}>
+            {presentation.state === 'caution'
+              ? <AlertTriangle size={18} />
+              : <CheckCircle size={18} />}
+          </div>
           <p className="text-sm text-[var(--color-text-secondary)]">{t('street_intel.no_upcoming')}</p>
         </div>
       )}
 
-      <p className="text-xs text-[var(--color-text-secondary)] mb-3">
+      <p className="pq-mycar-intel-reason">
         {t('street_intel.because', { schedule: result.scheduleDescription })}
       </p>
 
-      <div className="flex items-center gap-2">
-        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-white/5 border-white/10 text-[var(--color-text-secondary)]">
+      <div className="pq-mycar-intel-chips">
+        <span className="pq-mycar-intel-chip">
           {scheduleCount === 1
             ? t('street_intel.schedules_count_one')
             : t('street_intel.schedules_count', { count: String(scheduleCount) })}
         </span>
         {presentation.state === 'caution' ? (
-          <span className="text-[10px] font-semibold text-[var(--color-warning)] bg-yellow-500/10 px-2 py-0.5 rounded-full border border-yellow-500/20">
+          <span className="pq-mycar-intel-chip is-warning">
             {t('street_intel.needs_review')}
           </span>
         ) : (
-          <span className="text-[10px] font-semibold text-[var(--color-accent)] bg-blue-500/10 px-2 py-0.5 rounded-full border border-blue-500/20">
+          <span className="pq-mycar-intel-chip is-accent">
             {t('street_intel.info_available')}
           </span>
         )}
         {confirmedParkingSide && (
-          <span className="text-[10px] font-semibold text-[var(--color-warning)] bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20">
+          <span className="pq-mycar-intel-chip is-warning">
             {t('street_intel.you_confirmed')}
           </span>
         )}
       </div>
       {metadataBlock}
       {presentation.state === 'caution' && (
-        <p className="text-xs text-[var(--color-text-secondary)] mt-3">
+        <p className="pq-mycar-intel-reason" style={{ marginTop: 10, marginBottom: 0 }}>
           {cautionCopy(presentation.reasons) ?? t('street_intel.decision_caution')}
         </p>
       )}

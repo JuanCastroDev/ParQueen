@@ -3,6 +3,7 @@ import type { LocationAccess } from './locationAccess';
 
 /**
  * Pure Android system-Back decision table for ParQueen AppView navigation.
+ * Overlay/sheet/search dismiss happens BEFORE this table (see dispatchAndroidSystemBack).
  * No Capacitor / React / Android APIs — App.tsx applies the returned action.
  */
 export type AndroidBackAction =
@@ -10,8 +11,22 @@ export type AndroidBackAction =
   | { type: 'closeLegal' }
   | { type: 'delegateMessages' }
   | { type: 'delegateOnboarding' }
+  | { type: 'delegateAssistant' }
   | { type: 'minimize' }
   | { type: 'noop' };
+
+/**
+ * Overlay-first Android Back: dismiss the top sheet/modal/search, otherwise
+ * resolve+apply the AppView table. Map is the stable home for bottom-nav roots.
+ */
+export function dispatchAndroidSystemBack(
+  dismissOverlay: () => boolean,
+  resolve: () => AndroidBackAction,
+  apply: (action: AndroidBackAction) => void,
+): void {
+  if (dismissOverlay()) return;
+  apply(resolve());
+}
 
 export type AndroidBackContext = {
   currentView: AppView;
@@ -46,7 +61,7 @@ export function resolveAndroidBack(ctx: AndroidBackContext): AndroidBackAction {
       return { type: 'navigate', view: AppView.SETTINGS };
 
     case AppView.AI_ASSISTANT:
-      return { type: 'navigate', view: AppView.MAP };
+      return { type: 'delegateAssistant' };
 
     case AppView.PROFILE:
       return { type: 'navigate', view: AppView.MAP };
@@ -135,4 +150,16 @@ export type OnboardingAndroidBackAction = 'previousSlide' | 'minimize';
  */
 export function resolveOnboardingAndroidBack(slideIndex: number): OnboardingAndroidBackAction {
   return slideIndex > 0 ? 'previousSlide' : 'minimize';
+}
+
+/** Parking Tools owns tool-mode; App only receives this high-level decision. */
+export type AssistantAndroidBackAction = 'backToHub' | 'leaveAssistant';
+
+/**
+ * Mirror AssistantView visible Back:
+ * - nested tool (scanner / hydrant / check) -> hub
+ * - hub -> leave to Map
+ */
+export function resolveAssistantAndroidBack(isOnHub: boolean): AssistantAndroidBackAction {
+  return isOnHub ? 'leaveAssistant' : 'backToHub';
 }

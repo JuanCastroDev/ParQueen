@@ -35,19 +35,41 @@
   --color-overlay: rgba(255, 255, 255, 0.04);
   --mobile-primary-nav-space: calc(104px + env(safe-area-inset-bottom, 0px));
   --mobile-map-header-width: min(86vw, 372px);
-  --mobile-shell-surface: rgba(10, 25, 44, 0.84);
-  --mobile-shell-surface-strong: rgba(7, 20, 37, 0.91);
-  --mobile-shell-border: rgba(130, 169, 208, 0.44);
-  --mobile-shell-highlight: rgba(235, 245, 255, 0.20);
-  --mobile-shell-text: rgba(247, 250, 255, 0.96);
-  --mobile-shell-text-muted: rgba(226, 236, 248, 0.76);
-  --mobile-shell-accent: #4d94ff;
-  --mobile-shell-accent-soft: rgba(42, 121, 255, 0.20);
-  --mobile-shell-focus: #82bdff;
+  /* Light-mode map chrome: cool pale glass + navy type (dark mode overrides below) */
+  --mobile-shell-surface: rgba(244, 248, 253, 0.82);
+  --mobile-shell-surface-strong: rgba(236, 243, 252, 0.92);
+  --mobile-shell-border: rgba(40, 70, 120, 0.16);
+  --mobile-shell-highlight: rgba(255, 255, 255, 0.72);
+  --mobile-shell-text: rgba(12, 28, 52, 0.94);
+  --mobile-shell-text-muted: rgba(40, 64, 100, 0.62);
+  --mobile-shell-accent: #2f7dff;
+  --mobile-shell-accent-soft: rgba(47, 125, 255, 0.14);
+  --mobile-shell-focus: #3d8fff;
   --mobile-map-overlay: rgba(7, 22, 42, 0.03);
   --mobile-map-edge: radial-gradient(circle at 50% 48%, rgba(30, 117, 255, 0.005) 0%, rgba(8, 25, 47, 0.03) 74%, rgba(4, 16, 32, 0.075) 100%);
   --mobile-ping-cradle: rgba(17, 36, 59, 0.84);
   --mobile-ping-cradle-border: rgba(151, 201, 255, 0.32);
+
+  /* Elevated glass materials (sheets, pickers, tool cards). Light = cool
+     off-white with navy type; .dark restores the navy glass look. */
+  --pq-elev-surface: rgba(255, 255, 255, 0.92);
+  --pq-elev-surface-2: #f3f7fb;
+  --pq-elev-surface-3: #eaf1f8;
+  --pq-elev-well: rgba(12, 34, 56, 0.05);
+  --pq-elev-border: rgba(12, 34, 56, 0.12);
+  --pq-elev-border-strong: rgba(11, 99, 230, 0.28);
+  --pq-elev-text: var(--color-text);
+  --pq-elev-text-muted: var(--color-text-secondary);
+  --pq-elev-icon: #0b63d6;
+  --pq-elev-inset: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  --pq-elev-shadow: 0 8px 22px rgba(15, 32, 60, 0.10), 0 2px 6px rgba(15, 32, 60, 0.05);
+  --pq-elev-glow: 0 0 18px rgba(11, 99, 230, 0.12);
+  --pq-elev-accent-soft: rgba(11, 99, 230, 0.10);
+  --pq-elev-accent-mid: rgba(11, 99, 230, 0.16);
+  --pq-elev-panel: linear-gradient(165deg, rgba(255, 255, 255, 0.98), rgba(243, 247, 251, 0.94));
+  --pq-elev-card: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(247, 250, 252, 0.94) 100%), linear-gradient(165deg, #ffffff 0%, #eef4fa 100%);
+  --pq-elev-cta: linear-gradient(165deg, #0b63e6 0%, #0a4fc4 55%, #0a3fa8 100%);
+  --pq-elev-cta-text: #ffffff;
 }
 .dark {
   --color-accent: #60a5fa;
@@ -85,6 +107,25 @@
   --mobile-map-edge: radial-gradient(circle at 50% 48%, rgba(28, 83, 151, 0.02) 0%, rgba(2, 11, 25, 0.24) 76%, rgba(1, 7, 18, 0.38) 100%);
   --mobile-ping-cradle: rgba(7, 21, 39, 0.88);
   --mobile-ping-cradle-border: rgba(140, 196, 255, 0.28);
+
+  --pq-elev-surface: rgba(12, 22, 40, 0.72);
+  --pq-elev-surface-2: #0f1c32;
+  --pq-elev-surface-3: #0a1424;
+  --pq-elev-well: rgba(0, 0, 0, 0.22);
+  --pq-elev-border: rgba(255, 255, 255, 0.12);
+  --pq-elev-border-strong: rgba(96, 165, 250, 0.40);
+  --pq-elev-text: rgba(255, 255, 255, 0.94);
+  --pq-elev-text-muted: rgba(226, 232, 240, 0.72);
+  --pq-elev-icon: #9ec8ff;
+  --pq-elev-inset: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+  --pq-elev-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  --pq-elev-glow: 0 0 20px rgba(56, 140, 255, 0.18);
+  --pq-elev-accent-soft: rgba(96, 165, 250, 0.10);
+  --pq-elev-accent-mid: rgba(96, 165, 250, 0.16);
+  --pq-elev-panel: linear-gradient(165deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.04)), rgba(12, 22, 40, 0.72);
+  --pq-elev-card: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.01) 40%, rgba(0, 0, 0, 0.16) 100%), linear-gradient(165deg, #0f1c32 0%, #0a121f 55%, #0c182c 100%);
+  --pq-elev-cta: radial-gradient(120% 140% at 50% -10%, rgba(90, 160, 255, 0.36) 0%, rgba(40, 110, 230, 0.12) 45%, transparent 70%), linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.02) 40%, rgba(0, 0, 0, 0.18) 100%), linear-gradient(165deg, #12305a 0%, #0a1a36 50%, #0c2248 100%);
+  --pq-elev-cta-text: #eaf4ff;
 }
 
 html, body, #root {
@@ -124,7 +165,12 @@ html, body, #root {
 }
 
 /* Center-Ping mobile prototype: one cohesive navigation/action system. */
+.map-header-search-row {
+  width: var(--mobile-map-header-width);
+}
+
 .map-search-shell,
+.map-ai-action,
 .map-status-chip,
 .map-control-button,
 .mobile-primary-nav-surface {
@@ -137,16 +183,32 @@ html, body, #root {
 
 .map-search-shell {
   position: relative;
-  width: var(--mobile-map-header-width);
-  height: 54px;
-  border-radius: 999px;
-  background: var(--mobile-shell-surface-strong);
-  box-shadow: inset 0 1px 0 var(--mobile-shell-highlight), 0 12px 28px rgba(0, 6, 18, 0.24);
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  height: 51px;
+  padding-right: 6px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 14%, rgba(70, 100, 150, 0.12));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.012) 40%, rgba(0, 0, 0, 0.16) 100%),
+    linear-gradient(180deg, #091321 0%, #060d18 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(236, 246, 255, 0.14),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.32),
+    0 10px 24px rgba(0, 4, 14, 0.36),
+    0 2px 8px rgba(0, 4, 14, 0.22),
+    0 0 18px rgba(77, 148, 255, 0.10);
 }
 
 .map-search-shell:focus-within {
-  border-color: color-mix(in srgb, var(--mobile-shell-accent) 58%, transparent);
-  box-shadow: inset 0 1px 0 rgba(232, 244, 255, 0.16), 0 0 0 3px var(--mobile-shell-accent-soft), 0 14px 34px rgba(0, 6, 18, 0.28);
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 24%, rgba(90, 130, 190, 0.16));
+  box-shadow:
+    inset 0 1px 0 rgba(236, 246, 255, 0.18),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.28),
+    0 12px 26px rgba(0, 4, 14, 0.38),
+    0 2px 8px rgba(0, 4, 14, 0.24),
+    0 0 22px rgba(77, 148, 255, 0.14);
 }
 
 .map-search-icon {
@@ -156,27 +218,70 @@ html, body, #root {
 
 .map-search-input {
   min-width: 0;
+  box-sizing: border-box;
+  height: 32px;
+  min-height: 32px;
+  padding-right: 4px;
+  padding-top: 0;
+  padding-bottom: 0;
   color: var(--mobile-shell-text);
-  line-height: 1.25;
+  line-height: 1.4;
   letter-spacing: -0.018em;
+  overflow: visible;
 }
 
 .map-search-input::placeholder {
-  color: color-mix(in srgb, var(--mobile-shell-text-muted) 84%, transparent);
+  color: color-mix(in srgb, var(--mobile-shell-text-muted) 72%, var(--mobile-shell-text) 28%);
+  line-height: 1.4;
+  overflow: visible;
 }
 
 .map-ai-action {
-  width: 82px;
-  height: 44px;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: auto;
+  height: 51px;
+  min-width: 92px;
   min-height: 44px;
-  border: 1px solid rgba(83, 150, 255, 0.48);
-  background: rgba(32, 100, 211, 0.18);
-  box-shadow: inset 0 1px 0 rgba(217, 237, 255, 0.11), 0 5px 14px rgba(10, 65, 168, 0.10);
+  padding: 0 16px;
+  gap: 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 34%, rgba(110, 160, 230, 0.22));
+  color: var(--mobile-shell-accent);
+  background:
+    radial-gradient(120% 90% at 50% 20%, rgba(77, 148, 255, 0.16) 0%, rgba(77, 148, 255, 0.03) 42%, transparent 70%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.02) 38%, rgba(0, 0, 0, 0.18) 100%),
+    linear-gradient(165deg, #0c1a30 0%, #08111f 48%, #0a1730 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(236, 246, 255, 0.22),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.34),
+    0 10px 24px rgba(0, 4, 14, 0.36),
+    0 2px 8px rgba(0, 4, 14, 0.22),
+    0 0 22px rgba(77, 148, 255, 0.22),
+    0 0 36px rgba(77, 148, 255, 0.10);
+}
+
+.map-ai-action-label {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1;
+  color: color-mix(in srgb, #f2f7ff 72%, var(--mobile-shell-accent) 28%);
 }
 
 .map-ai-action:hover {
-  border-color: rgba(75, 145, 255, 0.68);
-  background: rgba(47, 128, 255, 0.22);
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 42%, rgba(130, 180, 255, 0.28));
+  background:
+    radial-gradient(120% 90% at 50% 18%, rgba(77, 148, 255, 0.20) 0%, rgba(77, 148, 255, 0.04) 44%, transparent 72%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.15) 0%, rgba(255, 255, 255, 0.03) 38%, rgba(0, 0, 0, 0.16) 100%),
+    linear-gradient(165deg, #0f1e38 0%, #0a1528 48%, #0c1a34 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(236, 246, 255, 0.26),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.30),
+    0 12px 26px rgba(0, 4, 14, 0.38),
+    0 2px 8px rgba(0, 4, 14, 0.24),
+    0 0 26px rgba(77, 148, 255, 0.26),
+    0 0 40px rgba(77, 148, 255, 0.12);
 }
 
 .map-ai-action:focus-visible,
@@ -188,16 +293,16 @@ html, body, #root {
 
 .map-status-row {
   width: var(--mobile-map-header-width);
-  margin-top: 0;
+  margin-top: 2px;
 }
 
 .map-status-chip {
-  min-height: 36px;
-  padding: 8px 14px;
+  min-height: 32px;
+  padding: 6px 12px;
   border-radius: 999px;
   color: var(--mobile-shell-text-muted);
   background: var(--mobile-shell-surface);
-  box-shadow: inset 0 1px 0 var(--mobile-shell-highlight), 0 8px 20px rgba(0, 6, 18, 0.18);
+  box-shadow: inset 0 1px 0 var(--mobile-shell-highlight), 0 5px 14px rgba(0, 6, 18, 0.12);
 }
 
 .map-status-chip.is-available {
@@ -205,18 +310,22 @@ html, body, #root {
 }
 
 .map-status-chip.is-empty {
-  border-color: rgba(251, 113, 133, 0.20);
+  border-color: rgba(148, 174, 201, 0.22);
 }
 
 .map-status-dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 999px;
-  box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.08);
+  box-shadow: 0 0 0 3px rgba(148, 174, 201, 0.10);
 }
 
 .map-status-chip.is-available .map-status-dot {
   box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.09);
+}
+
+.map-status-chip.is-empty .map-status-dot {
+  box-shadow: 0 0 0 3px rgba(148, 174, 201, 0.12);
 }
 
 .map-control-button {
@@ -331,36 +440,44 @@ html, body, #root {
   isolation: isolate;
   border-radius: 18px;
   color: inherit;
-  transition: color 180ms ease, background-color 180ms ease, transform 180ms ease;
+  transition: color 180ms ease-out, transform 180ms ease-out;
 }
 
 .mobile-primary-nav-item::before {
   content: '';
   position: absolute;
-  right: auto;
-  bottom: 3px;
-  left: 50%;
-  width: 22px;
-  height: 2px;
+  inset: 7px 5px 9px;
   z-index: -1;
-  border-radius: 999px;
+  border-radius: 16px;
   background: transparent;
-  transform: translateX(-50%) scaleX(0.4);
-  transition: background-color 180ms ease, transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  box-shadow: none;
+  opacity: 0;
+  transform: translateY(2px) scale(0.96);
+  transition: background 180ms ease-out, box-shadow 180ms ease-out, opacity 180ms ease-out, transform 180ms ease-out;
 }
 
 .mobile-primary-nav-item.is-active {
   color: #7fc1ff;
+  transform: translateY(-2px);
 }
 
 .mobile-primary-nav-item.is-active::before {
-  background: #4c9bff;
-  box-shadow: 0 0 8px rgba(76, 155, 255, 0.34);
-  transform: translateX(-50%) scaleX(1);
+  opacity: 1;
+  background:
+    linear-gradient(180deg, rgba(127, 193, 255, 0.16) 0%, rgba(20, 48, 92, 0.28) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(196, 228, 255, 0.14),
+    0 0 14px rgba(76, 155, 255, 0.22),
+    0 6px 14px rgba(0, 6, 18, 0.28);
+  transform: translateY(0) scale(1);
 }
 
 .mobile-primary-nav-item:active {
   transform: scale(0.96);
+}
+
+.mobile-primary-nav-item.is-active:active {
+  transform: translateY(-2px) scale(0.97);
 }
 
 .mobile-primary-nav-item:focus-visible {
@@ -371,6 +488,11 @@ html, body, #root {
 .mobile-primary-nav-icon-wrap {
   position: relative;
   display: inline-flex;
+  transition: transform 180ms ease-out;
+}
+
+.mobile-primary-nav-item.is-active .mobile-primary-nav-icon-wrap {
+  transform: scale(1.05);
 }
 
 .mobile-primary-nav-icon-wrap svg {
@@ -518,7 +640,7 @@ html, body, #root {
 
 /* Brand mark inside the Ping core. The logo is cyan on transparent, which
    would read blue-on-blue against the core's gradient, so it is rendered as a
-   white silhouette — same visual weight as the icon it replaces. */
+   white silhouette â€” same visual weight as the icon it replaces. */
 .mobile-primary-nav-ping-mark {
   position: absolute;
   left: 50%;
@@ -577,15 +699,15 @@ html, body, #root {
 
 @media (max-width: 340px) and (orientation: portrait) {
   .map-search-shell {
-    width: var(--mobile-map-header-width);
+    width: auto;
     padding-right: 10px;
     padding-left: 10px;
   }
 
   .map-search-content {
-    margin-right: 6px;
-    margin-left: 6px;
-    gap: 10px;
+    margin-right: 14px;
+    margin-left: 8px;
+    gap: 8px;
   }
 
   .map-search-icon {
@@ -598,9 +720,11 @@ html, body, #root {
   }
 
   .map-ai-action {
-    width: 78px;
-    padding-right: 12px;
-    padding-left: 12px;
+    width: auto;
+    height: 51px;
+    min-width: 84px;
+    min-height: 44px;
+    padding: 0 12px;
   }
 }
 
@@ -613,20 +737,26 @@ html, body, #root {
     padding-top: max(8px, env(safe-area-inset-top, 0px)) !important;
   }
 
-  .map-search-shell {
+  .map-header-search-row {
     width: min(86vw, 394px);
+  }
+
+  .map-search-shell {
+    width: auto;
     height: 52px;
   }
 
   .map-ai-action {
-    width: 76px;
-    height: 44px;
+    width: auto;
+    height: 52px;
+    min-width: 84px;
     min-height: 44px;
+    padding: 0 14px;
   }
 
   .map-status-row {
     width: min(86vw, 394px);
-    margin-top: 6px;
+    margin-top: 3px;
   }
 
   .map-status-chip {
@@ -651,7 +781,8 @@ html, body, #root {
   }
 
   .mobile-primary-nav-item::before {
-    border-radius: 18px;
+    inset: 4px 3px 5px;
+    border-radius: 14px;
   }
 
   .mobile-primary-nav-icon-wrap svg {
@@ -717,18 +848,29 @@ html, body, #root {
   }
 
   .map-search-shell {
-    width: 100%;
+    width: auto;
+    flex: 1 1 auto;
+    min-width: 0;
     height: 50px;
     padding-right: 14px;
     padding-left: 14px;
-    border-color: var(--color-border);
-    background: var(--color-card);
-    box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.10), 0 8px 10px -6px rgb(0 0 0 / 0.10);
+    border-radius: 14px;
+    border-color: color-mix(in srgb, var(--mobile-shell-accent) 16%, var(--color-border));
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.11) 0%, rgba(255, 255, 255, 0.02) 42%, rgba(0, 0, 0, 0.05) 100%),
+      var(--color-card);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.30),
+      0 8px 20px -6px rgb(0 0 0 / 0.16),
+      0 0 16px rgba(30, 117, 255, 0.08);
   }
 
   .map-search-shell:focus-within {
-    border-color: var(--color-border);
-    box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.10), 0 8px 10px -6px rgb(0 0 0 / 0.10);
+    border-color: color-mix(in srgb, var(--mobile-shell-accent) 26%, var(--color-border));
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.34),
+      0 8px 20px -6px rgb(0 0 0 / 0.16),
+      0 0 18px rgba(30, 117, 255, 0.12);
   }
 
   .map-search-icon {
@@ -742,27 +884,41 @@ html, body, #root {
     letter-spacing: normal;
   }
 
+  .map-header-search-row {
+    width: 100%;
+  }
+
   .map-ai-action {
     width: auto;
-    height: auto;
-    min-height: 0;
-    padding: 4px 8px;
-    border-color: rgba(30, 117, 255, 0.30);
-    background: rgba(30, 117, 255, 0.15);
-    box-shadow: none;
+    height: 50px;
+    min-width: 94px;
+    min-height: 44px;
+    padding: 0 16px;
+    border-radius: 999px;
+    border-color: color-mix(in srgb, var(--mobile-shell-accent) 32%, var(--color-border));
+    color: var(--mobile-shell-accent);
+    background:
+      radial-gradient(120% 90% at 50% 20%, rgba(30, 117, 255, 0.14) 0%, transparent 65%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.13) 0%, rgba(255, 255, 255, 0.02) 40%, rgba(0, 0, 0, 0.08) 100%),
+      var(--color-card);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.36),
+      0 8px 20px -6px rgb(0 0 0 / 0.16),
+      0 0 20px rgba(30, 117, 255, 0.18),
+      0 0 34px rgba(30, 117, 255, 0.08);
   }
 
   .map-ai-action svg {
-    width: 13px;
-    height: 13px;
+    width: 16px;
+    height: 16px;
   }
 
-  .map-ai-action span {
-    font-size: 10px;
+  .map-ai-action-label {
+    font-size: 13px;
   }
 
   .map-status-row {
-    margin-top: 4px;
+    margin-top: 2px;
   }
 
   .map-status-chip {
@@ -974,7 +1130,7 @@ html, body, #root {
 }
 
 
-/* Crown entrance animation — Screen 1 of onboarding */
+/* Crown entrance animation â€” Screen 1 of onboarding */
 @keyframes crown-drop {
   0%   { transform: translateY(-28px) scale(0.75); opacity: 0; }
   60%  { transform: translateY(5px) scale(1.05); opacity: 1; }
@@ -988,25 +1144,25 @@ html, body, #root {
   .crown-drop { animation: none; }
 }
 
-/* ── THE ROYAL BEACON — Screen 1 onboarding animations ── */
+/* â”€â”€ THE ROYAL BEACON â€” Screen 1 onboarding animations â”€â”€ */
 
-/* Text — 4px max rise for all staggered copy */
+/* Text â€” 4px max rise for all staggered copy */
 @keyframes hero-fade-up {
   0%   { transform: translateY(4px); opacity: 0; }
   100% { transform: translateY(0);   opacity: 1; }
 }
-/* Supporting copy + CTA — fade only, no movement */
+/* Supporting copy + CTA â€” fade only, no movement */
 @keyframes hero-fade {
   from { opacity: 0; }
   to   { opacity: 1; }
 }
-/* Logo: rise 10px, scale 0.96→1.01 settle→1 */
+/* Logo: rise 10px, scale 0.96â†’1.01 settleâ†’1 */
 @keyframes logo-rise {
   0%   { transform: translateY(10px) scale(0.96); opacity: 0; }
   78%  { transform: translateY(-1px) scale(1.01); opacity: 1; }
   100% { transform: translateY(0)    scale(1);    opacity: 1; }
 }
-/* One beacon broadcast ring — expands once, fades completely */
+/* One beacon broadcast ring â€” expands once, fades completely */
 @keyframes beacon-ring {
   0%   { transform: scale(0.35); opacity: 0; }
   8%   { opacity: 0.48; }
@@ -1018,7 +1174,7 @@ html, body, #root {
   35%  { opacity: 1;    box-shadow: 0 0 14px 5px rgba(96,165,250,0.70); }
   100% { opacity: 0.60; box-shadow: 0 0 8px 2px rgba(96,165,250,0.28); }
 }
-/* Crown shimmer — animates background-position so the div stays fixed */
+/* Crown shimmer â€” animates background-position so the div stays fixed */
 @keyframes crown-shimmer {
   0%   { background-position: -100% center; }
   100% { background-position: 200% center; }
@@ -1036,14 +1192,14 @@ html, body, #root {
 .logo-rise {
   animation: logo-rise 650ms cubic-bezier(0.22, 1, 0.36, 1) 100ms both;
 }
-/* One ring only — broadcast at 320ms, done by ~720ms */
+/* One ring only â€” broadcast at 320ms, done by ~720ms */
 .beacon-ring-1 {
   animation: beacon-ring 960ms cubic-bezier(0.16, 0.84, 0.44, 1) 320ms both;
 }
 .beacon-dot-anim {
   animation: beacon-dot-pulse 680ms ease-out 320ms both;
 }
-/* Shimmer overlay on logo wrapper — single pass, not looped */
+/* Shimmer overlay on logo wrapper â€” single pass, not looped */
 .logo-shimmer-once {
   position: absolute;
   inset: 0;
@@ -1083,7 +1239,7 @@ html, body, #root {
   .logo-shimmer-once { opacity: 0; }
 }
 
-/* ── LIVE MAP REVEAL — Screen 2 entrance sequence ── */
+/* â”€â”€ LIVE MAP REVEAL â€” Screen 2 entrance sequence â”€â”€ */
 @keyframes onb2-map-in {
   from { opacity: 0; transform: scale(1.016); }
   to   { opacity: 1; transform: scale(1); }
@@ -1151,7 +1307,7 @@ html, body, #root {
   .onb2-preview-in  { animation: none; opacity: 1; transform: none; }
 }
 
-/* ── MY CAR, REMEMBERED — Screen 3 entrance sequence ── */
+/* â”€â”€ MY CAR, REMEMBERED â€” Screen 3 entrance sequence â”€â”€ */
 @keyframes onb3-marker-drop {
   /* Circle marker: centered via translate(-50%,-50%) */
   from { opacity: 0; transform: translate(-50%, -50%) scale(0.62); }
@@ -1213,7 +1369,7 @@ html, body, #root {
   .loc-map-in, .loc-dot-in, .loc-ring, .loc-ping-in, .loc-sheet-in { animation: none; }
 }
 
-/* Country selector bottom sheet — transition-based enter/exit */
+/* Country selector bottom sheet â€” transition-based enter/exit */
 .cs-overlay {
   background: rgba(2, 8, 20, 0);
   transition: background-color 220ms ease-out;
@@ -1330,7 +1486,7 @@ html, body, #root {
   -webkit-overflow-scrolling: touch;
 }
 
-/* ── Sign Scanner (ParQueen Assistant) ───────────────────────────────────────
+/* â”€â”€ Sign Scanner (ParQueen Assistant) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    Scoped to .pq-assist. Colours come from the theme variables so the screen
    reads as premium NYC-night in dark mode without breaking light mode, where
    the same structure renders on light surfaces. Motion is transform/opacity
@@ -1340,7 +1496,7 @@ html, body, #root {
   padding-top: max(1rem, env(safe-area-inset-top, 0px));
 }
 
-/* Hero — atmospheric but compact. */
+/* Hero â€” atmospheric but compact. */
 .pq-assist-hero {
   background:
     radial-gradient(120% 140% at 85% 0%, rgba(30, 117, 255, 0.20), transparent 60%),
@@ -1349,7 +1505,7 @@ html, body, #root {
   border: 1px solid var(--color-border);
 }
 
-/* A hint of skyline, drawn with gradients only — no images, no extra requests. */
+/* A hint of skyline, drawn with gradients only â€” no images, no extra requests. */
 .pq-assist-skyline {
   position: absolute;
   right: -8%;
@@ -1408,7 +1564,7 @@ html, body, #root {
 .pq-cta:hover { filter: brightness(1.06); }
 .pq-cta:active { transform: scale(0.985); }
 
-/* "Soon" cards — intentionally designed, not broken-looking. */
+/* "Soon" cards â€” intentionally designed, not broken-looking. */
 .pq-soon-card {
   background: var(--color-card);
   border: 1px dashed var(--color-border);
@@ -1502,52 +1658,359 @@ html, body, #root {
   .pq-scan-card:active, .pq-cta:active { transform: none; }
 }
 
-/* ── AI Parking Assistant — tool cards & results ─────────────────────────────
-   One visual family for all three tools. Colours come from the theme variables
-   so light mode is a real design rather than an inversion. Sits above the
-   @tailwind directives with the rest of the semantic rules — see the banner
-   below, and utils/tailwindCascade.test.ts.
-   ───────────────────────────────────────────────────────────────────────── */
-.pq-tool-card {
+/* â”€â”€ AI Parking Assistant â€” tool cards & results â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+   One visual family for all three tools. Material language matches map-search-
+   shell / map-ai-action / mobile-shell: deep navy glass, soft blue rim, restrained
+   ambient glow. Featured Scan relates to map-ai-action but stays quieter than Ping.
+   Colours come from theme / shell variables. Sits above the @tailwind directives
+   with the rest of the semantic rules â€” see the banner below, and
+   utils/tailwindCascade.test.ts.
+   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+.pq-tools-hub {
   position: relative;
-  background:
-    linear-gradient(180deg, rgba(56, 189, 248, 0.05), rgba(56, 189, 248, 0) 60%),
-    var(--color-card);
-  border: 1px solid var(--color-border);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 6px 18px rgba(2, 8, 20, 0.28);
-  transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 2px;
 }
-.pq-tool-card::before {
+/* Barely-perceptible navy/blue ambient behind the upper tool-card cluster */
+.pq-tools-hub::before {
+  content: '';
+  position: absolute;
+  left: -8%;
+  right: -8%;
+  top: -6%;
+  height: 58%;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(70% 55% at 50% 18%, rgba(56, 140, 255, 0.07) 0%, rgba(20, 60, 120, 0.03) 42%, transparent 72%);
+  opacity: 0.85;
+}
+.pq-tools-hub > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Floating-glass hub / tool back control â€” dark navy glass, soft rim, no neon */
+.pq-assist-back {
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 9999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--color-text);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.015) 42%, rgba(0, 0, 0, 0.16) 100%),
+    linear-gradient(165deg, #0c182c 0%, #08111f 55%, #0a1528 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 16%, rgba(100, 130, 170, 0.18));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.12),
+    0 6px 16px rgba(0, 4, 14, 0.28),
+    0 0 12px rgba(56, 140, 255, 0.06);
+  backdrop-filter: blur(18px) saturate(1.1);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
+  transition: transform 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out, background 150ms ease-out;
+}
+.pq-assist-back:hover {
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 24%, rgba(110, 150, 200, 0.22));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.16),
+    0 8px 18px rgba(0, 4, 14, 0.32),
+    0 0 14px rgba(56, 140, 255, 0.09);
+}
+.pq-assist-back:active { transform: scale(0.95); }
+.pq-assist-back:focus-visible {
+  outline: 2px solid var(--mobile-shell-focus, #82bdff);
+  outline-offset: 2px;
+}
+
+/* Featured Scan â€” richer navy glass like map-ai-action; quieter glow than Ping */
+.pq-tool-featured {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 14px 14px 12px;
+  border-radius: 20px;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 90% at 18% 12%, rgba(77, 148, 255, 0.14) 0%, rgba(77, 148, 255, 0.03) 42%, transparent 68%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.02) 38%, rgba(0, 0, 0, 0.18) 100%),
+    linear-gradient(165deg, #0c1a30 0%, #08111f 48%, #0a1730 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 22%, rgba(90, 130, 180, 0.16));
+  box-shadow:
+    inset 0 1px 0 rgba(236, 246, 255, 0.18),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.28),
+    0 10px 26px rgba(0, 4, 14, 0.36),
+    0 2px 8px rgba(0, 4, 14, 0.20),
+    0 0 22px rgba(77, 148, 255, 0.12),
+    0 0 36px rgba(77, 148, 255, 0.05);
+  backdrop-filter: blur(22px) saturate(1.12);
+  -webkit-backdrop-filter: blur(22px) saturate(1.12);
+  transition: transform 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+.pq-tool-featured::before {
+  content: '';
+  position: absolute;
+  left: 12%;
+  right: 12%;
+  top: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(200, 230, 255, 0.42), transparent);
+  pointer-events: none;
+}
+.pq-tool-featured:hover {
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 32%, rgba(110, 160, 220, 0.22));
+  box-shadow:
+    inset 0 1px 0 rgba(236, 246, 255, 0.22),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.24),
+    0 12px 28px rgba(0, 4, 14, 0.40),
+    0 2px 8px rgba(0, 4, 14, 0.22),
+    0 0 26px rgba(77, 148, 255, 0.15),
+    0 0 40px rgba(77, 148, 255, 0.06);
+}
+.pq-tool-featured:active { transform: scale(0.985); }
+
+/* Luminous glass well â€” translucent blue glass holding bright shell-accent icon */
+.pq-tool-featured-icon {
+  position: relative;
+  z-index: 1;
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #38bdf8;
+  background:
+    radial-gradient(120% 100% at 50% 18%, rgba(77, 148, 255, 0.22) 0%, rgba(77, 148, 255, 0.05) 48%, transparent 72%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.02) 45%, rgba(0, 0, 0, 0.22) 100%),
+    linear-gradient(160deg, rgba(12, 28, 52, 0.92) 0%, rgba(6, 14, 28, 0.96) 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 28%, rgba(100, 140, 190, 0.20));
+  box-shadow:
+    inset 0 1px 0 rgba(236, 246, 255, 0.22),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.28),
+    0 0 16px rgba(56, 189, 248, 0.18),
+    0 4px 12px rgba(0, 4, 14, 0.28);
+}
+.pq-tool-featured-body {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.pq-tool-featured-title {
+  font-size: 15.5px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
+  line-height: 1.2;
+}
+.pq-tool-featured-desc {
+  font-size: 12px;
+  line-height: 1.35;
+  color: color-mix(in srgb, var(--color-text-secondary) 78%, transparent);
+}
+
+/* Secondary 2-col dashboard tiles â€” same navy glass family as Scan */
+.pq-tools-secondary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.pq-tool-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  min-height: 108px;
+  padding: 14px 13px 13px;
+  border-radius: 18px;
+  text-align: left;
+  overflow: hidden;
+  background:
+    radial-gradient(110% 80% at 20% 0%, rgba(77, 148, 255, 0.06) 0%, transparent 55%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.015) 42%, rgba(0, 0, 0, 0.16) 100%),
+    linear-gradient(165deg, #0c182c 0%, #08111f 52%, #0a1528 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 16%, rgba(90, 130, 180, 0.14));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.12),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.22),
+    0 8px 20px rgba(0, 4, 14, 0.30),
+    0 0 14px rgba(56, 140, 255, 0.05);
+  backdrop-filter: blur(18px) saturate(1.08);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+  transition: transform 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+.pq-tool-tile::before {
   content: '';
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  padding: 1px;
-  background: linear-gradient(140deg, rgba(56, 189, 248, 0.40), rgba(56, 189, 248, 0) 45%);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-          mask-composite: exclude;
   pointer-events: none;
+  background: linear-gradient(145deg, rgba(120, 180, 255, 0.05), transparent 48%);
 }
-.pq-tool-card:hover { border-color: rgba(56, 189, 248, 0.34); }
-.pq-tool-card:active { transform: scale(0.985); }
+.pq-tool-tile:hover {
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 26%, rgba(110, 160, 220, 0.20));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.16),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.18),
+    0 10px 22px rgba(0, 4, 14, 0.34),
+    0 0 16px rgba(56, 140, 255, 0.08);
+}
+.pq-tool-tile:active { transform: scale(0.985); }
 
-.pq-tool-icon {
-  width: 46px;
-  height: 46px;
-  border-radius: 15px;
+/* Icon wells sit in dark glass; semantic red/green only as muted washes */
+.pq-tool-tile-icon {
+  position: relative;
+  z-index: 1;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
-  background: linear-gradient(150deg, #1e75ff, #38bdf8);
-  box-shadow: 0 4px 14px rgba(30, 117, 255, 0.32);
+  color: #38bdf8;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(0, 0, 0, 0.18) 100%),
+    linear-gradient(160deg, rgba(10, 24, 44, 0.95) 0%, rgba(6, 14, 28, 0.98) 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 18%, rgba(90, 130, 180, 0.16));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.14),
+    0 0 10px rgba(56, 189, 248, 0.10),
+    0 3px 8px rgba(0, 4, 14, 0.24);
 }
-/* Each tool keeps its own accent while staying in the family. */
-.pq-tool--hydrant .pq-tool-icon { background: linear-gradient(150deg, #d9384f, #f97362); box-shadow: 0 4px 14px rgba(217, 56, 79, 0.30); }
-.pq-tool--check   .pq-tool-icon { background: linear-gradient(150deg, #0f9d6b, #34d399); box-shadow: 0 4px 14px rgba(15, 157, 107, 0.30); }
-.pq-tool--hydrant::before { background: linear-gradient(140deg, rgba(249, 115, 98, 0.34), rgba(249, 115, 98, 0) 45%); }
-.pq-tool--check::before   { background: linear-gradient(140deg, rgba(52, 211, 153, 0.34), rgba(52, 211, 153, 0) 45%); }
+.pq-tool--hydrant .pq-tool-tile-icon {
+  color: color-mix(in srgb, #f87171 82%, #fff 18%);
+  background:
+    radial-gradient(120% 100% at 50% 20%, rgba(248, 113, 113, 0.16) 0%, rgba(248, 113, 113, 0.04) 48%, transparent 70%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(0, 0, 0, 0.20) 100%),
+    linear-gradient(160deg, rgba(18, 14, 24, 0.96) 0%, rgba(8, 10, 20, 0.98) 100%);
+  border: 1px solid color-mix(in srgb, #f87171 22%, rgba(90, 110, 140, 0.16));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 220, 220, 0.10),
+    0 0 10px rgba(248, 113, 113, 0.10),
+    0 3px 8px rgba(0, 4, 14, 0.24);
+}
+.pq-tool--check .pq-tool-tile-icon {
+  color: color-mix(in srgb, #34d399 80%, #fff 20%);
+  background:
+    radial-gradient(120% 100% at 50% 20%, rgba(52, 211, 153, 0.14) 0%, rgba(52, 211, 153, 0.04) 48%, transparent 70%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(0, 0, 0, 0.20) 100%),
+    linear-gradient(160deg, rgba(10, 22, 28, 0.96) 0%, rgba(6, 14, 22, 0.98) 100%);
+  border: 1px solid color-mix(in srgb, #34d399 20%, rgba(90, 120, 140, 0.16));
+  box-shadow:
+    inset 0 1px 0 rgba(220, 255, 240, 0.10),
+    0 0 10px rgba(52, 211, 153, 0.09),
+    0 3px 8px rgba(0, 4, 14, 0.24);
+}
+.pq-tool-tile-label {
+  position: relative;
+  z-index: 1;
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  color: var(--color-text);
+}
+
+/* Legacy card/icon hooks (scan flow / other surfaces may still reference) */
+.pq-tool-card {
+  position: relative;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.015) 42%, rgba(0, 0, 0, 0.14) 100%),
+    linear-gradient(165deg, #0c182c 0%, #08111f 55%, #0a1528 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 14%, rgba(90, 130, 180, 0.12));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.10),
+    0 8px 22px rgba(0, 4, 14, 0.30),
+    0 0 16px rgba(56, 140, 255, 0.05);
+  transition: transform 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+.pq-tool-icon {
+  position: relative;
+  z-index: 1;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #38bdf8;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(0, 0, 0, 0.18) 100%),
+    linear-gradient(160deg, rgba(10, 24, 44, 0.95) 0%, rgba(6, 14, 28, 0.98) 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 20%, rgba(90, 130, 180, 0.16));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.14),
+    0 0 12px rgba(56, 189, 248, 0.12),
+    0 3px 10px rgba(0, 4, 14, 0.24);
+}
+.pq-tool-chevron {
+  position: relative;
+  z-index: 1;
+  color: color-mix(in srgb, var(--mobile-shell-text-muted, rgba(160, 180, 205, 0.55)) 70%, transparent);
+}
+
+.pq-tools-recent {
+  margin-top: 2px;
+  padding: 2px 0 0;
+}
+.pq-tools-recent-title {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: color-mix(in srgb, var(--color-text-secondary) 78%, transparent);
+}
+/* Quieter than tool cards â€” darker translucent navy, minimal glow */
+.pq-tools-recent-empty-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 14px 14px 13px;
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.028) 0%, rgba(0, 0, 0, 0.14) 100%),
+    linear-gradient(180deg, #08101c 0%, #060b14 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 8%, rgba(70, 100, 140, 0.10));
+  box-shadow: inset 0 1px 0 rgba(210, 230, 255, 0.06);
+}
+.pq-tools-recent-empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-bottom: 4px;
+  border-radius: 9px;
+  color: color-mix(in srgb, #7aa0c4 70%, rgba(160, 180, 205, 0.55) 30%);
+  background: rgba(80, 120, 170, 0.08);
+  border: 1px solid rgba(100, 140, 180, 0.10);
+}
+.pq-tools-recent-empty-title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 650;
+  line-height: 1.3;
+  color: color-mix(in srgb, var(--color-text) 84%, transparent);
+}
+.pq-tools-recent-empty {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: color-mix(in srgb, var(--color-text-secondary) 72%, transparent);
+}
 
 /* Result surfaces. Tone is reinforced by an icon and words, never colour alone. */
 .pq-result { background: var(--color-card); border: 1px solid var(--color-border); }
@@ -1589,9 +2052,16 @@ html, body, #root {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pq-tool-card { transition: none; }
-  .pq-tool-card:active { transform: none; }
+  .pq-tool-card,
+  .pq-tool-featured,
+  .pq-tool-tile,
+  .pq-assist-back { transition: none; }
+  .pq-tool-card:active,
+  .pq-tool-featured:active,
+  .pq-tool-tile:active,
+  .pq-assist-back:active { transform: none; }
 }
+
 
 /* -- Nearby Activity ------------------------------------------------------
    Live-feed visual language. Same family as the AI Parking Assistant cards:
@@ -1730,7 +2200,7 @@ html, body, #root {
   align-items: center;
   justify-content: center;
 }
-/* 11–12px helper lines under the location CTA. --color-text-secondary is only
+/* 11â€“12px helper lines under the location CTA. --color-text-secondary is only
    3.7:1 on the light ground; 66% of the theme text colour is 5.2:1 light and
    8.6:1 dark, yet still quieter than full-strength text. The first line is the
    fallback for browsers without color-mix. */
@@ -1774,7 +2244,7 @@ html, body, #root {
 
 /* Radius sheet. The primary bottom nav is position:fixed at z-index 35, so the
    sheet sits above it explicitly. Its surface is opaque rather than
-   var(--color-card), which is 60% transparent — the nav bar was showing
+   var(--color-card), which is 60% transparent â€” the nav bar was showing
    straight through the modal. Bottom clearance is applied in the JSX, because
    Tailwind's padding utility is emitted after these rules and would win. */
 .pq-sheet-overlay { z-index: 60; }
@@ -2272,7 +2742,7 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   color: var(--color-text-secondary);
   background: var(--color-overlay);
 }
-/* Legal: the lightest group — bare icons, tighter rows. */
+/* Legal: the lightest group â€” bare icons, tighter rows. */
 .pq-row-icon--bare {
   width: 24px;
   height: 24px;
@@ -2376,20 +2846,2143 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   }
 }
 
-/* ─────────────────────────────────────────────────────────────────────────────
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    TAILWIND MUST STAY LAST IN THIS FILE. DO NOT MOVE IT ABOVE THE RULES ABOVE.
 
    The Tailwind Play CDN used to append its compiled <style> to document.head at
    runtime, which put base + components + utilities AFTER the bundled stylesheet
    this file becomes. Utilities therefore won every equal-specificity conflict
    with the semantic classes above (.sp-overlay vs p-0/md:p-3, .map-status-row
-   vs md:w-full, and others). Emitting these directives here — at the bottom of
-   the last stylesheet in <head> — reproduces that exact cascade position.
+   vs md:w-full, and others). Emitting these directives here â€” at the bottom of
+   the last stylesheet in <head> â€” reproduces that exact cascade position.
 
    Putting `@tailwind base` at the top of this file instead would flip every one
    of those conflicts and silently change the layout. Guarded by
    utils/tailwindCascade.test.ts.
-   ───────────────────────────────────────────────────────────────────────────── */
+   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+
+
+/* Premium Ping / shared bottom sheet surface */
+.pq-bottom-sheet-root {
+  pointer-events: auto;
+}
+
+.pq-bottom-sheet-backdrop {
+  background: rgba(2, 8, 20, 0.48);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  opacity: 0;
+  transition: opacity 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.pq-bottom-sheet-backdrop.is-open {
+  opacity: 1;
+}
+
+.pq-bottom-sheet {
+  /* Theme-aware sheet surface: dark navy glass by default (dark mode),
+     re-scoped to pale ParQueen glass under :root:not(.dark) below. */
+  color: rgba(247, 250, 255, 0.96);
+  --color-text: rgba(247, 250, 255, 0.96);
+  --color-text-secondary: rgba(210, 224, 242, 0.72);
+  --color-border: rgba(255, 255, 255, 0.12);
+  --color-card: rgba(255, 255, 255, 0.06);
+  --color-info: #7dd3fc;
+  --color-danger: #f87171;
+  --sheet-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.015) 18%, rgba(0, 0, 0, 0.12) 100%), linear-gradient(180deg, #0c1526 0%, #070e1a 100%);
+  --sheet-border: color-mix(in srgb, var(--mobile-shell-accent, #4d94ff) 28%, rgba(90, 130, 180, 0.18));
+  --sheet-shadow: inset 0 1px 0 rgba(210, 230, 255, 0.14), 0 -18px 48px rgba(0, 4, 14, 0.42), 0 -4px 18px rgba(77, 148, 255, 0.10);
+  --sheet-handle: color-mix(in srgb, var(--mobile-shell-accent, #4d94ff) 22%, rgba(150, 170, 195, 0.45));
+  --sheet-fg: rgba(247, 250, 255, 0.96);
+  --sheet-fg-secondary: rgba(210, 224, 242, 0.72);
+  --sheet-fg-muted: rgba(186, 204, 228, 0.58);
+  --sheet-icon: #9ec8ff;
+  --pq-elev-surface: rgba(12, 22, 40, 0.72);
+  --pq-elev-surface-2: #0f1c32;
+  --pq-elev-surface-3: #0a1424;
+  --pq-elev-well: rgba(0, 0, 0, 0.22);
+  --pq-elev-border: rgba(255, 255, 255, 0.12);
+  --pq-elev-border-strong: rgba(96, 165, 250, 0.40);
+  --pq-elev-text: rgba(255, 255, 255, 0.94);
+  --pq-elev-text-muted: rgba(226, 232, 240, 0.72);
+  --pq-elev-icon: #9ec8ff;
+  --pq-elev-inset: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+  --pq-elev-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  --pq-elev-glow: 0 0 20px rgba(56, 140, 255, 0.18);
+  --pq-elev-accent-soft: rgba(96, 165, 250, 0.10);
+  --pq-elev-accent-mid: rgba(96, 165, 250, 0.16);
+  --pq-elev-panel: linear-gradient(165deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.04)), rgba(12, 22, 40, 0.72);
+  --pq-elev-card: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.01) 40%, rgba(0, 0, 0, 0.16) 100%), linear-gradient(165deg, #0f1c32 0%, #0a121f 55%, #0c182c 100%);
+  --pq-elev-cta: radial-gradient(120% 140% at 50% -10%, rgba(90, 160, 255, 0.36) 0%, rgba(40, 110, 230, 0.12) 45%, transparent 70%), linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.02) 40%, rgba(0, 0, 0, 0.18) 100%), linear-gradient(165deg, #12305a 0%, #0a1a36 50%, #0c2248 100%);
+  --pq-elev-cta-text: #eaf4ff;
+  background: var(--sheet-bg);
+  border: 1px solid var(--sheet-border);
+  border-bottom: 0;
+  border-radius: 28px 28px 0 0;
+  box-shadow: var(--sheet-shadow);
+  transform: translateY(100%);
+  transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+
+.pq-bottom-sheet.is-open {
+  transform: translateY(0);
+}
+
+/* light-mode map chrome materials */
+:root:not(.dark) .map-search-shell {
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 18%, rgba(60, 90, 140, 0.14));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72) 0%, rgba(255, 255, 255, 0.28) 42%, rgba(210, 226, 248, 0.22) 100%),
+    linear-gradient(180deg, rgba(244, 248, 253, 0.92) 0%, rgba(232, 240, 250, 0.88) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    inset 0 -1px 0 rgba(40, 70, 120, 0.06),
+    0 10px 24px rgba(20, 40, 80, 0.10),
+    0 2px 8px rgba(20, 40, 80, 0.06),
+    0 0 16px rgba(47, 125, 255, 0.08);
+  color: var(--mobile-shell-text);
+}
+:root:not(.dark) .map-search-shell:focus-within {
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 28%, rgba(60, 90, 140, 0.16));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 12px 26px rgba(20, 40, 80, 0.12),
+    0 0 20px rgba(47, 125, 255, 0.12);
+}
+:root:not(.dark) .map-search-icon {
+  color: rgba(18, 40, 72, 0.88);
+}
+:root:not(.dark) .map-search-input {
+  color: var(--mobile-shell-text);
+}
+:root:not(.dark) .map-search-input::placeholder {
+  color: color-mix(in srgb, var(--mobile-shell-text-muted) 88%, transparent);
+}
+
+:root:not(.dark) .map-ai-action {
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 28%, rgba(60, 90, 140, 0.14));
+  color: var(--mobile-shell-text);
+  background:
+    radial-gradient(120% 90% at 50% 18%, rgba(47, 125, 255, 0.14) 0%, rgba(47, 125, 255, 0.03) 46%, transparent 72%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.7) 0%, rgba(255, 255, 255, 0.22) 40%, rgba(210, 226, 248, 0.2) 100%),
+    linear-gradient(165deg, rgba(244, 248, 253, 0.96) 0%, rgba(230, 239, 250, 0.94) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.88),
+    0 10px 22px rgba(20, 40, 80, 0.10),
+    0 0 14px rgba(47, 125, 255, 0.10);
+}
+:root:not(.dark) .map-ai-action-label {
+  color: rgba(14, 34, 64, 0.92);
+}
+:root:not(.dark) .map-ai-action svg {
+  color: var(--mobile-shell-accent);
+}
+
+:root:not(.dark) .map-status-chip {
+  color: var(--mobile-shell-text);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 10%, rgba(70, 100, 140, 0.14));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.7) 0%, rgba(236, 243, 252, 0.88) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 6px 14px rgba(20, 40, 80, 0.08);
+}
+:root:not(.dark) .map-status-chip.is-empty {
+  color: var(--mobile-shell-text-muted);
+}
+
+:root:not(.dark) .map-control-button {
+  color: var(--mobile-shell-accent);
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 22%, rgba(60, 90, 140, 0.14));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78) 0%, rgba(236, 243, 252, 0.9) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.88),
+    0 10px 20px rgba(20, 40, 80, 0.10),
+    0 0 12px rgba(47, 125, 255, 0.08);
+}
+:root:not(.dark) .map-control-button:hover {
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 40%, rgba(60, 90, 140, 0.16));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.88) 0%, rgba(230, 240, 252, 0.94) 100%);
+}
+:root:not(.dark) .map-control-button.is-active {
+  color: #fff;
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 55%, transparent);
+  background: linear-gradient(145deg, #3d8fff, #2a6fe0);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 10px 20px rgba(30, 90, 200, 0.22);
+}
+:root:not(.dark) .map-control-button.is-active svg {
+  color: #fff;
+}
+
+:root:not(.dark) .mobile-primary-nav-surface {
+  color: var(--mobile-shell-text-muted);
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 12%, rgba(60, 90, 140, 0.14));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78) 0%, rgba(236, 243, 252, 0.9) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.88),
+    0 14px 32px rgba(20, 40, 80, 0.12),
+    0 3px 10px rgba(20, 40, 80, 0.06);
+}
+:root:not(.dark) .mobile-primary-nav-item {
+  color: rgba(40, 64, 100, 0.72);
+}
+:root:not(.dark) .mobile-primary-nav-item.is-active {
+  color: var(--mobile-shell-accent);
+}
+:root:not(.dark) .mobile-primary-nav-item.is-active::before {
+  background:
+    linear-gradient(180deg, rgba(47, 125, 255, 0.12) 0%, rgba(47, 125, 255, 0.05) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 0 12px rgba(47, 125, 255, 0.16),
+    0 4px 10px rgba(20, 40, 80, 0.08);
+}
+/* Ping center CTA stays electric blue — do not restyle core/orbit in this pass */
+/* end light-mode map chrome materials */
+
+/* light-mode bottom-sheet materials */
+:root:not(.dark) .pq-bottom-sheet {
+  color: rgba(14, 34, 64, 0.94);
+  --color-text: rgba(14, 34, 64, 0.94);
+  --color-text-secondary: rgba(28, 52, 88, 0.72);
+  --color-border: rgba(32, 60, 110, 0.18);
+  --color-card: rgba(255, 255, 255, 0.72);
+  --color-info: #1d6fe8;
+  --color-danger: #c0392b;
+  --sheet-fg: rgba(14, 34, 64, 0.94);
+  --sheet-fg-secondary: rgba(28, 52, 88, 0.72);
+  --sheet-fg-muted: rgba(36, 60, 100, 0.62);
+  --sheet-icon: #1d6fe8;
+  --sheet-bg:
+    linear-gradient(180deg, rgba(248, 251, 255, 0.78) 0%, rgba(236, 243, 252, 0.72) 42%, rgba(220, 232, 246, 0.55) 100%),
+    linear-gradient(180deg, #eef3f9 0%, #e3ecf6 100%);
+  --sheet-border: color-mix(in srgb, var(--mobile-shell-accent, #2f7dff) 18%, rgba(60, 90, 140, 0.16));
+  --sheet-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 -14px 36px rgba(20, 40, 80, 0.12),
+    0 -2px 10px rgba(20, 40, 80, 0.06),
+    0 0 18px rgba(47, 125, 255, 0.08);
+  --sheet-handle: color-mix(in srgb, var(--mobile-shell-accent, #2f7dff) 28%, rgba(100, 130, 170, 0.35));
+  /* Inherit pale elev tokens from :root — do not force dark elev inside the sheet */
+  --pq-elev-surface: rgba(255, 255, 255, 0.92);
+  --pq-elev-surface-2: #f3f7fb;
+  --pq-elev-surface-3: #eaf1f8;
+  --pq-elev-well: rgba(12, 34, 56, 0.05);
+  --pq-elev-border: rgba(12, 34, 56, 0.12);
+  --pq-elev-border-strong: rgba(11, 99, 230, 0.28);
+  --pq-elev-text: rgba(14, 34, 64, 0.94);
+  --pq-elev-text-muted: rgba(28, 52, 88, 0.72);
+  --pq-elev-icon: #1d6fe8;
+  --pq-elev-inset: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  --pq-elev-shadow: 0 8px 22px rgba(15, 32, 60, 0.10), 0 2px 6px rgba(15, 32, 60, 0.05);
+  --pq-elev-glow: 0 0 18px rgba(11, 99, 230, 0.12);
+  --pq-elev-accent-soft: rgba(11, 99, 230, 0.10);
+  --pq-elev-accent-mid: rgba(11, 99, 230, 0.16);
+  --pq-elev-panel: linear-gradient(165deg, rgba(255, 255, 255, 0.98), rgba(243, 247, 251, 0.94));
+  --pq-elev-card: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(247, 250, 252, 0.94) 100%), linear-gradient(165deg, #ffffff 0%, #eef4fa 100%);
+  --pq-elev-cta: linear-gradient(165deg, #2f7dff 0%, #1d6fe8 55%, #1557c2 100%);
+  --pq-elev-cta-text: #ffffff;
+}
+
+/* Hardcoded dark cards/rings inside sheets → light elev surfaces */
+:root:not(.dark) .pq-leave-hero-ring,
+:root:not(.dark) .pq-postsave-hero-ring {
+  background:
+    radial-gradient(120% 100% at 30% 15%, rgba(47, 125, 255, 0.16) 0%, transparent 55%),
+    linear-gradient(165deg, #ffffff 0%, #e8f1fb 55%, #dce8f6 100%);
+  border-color: color-mix(in srgb, var(--mobile-shell-accent, #2f7dff) 22%, rgba(60, 90, 140, 0.14));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 6px 14px rgba(20, 40, 80, 0.08),
+    0 0 12px rgba(47, 125, 255, 0.10);
+  color: var(--pq-elev-icon);
+}
+:root:not(.dark) .pq-leave-hero-icon,
+:root:not(.dark) .pq-postsave-hero-icon {
+  color: var(--pq-elev-icon);
+  filter: none;
+}
+
+:root:not(.dark) .pq-leave-secondary,
+:root:not(.dark) .pq-leave-tertiary {
+  color: var(--pq-elev-text);
+}
+:root:not(.dark) .pq-leave-secondary {
+  background: var(--pq-elev-well);
+  border-color: var(--pq-elev-border);
+  box-shadow: var(--pq-elev-inset);
+}
+:root:not(.dark) .pq-leave-tertiary {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  color: var(--pq-elev-text-muted);
+}
+
+:root:not(.dark) .pq-ping-option {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(40, 70, 120, 0.12);
+  box-shadow: 0 4px 12px rgba(20, 40, 80, 0.06);
+  color: var(--pq-elev-text);
+}
+:root:not(.dark) .pq-ping-option.is-selected {
+  background:
+    linear-gradient(180deg, rgba(47, 125, 255, 0.14) 0%, rgba(47, 125, 255, 0.06) 100%);
+  border-color: color-mix(in srgb, var(--mobile-shell-accent, #2f7dff) 34%, rgba(60, 90, 140, 0.14));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    0 0 14px rgba(47, 125, 255, 0.14),
+    0 6px 14px rgba(20, 40, 80, 0.08);
+}
+:root:not(.dark) .pq-ping-option-icon {
+  color: var(--sheet-fg-secondary, var(--color-text-secondary));
+  background: rgba(12, 34, 56, 0.05);
+}
+:root:not(.dark) .pq-ping-option-icon.is-selected {
+  color: var(--mobile-shell-accent, #2f7dff);
+}
+
+:root:not(.dark) .pq-tools-recent-empty-panel,
+:root:not(.dark) .pq-assist-hero {
+  background: var(--pq-elev-card);
+  border-color: var(--pq-elev-border);
+  box-shadow: var(--pq-elev-inset), var(--pq-elev-shadow);
+  color: var(--pq-elev-text);
+}
+
+/* Glass date / time pickers inside light sheets */
+:root:not(.dark) .pq-bottom-sheet .pq-gdate-trigger,
+:root:not(.dark) .pq-bottom-sheet .pq-gdate-panel,
+:root:not(.dark) .pq-bottom-sheet .pq-time-card {
+  background: var(--pq-elev-panel);
+  border-color: var(--pq-elev-border);
+  color: var(--pq-elev-text);
+  box-shadow: var(--pq-elev-inset), var(--pq-elev-shadow);
+}
+:root:not(.dark) .pq-bottom-sheet .pq-gdate-day.is-selected,
+:root:not(.dark) .pq-bottom-sheet .pq-time-period-btn.is-active {
+  background: var(--pq-elev-accent-mid);
+  color: var(--pq-elev-icon);
+  border-color: var(--pq-elev-border-strong);
+  box-shadow: var(--pq-elev-inset), var(--pq-elev-glow);
+}
+:root:not(.dark) .pq-bottom-sheet .pq-gdate-day.is-today:not(.is-selected) {
+  box-shadow: inset 0 0 0 1.5px var(--pq-elev-border-strong);
+  color: var(--pq-elev-icon);
+}
+:root:not(.dark) .pq-bottom-sheet .pq-gdate-day.is-outside,
+:root:not(.dark) .pq-bottom-sheet .pq-gdate-day.is-disabled {
+  color: color-mix(in srgb, var(--pq-elev-text-muted) 55%, transparent);
+}
+/* end light-mode bottom-sheet materials */
+
+/* light-mode My Car contrast pass */
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-hero {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, rgba(244, 248, 253, 0.88) 100%);
+  border-color: color-mix(in srgb, var(--mobile-shell-accent, #2f7dff) 16%, rgba(40, 70, 120, 0.18));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 8px 20px rgba(18, 40, 78, 0.10),
+    0 2px 6px rgba(18, 40, 78, 0.05);
+}
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-hero-address {
+  color: rgba(10, 28, 56, 0.96);
+}
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-hero-status,
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-hero-kicker {
+  color: rgba(28, 52, 88, 0.78);
+}
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-nav {
+  color: var(--mobile-shell-accent, #2f7dff);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9) 0%, rgba(236, 244, 255, 0.88) 100%);
+  border-color: color-mix(in srgb, var(--mobile-shell-accent, #2f7dff) 28%, rgba(40, 70, 120, 0.14));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 4px 12px rgba(30, 80, 180, 0.10);
+}
+
+/* Safe Until — strongest elevated separation */
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-intel,
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-intel--safe {
+  background:
+    linear-gradient(180deg, rgba(248, 252, 255, 0.96) 0%, rgba(232, 242, 252, 0.92) 55%, rgba(224, 236, 248, 0.9) 100%);
+  border-color: color-mix(in srgb, rgba(20, 90, 70, 0.22) 35%, rgba(40, 70, 120, 0.18));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    inset 0 2px 0 color-mix(in srgb, rgba(30, 90, 160, 0.14) 60%, transparent),
+    0 10px 24px rgba(18, 40, 78, 0.11),
+    0 2px 8px rgba(18, 40, 78, 0.05);
+}
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-intel-datetime,
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-intel-hero {
+  color: rgba(8, 26, 54, 0.96);
+  font-weight: 700;
+}
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-intel-street,
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-intel-street p,
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-intel-reason,
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-intel-meta,
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-intel-label {
+  color: rgba(28, 52, 88, 0.78);
+}
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-intel-chip {
+  color: rgba(22, 46, 82, 0.82);
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(40, 70, 120, 0.14);
+}
+
+/* Reminder tiles */
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-remind-tile {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9) 0%, rgba(240, 246, 253, 0.9) 100%);
+  border-color: rgba(40, 70, 120, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 4px 12px rgba(18, 40, 78, 0.07);
+  color: rgba(12, 30, 58, 0.92);
+}
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-remind-tile-label {
+  color: rgba(12, 30, 58, 0.92);
+}
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-remind-tile-icon {
+  color: var(--mobile-shell-accent, #2f7dff);
+  background: rgba(47, 125, 255, 0.08);
+  border-color: color-mix(in srgb, var(--mobile-shell-accent, #2f7dff) 22%, rgba(40, 70, 120, 0.12));
+}
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-remind-tile.is-on {
+  background:
+    linear-gradient(165deg, rgba(214, 232, 255, 0.95) 0%, rgba(232, 242, 255, 0.9) 48%, rgba(245, 249, 255, 0.92) 100%);
+  border-color: color-mix(in srgb, var(--mobile-shell-accent, #2f7dff) 38%, rgba(40, 70, 120, 0.14));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    0 0 16px rgba(47, 125, 255, 0.14),
+    0 6px 16px rgba(30, 80, 180, 0.10);
+}
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-remind-tile.is-on .pq-mycar-remind-tile-label,
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-remind-tile.is-on .pq-mycar-remind-tile-icon,
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-remind-tile.is-on .pq-mycar-remind-on {
+  color: #1a5fd4;
+}
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-remind-note {
+  color: rgba(28, 52, 88, 0.78);
+}
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-remind-note strong {
+  color: rgba(12, 30, 58, 0.92);
+  font-weight: 700;
+}
+
+/* Community CTA — deeper blue glass, less flat */
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-ping-cta {
+  color: #f4f8ff;
+  background:
+    radial-gradient(120% 140% at 50% -20%, rgba(120, 180, 255, 0.35) 0%, transparent 55%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.04) 40%, rgba(0, 30, 90, 0.12) 100%),
+    linear-gradient(165deg, #3a86f0 0%, #1f66d8 52%, #1553b8 100%);
+  border-color: color-mix(in srgb, #0b3f9a 35%, rgba(40, 70, 120, 0.2));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 8px 20px rgba(25, 80, 180, 0.22),
+    0 0 14px rgba(47, 125, 255, 0.12);
+}
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-ping-hint {
+  color: rgba(28, 52, 88, 0.76);
+}
+
+/* Remove saved car — muted coral, understated */
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-btn-danger,
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-danger-trigger {
+  color: #b54a46;
+  background: transparent;
+  border-color: transparent;
+}
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-section-label > span,
+:root:not(.dark) .pq-bottom-sheet .pq-mycar-note {
+  color: rgba(28, 52, 88, 0.76);
+}
+/* end light-mode My Car contrast pass */
+
+
+
+/* bottom-sheet drag performance */
+.pq-bottom-sheet.is-dragging {
+  transition: none !important;
+}
+.pq-bottom-sheet-backdrop.is-dragging {
+  transition: none !important;
+  /* Freeze expensive blur repaints while the finger is down */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+
+.pq-bottom-sheet-handle-row {
+  display: flex;
+  justify-content: center;
+  padding: 12px 0 10px;
+}
+
+.pq-bottom-sheet-handle {
+  width: 40px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--sheet-handle, color-mix(in srgb, var(--mobile-shell-accent, #4d94ff) 22%, rgba(150, 170, 195, 0.45)));
+  box-shadow: 0 0 8px rgba(77, 148, 255, 0.12);
+}
+
+.pq-bottom-sheet-body {
+  color: inherit;
+}
+
+
+.pq-ping-sheet-location {
+  background: rgba(30, 117, 255, 0.10);
+  border: 1px solid rgba(30, 117, 255, 0.16);
+  box-shadow: inset 0 1px 0 rgba(200, 230, 255, 0.08);
+}
+
+.pq-ping-option {
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(140, 170, 210, 0.10);
+  box-shadow: 0 4px 14px rgba(0, 4, 14, 0.14);
+}
+
+.pq-ping-option:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.pq-ping-option.is-selected {
+  background:
+    linear-gradient(180deg, rgba(77, 148, 255, 0.16) 0%, rgba(20, 48, 92, 0.22) 100%);
+  border-color: rgba(127, 193, 255, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(200, 230, 255, 0.12),
+    0 0 16px rgba(77, 148, 255, 0.18),
+    0 8px 18px rgba(0, 4, 14, 0.22);
+}
+
+.pq-ping-option-icon {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--sheet-fg-secondary, var(--color-text-secondary));
+}
+
+.pq-ping-option-icon.is-selected {
+  background: rgba(77, 148, 255, 0.18);
+  color: var(--mobile-shell-accent, #4d94ff);
+  box-shadow: 0 0 12px rgba(77, 148, 255, 0.20);
+}
+
+.pq-ping-option-radio {
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 999px;
+  border-width: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.pq-ping-option-radio.is-selected {
+  background: #3b82f6;
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.45);
+}
+
+.pq-ping-sheet-cta {
+  background:
+    radial-gradient(120% 140% at 50% 0%, rgba(120, 190, 255, 0.35) 0%, transparent 55%),
+    linear-gradient(105deg, #1a6dff 0%, #2f8bff 42%, #38bdf8 100%);
+  border: 1px solid rgba(160, 210, 255, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 0 22px rgba(56, 140, 255, 0.38),
+    0 10px 24px rgba(0, 6, 18, 0.32);
+  letter-spacing: -0.01em;
+}
+
+.pq-ping-sheet-cta:disabled {
+  opacity: 0.45;
+  box-shadow: none;
+}
+
+
+/* â”€â”€ My Car session sheet â€” four-section premium glass â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+   Same deep-navy glass family as Parking Tools / map-search / Ping.
+   Soft blue rim + restrained glow; Safe Until is the visual hero.
+   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* My Car — quieter compact final pass (visual only) */
+.pq-mycar {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 0;
+  margin-top: -6px;
+}
+
+.pq-mycar-section-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.pq-mycar-section-label > span {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  color: color-mix(in srgb, var(--color-text-secondary) 78%, var(--color-text) 22%);
+  flex-shrink: 0;
+}
+.pq-mycar-section-label::after {
+  content: none;
+}
+
+/* 1 — Car identity hero */
+.pq-mycar-hero {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 11px 10px 10px;
+  border-radius: 18px;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 90% at 12% 8%, rgba(77, 148, 255, 0.11) 0%, rgba(77, 148, 255, 0.02) 44%, transparent 68%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.012) 40%, rgba(0, 0, 0, 0.16) 100%),
+    linear-gradient(165deg, #0c1a30 0%, #08111f 50%, #0a1730 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 14%, rgba(90, 130, 180, 0.10));
+  box-shadow:
+    inset 0 1px 0 rgba(236, 246, 255, 0.14),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.22),
+    0 8px 20px rgba(0, 4, 14, 0.30),
+    0 0 16px rgba(77, 148, 255, 0.06);
+  backdrop-filter: blur(20px) saturate(1.1);
+  -webkit-backdrop-filter: blur(20px) saturate(1.1);
+}
+.pq-mycar-hero::before {
+  content: '';
+  position: absolute;
+  left: 14%;
+  right: 14%;
+  top: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(200, 230, 255, 0.30), transparent);
+  pointer-events: none;
+}
+.pq-mycar-hero-icon {
+  position: relative;
+  z-index: 1;
+  width: 42px;
+  height: 42px;
+  border-radius: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background:
+    radial-gradient(120% 100% at 50% 18%, rgba(77, 148, 255, 0.20) 0%, rgba(77, 148, 255, 0.04) 48%, transparent 72%),
+    linear-gradient(160deg, rgba(12, 28, 52, 0.92) 0%, rgba(6, 14, 28, 0.96) 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 22%, rgba(100, 140, 190, 0.14));
+  box-shadow:
+    inset 0 1px 0 rgba(236, 246, 255, 0.18),
+    0 0 12px rgba(56, 189, 248, 0.12);
+}
+.pq-mycar-hero-body {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 0;
+}
+.pq-mycar-hero-kicker {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, #7eb8ff 78%, transparent);
+  margin-bottom: 2px;
+}
+.pq-mycar-hero-address {
+  font-size: 15px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pq-mycar-hero-status {
+  font-size: 11px;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--color-text-secondary) 72%, transparent);
+  margin-top: 2px;
+}
+.pq-mycar-nav {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 12px;
+  border-radius: 9999px;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: #d9ecff;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.02) 45%, rgba(0, 0, 0, 0.16) 100%),
+    linear-gradient(165deg, rgba(20, 48, 92, 0.88) 0%, rgba(10, 22, 44, 0.94) 100%);
+  border: 1px solid rgba(77, 148, 255, 0.58);
+  box-shadow:
+    inset 0 1px 0 rgba(170, 210, 255, 0.14),
+    0 3px 10px rgba(0, 4, 14, 0.24),
+    0 0 12px rgba(56, 140, 255, 0.12);
+  transition: transform 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+.pq-mycar-nav:active { transform: scale(0.95); }
+.pq-mycar-nav:hover {
+  border-color: rgba(77, 148, 255, 0.72);
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.20),
+    0 5px 12px rgba(0, 4, 14, 0.28),
+    0 0 16px rgba(56, 140, 255, 0.16);
+}
+
+/* 2 — Safety / Street Intelligence glass shell */
+.pq-mycar-intel,
+.pq-mycar-intel-unavailable {
+  position: relative;
+  padding: 13px 14px 10px;
+  border-radius: 18px;
+  overflow: hidden;
+  background:
+    radial-gradient(110% 80% at 18% 0%, rgba(52, 211, 153, 0.06) 0%, transparent 52%),
+    radial-gradient(100% 70% at 88% 12%, rgba(77, 148, 255, 0.07) 0%, transparent 48%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.012) 40%, rgba(0, 0, 0, 0.16) 100%),
+    linear-gradient(165deg, #0b182c 0%, #07101e 52%, #0a1628 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 12%, rgba(90, 130, 180, 0.10));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.12),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.20),
+    0 8px 22px rgba(0, 4, 14, 0.32),
+    0 0 18px rgba(56, 140, 255, 0.05);
+  backdrop-filter: blur(20px) saturate(1.1);
+  -webkit-backdrop-filter: blur(20px) saturate(1.1);
+}
+.pq-mycar-intel--safe {
+  border-color: color-mix(in srgb, #34d399 22%, rgba(90, 130, 180, 0.10));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.12),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.20),
+    0 8px 22px rgba(0, 4, 14, 0.32),
+    0 0 18px rgba(52, 211, 153, 0.08);
+}
+.pq-mycar-intel--danger {
+  border-color: color-mix(in srgb, #f87171 24%, rgba(90, 130, 180, 0.10));
+  background:
+    radial-gradient(110% 80% at 18% 0%, rgba(248, 113, 113, 0.09) 0%, transparent 52%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.012) 40%, rgba(0, 0, 0, 0.16) 100%),
+    linear-gradient(165deg, #1a1018 0%, #0c0a12 52%, #140e14 100%);
+}
+.pq-mycar-intel--caution {
+  border-color: color-mix(in srgb, #f5b942 22%, rgba(90, 130, 180, 0.10));
+}
+.pq-mycar-intel-street {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+}
+.pq-mycar-intel-street p {
+  font-size: 10px;
+  font-weight: 550;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text-secondary) 68%, transparent);
+  line-height: 1.25;
+}
+.pq-mycar-intel-hero {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  margin-bottom: 8px;
+}
+.pq-mycar-intel-hero-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(0, 0, 0, 0.14) 100%),
+    rgba(8, 18, 34, 0.7);
+  border: 1px solid rgba(120, 160, 210, 0.12);
+}
+.pq-mycar-intel-hero-icon.is-safe {
+  color: #34d399;
+  border-color: rgba(52, 211, 153, 0.24);
+  box-shadow: 0 0 12px rgba(52, 211, 153, 0.14);
+}
+.pq-mycar-intel-hero-icon.is-danger {
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.26);
+  box-shadow: 0 0 12px rgba(248, 113, 113, 0.12);
+}
+.pq-mycar-intel-hero-icon.is-caution {
+  color: #f5b942;
+  border-color: rgba(245, 185, 66, 0.24);
+}
+.pq-mycar-intel-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text-secondary) 62%, transparent);
+  margin-bottom: 3px;
+}
+.pq-mycar-intel-datetime {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+  color: var(--color-text);
+  text-shadow: 0 0 24px rgba(52, 211, 153, 0.12);
+}
+.pq-mycar-intel-datetime.is-danger { color: #fca5a5; text-shadow: none; }
+.pq-mycar-intel-datetime.is-caution { color: #fde68a; text-shadow: none; }
+.pq-mycar-intel-reason {
+  font-size: 11px;
+  font-weight: 450;
+  line-height: 1.45;
+  color: color-mix(in srgb, var(--color-text-secondary) 70%, transparent);
+  margin-bottom: 8px;
+}
+.pq-mycar-intel-caution-banner {
+  border-radius: 11px;
+  padding: 9px 11px;
+  margin-bottom: 10px;
+  background: rgba(245, 185, 66, 0.07);
+  border: 1px solid rgba(245, 185, 66, 0.16);
+}
+.pq-mycar-intel-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 0;
+}
+.pq-mycar-intel-chip {
+  font-size: 9.5px;
+  font-weight: 500;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  color: color-mix(in srgb, var(--color-text-secondary) 64%, transparent);
+  background: rgba(255, 255, 255, 0.018);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+.pq-mycar-intel-chip.is-accent {
+  color: color-mix(in srgb, #7eb8ff 68%, transparent);
+  background: rgba(56, 140, 255, 0.04);
+  border-color: rgba(56, 140, 255, 0.08);
+}
+.pq-mycar-intel-chip.is-warning {
+  color: color-mix(in srgb, #f5b942 68%, transparent);
+  background: rgba(245, 185, 66, 0.04);
+  border-color: rgba(245, 185, 66, 0.08);
+}
+.pq-mycar-intel-meta {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: 9.5px;
+  font-weight: 450;
+  line-height: 1.35;
+  color: color-mix(in srgb, var(--color-text-secondary) 62%, transparent);
+}
+.pq-mycar-intel-meta p {
+  margin: 0;
+}
+.pq-mycar-intel-meta p + p::before {
+  content: '\00B7';
+  margin-right: 10px;
+  opacity: 0.55;
+}
+.pq-mycar-intel-side-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.pq-mycar-intel-side-btn {
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 12px;
+  color: var(--color-text);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  transition: transform 150ms ease-out, background 150ms ease-out;
+}
+.pq-mycar-intel-side-btn:active { transform: scale(0.95); }
+.pq-mycar-intel-retry {
+  margin-top: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #7eb8ff;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.pq-mycar-intel-retry:disabled { opacity: 0.5; }
+
+/* 3 — Reminders: compact horizontal action cards */
+.pq-mycar-remind-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.pq-mycar-remind-tile {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  min-height: 58px;
+  height: 60px;
+  padding: 0 12px;
+  border-radius: 14px;
+  text-align: left;
+  overflow: visible;
+  background:
+    radial-gradient(110% 80% at 12% 0%, rgba(77, 148, 255, 0.05) 0%, transparent 55%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.012) 42%, rgba(0, 0, 0, 0.14) 100%),
+    linear-gradient(165deg, #0c182c 0%, #08111f 52%, #0a1528 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 12%, rgba(90, 130, 180, 0.10));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.10),
+    0 6px 14px rgba(0, 4, 14, 0.24),
+    0 0 10px rgba(56, 140, 255, 0.03);
+  backdrop-filter: blur(16px) saturate(1.08);
+  -webkit-backdrop-filter: blur(16px) saturate(1.08);
+  transition: transform 160ms ease-out, border-color 180ms ease-out, box-shadow 180ms ease-out, color 180ms ease-out, background 180ms ease-out;
+  color: color-mix(in srgb, var(--color-text-secondary) 82%, transparent);
+}
+.pq-mycar-remind-tile:active { transform: scale(0.97); }
+.pq-mycar-remind-tile:not(.is-on):not(:disabled) {
+  color: color-mix(in srgb, var(--color-text) 72%, var(--color-text-secondary) 28%);
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 18%, rgba(110, 150, 200, 0.12));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.12),
+    0 6px 14px rgba(0, 4, 14, 0.22),
+    0 0 8px rgba(56, 140, 255, 0.05);
+}
+.pq-mycar-remind-tile:not(.is-on):not(:disabled) .pq-mycar-remind-tile-icon {
+  color: #9ec8ff;
+  background: rgba(56, 140, 255, 0.07);
+  border-color: rgba(56, 140, 255, 0.14);
+}
+.pq-mycar-remind-tile:disabled {
+  opacity: 0.38;
+  pointer-events: none;
+}
+.pq-mycar-remind-tile.is-on {
+  border-color: rgba(77, 148, 255, 0.62);
+  color: #f2f8ff;
+  box-shadow:
+    inset 0 1px 0 rgba(210, 235, 255, 0.24),
+    inset 0 0 34px rgba(56, 140, 255, 0.16),
+    0 6px 16px rgba(0, 4, 14, 0.28),
+    0 0 28px rgba(56, 140, 255, 0.32);
+  background:
+    radial-gradient(125% 110% at 16% 0%, rgba(77, 148, 255, 0.40) 0%, rgba(56, 140, 255, 0.14) 40%, transparent 68%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.025) 42%, rgba(0, 0, 0, 0.14) 100%),
+    linear-gradient(165deg, #123050 0%, #0c1c34 52%, #0e2440 100%);
+}
+.pq-mycar-remind-on {
+  position: absolute;
+  top: 6px;
+  right: 7px;
+  z-index: 3;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.3;
+  text-transform: uppercase;
+  color: #d7ebff;
+  background: rgba(56, 140, 255, 0.28);
+  border: 1px solid rgba(120, 185, 255, 0.48);
+  box-shadow: 0 0 10px rgba(56, 140, 255, 0.28);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-1px);
+  pointer-events: none;
+  transition: opacity 180ms ease-out, transform 180ms ease-out, visibility 180ms ease-out;
+}
+.pq-mycar-remind-tile.is-on .pq-mycar-remind-on {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+.pq-mycar-remind-tile-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: background 180ms ease-out, border-color 180ms ease-out, color 180ms ease-out, box-shadow 180ms ease-out;
+}
+.pq-mycar-remind-tile.is-on .pq-mycar-remind-tile-icon {
+  color: #ffffff;
+  background: rgba(56, 140, 255, 0.34);
+  border-color: rgba(140, 200, 255, 0.55);
+  box-shadow: 0 0 14px rgba(56, 140, 255, 0.40), inset 0 1px 0 rgba(230, 245, 255, 0.28);
+}
+.pq-mycar-remind-tile-label {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  flex: 1;
+  min-width: 0;
+  padding-right: 28px;
+  transition: color 180ms ease-out;
+}
+.pq-mycar-remind-tile.is-on .pq-mycar-remind-tile-label {
+  color: #f2f8ff;
+}
+.pq-mycar-remind-note {
+  margin-top: 11px;
+  padding: 0 2px;
+  font-size: 10.5px;
+  font-weight: 450;
+  line-height: 1.85;
+  color: color-mix(in srgb, var(--color-text-secondary) 50%, transparent);
+}
+.pq-mycar-remind-note strong {
+  color: color-mix(in srgb, var(--color-text) 72%, transparent);
+  font-weight: 600;
+}
+.pq-mycar-remind-panel {
+  margin-top: 10px;
+  border-radius: 14px;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, rgba(0, 0, 0, 0.10) 100%),
+    linear-gradient(165deg, #0c182c 0%, #08111f 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 10%, rgba(90, 130, 180, 0.10));
+  box-shadow: inset 0 1px 0 rgba(230, 242, 255, 0.06);
+}
+
+/* 4 — Community + danger */
+.pq-mycar-ping-cta {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #dceeff;
+  background:
+    radial-gradient(120% 110% at 30% 0%, rgba(77, 148, 255, 0.31) 0%, rgba(56, 140, 255, 0.09) 40%, transparent 70%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.012) 42%, rgba(0, 0, 0, 0.14) 100%),
+    linear-gradient(165deg, #0c1a30 0%, #08111f 52%, #0a1730 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 18%, rgba(100, 140, 190, 0.10));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.14),
+    inset 0 0 32px rgba(56, 140, 255, 0.11),
+    0 6px 16px rgba(0, 4, 14, 0.24),
+    0 0 24px rgba(56, 140, 255, 0.18);
+  transition: transform 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+.pq-mycar-ping-cta > .pq-mycar-ping-cta-label {
+  flex: 1;
+  text-align: left;
+  min-width: 0;
+}
+.pq-mycar-ping-cta > .pq-mycar-ping-cta-chevron {
+  margin-left: auto;
+  opacity: 0.42;
+  color: #9ec8ff;
+  flex-shrink: 0;
+}
+.pq-mycar-ping-cta svg:first-child {
+  color: #7eb8ff;
+  filter: drop-shadow(0 0 7px rgba(56, 189, 248, 0.42));
+  flex-shrink: 0;
+}
+.pq-mycar-ping-cta:active { transform: scale(0.985); }
+.pq-mycar-ping-hint {
+  margin-top: 7px;
+  text-align: center;
+  font-size: 10.5px;
+  font-weight: 450;
+  line-height: 1.45;
+  color: color-mix(in srgb, var(--color-text-secondary) 52%, transparent);
+}
+.pq-mycar-ping-active {
+  padding: 13px;
+  border-radius: 14px;
+  background:
+    radial-gradient(110% 80% at 20% 0%, rgba(77, 148, 255, 0.09) 0%, transparent 55%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(0, 0, 0, 0.12) 100%),
+    linear-gradient(165deg, #0c182c 0%, #08111f 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 14%, rgba(90, 130, 180, 0.10));
+  box-shadow: inset 0 1px 0 rgba(230, 242, 255, 0.08);
+}
+.pq-mycar-ping-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.pq-mycar-btn-ghost {
+  flex: 1;
+  padding: 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text);
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: transform 150ms ease-out, background 150ms ease-out;
+}
+.pq-mycar-btn-ghost:active { transform: scale(0.97); }
+.pq-mycar-btn-danger {
+  flex: 1;
+  padding: 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fca5a5;
+  background: rgba(248, 113, 113, 0.07);
+  border: 1px solid rgba(248, 113, 113, 0.18);
+  transition: transform 150ms ease-out, background 150ms ease-out;
+}
+.pq-mycar-btn-danger:active { transform: scale(0.97); }
+.pq-mycar-btn-danger:disabled { opacity: 0.5; }
+
+.pq-mycar-danger {
+  margin-top: 12px;
+  padding-top: 18px;
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 40%, transparent);
+}
+.pq-mycar-danger-trigger {
+  width: 100%;
+  padding: 11px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 550;
+  color: #f87171;
+  background: transparent;
+  border: none;
+  transition: background 150ms ease-out, color 150ms ease-out;
+}
+.pq-mycar-danger-trigger:hover {
+  background: rgba(248, 113, 113, 0.05);
+}
+.pq-mycar-danger-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pq-mycar-danger-confirm > p {
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+  color: color-mix(in srgb, var(--color-text-secondary) 80%, transparent);
+}
+
+
+/* Post-save confirmation sheet — compact ParQueen blue glass */
+.pq-postsave {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 2px 0 4px;
+  gap: 0;
+}
+.pq-postsave-hero {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 2px 0 14px;
+}
+.pq-postsave-hero-glow {
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 45%, rgba(56, 140, 255, 0.42) 0%, rgba(56, 140, 255, 0.12) 42%, transparent 70%);
+  filter: blur(6px);
+  pointer-events: none;
+}
+.pq-postsave-hero-ring {
+  position: relative;
+  z-index: 1;
+  width: 58px;
+  height: 58px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(120% 100% at 30% 15%, rgba(120, 180, 255, 0.28) 0%, transparent 55%),
+    linear-gradient(165deg, #132848 0%, #0a1528 48%, #0c1c38 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent, #3b8cff) 28%, rgba(120, 160, 210, 0.14));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.22),
+    inset 0 -10px 24px rgba(30, 90, 200, 0.18),
+    0 8px 22px rgba(0, 6, 20, 0.35),
+    0 0 28px rgba(56, 140, 255, 0.22);
+}
+.pq-postsave-hero-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #e8f3ff;
+  filter: drop-shadow(0 0 8px rgba(90, 170, 255, 0.55));
+}
+.pq-postsave-title {
+  margin: 0 0 6px;
+  font-size: 1.2rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--color-text);
+}
+.pq-postsave-sub {
+  margin: 0 0 18px;
+  max-width: 16.5rem;
+  font-size: 0.8125rem;
+  font-weight: 450;
+  line-height: 1.4;
+  color: color-mix(in srgb, var(--color-text-secondary) 88%, transparent);
+}
+.pq-postsave-cta {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 13px 16px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent, #3b8cff) 34%, rgba(100, 150, 210, 0.16));
+  font-size: 0.875rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #eaf4ff;
+  background:
+    radial-gradient(120% 140% at 50% -10%, rgba(90, 160, 255, 0.38) 0%, rgba(40, 110, 230, 0.12) 45%, transparent 70%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.02) 40%, rgba(0, 0, 0, 0.18) 100%),
+    linear-gradient(165deg, #12305a 0%, #0a1a36 50%, #0c2248 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.2),
+    inset 0 0 28px rgba(56, 140, 255, 0.14),
+    0 8px 18px rgba(0, 6, 18, 0.28),
+    0 0 22px rgba(56, 140, 255, 0.2);
+  transition: transform 150ms ease-out, box-shadow 150ms ease-out, border-color 150ms ease-out;
+}
+.pq-postsave-cta svg {
+  color: #9ec8ff;
+  filter: drop-shadow(0 0 6px rgba(90, 170, 255, 0.45));
+  flex-shrink: 0;
+}
+.pq-postsave-cta:active {
+  transform: scale(0.985);
+}
+.pq-postsave-dismiss {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: color-mix(in srgb, var(--color-text-secondary) 78%, transparent);
+  transition: transform 150ms ease-out, color 150ms ease-out, background 150ms ease-out, border-color 150ms ease-out;
+}
+.pq-postsave-dismiss:active {
+  transform: scale(0.98);
+  color: var(--color-text);
+  background: rgba(255, 255, 255, 0.045);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pq-postsave-cta,
+  .pq-postsave-dismiss {
+    transition: none;
+  }
+  .pq-postsave-cta:active,
+  .pq-postsave-dismiss:active {
+    transform: none;
+  }
+}
+
+/* Leaving-spot departure prompt - ParQueen blue glass */
+.pq-leave {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  text-align: center;
+  padding: 0 0 2px;
+  gap: 0;
+}
+.pq-leave-hero {
+  align-self: center;
+  position: relative;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 0 8px;
+}
+.pq-leave-hero-glow {
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 45%, rgba(56, 140, 255, 0.26) 0%, rgba(56, 140, 255, 0.06) 45%, transparent 70%);
+  filter: blur(5px);
+  pointer-events: none;
+}
+.pq-leave-hero-ring {
+  position: relative;
+  z-index: 1;
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(120% 100% at 30% 15%, rgba(120, 180, 255, 0.2) 0%, transparent 55%),
+    linear-gradient(165deg, #132848 0%, #0a1528 48%, #0c1c38 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent, #3b8cff) 24%, rgba(120, 160, 210, 0.12));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.16),
+    inset 0 -8px 18px rgba(30, 90, 200, 0.12),
+    0 4px 14px rgba(0, 6, 20, 0.24),
+    0 0 14px rgba(56, 140, 255, 0.12);
+}
+.pq-leave-hero-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #e8f3ff;
+  filter: drop-shadow(0 0 5px rgba(90, 170, 255, 0.35));
+}
+.pq-leave-title {
+  align-self: center;
+  margin: 0 0 4px;
+  font-size: 1.125rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--color-text);
+}
+.pq-leave-sub {
+  align-self: center;
+  margin: 0 0 12px;
+  max-width: 17rem;
+  font-size: 0.78125rem;
+  font-weight: 450;
+  line-height: 1.35;
+  color: color-mix(in srgb, var(--color-text-secondary) 88%, transparent);
+}
+.pq-leave-error {
+  margin: 0 0 10px;
+  width: 100%;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-danger);
+}
+.pq-leave-primary {
+  min-height: 52px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 16px;
+  margin-bottom: 8px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent, #3b8cff) 32%, rgba(100, 150, 210, 0.14));
+  font-size: 0.875rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #eaf4ff;
+  background:
+    radial-gradient(120% 140% at 50% -10%, rgba(90, 160, 255, 0.3) 0%, rgba(40, 110, 230, 0.1) 45%, transparent 70%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.02) 40%, rgba(0, 0, 0, 0.16) 100%),
+    linear-gradient(165deg, #12305a 0%, #0a1a36 50%, #0c2248 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.18),
+    inset 0 0 22px rgba(56, 140, 255, 0.1),
+    0 6px 14px rgba(0, 6, 18, 0.24),
+    0 0 14px rgba(56, 140, 255, 0.14);
+  transition: transform 150ms ease-out, box-shadow 150ms ease-out, border-color 150ms ease-out, opacity 150ms ease-out;
+}
+.pq-leave-primary svg {
+  color: #9ec8ff;
+  filter: drop-shadow(0 0 6px rgba(90, 170, 255, 0.45));
+  flex-shrink: 0;
+}
+.pq-leave-primary:active:not(:disabled) { transform: scale(0.985); }
+.pq-leave-primary:disabled { opacity: 0.5; }
+.pq-leave-secondary {
+  min-height: 52px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 16px;
+  margin-bottom: 4px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent, #3b8cff) 14%, rgba(120, 150, 190, 0.12));
+  font-size: 0.875rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #d7e8ff;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.015) 45%, rgba(0, 0, 0, 0.16) 100%),
+    linear-gradient(165deg, #0f1c32 0%, #0a121f 55%, #0c182c 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.1),
+    0 4px 12px rgba(0, 4, 14, 0.18);
+  transition: transform 150ms ease-out, background 150ms ease-out, border-color 150ms ease-out, opacity 150ms ease-out;
+}
+.pq-leave-secondary svg {
+  color: #8fb6e8;
+  opacity: 0.85;
+  flex-shrink: 0;
+}
+.pq-leave-secondary:active:not(:disabled) { transform: scale(0.985); }
+.pq-leave-secondary:disabled { opacity: 0.5; }
+.pq-leave-tertiary {
+  width: 100%;
+  margin-top: 0;
+  padding: 12px 12px 8px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: color-mix(in srgb, var(--color-text-secondary) 78%, transparent);
+  transition: color 150ms ease-out, opacity 150ms ease-out;
+}
+.pq-leave-tertiary:active {
+  transform: scale(0.98);
+  color: var(--color-text);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pq-leave-primary,
+  .pq-leave-secondary,
+  .pq-leave-tertiary {
+    transition: none;
+  }
+  .pq-leave-primary:active:not(:disabled),
+  .pq-leave-secondary:active:not(:disabled),
+  .pq-leave-tertiary:active {
+    transform: none;
+  }
+}
+
+/* Set-departure sheet — compact ParQueen navy glass */
+.pq-depart {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0 0 2px;
+}
+.pq-depart-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.pq-depart-back {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--pq-elev-icon);
+  background: var(--pq-elev-card);
+  border: 1px solid var(--pq-elev-border);
+  box-shadow: var(--pq-elev-inset), var(--pq-elev-shadow);
+  transition: transform 150ms ease-out, border-color 150ms ease-out;
+}
+.pq-depart-back:active { transform: scale(0.96); }
+.pq-depart-heading {
+  min-width: 0;
+  text-align: left;
+}
+.pq-depart-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--color-text);
+}
+.pq-depart-sub {
+  margin: 3px 0 0;
+  font-size: 0.75rem;
+  font-weight: 450;
+  line-height: 1.35;
+  color: color-mix(in srgb, var(--color-text-secondary) 88%, transparent);
+}
+.pq-depart-section {
+  margin-bottom: 10px;
+}
+.pq-depart-label {
+  margin: 0 0 5px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: color-mix(in srgb, var(--color-text-secondary) 82%, transparent);
+}
+.pq-depart-date {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 48px;
+  border-radius: 14px;
+  background: var(--pq-elev-card);
+  border: 1px solid var(--pq-elev-border);
+  box-shadow: var(--pq-elev-inset), var(--pq-elev-shadow);
+  overflow: hidden;
+}
+.pq-depart-date-input {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 0.875rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  padding: 13px 44px 13px 14px;
+  color-scheme: dark;
+  cursor: pointer;
+}
+.pq-depart-date-input::-webkit-calendar-picker-indicator {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.pq-depart-date-icon {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--pq-elev-icon);
+  pointer-events: none;
+  filter: drop-shadow(0 0 6px rgba(90, 170, 255, 0.28));
+}
+.pq-depart-time-card {
+  width: 100%;
+  padding: 10px 10px 8px;
+  border-radius: 14px;
+  background: var(--pq-elev-card);
+  border: 1px solid var(--pq-elev-border);
+  box-shadow: var(--pq-elev-inset), var(--pq-elev-shadow);
+}
+.pq-depart-error {
+  margin: 0 0 10px;
+  text-align: center;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-danger, #f87171);
+}
+.pq-depart-cta {
+  width: 100%;
+  min-height: 46px;
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--pq-elev-border-strong);
+  font-size: 0.875rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--pq-elev-cta-text);
+  background: var(--pq-elev-cta);
+  box-shadow: var(--pq-elev-inset), var(--pq-elev-shadow), var(--pq-elev-glow);
+  transition: transform 150ms ease-out, box-shadow 150ms ease-out, opacity 150ms ease-out;
+}
+.pq-depart-cta svg {
+  color: var(--pq-elev-icon);
+  filter: drop-shadow(0 0 6px rgba(90, 170, 255, 0.45));
+  flex-shrink: 0;
+}
+.pq-depart-cta:active:not(:disabled) { transform: scale(0.985); }
+.pq-depart-cta:disabled { opacity: 0.5; }
+
+/* Glass time picker (departure sheet only via variant) */
+.pq-time {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.pq-time-wheel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pq-time-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.pq-time-chevron {
+  width: 34px;
+  height: 24px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--pq-elev-icon);
+  background: var(--pq-elev-well);
+  border: 1px solid var(--pq-elev-border);
+  transition: transform 120ms ease-out, background 120ms ease-out, border-color 120ms ease-out;
+}
+.pq-time-chevron:active {
+  transform: scale(0.94);
+  background: rgba(56, 140, 255, 0.12);
+  border-color: color-mix(in srgb, var(--mobile-shell-accent, #3b8cff) 28%, transparent);
+}
+.pq-time-digit {
+  width: 48px;
+  height: 38px;
+  text-align: center;
+  font-size: 1.625rem;
+  font-weight: 750;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  color: var(--pq-elev-text);
+  background: var(--pq-elev-well);
+  border: 1px solid var(--pq-elev-border);
+  border-radius: 12px;
+  outline: none;
+  caret-color: transparent;
+}
+.pq-time-digit:focus {
+  border-color: color-mix(in srgb, var(--mobile-shell-accent, #3b8cff) 40%, transparent);
+  box-shadow: 0 0 0 2px rgba(56, 140, 255, 0.18);
+}
+.pq-time-colon {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--pq-elev-text-muted);
+  padding-bottom: 1px;
+}
+.pq-time-period {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 11px;
+  background: var(--pq-elev-well);
+  border: 1px solid var(--pq-elev-border);
+}
+.pq-time-period-btn {
+  min-width: 44px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: color-mix(in srgb, var(--color-text-secondary) 85%, transparent);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  transition: background 150ms ease-out, color 150ms ease-out, box-shadow 150ms ease-out, border-color 150ms ease-out;
+}
+.pq-time-period-btn.is-active {
+  color: var(--pq-elev-text);
+  background: var(--pq-elev-accent-mid);
+  border-color: color-mix(in srgb, var(--mobile-shell-accent, #3b8cff) 40%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.18),
+    0 0 14px rgba(56, 140, 255, 0.28);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pq-depart-back,
+  .pq-depart-cta,
+  .pq-time-chevron,
+  .pq-time-period-btn {
+    transition: none;
+  }
+  .pq-depart-back:active,
+  .pq-depart-cta:active:not(:disabled),
+  .pq-time-chevron:active {
+    transform: none;
+  }
+}
+/* My Car saved-location map marker - unified ParQueen blue pin */
+.pq-mycar-map-marker {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  width: 48px;
+  height: 62px;
+  cursor: pointer;
+  z-index: 10;
+  overflow: visible;
+  pointer-events: auto;
+  transform: translateZ(0);
+}
+.pq-mycar-map-marker-halo {
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  width: 28px;
+  height: 12px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: radial-gradient(ellipse at center, rgba(56, 140, 255, 0.45) 0%, rgba(56, 140, 255, 0.12) 55%, transparent 72%);
+  filter: blur(1px);
+  pointer-events: none;
+}
+.pq-mycar-map-marker-svg {
+  position: relative;
+  z-index: 1;
+  width: 48px;
+  height: 62px;
+  display: block;
+  pointer-events: none;
+  filter: drop-shadow(0 0 10px rgba(56, 140, 255, 0.35));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pq-mycar-nav,
+  .pq-mycar-remind-tile,
+  .pq-mycar-ping-cta,
+  .pq-mycar-btn-ghost,
+  .pq-mycar-btn-danger,
+  .pq-mycar-intel-side-btn {
+    transition: none;
+  }
+  .pq-mycar-nav:active,
+  .pq-mycar-remind-tile:active,
+  .pq-mycar-ping-cta:active,
+  .pq-mycar-btn-ghost:active,
+  .pq-mycar-btn-danger:active,
+  .pq-mycar-intel-side-btn:active {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pq-bottom-sheet-backdrop,
+  .pq-bottom-sheet {
+    transition: none;
+  }
+}
+
+/* ── GlassDatePicker (Set departure time) ── */
+.pq-gdate {
+  position: relative;
+  width: 100%;
+}
+.pq-gdate-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--pq-elev-border);
+  background: var(--pq-elev-surface);
+  color: var(--pq-elev-text);
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: var(--pq-elev-inset), var(--pq-elev-shadow);
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.pq-gdate-trigger.is-open,
+.pq-gdate-trigger:focus-visible {
+  outline: none;
+  border-color: var(--pq-elev-border-strong);
+  background: var(--pq-elev-accent-soft);
+  box-shadow: var(--pq-elev-inset), 0 0 0 3px var(--pq-elev-accent-mid);
+}
+.pq-gdate-trigger-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--pq-elev-text);
+}
+.pq-gdate-trigger-icon {
+  flex-shrink: 0;
+  color: var(--pq-elev-icon);
+  opacity: 0.95;
+}
+.pq-gdate-panel {
+  margin-top: 6px;
+  padding: 6px 8px 6px;
+  border-radius: 14px;
+  border: 1px solid var(--pq-elev-border);
+  background: var(--pq-elev-panel);
+  backdrop-filter: blur(18px) saturate(1.25);
+  -webkit-backdrop-filter: blur(18px) saturate(1.25);
+  box-shadow: var(--pq-elev-shadow), var(--pq-elev-inset);
+}
+.pq-gdate-month {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.pq-gdate-month-label {
+  margin: 0;
+  flex: 1;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--pq-elev-text);
+}
+.pq-gdate-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  border: 1px solid var(--pq-elev-border);
+  background: var(--pq-elev-well);
+  color: var(--pq-elev-text);
+  cursor: pointer;
+  transition: transform 120ms ease, background 120ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.pq-gdate-nav:active:not(:disabled) {
+  transform: scale(0.94);
+  background: var(--pq-elev-accent-soft);
+}
+.pq-gdate-nav:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.pq-gdate-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0;
+  margin-bottom: 1px;
+}
+.pq-gdate-weekday {
+  text-align: center;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--pq-elev-text-muted);
+  padding: 1px 0;
+}
+.pq-gdate-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 1px;
+}
+.pq-gdate-day {
+  aspect-ratio: 1.22;
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--pq-elev-text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: transform 110ms ease, background 110ms ease, color 110ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.pq-gdate-day:active:not(:disabled) { transform: scale(0.94); }
+.pq-gdate-day.is-outside {
+  color: color-mix(in srgb, var(--pq-elev-text-muted) 70%, transparent);
+}
+.pq-gdate-day.is-disabled {
+  color: color-mix(in srgb, var(--pq-elev-text-muted) 45%, transparent);
+  cursor: default;
+}
+.pq-gdate-day.is-today:not(.is-selected) {
+  box-shadow: inset 0 0 0 1.5px var(--pq-elev-border-strong);
+  color: var(--pq-elev-icon);
+}
+.pq-gdate-day.is-selected {
+  background: linear-gradient(160deg, color-mix(in srgb, var(--color-brand) 92%, white), var(--color-brand));
+  color: #fff;
+  font-weight: 650;
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--color-brand) 35%, transparent);
+}
+.pq-gdate-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--pq-elev-border);
+}
+.pq-gdate-action {
+  flex: 1;
+  min-height: 32px;
+  border-radius: 9px;
+  border: 1px solid var(--pq-elev-border);
+  background: var(--pq-elev-well);
+  color: var(--pq-elev-text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 120ms ease, background 120ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.pq-gdate-action:active {
+  transform: scale(0.97);
+  background: var(--pq-elev-accent-soft);
+}
+.pq-gdate-action.is-accent {
+  border-color: var(--pq-elev-border-strong);
+  background: var(--pq-elev-accent-mid);
+  color: var(--pq-elev-icon);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pq-gdate-trigger,
+  .pq-gdate-nav,
+  .pq-gdate-day,
+  .pq-gdate-action { transition: none; }
+  .pq-gdate-nav:active:not(:disabled),
+  .pq-gdate-day:active:not(:disabled) { transform: none; }
+}
+
+/* ===== Light-mode elevated materials for recent UX glass =====
+   Dark mode keeps the navy glass look via --pq-elev-* defaults in .dark.
+   Light mode translates the same components to cool off-white surfaces,
+   navy type, and restrained ParQueen blue accents. */
+:root:not(.dark) .pq-mycar-hero,
+:root:not(.dark) .pq-mycar-intel,
+:root:not(.dark) .pq-mycar-intel-unavailable,
+:root:not(.dark) .pq-mycar-remind-tile,
+:root:not(.dark) .pq-mycar-remind-panel,
+:root:not(.dark) .pq-mycar-note,
+:root:not(.dark) .pq-mycar-footer-card {
+  background: var(--pq-elev-card);
+  border-color: var(--pq-elev-border);
+  box-shadow: var(--pq-elev-inset), var(--pq-elev-shadow);
+  color: var(--pq-elev-text);
+}
+:root:not(.dark) .pq-mycar-hero-kicker,
+:root:not(.dark) .pq-mycar-section-label > span,
+:root:not(.dark) .pq-mycar-intel-street p,
+:root:not(.dark) .pq-mycar-remind-note,
+:root:not(.dark) .pq-mycar-remind-tile-label {
+  color: var(--pq-elev-text-muted);
+}
+:root:not(.dark) .pq-mycar-hero-address,
+:root:not(.dark) .pq-mycar-hero-status,
+:root:not(.dark) .pq-mycar-intel-hero {
+  color: var(--pq-elev-text);
+}
+:root:not(.dark) .pq-mycar-hero-icon,
+:root:not(.dark) .pq-mycar-nav,
+:root:not(.dark) .pq-mycar-intel-side-btn,
+:root:not(.dark) .pq-mycar-remind-tile-icon {
+  color: var(--pq-elev-icon);
+  background: var(--pq-elev-well);
+  border-color: var(--pq-elev-border-strong);
+  box-shadow: var(--pq-elev-inset);
+}
+:root:not(.dark) .pq-mycar-remind-tile.is-on {
+  border-color: var(--pq-elev-border-strong);
+  background: var(--pq-elev-accent-soft);
+  box-shadow: var(--pq-elev-inset), var(--pq-elev-glow);
+}
+:root:not(.dark) .pq-mycar-remind-tile.is-on .pq-mycar-remind-tile-label,
+:root:not(.dark) .pq-mycar-remind-tile.is-on .pq-mycar-remind-tile-icon,
+:root:not(.dark) .pq-mycar-remind-tile.is-on .pq-mycar-remind-on {
+  color: var(--pq-elev-icon);
+}
+:root:not(.dark) .pq-mycar-ping-cta {
+  color: var(--pq-elev-cta-text);
+  background: var(--pq-elev-cta);
+  border-color: var(--pq-elev-border-strong);
+  box-shadow: var(--pq-elev-inset), var(--pq-elev-shadow), var(--pq-elev-glow);
+}
+:root:not(.dark) .pq-mycar-btn-ghost {
+  color: var(--pq-elev-text);
+  background: var(--pq-elev-well);
+  border-color: var(--pq-elev-border);
+}
+
+
+:root:not(.dark) .pq-leave-title { color: var(--pq-elev-text); }
+:root:not(.dark) .pq-leave-sub,
+:root:not(.dark) .pq-leave-error { color: var(--pq-elev-text-muted); }
+:root:not(.dark) .pq-leave-primary {
+  color: var(--pq-elev-cta-text);
+  background: var(--pq-elev-cta);
+  border-color: var(--pq-elev-border-strong);
+  box-shadow: var(--pq-elev-inset), var(--pq-elev-glow);
+}
+:root:not(.dark) .pq-leave-secondary {
+  color: var(--pq-elev-text);
+  background: var(--pq-elev-well);
+  border-color: var(--pq-elev-border);
+}
+:root:not(.dark) .pq-leave-tertiary {
+  color: var(--pq-elev-text-muted);
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+:root:not(.dark) .pq-postsave-hero {
+  background: var(--pq-elev-card);
+  border-color: var(--pq-elev-border);
+  box-shadow: var(--pq-elev-inset), var(--pq-elev-shadow);
+}
+:root:not(.dark) .pq-postsave-title { color: var(--pq-elev-text); }
+:root:not(.dark) .pq-postsave-sub { color: var(--pq-elev-text-muted); }
+:root:not(.dark) .pq-postsave-cta {
+  color: var(--pq-elev-cta-text);
+  background: var(--pq-elev-cta);
+  border-color: var(--pq-elev-border-strong);
+}
+:root:not(.dark) .pq-postsave-dismiss {
+  color: var(--pq-elev-text);
+  background: var(--pq-elev-well);
+  border-color: var(--pq-elev-border);
+}
+
+:root:not(.dark) .pq-tools-secondary,
+:root:not(.dark) .pq-tools-recent-empty-panel,
+:root:not(.dark) .pq-assist-hero {
+  background: var(--pq-elev-card);
+  border-color: var(--pq-elev-border);
+  box-shadow: var(--pq-elev-inset), var(--pq-elev-shadow);
+  color: var(--pq-elev-text);
+}
+:root:not(.dark) .pq-tools-recent-title,
+:root:not(.dark) .pq-tools-recent-empty,
+:root:not(.dark) .pq-tools-recent-empty-title {
+  color: var(--pq-elev-text-muted);
+}
+:root:not(.dark) .pq-tools-recent-empty-icon,
+:root:not(.dark) .pq-assist-back {
+  color: var(--pq-elev-icon);
+  background: var(--pq-elev-well);
+  border-color: var(--pq-elev-border);
+  box-shadow: var(--pq-elev-inset);
+}
+:root:not(.dark) .pq-tools-hub::before {
+  background: radial-gradient(70% 55% at 50% 18%, rgba(11, 99, 230, 0.06) 0%, rgba(11, 99, 230, 0.02) 42%, transparent 72%);
+}
+
+:root:not(.dark) .pq-time-colon { color: var(--pq-elev-text-muted); }
+:root:not(.dark) .pq-time-period-btn { color: var(--pq-elev-text-muted); }
+:root:not(.dark) .pq-time-period-btn.is-active {
+  color: var(--pq-elev-icon);
+  background: var(--pq-elev-accent-mid);
+  border-color: var(--pq-elev-border-strong);
+  box-shadow: var(--pq-elev-inset), var(--pq-elev-glow);
+}
+
+:root:not(.dark) .mobile-primary-nav-item.is-active {
+  color: var(--mobile-shell-accent);
+}
+
+:root:not(.dark) .pq-tool-featured,
+:root:not(.dark) .pq-tool-tile {
+  background: var(--pq-elev-card);
+  border-color: var(--pq-elev-border);
+  box-shadow: var(--pq-elev-inset), var(--pq-elev-shadow);
+  color: var(--pq-elev-text);
+}
+:root:not(.dark) .pq-tool-featured {
+  border-color: var(--pq-elev-border-strong);
+  box-shadow: var(--pq-elev-inset), var(--pq-elev-shadow), var(--pq-elev-glow);
+}
+:root:not(.dark) .pq-tool-featured-title,
+:root:not(.dark) .pq-tool-tile-label {
+  color: var(--pq-elev-text);
+}
+:root:not(.dark) .pq-tool-featured-desc {
+  color: var(--pq-elev-text-muted);
+}
+:root:not(.dark) .pq-tool-featured-icon,
+:root:not(.dark) .pq-tool-tile-icon {
+  color: var(--pq-elev-icon);
+  background: var(--pq-elev-well);
+  border-color: var(--pq-elev-border);
+  box-shadow: var(--pq-elev-inset);
+}
+:root:not(.dark) .pq-tool-chevron {
+  color: var(--pq-elev-text-muted);
+}
