@@ -2068,40 +2068,49 @@ export const MapView: React.FC<MapViewProps> = ({
 
                         {/* Prompt view */}
                         {!myCarPingSuccess && myCarDepartureView === 'prompt' && (
-                            <div className="text-center">
-                                <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4"
-                                    style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>
-                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#facc15" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m2 4 3 12h14l3-12-6 5-4-5-4 5-6-5zm3 16h14"/></svg>
+                            <div className="pq-leave">
+                                <div className="pq-leave-hero" aria-hidden="true">
+                                    <span className="pq-leave-hero-glow" />
+                                    <div className="pq-leave-hero-ring">
+                                        <div className="pq-leave-hero-icon">
+                                            <Car size={24} strokeWidth={1.85} />
+                                        </div>
+                                    </div>
                                 </div>
-                                <p className="text-xl font-extrabold text-[var(--color-text)] mb-1">{t('my_car.leaving_this_spot')}</p>
-                                <p className="text-sm text-[var(--color-text-secondary)] mb-6">{t('my_car.share_with_drivers')}</p>
+                                <h2 className="pq-leave-title">{t('my_car.leaving_this_spot')}</h2>
+                                <p className="pq-leave-sub">{t('my_car.share_with_drivers')}</p>
 
                                 {myCarDepartureError && (
-                                    <p className="text-sm text-[var(--color-danger)] font-semibold text-center mb-4">{myCarDepartureError}</p>
+                                    <p className="pq-leave-error">{myCarDepartureError}</p>
                                 )}
 
                                 <button
+                                    type="button"
                                     onClick={() => handleMyCarPing(null)}
                                     disabled={myCarDepartureLoading}
-                                    className="w-full py-3.5 rounded-full text-white font-bold text-sm flex items-center justify-center gap-2 active:scale-95 transition-transform mb-2 disabled:opacity-50"
-                                    style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>
-                                    <MapPin size={16} />
-                                    {myCarDepartureLoading ? t('my_car.sharing') : t('ping_modal.leaving_now')}
+                                    className="pq-leave-primary"
+                                >
+                                    <MapPin size={16} strokeWidth={2.2} />
+                                    <span>{myCarDepartureLoading ? t('my_car.sharing') : t('ping_modal.leaving_now')}</span>
                                 </button>
                                 <button
+                                    type="button"
                                     onClick={() => {
                                         setMyCarDepartureTime(new Date(Date.now() + 2 * 60_000));
                                         setMyCarDepartureError(null);
                                         setMyCarDepartureView('timePicker');
                                     }}
                                     disabled={myCarDepartureLoading}
-                                    className="w-full py-3 rounded-full text-sm font-bold border border-[var(--color-border)] bg-white/5 hover:bg-white/10 transition-all active:scale-95 text-[var(--color-text)] flex items-center justify-center gap-2 mb-3 disabled:opacity-50">
-                                    <Clock size={15} />
-                                    {t('ping_modal.leaving_later')}
+                                    className="pq-leave-secondary"
+                                >
+                                    <Clock size={15} strokeWidth={2.1} />
+                                    <span>{t('ping_modal.leaving_later')}</span>
                                 </button>
                                 <button
+                                    type="button"
                                     onClick={() => setShowDepartureSheet(false)}
-                                    className="w-full py-2.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-all">
+                                    className="pq-leave-tertiary"
+                                >
                                     {t('my_car.keep_saved')}
                                 </button>
                             </div>
