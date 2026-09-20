@@ -12,7 +12,7 @@
     "test:storage:rules:unit": "vitest run --config vite.storage-rules.config.ts",
     "test:storage:rules": "firebase emulators:exec --only storage \"npm run test:storage:rules:unit\"",
     "install:functions": "npm install --prefix functions",
-    "test:functions": "firebase emulators:exec --only functions,firestore,auth,storage \"vitest run --config vite.functions.config.ts\"",
+    "test:functions": "firebase emulators:exec --only functions,firestore,auth,storage \"sh -c 'echo FUNCTIONS_VITEST_START; vitest run --config vite.functions.config.ts'\"",
     "test:watch": "vitest",
     "cap:sync": "npm run build && npx cap sync",
     "cap:copy": "npm run build && npx cap copy",

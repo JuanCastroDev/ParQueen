@@ -21,7 +21,8 @@ try {
     console.warn('[verifyEmailOTP] Could not load index.js:', e.message);
 }
 
-const PROJECT_ID = 'parkqueen-46475363-ccf36';
+const { requireEmulatorProjectId } = require('./emulatorProjectId');
+const PROJECT_ID = requireEmulatorProjectId();
 const APP_NAME = '__verifyEmailOTP_intg__';
 
 const testApp =

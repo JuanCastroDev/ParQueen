@@ -1,14 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
+const { RELATIONSHIP_TIMEOUT_MS } = require('./minimumCleaningShadow');
 const { normalizeCsclRow } = require('./csclNormalizer');
 const { createMemoryCandidateStore } = require('./candidateStore');
 const { normalizeDotSignRow } = require('./dotSignNormalizer');
 const { normalizeParkNycRow } = require('./parkNycNormalizer');
 const { createOfficialDotRelationshipProvider } = require('./officialDotRelationshipProvider');
 const { createMemoryAggregateShadowSink } = require('./shadowTelemetry');
-const { bounded, runCurbIntelligenceShadow } = require('./shadowExecution');
+const { DEFAULT_EXECUTION_POLICY, bounded, runCurbIntelligenceShadow } = require('./shadowExecution');
 
 const CSCL_VERSION = { resourceId: 'inkn-q76z', version: 'fixture-v1' };
 const DOT_VERSION = { resourceId: 'nfid-uabd', rowsUpdatedAt: '2026-09-15T10:04:47Z', viewLastModified: '2026-09-15T10:00:16Z' };
@@ -116,6 +117,15 @@ async function run(extra = {}) {
 }
 
 describe('standalone Curb Intelligence shadow execution', () => {
+  it('keeps official relationship and overall deadlines aligned with the minimum shadow', () => {
+    expect(DEFAULT_EXECUTION_POLICY.sourceDeadlineMs.relationship).toBe(3000);
+    expect(DEFAULT_EXECUTION_POLICY.sourceDeadlineMs.relationship).toBe(RELATIONSHIP_TIMEOUT_MS);
+    expect(DEFAULT_EXECUTION_POLICY.overallDeadlineMs).toBe(8000);
+    expect(DEFAULT_EXECUTION_POLICY.maxRetries).toBe(0);
+    expect(DEFAULT_EXECUTION_POLICY.sourceDeadlineMs.relationship)
+      .toBeLessThan(DEFAULT_EXECUTION_POLICY.overallDeadlineMs);
+  });
+
   it('returns separate rich runtime and aggregate-safe outputs', async () => {
     const sink = createMemoryAggregateShadowSink();
     const result = await run({ dependencies: { sink } });
@@ -299,6 +309,119 @@ describe('standalone Curb Intelligence shadow execution', () => {
     });
     expect(downstreamCalls).toBe(0);
     expect(result.diagnostics).toContain('execution_timeout');
+  });
+
+  it('completes a 2700ms official relationship inside the 3000ms source budget', async () => {
+    vi.useFakeTimers();
+    try {
+      let relationshipCalls = 0;
+      let receivedSignal;
+      const officialRelationshipProvider = {
+        async resolve({ signal }) {
+          relationshipCalls += 1;
+          receivedSignal = signal;
+          await new Promise(resolve => setTimeout(resolve, 2700));
+          expect(signal.aborted).toBe(false);
+          return dependencies().officialRelationshipProvider.resolve();
+        },
+      };
+      const pending = runCurbIntelligenceShadow({
+        location: { lat: 40.70005, lng: -74, accuracyMeters: 1 },
+        legacyEvidence,
+        dependencies: dependencies({ officialRelationshipProvider }),
+        executionPolicy: {
+          overallDeadlineMs: 8000,
+          sourceDeadlineMs: { curb: 2500, dot: 2500, parkNyc: 2500, relationship: 3000, sink: 500 },
+          maxCandidates: { curb: 10, dot: 10, parkNyc: 10 },
+          maxRetries: 0,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(2700);
+      const result = await pending;
+      expect(relationshipCalls).toBe(1);
+      expect(result.runtimeResult.states).toEqual({
+        curb: 'SUPPORTED', cleaning: 'SUPPORTED', meter: 'SUPPORTED',
+      });
+      expect(receivedSignal).toBeInstanceOf(AbortSignal);
+      expect(JSON.stringify(result.persistableComparison)).not.toMatch(/officialBlockFaceId/i);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts a relationship that exceeds 3000ms without retrying', async () => {
+    vi.useFakeTimers();
+    try {
+      let relationshipCalls = 0;
+      let receivedSignal;
+      const officialRelationshipProvider = {
+        resolve({ signal }) {
+          relationshipCalls += 1;
+          receivedSignal = signal;
+          return new Promise(() => {});
+        },
+      };
+      const pending = runCurbIntelligenceShadow({
+        location: { lat: 40.70005, lng: -74, accuracyMeters: 1 },
+        legacyEvidence,
+        dependencies: dependencies({ officialRelationshipProvider }),
+        executionPolicy: {
+          overallDeadlineMs: 8000,
+          sourceDeadlineMs: { curb: 2500, dot: 2500, parkNyc: 2500, relationship: 3000, sink: 500 },
+          maxCandidates: { curb: 10, dot: 10, parkNyc: 10 },
+          maxRetries: 0,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(2999);
+      expect(receivedSignal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await pending;
+      expect(relationshipCalls).toBe(1);
+      expect(receivedSignal.aborted).toBe(true);
+      expect(result.runtimeResult.states).toEqual({
+        curb: 'SUPPORTED', cleaning: 'UNKNOWN', meter: 'SUPPORTED',
+      });
+      expect(result.runtimeResult.cleaning.reasons).toContain('official_order_relationship_missing');
+      expect(JSON.stringify(result.persistableComparison)).not.toMatch(/officialBlockFaceId/i);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets the overall deadline abort a 3000ms relationship when less time remains', async () => {
+    vi.useFakeTimers();
+    try {
+      let relationshipCalls = 0;
+      let receivedSignal;
+      const officialRelationshipProvider = {
+        resolve({ signal }) {
+          relationshipCalls += 1;
+          receivedSignal = signal;
+          return new Promise(() => {});
+        },
+      };
+      const pending = runCurbIntelligenceShadow({
+        location: { lat: 40.70005, lng: -74, accuracyMeters: 1 },
+        legacyEvidence,
+        dependencies: dependencies({ officialRelationshipProvider }),
+        executionPolicy: {
+          overallDeadlineMs: 2000,
+          sourceDeadlineMs: { curb: 2500, dot: 2500, parkNyc: 2500, relationship: 3000, sink: 500 },
+          maxCandidates: { curb: 10, dot: 10, parkNyc: 10 },
+          maxRetries: 0,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(receivedSignal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await pending;
+      expect(relationshipCalls).toBe(1);
+      expect(receivedSignal.aborted).toBe(true);
+      expect(result.runtimeResult.states.cleaning).toBe('UNKNOWN');
+      expect(result.runtimeResult.states.meter).toBe('SUPPORTED');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not throw when the aggregate sink fails', async () => {

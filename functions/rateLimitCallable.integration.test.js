@@ -29,7 +29,8 @@ try {
     console.warn('[rateLimit.callable] Could not load index.js:', e.message);
 }
 
-const PROJECT_ID = 'parkqueen-46475363-ccf36';
+const { requireEmulatorProjectId } = require('./emulatorProjectId');
+const PROJECT_ID = requireEmulatorProjectId();
 const APP_NAME = '__rateLimit_callable_intg__';
 
 const testApp =
@@ -193,12 +194,12 @@ describe('RL-C createSegmentFromSweepNYC â€” callable behavioral tests', ()
         expect(counterSnap.data().count).toBe(LIMIT); // exact boundary, no overshoot from the race
     });
 
-    it("RL-C-10: Runtime-IAM canary config-contract — createSegmentFromSweepNYC's serviceAccount is the dedicated parqueen-user identity", () => {
+    it("RL-C-10: Runtime-IAM canary config-contract — createSegmentFromSweepNYC declares the dedicated curb caller identity", () => {
         const indexSrc = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
         const callStart = indexSrc.indexOf('exports.createSegmentFromSweepNYC = onCall(');
         expect(callStart).toBeGreaterThan(-1);
         const optionsSlice = indexSrc.slice(callStart, callStart + 600);
-        expect(optionsSlice).toMatch(/serviceAccount:\s*'parqueen-user@parkqueen-46475363-ccf36\.iam\.gserviceaccount\.com'/);
+        expect(optionsSlice).toMatch(/serviceAccount:\s*'parqueen-curb-caller@parkqueen-46475363-ccf36\.iam\.gserviceaccount\.com'/);
     });
 });
 

@@ -303,7 +303,7 @@ export const MapView: React.FC<MapViewProps> = ({
         const lng = parseFloat(manualLng);
         if (isNaN(lat) || isNaN(lng)) { dbg('Manual CF: invalid lat/lng'); return; }
         setCfManualLoading(true);
-        dbg(`--- DIRECT MANUAL CF TEST lat:${lat} lng:${lng} ---`);
+        dbg('--- DIRECT MANUAL CF TEST ---');
         try {
             const fn = httpsCallable(getFunctions(getApp(), 'us-central1'), 'createSegmentFromSweepNYC');
             const result = await fn({ lat, lng });
@@ -311,12 +311,11 @@ export const MapView: React.FC<MapViewProps> = ({
             const hasDiag = data._diag != null;
             const d = data._diag ?? {};
             const dv = (v: any) => hasDiag ? (v == null ? 'null' : String(v)) : '?';
-            dbg(`Manual CF result: success=${data.success} reason=${data.reason ?? 'none'} segmentId=${data.segmentId ?? 'null'} parkingSide=${data.parkingSide ?? 'null'} streetName=${data.streetName ?? 'null'}`);
+            dbg(`Manual CF result: success=${data.success} reason=${data.reason ?? 'none'}`);
             dbg(`  _diag: stage=${dv(d.stage)} geo=${dv(d.geometrySource)} segStatus=${dv(d.segmentStatus)} signs=${dv(d.signsCount)} parsed=${dv(d.parsedCount)} failures=${dv(d.parseFailureCount)}`);
-            dbg(`  _diag: extractedStreet="${dv(d.extractedStreetName)}" extractedSide="${dv(d.extractedSide)}" errMsg="${dv(d.errorMessage)}"`);
         } catch (e: any) {
-            dbg(`Manual CF THREW: code=${e?.code ?? '?'} msg=${e?.message ?? String(e)}`);
-            console.error('[StreetIntelDebug] Manual CF error:', e);
+            dbg(`Manual CF failed: code=${e?.code ?? 'unknown'}`);
+            console.warn('[StreetIntelDebug] Manual CF failed');
         } finally {
             setCfManualLoading(false);
             dbg('--- MANUAL CF TEST DONE ---');
@@ -336,16 +335,16 @@ export const MapView: React.FC<MapViewProps> = ({
                 const fn = httpsCallable(getFunctions(getApp(), 'us-central1'), 'createSegmentFromSweepNYC');
                 const result = await fn({ lat, lng });
                 const data = result.data as any;
-                dbg(`CF test result: ${JSON.stringify(data)}`);
+                dbg(`CF test result: success=${data?.success === true} reason=${data?.reason ?? 'none'}`);
             } catch (e: any) {
-                dbg(`CF test THREW: code=${e?.code ?? '?'} msg=${e?.message ?? String(e)}`);
-                console.error('[StreetIntelDebug] CF test error:', e);
+                dbg(`CF test failed: code=${e?.code ?? 'unknown'}`);
+                console.warn('[StreetIntelDebug] CF test failed');
             } finally {
                 setCfTestLoading(false);
                 dbg('--- CF TEST DONE ---');
             }
         }).catch(err => {
-            dbg(`CF test geolocation error: ${err?.kind ?? err?.message ?? 'failed'}`);
+            dbg(`CF test geolocation failed: ${err?.kind ?? 'failed'}`);
             setCfTestLoading(false);
         });
     }, [isDebugMode, dbg]);
@@ -366,11 +365,11 @@ export const MapView: React.FC<MapViewProps> = ({
         segmentRetrySessionRef.current = savedSpot.sessionId;
         // Use the saved spot's own coordinates — not current GPS — so retry targets the parked location
         const { lat, lng } = savedSpot;
-        console.log('[segmentRetry] retrying using savedSpot coordinates lat:' + lat + ' lng:' + lng);
+        console.log('[segmentRetry] retrying saved location');
         (async () => {
             const match = await matchNearestSegment(lat, lng);
             if (!match.segmentId) { console.warn('[segmentRetry] retry also returned null, status:', match.streetIntelStatus); return; }
-            console.log('[segmentRetry] retry succeeded:', match.segmentId);
+            console.log('[segmentRetry] retry succeeded');
             const updated = { ...savedSpot, ...match, streetIntelCheckedAt: new Date().toISOString() };
             setSavedSpot(updated);
             localStorage.setItem(SAVED_SPOT_KEY, JSON.stringify(updated));
@@ -398,7 +397,7 @@ export const MapView: React.FC<MapViewProps> = ({
 
     const matchNearestSegment = async (userLat: number, userLng: number) => {
         try {
-            dbg(`matchNearestSegment started — lat:${userLat.toFixed(6)} lng:${userLng.toFixed(6)}`);
+            dbg('matchNearestSegment started');
             const radiusM = 80;
             const center: [number, number] = [userLat, userLng];
             const bounds = geofire.geohashQueryBounds(center, radiusM);
@@ -424,15 +423,10 @@ export const MapView: React.FC<MapViewProps> = ({
             const candidates = allCandidates.filter(
                 (c: any) => !c.status || c.status === 'active' || c.status === 'needs_review'
             );
-            console.log('[matchNearestSegment] lat:', userLat, 'lng:', userLng,
-                '| raw candidates:', allCandidates.length, '| active candidates:', candidates.length,
-                '| statuses:', allCandidates.map((c: any) => c.status || 'none').join(', '));
+            console.log('[matchNearestSegment] candidate counts:', {
+                total: allCandidates.length, active: candidates.length,
+            });
             dbg(`raw candidates: ${allCandidates.length} | active: ${candidates.length}`);
-            if (allCandidates.length) {
-                allCandidates.forEach((c: any) =>
-                    dbg(`  candidate: ${c.id} | status:${c.status ?? 'none'} | street:${c.streetName ?? '?'}`)
-                );
-            }
 
             if (!candidates.length) {
                 // No active Firestore segment — lazy-populate via CF (server-controlled write)
@@ -442,8 +436,8 @@ export const MapView: React.FC<MapViewProps> = ({
                     const fn = httpsCallable(getFunctions(getApp(), 'us-central1'), 'createSegmentFromSweepNYC');
                     const result = await fn({ lat: userLat, lng: userLng });
                     const data = result.data as { success: boolean; segmentId?: string; parkingSide?: string; streetName?: string; reason?: string };
-                    console.log('[matchNearestSegment] CF result:', JSON.stringify(data));
-                    dbg(`CF result: success=${data.success} segmentId=${data.segmentId ?? 'null'} parkingSide=${data.parkingSide ?? 'null'} street=${data.streetName ?? 'null'} reason=${data.reason ?? 'none'}`);
+                    console.log('[matchNearestSegment] CF result:', { success: data.success, reason: data.reason ?? 'none' });
+                    dbg(`CF result: success=${data.success} reason=${data.reason ?? 'none'}`);
                     if (!data.success || !data.segmentId) {
                         const status = cfReasonToIntelStatus(data.reason);
                         console.warn('[SweepNYC] lookup failed:', data.reason ?? 'unknown');
@@ -458,8 +452,8 @@ export const MapView: React.FC<MapViewProps> = ({
                         streetIntelReason: null,
                     };
                 } catch (e: any) {
-                    console.warn('[SweepNYC] cloud function error:', e?.code ?? e?.message ?? 'unknown');
-                    dbg(`CF threw: code=${e?.code ?? '?'} msg=${e?.message ?? '?'}`);
+                    console.warn('[SweepNYC] cloud function failed:', e?.code ?? 'unknown');
+                    dbg(`CF failed: code=${e?.code ?? 'unknown'}`);
                     return { segmentId: null, parkingSide: null, restrictionVersionId: null, segmentStreetName: null, streetIntelStatus: 'failed' as const, streetIntelReason: e?.code ?? 'cf_error' };
                 }
             }
@@ -470,7 +464,7 @@ export const MapView: React.FC<MapViewProps> = ({
             }));
             withDist.sort((a: any, b: any) => a.dist - b.dist);
             const nearest = withDist[0];
-            dbg(`selected nearest: ${nearest.id} | street:${nearest.streetName ?? '?'} | status:${nearest.status ?? 'none'} | dist:${(nearest.dist * 1000).toFixed(0)}m`);
+            dbg(`selected nearest candidate: status=${nearest.status ?? 'none'}`);
 
             if (isLegacyNYCOpenDataSegment(nearest)) {
                 // Rows written before block-face evidence existed must not be
@@ -508,10 +502,10 @@ export const MapView: React.FC<MapViewProps> = ({
                 ),
             );
             const restrictionVersionId = rulesSnap.docs[0]?.id || null;
-            dbg(`streetRules count: ${rulesSnap.docs.length} | restrictionVersionId: ${restrictionVersionId ?? 'null'}`);
+            dbg(`streetRules count: ${rulesSnap.docs.length}`);
             if (rulesSnap.docs.length === 0) {
                 dbg('⚠️ Existing segment found but no streetRules detected. SweepNYC was NOT called.');
-                console.warn('[StreetIntelDebug] Existing segment found but no streetRules detected. segmentId:', nearest.id);
+                console.warn('[StreetIntelDebug] Existing segment found but no streetRules detected');
             }
 
             return {
@@ -523,8 +517,8 @@ export const MapView: React.FC<MapViewProps> = ({
                 streetIntelReason: null,
             };
         } catch (e) {
-            dbg(`matchNearestSegment threw: ${(e as any)?.message ?? String(e)}`);
-            console.warn('Segment match failed:', e);
+            dbg('matchNearestSegment failed');
+            console.warn('Segment match failed');
             return { segmentId: null, parkingSide: null, restrictionVersionId: null, segmentStreetName: null, streetIntelStatus: 'failed' as const, streetIntelReason: 'match_error' };
         }
     };
@@ -536,10 +530,10 @@ export const MapView: React.FC<MapViewProps> = ({
         const lng = parseFloat(manualLng);
         if (isNaN(lat) || isNaN(lng)) { dbg('Simulate save: invalid lat/lng'); return; }
         setSimSaveLoading(true);
-        dbg(`--- SIMULATED MY CAR SAVE lat:${lat} lng:${lng} ---`);
+        dbg('--- SIMULATED MY CAR SAVE ---');
         try {
             const match = await matchNearestSegment(lat, lng);
-            dbg(`match: segmentId=${match.segmentId ?? 'null'} parkingSide=${match.parkingSide ?? 'null'} street=${match.segmentStreetName ?? 'null'} status=${match.streetIntelStatus} reason=${match.streetIntelReason ?? 'none'}`);
+            dbg(`match: status=${match.streetIntelStatus} reason=${match.streetIntelReason ?? 'none'}`);
             const spot: SavedSpot = {
                 lat, lng,
                 address: `${lat.toFixed(5)}, ${lng.toFixed(5)} (simulated)`,
@@ -562,11 +556,11 @@ export const MapView: React.FC<MapViewProps> = ({
             setShowSessionSheet(true);
             const willRenderCard = !!(spot.segmentId && spot.segmentStreetName);
             const willRenderUnavailable = !willRenderCard && (spot.streetIntelStatus === 'unavailable' || spot.streetIntelStatus === 'failed');
-            dbg(`savedSpot set: segmentId=${spot.segmentId ?? 'null'} parkingSide=${spot.parkingSide ?? 'null'} street=${spot.segmentStreetName ?? 'null'}`);
+            dbg('savedSpot set');
             dbg(`  streetIntelStatus=${spot.streetIntelStatus} streetIntelReason=${spot.streetIntelReason ?? 'null'}`);
             dbg(`  StreetIntelligenceCard renders: ${willRenderCard} | unavailable card renders: ${willRenderUnavailable}`);
         } catch (e: any) {
-            dbg(`Simulate save THREW: ${e?.message ?? String(e)}`);
+            dbg('Simulate save failed');
         } finally {
             setSimSaveLoading(false);
             dbg('--- SIMULATED MY CAR SAVE DONE ---');
@@ -576,7 +570,7 @@ export const MapView: React.FC<MapViewProps> = ({
     const saveMySpot = async () => {
         if (!userLocation) return;
         const [lng, lat] = userLocation;
-        dbg(`saveMySpot started — lng:${lng.toFixed(6)} lat:${lat.toFixed(6)}`);
+        dbg('saveMySpot started');
         const [address, segmentMatch] = await Promise.all([
             reverseGeocode(lng, lat),
             matchNearestSegment(lat, lng),
@@ -585,7 +579,7 @@ export const MapView: React.FC<MapViewProps> = ({
         const sideConfidence: SavedSpot['sideConfidence'] = !segmentMatch.parkingSide ? 'unknown'
             : (gpsAccuracyMeters === null || gpsAccuracyMeters > 30) ? 'low'
             : 'high';
-        dbg(`segmentMatch: segmentId=${segmentMatch.segmentId ?? 'null'} parkingSide=${segmentMatch.parkingSide ?? 'null'} street=${segmentMatch.segmentStreetName ?? 'null'} status=${segmentMatch.streetIntelStatus} gpsAccuracy=${gpsAccuracyMeters ?? 'null'}m sideConfidence=${sideConfidence}`);
+        dbg(`segmentMatch: status=${segmentMatch.streetIntelStatus} sideConfidence=${sideConfidence}`);
         const spot: SavedSpot = {
             lat,
             lng,
@@ -605,7 +599,7 @@ export const MapView: React.FC<MapViewProps> = ({
             confirmedParkingSide: null,
         };
         const cardCondition = !!(spot.segmentId && spot.segmentStreetName);
-        dbg(`StreetIntelligenceCard will render: ${cardCondition} (segmentId=${spot.segmentId ?? 'null'} status=${spot.streetIntelStatus} reason=${spot.streetIntelReason ?? 'none'})`);
+        dbg(`StreetIntelligenceCard will render: ${cardCondition} status=${spot.streetIntelStatus}`);
         localStorage.setItem(SAVED_SPOT_KEY, JSON.stringify(spot));
         setSavedSpot(spot);
         setShowPostSaveOffer(true);
@@ -689,7 +683,7 @@ export const MapView: React.FC<MapViewProps> = ({
                 savedAt: Timestamp.now(),
             });
         } catch (e) {
-            console.warn('Could not write cleaning reminder:', e);
+            console.warn('Could not write cleaning reminder:', (e as any)?.code ?? 'unknown');
         }
     };
 
@@ -909,9 +903,9 @@ export const MapView: React.FC<MapViewProps> = ({
                             authUid: auth.currentUser?.uid ?? null,
                             ownerUid: userRef.current?.id ?? null,
                             geohash: newGeohash,
-                        }).catch(e => console.warn('Failed to persist lastGeohash', e));
+                        }).catch(e => console.warn('Failed to persist lastGeohash:', (e as any)?.code ?? 'unknown'));
                     } catch (err) {
-                        console.error("Geohash generation error:", err);
+                        console.error("Geohash generation failed:", (err as any)?.name ?? 'unknown');
                     }
                 },
                 () => {
@@ -1263,7 +1257,7 @@ export const MapView: React.FC<MapViewProps> = ({
             // Revert optimistic update — the ping doc was never created
             localStorage.setItem(SAVED_SPOT_KEY, JSON.stringify(savedSpot));
             setSavedSpot(savedSpot);
-            console.error('My Car ping failed:', e);
+            console.error('My Car ping failed:', (e as any)?.code ?? 'unknown');
             setMyCarDepartureError(t('my_car.share_error'));
             setMyCarDepartureLoading(false);
         }
@@ -1300,7 +1294,7 @@ export const MapView: React.FC<MapViewProps> = ({
         };
 
         const onSaveError = (error: any) => {
-            console.error("Error saving spot:", error);
+            console.error("Error saving spot:", (error as any)?.code ?? 'unknown');
             reportPingCreationFailure(error, departureTime);
             setPingError(t('ping_errors.save_failed'));
             setIsPinging(false);
@@ -1354,7 +1348,7 @@ export const MapView: React.FC<MapViewProps> = ({
                     return;
                 }
             } catch (error) {
-                console.error("Error checking rate limit:", error);
+                console.error("Error checking rate limit:", (error as any)?.code ?? 'unknown');
             }
 
             if (userLocation) {
@@ -1436,7 +1430,7 @@ export const MapView: React.FC<MapViewProps> = ({
         try {
             await deleteDoc(doc(db, 'spots', savedSpot.linkedPingId));
         } catch (e) {
-            console.error('Error canceling linked ping:', e);
+            console.error('Error canceling linked ping:', (e as any)?.code ?? 'unknown');
             setLinkedPingError(t('my_car.cancel_shared_error'));
             return;
         }
@@ -1454,7 +1448,7 @@ export const MapView: React.FC<MapViewProps> = ({
         try {
             snap = await getDoc(doc(db, 'spots', savedSpot.linkedPingId));
         } catch (e) {
-            console.error('Error checking linked ping before remove:', e);
+            console.error('Error checking linked ping before remove:', (e as any)?.code ?? 'unknown');
             setLinkedPingError(t('my_car.remove_error'));
             setRemoveCarLoading(false);
             return;
@@ -1472,7 +1466,7 @@ export const MapView: React.FC<MapViewProps> = ({
         try {
             await deleteDoc(doc(db, 'spots', savedSpot.linkedPingId));
         } catch (e) {
-            console.error('Error canceling linked ping before remove:', e);
+            console.error('Error canceling linked ping before remove:', (e as any)?.code ?? 'unknown');
             setLinkedPingError(t('my_car.remove_error'));
             setRemoveCarLoading(false);
             return;
@@ -1486,7 +1480,7 @@ export const MapView: React.FC<MapViewProps> = ({
         try {
             await deleteDoc(doc(db, 'spots', savedSpot.linkedPingId));
         } catch (e) {
-            console.error('Error updating linked ping:', e);
+            console.error('Error updating linked ping:', (e as any)?.code ?? 'unknown');
             setLinkedPingError(t('my_car.update_error'));
             return;
         }
@@ -1507,7 +1501,7 @@ export const MapView: React.FC<MapViewProps> = ({
             await deleteDoc(doc(db, "spots", spotToDelete.id));
             setSelectedItem(null);
         } catch (e) {
-            console.error("Error deleting ping:", e);
+            console.error("Error deleting ping:", (e as any)?.code ?? 'unknown');
         }
     };
 
