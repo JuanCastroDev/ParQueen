@@ -882,6 +882,7 @@ const en: Record<string, string> = {
     'check.view_on_map': 'View My Car on the map',
     'check.disclaimer': 'ParQueen checks known parking data, but signs and conditions on the street control.',
     'assistant.hydrant_title': 'Check Hydrant Distance',
+    'assistant.hydrant_short': 'Hydrant Distance',
     'assistant.hydrant_desc': "See if you're far enough from a hydrant.",
     'assistant.photo_hint': 'Take a clear photo of the full parking sign.',
     'assistant.open_camera': 'Open camera',
@@ -911,7 +912,8 @@ const en: Record<string, string> = {
     'assistant.how_2_d': 'ParQueen interprets the posted rules.',
     'assistant.how_3_d': 'Get a simple explanation before you park.',
     'assistant.recent_title': 'Recent',
-    'assistant.recent_empty': 'Your recent parking checks will appear here.',
+    'assistant.recent_empty_title': 'No parking checks yet',
+    'assistant.recent_empty': 'Your recent parking activity will appear here.',
 
     // Messages / Inbox
     'messages.title': 'Inbox',

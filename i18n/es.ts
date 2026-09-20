@@ -882,6 +882,7 @@ const es: Record<string, string> = {
     'check.view_on_map': 'Ver Mi Carro en el mapa',
     'check.disclaimer': 'ParQueen revisa datos de parqueo conocidos, pero las señales y condiciones de la calle son las que mandan.',
     'assistant.hydrant_title': 'Revisar distancia al hidrante',
+    'assistant.hydrant_short': 'Distancia al hidrante',
     'assistant.hydrant_desc': 'Mira si estás lo suficientemente lejos de un hidrante.',
     'assistant.photo_hint': 'Toma una foto clara de la señal completa de parqueo.',
     'assistant.open_camera': 'Abrir cámara',
@@ -911,7 +912,8 @@ const es: Record<string, string> = {
     'assistant.how_2_d': 'ParQueen interpreta las reglas publicadas.',
     'assistant.how_3_d': 'Recibe una explicacion sencilla antes de parquear.',
     'assistant.recent_title': 'Recientes',
-    'assistant.recent_empty': 'Tus revisiones de parqueo recientes apareceran aqui.',
+    'assistant.recent_empty_title': 'Aún no hay revisiones de parqueo',
+    'assistant.recent_empty': 'Tu actividad reciente de parqueo aparecerá aquí.',
 
     // Messages / Inbox
     'messages.title': 'Mensajes',

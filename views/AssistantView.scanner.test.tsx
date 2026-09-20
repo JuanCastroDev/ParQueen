@@ -70,13 +70,17 @@ beforeEach(() => {
 });
 
 describe('Parking Tools - hub', () => {
-  it('leads with the three tools', async () => {
+  it('leads with featured Scan and secondary tool tiles', async () => {
     const r = await mount();
     const text = textOf(r);
     expect(text).toContain('Parking Tools');
     expect(text).toContain('Scan a Parking Sign');
-    expect(text).toContain('Check Hydrant Distance');
+    expect(text).toContain('Hydrant Distance');
     expect(text).toContain('Am I Safe Here?');
+    const buttons = r.root.findAllByType('button');
+    expect(buttons.find(b => b.props['aria-label'] === 'Check Hydrant Distance')).toBeDefined();
+    expect(buttons.find(b => b.props.className?.includes('pq-tool-featured'))).toBeDefined();
+    expect(r.root.findAll(n => n.props?.className === 'pq-tools-secondary')).toHaveLength(1);
   });
 
   it('shows one header and one back control at a time', async () => {
@@ -116,7 +120,7 @@ describe('Parking Tools - hub', () => {
     expect(textOf(r)).not.toContain('Soon');
     const buttons = r.root.findAllByType('button');
     expect(buttons.some(b => b.props.disabled)).toBe(false);
-    // Every tool card is a real destination with a working handler.
+    // Every tool card is a real destination with a working handler (aria keeps full titles).
     for (const title of ['Scan a Parking Sign', 'Check Hydrant Distance', 'Am I Safe Here?']) {
       const card = buttons.find(b => b.props['aria-label'] === title);
       expect(card).toBeDefined();
@@ -139,7 +143,8 @@ describe('Parking Tools - hub', () => {
 
   it('shows an empty state rather than sample scans', async () => {
     const text = textOf(await mount());
-    expect(text).toContain('Your recent parking checks will appear here.');
+    expect(text).toContain('No parking checks yet');
+    expect(text).toContain('Your recent parking activity will appear here.');
   });
 
   it('lists a real scan after one completes', async () => {
@@ -223,7 +228,10 @@ describe('Sign Scanner â€” scan states', () => {
     const r = await mount();
     await choosePhoto(r);
     await act(async () => { buttonWith(r, 'Cancel').props.onClick(); });
-    expect(textOf(r)).toContain('Check Hydrant Distance');
+    expect(textOf(r)).toContain('Hydrant Distance');
+    expect(
+      r.root.findAllByType('button').some(b => b.props['aria-label'] === 'Check Hydrant Distance'),
+    ).toBe(true);
   });
 
   it('does not print the error headline twice when it matches the card label', async () => {
