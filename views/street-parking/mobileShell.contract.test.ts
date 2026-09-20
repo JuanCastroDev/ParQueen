@@ -94,6 +94,7 @@ describe('mobile shell layout contract', () => {
     expect(header).toContain('map-header-search-row');
     expect(header).toContain('map-search-shell');
     expect(header).toContain('map-ai-action');
+    expect(header).toContain('Scan');
     expect(map).toContain('map-status-chip');
     expect(map).toContain('map-control-button');
     expect(map).toContain('map-primary-cta');
