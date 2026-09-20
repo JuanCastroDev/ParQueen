@@ -4196,8 +4196,8 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   justify-content: space-between;
   gap: 10px;
   width: 100%;
-  min-height: 48px;
-  padding: 12px 14px;
+  min-height: 44px;
+  padding: 10px 14px;
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(255, 255, 255, 0.06);
@@ -4230,9 +4230,9 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   opacity: 0.9;
 }
 .pq-gdate-panel {
-  margin-top: 10px;
-  padding: 12px 12px 10px;
-  border-radius: 18px;
+  margin-top: 8px;
+  padding: 8px 10px 8px;
+  border-radius: 16px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background:
     linear-gradient(165deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.04)),
@@ -4247,14 +4247,14 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 10px;
+  gap: 6px;
+  margin-bottom: 6px;
 }
 .pq-gdate-month-label {
   margin: 0;
   flex: 1;
   text-align: center;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: -0.02em;
   color: rgba(255, 255, 255, 0.94);
@@ -4263,9 +4263,9 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 12px;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.06);
   color: rgba(226, 232, 240, 0.95);
@@ -4284,33 +4284,34 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
 .pq-gdate-weekdays {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  gap: 2px;
-  margin-bottom: 4px;
+  gap: 1px;
+  margin-bottom: 2px;
 }
 .pq-gdate-weekday {
   text-align: center;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: rgba(148, 163, 184, 0.85);
-  padding: 4px 0;
+  padding: 2px 0;
 }
 .pq-gdate-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  gap: 2px;
+  gap: 1px;
 }
 .pq-gdate-day {
-  aspect-ratio: 1;
+  aspect-ratio: 1.15;
+  min-height: 34px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: 12px;
+  border-radius: 10px;
   background: transparent;
   color: rgba(241, 245, 249, 0.92);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   transition: transform 110ms ease, background 110ms ease, color 110ms ease;
@@ -4340,14 +4341,14 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  margin-top: 10px;
-  padding-top: 8px;
+  margin-top: 6px;
+  padding-top: 6px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 .pq-gdate-action {
   flex: 1;
-  min-height: 40px;
-  border-radius: 12px;
+  min-height: 36px;
+  border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.05);
   color: rgba(226, 232, 240, 0.92);
