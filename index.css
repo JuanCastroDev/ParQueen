@@ -1623,46 +1623,93 @@ html, body, #root {
    @tailwind directives with the rest of the semantic rules — see the banner
    below, and utils/tailwindCascade.test.ts.
    ───────────────────────────────────────────────────────────────────────── */
+.pq-tools-hub {
+  padding-top: 2px;
+}
+
 .pq-tool-card {
   position: relative;
   background:
-    linear-gradient(180deg, rgba(56, 189, 248, 0.05), rgba(56, 189, 248, 0) 60%),
-    var(--color-card);
-  border: 1px solid var(--color-border);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 6px 18px rgba(2, 8, 20, 0.28);
-  transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055) 0%, rgba(255, 255, 255, 0.015) 42%, rgba(0, 0, 0, 0.14) 100%),
+    linear-gradient(180deg, #0c1526 0%, #080f1c 100%);
+  border: 1px solid rgba(120, 160, 210, 0.12);
+  box-shadow:
+    inset 0 1px 0 rgba(210, 230, 255, 0.10),
+    0 8px 22px rgba(0, 4, 14, 0.30),
+    0 0 18px rgba(56, 140, 255, 0.06);
+  transition: transform 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
 }
 .pq-tool-card::before {
   content: '';
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  padding: 1px;
-  background: linear-gradient(140deg, rgba(56, 189, 248, 0.40), rgba(56, 189, 248, 0) 45%);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-          mask-composite: exclude;
   pointer-events: none;
+  background: linear-gradient(140deg, rgba(120, 180, 255, 0.10), transparent 42%);
+  opacity: 0.9;
 }
-.pq-tool-card:hover { border-color: rgba(56, 189, 248, 0.34); }
+.pq-tool-card:hover {
+  border-color: rgba(127, 193, 255, 0.22);
+  box-shadow:
+    inset 0 1px 0 rgba(210, 230, 255, 0.14),
+    0 10px 24px rgba(0, 4, 14, 0.34),
+    0 0 20px rgba(56, 140, 255, 0.10);
+}
 .pq-tool-card:active { transform: scale(0.985); }
 
 .pq-tool-icon {
-  width: 46px;
-  height: 46px;
-  border-radius: 15px;
+  position: relative;
+  z-index: 1;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
   color: #fff;
-  background: linear-gradient(150deg, #1e75ff, #38bdf8);
-  box-shadow: 0 4px 14px rgba(30, 117, 255, 0.32);
+  background: linear-gradient(150deg, #1a6dff, #3aa0ff);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 0 14px rgba(56, 148, 255, 0.28),
+    0 4px 12px rgba(20, 90, 220, 0.28);
 }
-/* Each tool keeps its own accent while staying in the family. */
-.pq-tool--hydrant .pq-tool-icon { background: linear-gradient(150deg, #d9384f, #f97362); box-shadow: 0 4px 14px rgba(217, 56, 79, 0.30); }
-.pq-tool--check   .pq-tool-icon { background: linear-gradient(150deg, #0f9d6b, #34d399); box-shadow: 0 4px 14px rgba(15, 157, 107, 0.30); }
-.pq-tool--hydrant::before { background: linear-gradient(140deg, rgba(249, 115, 98, 0.34), rgba(249, 115, 98, 0) 45%); }
-.pq-tool--check::before   { background: linear-gradient(140deg, rgba(52, 211, 153, 0.34), rgba(52, 211, 153, 0) 45%); }
+.pq-tool--hydrant .pq-tool-icon {
+  background: linear-gradient(150deg, #c83248, #f07362);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 0 14px rgba(240, 100, 90, 0.26),
+    0 4px 12px rgba(200, 50, 70, 0.26);
+}
+.pq-tool--check .pq-tool-icon {
+  background: linear-gradient(150deg, #0d9466, #2fd193);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 0 14px rgba(47, 209, 147, 0.24),
+    0 4px 12px rgba(15, 150, 100, 0.26);
+}
+.pq-tool-chevron {
+  color: rgba(160, 180, 205, 0.55);
+}
+
+.pq-tools-recent {
+  margin-top: 6px;
+  padding: 14px 4px 2px;
+}
+.pq-tools-recent-title {
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: color-mix(in srgb, var(--color-text-secondary) 88%, transparent);
+}
+.pq-tools-recent-empty {
+  margin: 0;
+  padding: 4px 0 2px;
+  font-size: 13px;
+  line-height: 1.35;
+  color: color-mix(in srgb, var(--color-text-secondary) 82%, transparent);
+}
 
 /* Result surfaces. Tone is reinforced by an icon and words, never colour alone. */
 .pq-result { background: var(--color-card); border: 1px solid var(--color-border); }

@@ -801,10 +801,10 @@ const es: Record<string, string> = {
 
     // Assistant
     'assistant.scan_title': 'Escanear señal de parqueo',
-    'assistant.hub_title': 'Asistente de Parqueo IA',
+    'assistant.hub_title': 'Herramientas de Parqueo',
     'assistant.back_map_aria': 'Volver al mapa',
     'assistant.check_title': '¿Es seguro aquí?',
-    'assistant.check_desc': 'Revisa tu lugar guardado frente a las restricciones de parqueo conocidas.',
+    'assistant.check_desc': 'Revisa tu ubicacion estacionada frente a restricciones conocidas.',
     'assistant.tag_ai_vision': 'VISIÓN IA',
     'assistant.tag_15ft': 'REGLA DE 15 PIES',
     'assistant.tag_parking_check': 'REVISIÓN DE PARQUEO',
@@ -882,7 +882,7 @@ const es: Record<string, string> = {
     'check.view_on_map': 'Ver Mi Carro en el mapa',
     'check.disclaimer': 'ParQueen revisa datos de parqueo conocidos, pero las señales y condiciones de la calle son las que mandan.',
     'assistant.hydrant_title': 'Revisar distancia al hidrante',
-    'assistant.hydrant_desc': 'Estima si estás lo suficientemente lejos de un hidrante.',
+    'assistant.hydrant_desc': 'Mira si estás lo suficientemente lejos de un hidrante.',
     'assistant.photo_hint': 'Toma una foto clara de la señal completa de parqueo.',
     'assistant.open_camera': 'Abrir cámara',
     'assistant.choose_photos': 'Elegir de fotos',
@@ -897,7 +897,7 @@ const es: Record<string, string> = {
     'assistant.disclaimer': 'La interpretación de IA puede estar incompleta o ser incorrecta. Verifica las señales publicadas.',
     'assistant.error_generic': 'ParQueen Assistant tiene problemas en este momento. Por favor, inténtalo de nuevo.',
     'assistant.back_hub_aria': 'Volver al inicio del asistente',
-    'assistant.scan_desc_long': 'Toma una foto y obten una explicacion clara de las reglas de parqueo.',
+    'assistant.scan_desc_long': 'Toma una foto y entiende las reglas de parqueo.',
     'assistant.analyze_cta': 'Analizar senal',
     'assistant.retake': 'Tomar otra foto',
     'assistant.cancel': 'Cancelar',
@@ -910,8 +910,8 @@ const es: Record<string, string> = {
     'assistant.how_1_d': 'Toma una foto clara de la senal de parqueo.',
     'assistant.how_2_d': 'ParQueen interpreta las reglas publicadas.',
     'assistant.how_3_d': 'Recibe una explicacion sencilla antes de parquear.',
-    'assistant.recent_title': 'ESCANEOS RECIENTES',
-    'assistant.recent_empty': 'Tus escaneos recientes apareceran aqui.',
+    'assistant.recent_title': 'Recientes',
+    'assistant.recent_empty': 'Tus revisiones de parqueo recientes apareceran aqui.',
 
     // Messages / Inbox
     'messages.title': 'Mensajes',

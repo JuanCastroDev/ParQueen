@@ -69,11 +69,11 @@ beforeEach(() => {
   clearRecentScans();
 });
 
-describe('AI Parking Assistant — hub', () => {
+describe('Parking Tools - hub', () => {
   it('leads with the three tools', async () => {
     const r = await mount();
     const text = textOf(r);
-    expect(text).toContain('AI Parking Assistant');
+    expect(text).toContain('Parking Tools');
     expect(text).toContain('Scan a Parking Sign');
     expect(text).toContain('Check Hydrant Distance');
     expect(text).toContain('Am I Safe Here?');
@@ -84,7 +84,7 @@ describe('AI Parking Assistant — hub', () => {
     const headings = () => r.root.findAllByType('h1');
     const backs = () => r.root.findAllByType('button').filter(b => /Back to/.test(b.props['aria-label'] ?? ''));
     expect(headings()).toHaveLength(1);
-    expect(collectText(headings()[0])).toBe('AI Parking Assistant');
+    expect(collectText(headings()[0])).toBe('Parking Tools');
     expect(backs()).toHaveLength(1);
     expect(backs()[0].props['aria-label']).toBe('Back to the map');
 
@@ -126,7 +126,7 @@ describe('AI Parking Assistant — hub', () => {
 
   it('names each tool card rather than reciting its whole contents', async () => {
     const r = await mount();
-    const card = r.root.findAllByType('button').find(b => collectText(b).includes('AI VISION'))!;
+    const card = r.root.findAllByType('button').find(b => collectText(b).includes('Scan a Parking Sign'))!;
     expect(card.props['aria-label']).toBe('Scan a Parking Sign');
   });
 
@@ -139,7 +139,7 @@ describe('AI Parking Assistant — hub', () => {
 
   it('shows an empty state rather than sample scans', async () => {
     const text = textOf(await mount());
-    expect(text).toContain('Your recent scans will appear here.');
+    expect(text).toContain('Your recent parking checks will appear here.');
   });
 
   it('lists a real scan after one completes', async () => {
@@ -159,7 +159,7 @@ describe('AI Parking Assistant — hub', () => {
   });
 });
 
-describe('Sign Scanner — scan states', () => {
+describe('Sign Scanner â€” scan states', () => {
   it('previews the photo and waits for an explicit Analyze before calling the model', async () => {
     const r = await mount();
     await choosePhoto(r);
@@ -258,7 +258,7 @@ describe('Sign Scanner — scan states', () => {
 });
 
 describe('recentScans store', () => {
-  it('keeps only title, verdict and timestamp — never a photo or location', async () => {
+  it('keeps only title, verdict and timestamp â€” never a photo or location', async () => {
     const list = recordScan({ status: 'YES', explanation: 'Parking allowed.\nDetails here.' } as any);
     expect(list).toHaveLength(1);
     expect(Object.keys(list[0]).sort()).toEqual(['id', 'status', 'title', 'ts']);

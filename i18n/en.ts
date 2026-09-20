@@ -801,10 +801,10 @@ const en: Record<string, string> = {
 
     // Assistant
     'assistant.scan_title': 'Scan a Parking Sign',
-    'assistant.hub_title': 'AI Parking Assistant',
+    'assistant.hub_title': 'Parking Tools',
     'assistant.back_map_aria': 'Back to the map',
     'assistant.check_title': 'Am I Safe Here?',
-    'assistant.check_desc': 'Check your saved spot against known parking restrictions.',
+    'assistant.check_desc': 'Check your parked location against known restrictions.',
     'assistant.tag_ai_vision': 'AI VISION',
     'assistant.tag_15ft': '15 FT RULE',
     'assistant.tag_parking_check': 'PARKING CHECK',
@@ -882,7 +882,7 @@ const en: Record<string, string> = {
     'check.view_on_map': 'View My Car on the map',
     'check.disclaimer': 'ParQueen checks known parking data, but signs and conditions on the street control.',
     'assistant.hydrant_title': 'Check Hydrant Distance',
-    'assistant.hydrant_desc': "Estimate if you're far enough from a hydrant.",
+    'assistant.hydrant_desc': "See if you're far enough from a hydrant.",
     'assistant.photo_hint': 'Take a clear photo of the full parking sign.',
     'assistant.open_camera': 'Open camera',
     'assistant.choose_photos': 'Choose from photos',
@@ -897,7 +897,7 @@ const en: Record<string, string> = {
     'assistant.disclaimer': 'AI interpretation may be incomplete or incorrect. Verify posted signs.',
     'assistant.error_generic': 'ParQueen Assistant is having trouble right now. Please try again.',
     'assistant.back_hub_aria': 'Back to the assistant home',
-    'assistant.scan_desc_long': 'Take a photo and get a clear explanation of the parking rules.',
+    'assistant.scan_desc_long': 'Take a photo and understand the parking rules.',
     'assistant.analyze_cta': 'Analyze Sign',
     'assistant.retake': 'Retake photo',
     'assistant.cancel': 'Cancel',
@@ -910,8 +910,8 @@ const en: Record<string, string> = {
     'assistant.how_1_d': 'Take a clear photo of the parking sign.',
     'assistant.how_2_d': 'ParQueen interprets the posted rules.',
     'assistant.how_3_d': 'Get a simple explanation before you park.',
-    'assistant.recent_title': 'RECENT SCANS',
-    'assistant.recent_empty': 'Your recent scans will appear here.',
+    'assistant.recent_title': 'Recent',
+    'assistant.recent_empty': 'Your recent parking checks will appear here.',
 
     // Messages / Inbox
     'messages.title': 'Inbox',

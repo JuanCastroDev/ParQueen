@@ -189,7 +189,7 @@ export const AssistantView = ({ onBack, onOpenMyCar }: AssistantViewProps = {}) 
         <h1
           ref={headingRef}
           tabIndex={-1}
-          className="text-xl font-extrabold text-[var(--color-text)] tracking-tight truncate focus:outline-none"
+          className="text-[19px] font-bold text-[var(--color-text)] tracking-tight truncate focus:outline-none"
         >
           {mode === 'hub' ? t('assistant.hub_title')
             : mode === 'scan' ? t('assistant.scan_title')
@@ -200,7 +200,7 @@ export const AssistantView = ({ onBack, onOpenMyCar }: AssistantViewProps = {}) 
 
       {/* ── Hub ────────────────────────────────────────────────────────────── */}
       {mode === 'hub' && (
-        <div className="space-y-3.5">
+        <div className="pq-tools-hub space-y-3">
           {/* Three tools, one visual family. Each is a real destination — there
               are no disabled cards and no "Soon" badges on this screen. */}
           {([
@@ -208,7 +208,6 @@ export const AssistantView = ({ onBack, onOpenMyCar }: AssistantViewProps = {}) 
               key: 'scan',
               title: t('assistant.scan_title'),
               desc: t('assistant.scan_desc_long'),
-              tag: t('assistant.tag_ai_vision'),
               icon: <ScanLine size={22} aria-hidden="true" />,
               tone: 'pq-tool--scan',
               go: openScanner,
@@ -217,7 +216,6 @@ export const AssistantView = ({ onBack, onOpenMyCar }: AssistantViewProps = {}) 
               key: 'hydrant',
               title: t('assistant.hydrant_title'),
               desc: t('assistant.hydrant_desc'),
-              tag: t('assistant.tag_15ft'),
               icon: <HydrantIcon />,
               tone: 'pq-tool--hydrant',
               go: () => setMode('hydrant'),
@@ -226,7 +224,6 @@ export const AssistantView = ({ onBack, onOpenMyCar }: AssistantViewProps = {}) 
               key: 'check',
               title: t('assistant.check_title'),
               desc: t('assistant.check_desc'),
-              tag: t('assistant.tag_parking_check'),
               icon: <ShieldCheck size={22} aria-hidden="true" />,
               tone: 'pq-tool--check',
               go: () => setMode('check'),
@@ -237,31 +234,28 @@ export const AssistantView = ({ onBack, onOpenMyCar }: AssistantViewProps = {}) 
               type="button"
               onClick={tool.go}
               aria-label={tool.title}
-              className={`pq-tool-card ${tool.tone} w-full text-left rounded-[22px] p-4 flex items-center gap-4 focus-visible:ring-2 focus-visible:ring-[#38bdf8] focus-visible:outline-none`}
+              className={`pq-tool-card ${tool.tone} w-full text-left rounded-[20px] px-3.5 py-3.5 flex items-center gap-3.5 focus-visible:ring-2 focus-visible:ring-[#38bdf8] focus-visible:outline-none`}
             >
               <span className="pq-tool-icon shrink-0" aria-hidden="true">{tool.icon}</span>
               <span className="block flex-1 min-w-0">
-                <span className="block text-[9.5px] font-bold tracking-[0.16em] text-[var(--color-info)] mb-1">
-                  {tool.tag}
-                </span>
-                <span className="block font-extrabold text-[15px] text-[var(--color-text)] leading-tight">
+                <span className="block font-bold text-[15px] text-[var(--color-text)] leading-tight">
                   {tool.title}
                 </span>
-                <span className="block text-xs text-[var(--color-text-secondary)] mt-1 leading-snug">
+                <span className="block text-[12px] text-[var(--color-text-secondary)] mt-0.5 leading-snug">
                   {tool.desc}
                 </span>
               </span>
-              <ChevronRight size={18} aria-hidden="true" className="shrink-0 text-[var(--color-text-secondary)]" />
+              <ChevronRight size={16} aria-hidden="true" className="pq-tool-chevron shrink-0" />
             </button>
           ))}
 
           {/* Recent scans — real local history only */}
-          <section className="rounded-3xl p-5 bg-[var(--color-card)] border border-[var(--color-border)]">
-            <h2 className="text-[10px] font-bold tracking-[0.18em] text-[var(--color-text-secondary)] mb-3">
+          <section className="pq-tools-recent">
+            <h2 className="pq-tools-recent-title">
               {t('assistant.recent_title')}
             </h2>
             {recent.length === 0 ? (
-              <p className="text-sm text-[var(--color-text-secondary)] py-2">{t('assistant.recent_empty')}</p>
+              <p className="pq-tools-recent-empty">{t('assistant.recent_empty')}</p>
             ) : (
               <ul className="space-y-2.5">
                 {recent.map(scan => (
