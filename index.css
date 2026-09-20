@@ -2884,9 +2884,8 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
 }
 
 .pq-bottom-sheet {
-  /* Always-dark surface: keep navy glass in both app themes, and re-scope
-     foreground/elev tokens so children using var(--color-text) / elev tokens
-     stay bright on this surface (fixes light-mode navy-on-navy). */
+  /* Theme-aware sheet surface: dark navy glass by default (dark mode),
+     re-scoped to pale ParQueen glass under :root:not(.dark) below. */
   color: rgba(247, 250, 255, 0.96);
   --color-text: rgba(247, 250, 255, 0.96);
   --color-text-secondary: rgba(210, 224, 242, 0.72);
@@ -2894,6 +2893,10 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   --color-card: rgba(255, 255, 255, 0.06);
   --color-info: #7dd3fc;
   --color-danger: #f87171;
+  --sheet-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.015) 18%, rgba(0, 0, 0, 0.12) 100%), linear-gradient(180deg, #0c1526 0%, #070e1a 100%);
+  --sheet-border: color-mix(in srgb, var(--mobile-shell-accent, #4d94ff) 28%, rgba(90, 130, 180, 0.18));
+  --sheet-shadow: inset 0 1px 0 rgba(210, 230, 255, 0.14), 0 -18px 48px rgba(0, 4, 14, 0.42), 0 -4px 18px rgba(77, 148, 255, 0.10);
+  --sheet-handle: color-mix(in srgb, var(--mobile-shell-accent, #4d94ff) 22%, rgba(150, 170, 195, 0.45));
   --sheet-fg: rgba(247, 250, 255, 0.96);
   --sheet-fg-secondary: rgba(210, 224, 242, 0.72);
   --sheet-fg-muted: rgba(186, 204, 228, 0.58);
@@ -2916,17 +2919,11 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   --pq-elev-card: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.01) 40%, rgba(0, 0, 0, 0.16) 100%), linear-gradient(165deg, #0f1c32 0%, #0a121f 55%, #0c182c 100%);
   --pq-elev-cta: radial-gradient(120% 140% at 50% -10%, rgba(90, 160, 255, 0.36) 0%, rgba(40, 110, 230, 0.12) 45%, transparent 70%), linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.02) 40%, rgba(0, 0, 0, 0.18) 100%), linear-gradient(165deg, #12305a 0%, #0a1a36 50%, #0c2248 100%);
   --pq-elev-cta-text: #eaf4ff;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.015) 18%, rgba(0, 0, 0, 0.12) 100%),
-    linear-gradient(180deg, #0c1526 0%, #070e1a 100%);
-
-  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent, #4d94ff) 28%, rgba(90, 130, 180, 0.18));
+  background: var(--sheet-bg);
+  border: 1px solid var(--sheet-border);
   border-bottom: 0;
   border-radius: 28px 28px 0 0;
-  box-shadow:
-    inset 0 1px 0 rgba(210, 230, 255, 0.14),
-    0 -18px 48px rgba(0, 4, 14, 0.42),
-    0 -4px 18px rgba(77, 148, 255, 0.10);
+  box-shadow: var(--sheet-shadow);
   transform: translateY(100%);
   transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
   will-change: transform;
@@ -3053,6 +3050,143 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
 /* Ping center CTA stays electric blue — do not restyle core/orbit in this pass */
 /* end light-mode map chrome materials */
 
+/* light-mode bottom-sheet materials */
+:root:not(.dark) .pq-bottom-sheet {
+  color: rgba(14, 34, 64, 0.94);
+  --color-text: rgba(14, 34, 64, 0.94);
+  --color-text-secondary: rgba(40, 64, 100, 0.66);
+  --color-border: rgba(40, 70, 120, 0.14);
+  --color-card: rgba(255, 255, 255, 0.72);
+  --color-info: #1d6fe8;
+  --color-danger: #c0392b;
+  --sheet-fg: rgba(14, 34, 64, 0.94);
+  --sheet-fg-secondary: rgba(40, 64, 100, 0.66);
+  --sheet-fg-muted: rgba(60, 84, 120, 0.55);
+  --sheet-icon: #1d6fe8;
+  --sheet-bg:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.88) 0%, rgba(255, 255, 255, 0.55) 36%, rgba(226, 236, 248, 0.42) 100%),
+    linear-gradient(180deg, #f5f8fc 0%, #e8f0fa 100%);
+  --sheet-border: color-mix(in srgb, var(--mobile-shell-accent, #2f7dff) 18%, rgba(60, 90, 140, 0.16));
+  --sheet-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 -14px 36px rgba(20, 40, 80, 0.12),
+    0 -2px 10px rgba(20, 40, 80, 0.06),
+    0 0 18px rgba(47, 125, 255, 0.08);
+  --sheet-handle: color-mix(in srgb, var(--mobile-shell-accent, #2f7dff) 28%, rgba(100, 130, 170, 0.35));
+  /* Inherit pale elev tokens from :root — do not force dark elev inside the sheet */
+  --pq-elev-surface: rgba(255, 255, 255, 0.92);
+  --pq-elev-surface-2: #f3f7fb;
+  --pq-elev-surface-3: #eaf1f8;
+  --pq-elev-well: rgba(12, 34, 56, 0.05);
+  --pq-elev-border: rgba(12, 34, 56, 0.12);
+  --pq-elev-border-strong: rgba(11, 99, 230, 0.28);
+  --pq-elev-text: rgba(14, 34, 64, 0.94);
+  --pq-elev-text-muted: rgba(40, 64, 100, 0.66);
+  --pq-elev-icon: #1d6fe8;
+  --pq-elev-inset: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  --pq-elev-shadow: 0 8px 22px rgba(15, 32, 60, 0.10), 0 2px 6px rgba(15, 32, 60, 0.05);
+  --pq-elev-glow: 0 0 18px rgba(11, 99, 230, 0.12);
+  --pq-elev-accent-soft: rgba(11, 99, 230, 0.10);
+  --pq-elev-accent-mid: rgba(11, 99, 230, 0.16);
+  --pq-elev-panel: linear-gradient(165deg, rgba(255, 255, 255, 0.98), rgba(243, 247, 251, 0.94));
+  --pq-elev-card: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(247, 250, 252, 0.94) 100%), linear-gradient(165deg, #ffffff 0%, #eef4fa 100%);
+  --pq-elev-cta: linear-gradient(165deg, #2f7dff 0%, #1d6fe8 55%, #1557c2 100%);
+  --pq-elev-cta-text: #ffffff;
+}
+
+/* Hardcoded dark cards/rings inside sheets → light elev surfaces */
+:root:not(.dark) .pq-leave-hero-ring,
+:root:not(.dark) .pq-postsave-hero-ring {
+  background:
+    radial-gradient(120% 100% at 30% 15%, rgba(47, 125, 255, 0.16) 0%, transparent 55%),
+    linear-gradient(165deg, #ffffff 0%, #e8f1fb 55%, #dce8f6 100%);
+  border-color: color-mix(in srgb, var(--mobile-shell-accent, #2f7dff) 22%, rgba(60, 90, 140, 0.14));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 6px 14px rgba(20, 40, 80, 0.08),
+    0 0 12px rgba(47, 125, 255, 0.10);
+  color: var(--pq-elev-icon);
+}
+:root:not(.dark) .pq-leave-hero-icon,
+:root:not(.dark) .pq-postsave-hero-icon {
+  color: var(--pq-elev-icon);
+  filter: none;
+}
+
+:root:not(.dark) .pq-leave-secondary,
+:root:not(.dark) .pq-leave-tertiary {
+  color: var(--pq-elev-text);
+}
+:root:not(.dark) .pq-leave-secondary {
+  background: var(--pq-elev-well);
+  border-color: var(--pq-elev-border);
+  box-shadow: var(--pq-elev-inset);
+}
+:root:not(.dark) .pq-leave-tertiary {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  color: var(--pq-elev-text-muted);
+}
+
+:root:not(.dark) .pq-ping-option {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(40, 70, 120, 0.12);
+  box-shadow: 0 4px 12px rgba(20, 40, 80, 0.06);
+  color: var(--pq-elev-text);
+}
+:root:not(.dark) .pq-ping-option.is-selected {
+  background:
+    linear-gradient(180deg, rgba(47, 125, 255, 0.14) 0%, rgba(47, 125, 255, 0.06) 100%);
+  border-color: color-mix(in srgb, var(--mobile-shell-accent, #2f7dff) 34%, rgba(60, 90, 140, 0.14));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    0 0 14px rgba(47, 125, 255, 0.14),
+    0 6px 14px rgba(20, 40, 80, 0.08);
+}
+:root:not(.dark) .pq-ping-option-icon {
+  color: var(--sheet-fg-secondary, var(--color-text-secondary));
+  background: rgba(12, 34, 56, 0.05);
+}
+:root:not(.dark) .pq-ping-option-icon.is-selected {
+  color: var(--mobile-shell-accent, #2f7dff);
+}
+
+:root:not(.dark) .pq-tools-recent-empty-panel,
+:root:not(.dark) .pq-assist-hero {
+  background: var(--pq-elev-card);
+  border-color: var(--pq-elev-border);
+  box-shadow: var(--pq-elev-inset), var(--pq-elev-shadow);
+  color: var(--pq-elev-text);
+}
+
+/* Glass date / time pickers inside light sheets */
+:root:not(.dark) .pq-bottom-sheet .pq-gdate-trigger,
+:root:not(.dark) .pq-bottom-sheet .pq-gdate-panel,
+:root:not(.dark) .pq-bottom-sheet .pq-time-card {
+  background: var(--pq-elev-panel);
+  border-color: var(--pq-elev-border);
+  color: var(--pq-elev-text);
+  box-shadow: var(--pq-elev-inset), var(--pq-elev-shadow);
+}
+:root:not(.dark) .pq-bottom-sheet .pq-gdate-day.is-selected,
+:root:not(.dark) .pq-bottom-sheet .pq-time-period-btn.is-active {
+  background: var(--pq-elev-accent-mid);
+  color: var(--pq-elev-icon);
+  border-color: var(--pq-elev-border-strong);
+  box-shadow: var(--pq-elev-inset), var(--pq-elev-glow);
+}
+:root:not(.dark) .pq-bottom-sheet .pq-gdate-day.is-today:not(.is-selected) {
+  box-shadow: inset 0 0 0 1.5px var(--pq-elev-border-strong);
+  color: var(--pq-elev-icon);
+}
+:root:not(.dark) .pq-bottom-sheet .pq-gdate-day.is-outside,
+:root:not(.dark) .pq-bottom-sheet .pq-gdate-day.is-disabled {
+  color: color-mix(in srgb, var(--pq-elev-text-muted) 55%, transparent);
+}
+/* end light-mode bottom-sheet materials */
+
+
 /* bottom-sheet drag performance */
 .pq-bottom-sheet.is-dragging {
   transition: none !important;
@@ -3075,7 +3209,7 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   width: 40px;
   height: 4px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--mobile-shell-accent, #4d94ff) 22%, rgba(150, 170, 195, 0.45));
+  background: var(--sheet-handle, color-mix(in srgb, var(--mobile-shell-accent, #4d94ff) 22%, rgba(150, 170, 195, 0.45)));
   box-shadow: 0 0 8px rgba(77, 148, 255, 0.12);
 }
 
