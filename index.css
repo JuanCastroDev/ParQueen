@@ -35,15 +35,16 @@
   --color-overlay: rgba(255, 255, 255, 0.04);
   --mobile-primary-nav-space: calc(104px + env(safe-area-inset-bottom, 0px));
   --mobile-map-header-width: min(86vw, 372px);
-  --mobile-shell-surface: rgba(10, 25, 44, 0.84);
-  --mobile-shell-surface-strong: rgba(7, 20, 37, 0.91);
-  --mobile-shell-border: rgba(130, 169, 208, 0.44);
-  --mobile-shell-highlight: rgba(235, 245, 255, 0.20);
-  --mobile-shell-text: rgba(247, 250, 255, 0.96);
-  --mobile-shell-text-muted: rgba(226, 236, 248, 0.76);
-  --mobile-shell-accent: #4d94ff;
-  --mobile-shell-accent-soft: rgba(42, 121, 255, 0.20);
-  --mobile-shell-focus: #82bdff;
+  /* Light-mode map chrome: cool pale glass + navy type (dark mode overrides below) */
+  --mobile-shell-surface: rgba(244, 248, 253, 0.82);
+  --mobile-shell-surface-strong: rgba(236, 243, 252, 0.92);
+  --mobile-shell-border: rgba(40, 70, 120, 0.16);
+  --mobile-shell-highlight: rgba(255, 255, 255, 0.72);
+  --mobile-shell-text: rgba(12, 28, 52, 0.94);
+  --mobile-shell-text-muted: rgba(40, 64, 100, 0.62);
+  --mobile-shell-accent: #2f7dff;
+  --mobile-shell-accent-soft: rgba(47, 125, 255, 0.14);
+  --mobile-shell-focus: #3d8fff;
   --mobile-map-overlay: rgba(7, 22, 42, 0.03);
   --mobile-map-edge: radial-gradient(circle at 50% 48%, rgba(30, 117, 255, 0.005) 0%, rgba(8, 25, 47, 0.03) 74%, rgba(4, 16, 32, 0.075) 100%);
   --mobile-ping-cradle: rgba(17, 36, 59, 0.84);
@@ -2934,6 +2935,124 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
 .pq-bottom-sheet.is-open {
   transform: translateY(0);
 }
+
+/* light-mode map chrome materials */
+:root:not(.dark) .map-search-shell {
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 18%, rgba(60, 90, 140, 0.14));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72) 0%, rgba(255, 255, 255, 0.28) 42%, rgba(210, 226, 248, 0.22) 100%),
+    linear-gradient(180deg, rgba(244, 248, 253, 0.92) 0%, rgba(232, 240, 250, 0.88) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    inset 0 -1px 0 rgba(40, 70, 120, 0.06),
+    0 10px 24px rgba(20, 40, 80, 0.10),
+    0 2px 8px rgba(20, 40, 80, 0.06),
+    0 0 16px rgba(47, 125, 255, 0.08);
+  color: var(--mobile-shell-text);
+}
+:root:not(.dark) .map-search-shell:focus-within {
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 28%, rgba(60, 90, 140, 0.16));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 12px 26px rgba(20, 40, 80, 0.12),
+    0 0 20px rgba(47, 125, 255, 0.12);
+}
+:root:not(.dark) .map-search-icon {
+  color: rgba(18, 40, 72, 0.88);
+}
+:root:not(.dark) .map-search-input {
+  color: var(--mobile-shell-text);
+}
+:root:not(.dark) .map-search-input::placeholder {
+  color: color-mix(in srgb, var(--mobile-shell-text-muted) 88%, transparent);
+}
+
+:root:not(.dark) .map-ai-action {
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 28%, rgba(60, 90, 140, 0.14));
+  color: var(--mobile-shell-text);
+  background:
+    radial-gradient(120% 90% at 50% 18%, rgba(47, 125, 255, 0.14) 0%, rgba(47, 125, 255, 0.03) 46%, transparent 72%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.7) 0%, rgba(255, 255, 255, 0.22) 40%, rgba(210, 226, 248, 0.2) 100%),
+    linear-gradient(165deg, rgba(244, 248, 253, 0.96) 0%, rgba(230, 239, 250, 0.94) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.88),
+    0 10px 22px rgba(20, 40, 80, 0.10),
+    0 0 14px rgba(47, 125, 255, 0.10);
+}
+:root:not(.dark) .map-ai-action-label {
+  color: rgba(14, 34, 64, 0.92);
+}
+:root:not(.dark) .map-ai-action svg {
+  color: var(--mobile-shell-accent);
+}
+
+:root:not(.dark) .map-status-chip {
+  color: var(--mobile-shell-text);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 10%, rgba(70, 100, 140, 0.14));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.7) 0%, rgba(236, 243, 252, 0.88) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 6px 14px rgba(20, 40, 80, 0.08);
+}
+:root:not(.dark) .map-status-chip.is-empty {
+  color: var(--mobile-shell-text-muted);
+}
+
+:root:not(.dark) .map-control-button {
+  color: var(--mobile-shell-accent);
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 22%, rgba(60, 90, 140, 0.14));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78) 0%, rgba(236, 243, 252, 0.9) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.88),
+    0 10px 20px rgba(20, 40, 80, 0.10),
+    0 0 12px rgba(47, 125, 255, 0.08);
+}
+:root:not(.dark) .map-control-button:hover {
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 40%, rgba(60, 90, 140, 0.16));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.88) 0%, rgba(230, 240, 252, 0.94) 100%);
+}
+:root:not(.dark) .map-control-button.is-active {
+  color: #fff;
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 55%, transparent);
+  background: linear-gradient(145deg, #3d8fff, #2a6fe0);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 10px 20px rgba(30, 90, 200, 0.22);
+}
+:root:not(.dark) .map-control-button.is-active svg {
+  color: #fff;
+}
+
+:root:not(.dark) .mobile-primary-nav-surface {
+  color: var(--mobile-shell-text-muted);
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 12%, rgba(60, 90, 140, 0.14));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78) 0%, rgba(236, 243, 252, 0.9) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.88),
+    0 14px 32px rgba(20, 40, 80, 0.12),
+    0 3px 10px rgba(20, 40, 80, 0.06);
+}
+:root:not(.dark) .mobile-primary-nav-item {
+  color: rgba(40, 64, 100, 0.72);
+}
+:root:not(.dark) .mobile-primary-nav-item.is-active {
+  color: var(--mobile-shell-accent);
+}
+:root:not(.dark) .mobile-primary-nav-item.is-active::before {
+  background:
+    linear-gradient(180deg, rgba(47, 125, 255, 0.12) 0%, rgba(47, 125, 255, 0.05) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 0 12px rgba(47, 125, 255, 0.16),
+    0 4px 10px rgba(20, 40, 80, 0.08);
+}
+/* Ping center CTA stays electric blue — do not restyle core/orbit in this pass */
+/* end light-mode map chrome materials */
+
 /* bottom-sheet drag performance */
 .pq-bottom-sheet.is-dragging {
   transition: none !important;
