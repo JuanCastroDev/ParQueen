@@ -55,7 +55,7 @@ describe('private resolver backend configuration', () => {
       expect(dotenv).toMatch(new RegExp(`^${name}=`, 'm'));
     }
     expect(dotenv).toMatch(/^CURB_RESOLVER_MODE=shadow$/m);
-    expect(dotenv).toMatch(/^CURB_SHADOW_SAMPLE_PERMILLE=0$/m);
+    expect(dotenv).toMatch(/^CURB_SHADOW_SAMPLE_PERMILLE=100$/m); // Phase 2A.21 first organic cohort
     expect(dotenv).toMatch(
       /^CURB_RESOLVER_URL=https:\/\/parqueen-curb-resolver-spike-oxbozdhlwa-uc\.a\.run\.app$/m,
     );
