@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { getMapboxToken } from '../../utils/browserCredentials';
+import { registerAndroidBackOverlay } from '../../utils/androidBackOverlay';
 
 export function useSearch() {
     const inputRef = useRef<HTMLInputElement>(null);
@@ -57,6 +58,27 @@ export function useSearch() {
         setSearchOpen(false);
         inputRef.current?.blur();
     };
+    const handleCancelSearchRef = useRef(handleCancelSearch);
+    handleCancelSearchRef.current = handleCancelSearch;
+
+    useEffect(() => {
+        if (!searchOpen) return;
+        return registerAndroidBackOverlay({
+            layer: 'transient',
+            dismiss: () => {
+                handleCancelSearchRef.current();
+            },
+            isActive: () => {
+                const el = inputRef.current;
+                if (!el) return true;
+                try {
+                    return !el.closest?.('[inert]');
+                } catch {
+                    return true;
+                }
+            },
+        });
+    }, [searchOpen]);
 
     const handleSelectResult = (result: any) => {
         setSelectedDestination({

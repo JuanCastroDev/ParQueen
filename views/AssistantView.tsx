@@ -8,6 +8,7 @@ import { HydrantDistanceTool } from './assistant/HydrantDistanceTool';
 import { ParkingCheckTool } from './assistant/ParkingCheckTool';
 import { HydrantIcon } from './assistant/HydrantIcon';
 import { analyzeParkingSign, SignAnalysisResult } from '../services/geminiService';
+import { resolveAssistantAndroidBack } from '../utils/androidBackNavigation';
 import { useParkingTimer } from './street-parking/useParkingTimer';
 import { t, useLang } from '../i18n';
 import { loadRecentScans, recordScan, RecentScan } from '../utils/recentScans';
@@ -44,14 +45,20 @@ function splitExplanation(text: string): { headline: string | null; body: string
 
 type ToolMode = 'hub' | 'scan' | 'hydrant' | 'check';
 
+export type AssistantAndroidBackHandle = {
+  handleAndroidBack: () => 'handled' | 'leave';
+};
+
 interface AssistantViewProps {
   /** Leaves the assistant entirely. The hub's back control calls this. */
   onBack?: () => void;
   /** Opens the map's My Car flow, for the empty states that need a saved spot. */
   onOpenMyCar?: () => void;
+  /** Optional ref so App can mirror visible Parking Tools Back for Android system Back. */
+  androidBackRef?: React.MutableRefObject<AssistantAndroidBackHandle | null>;
 }
 
-export const AssistantView = ({ onBack, onOpenMyCar }: AssistantViewProps = {}) => {
+export const AssistantView = ({ onBack, onOpenMyCar, androidBackRef }: AssistantViewProps = {}) => {
   useLang();
   const [mode, setMode] = useState<ToolMode>('hub');
   const [scanState, setScanState] = useState<ScanState>('idle');
@@ -151,6 +158,31 @@ export const AssistantView = ({ onBack, onOpenMyCar }: AssistantViewProps = {}) 
     setMode('hub');
     setRecent(loadRecentScans());
   };
+
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const backToHubRef = useRef(backToHub);
+  backToHubRef.current = backToHub;
+  const onBackRef = useRef(onBack);
+  onBackRef.current = onBack;
+
+  useEffect(() => {
+    if (!androidBackRef) return;
+    androidBackRef.current = {
+      handleAndroidBack: () => {
+        const action = resolveAssistantAndroidBack(modeRef.current === 'hub');
+        if (action === 'backToHub') {
+          backToHubRef.current();
+          return 'handled';
+        }
+        onBackRef.current?.();
+        return 'leave';
+      },
+    };
+    return () => {
+      androidBackRef.current = null;
+    };
+  }, [androidBackRef]);
 
   const reminderSet = !!timer;
 

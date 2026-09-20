@@ -109,6 +109,7 @@ describe('applyAndroidBackAction', () => {
     const closeLegal = vi.fn();
     const delegateMessages = vi.fn();
     const delegateOnboarding = vi.fn();
+    const delegateAssistant = vi.fn();
     const minimize = vi.fn();
     const clearVehicleOnboarding = vi.fn();
 
@@ -119,6 +120,7 @@ describe('applyAndroidBackAction', () => {
         closeLegal,
         delegateMessages,
         delegateOnboarding,
+        delegateAssistant,
         minimize,
         clearVehicleOnboarding,
         currentView: AppView.PROFILE,
@@ -134,6 +136,7 @@ describe('applyAndroidBackAction', () => {
         closeLegal,
         delegateMessages,
         delegateOnboarding,
+        delegateAssistant,
         minimize,
         clearVehicleOnboarding,
         currentView: AppView.EDIT_VEHICLE,
@@ -141,27 +144,42 @@ describe('applyAndroidBackAction', () => {
     );
     expect(clearVehicleOnboarding).toHaveBeenCalledTimes(1);
 
+    const effects = {
+      navigate,
+      closeLegal,
+      delegateMessages,
+      delegateOnboarding,
+      delegateAssistant,
+      minimize,
+    };
+
     applyAndroidBackAction(
       { type: 'closeLegal' },
-      { navigate, closeLegal, delegateMessages, delegateOnboarding, minimize, currentView: AppView.PRIVACY_POLICY },
+      { ...effects, currentView: AppView.PRIVACY_POLICY },
     );
     expect(closeLegal).toHaveBeenCalledTimes(1);
 
     applyAndroidBackAction(
       { type: 'delegateMessages' },
-      { navigate, closeLegal, delegateMessages, delegateOnboarding, minimize, currentView: AppView.MESSAGES },
+      { ...effects, currentView: AppView.MESSAGES },
     );
     expect(delegateMessages).toHaveBeenCalledTimes(1);
 
     applyAndroidBackAction(
       { type: 'delegateOnboarding' },
-      { navigate, closeLegal, delegateMessages, delegateOnboarding, minimize, currentView: AppView.ONBOARDING },
+      { ...effects, currentView: AppView.ONBOARDING },
     );
     expect(delegateOnboarding).toHaveBeenCalledTimes(1);
 
     applyAndroidBackAction(
+      { type: 'delegateAssistant' },
+      { ...effects, currentView: AppView.AI_ASSISTANT },
+    );
+    expect(delegateAssistant).toHaveBeenCalledTimes(1);
+
+    applyAndroidBackAction(
       { type: 'minimize' },
-      { navigate, closeLegal, delegateMessages, delegateOnboarding, minimize, currentView: AppView.MAP },
+      { ...effects, currentView: AppView.MAP },
     );
     expect(minimize).toHaveBeenCalledTimes(1);
   });
@@ -171,5 +189,17 @@ describe('applyAndroidBackAction', () => {
     expect(appSource).toContain('minimizeApp');
     expect(appSource).not.toMatch(/exitApp\s*\(/);
     expect(appSource).not.toContain('removeAllListeners');
+  });
+
+  it('App.tsx dismisses overlays before resolving AppView Back', () => {
+    const appSource = readFileSync(resolve(__dirname, '../App.tsx'), 'utf8');
+    expect(appSource).toContain('dispatchAndroidSystemBack');
+    expect(appSource).toContain('dismissTopAndroidBackOverlay');
+    const dispatchIdx = appSource.indexOf('dispatchAndroidSystemBack(');
+    const overlayIdx = appSource.indexOf('dismissTopAndroidBackOverlay', dispatchIdx);
+    const resolveIdx = appSource.indexOf('resolveAndroidBack(', dispatchIdx);
+    expect(dispatchIdx).toBeGreaterThan(-1);
+    expect(overlayIdx).toBeGreaterThan(dispatchIdx);
+    expect(resolveIdx).toBeGreaterThan(overlayIdx);
   });
 });

@@ -1,4 +1,5 @@
-import { RefObject, useLayoutEffect, useRef } from 'react';
+import { RefObject, useEffect, useLayoutEffect, useRef } from 'react';
+import { registerAndroidBackOverlay } from '../utils/androidBackOverlay';
 
 const FOCUSABLE = [
   'button:not([disabled])',
@@ -217,6 +218,19 @@ export function useModalAccessibility({
       }
     };
   }, [isOpen, dialogRef, initialFocusRef, returnFocusRef]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    return registerAndroidBackOverlay({
+      dismiss: () => {
+        onEscapeRef.current?.();
+      },
+      isActive: () => {
+        const modalRoot = dialogRef.current?.parentElement ?? null;
+        return !modalRootIsSuspended(modalRoot);
+      },
+    });
+  }, [isOpen, dialogRef]);
 
   useLayoutEffect(() => {
     if (!isOpen || !dialogRef.current || typeof document === 'undefined') return;

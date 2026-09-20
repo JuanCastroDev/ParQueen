@@ -54,7 +54,11 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
     const isEditing = !!spot;
 
     return (
-        <BottomSheet isOpen={isOpen} onClose={onClose} ariaLabel={t('ping_modal.sheet_label')}>
+        <BottomSheet isOpen={isOpen} onClose={onClose} ariaLabel={t('ping_modal.sheet_label')} onNestedBack={() => {
+            if (view !== 'timePicker') return false;
+            setView('main');
+            return true;
+        }}>
             {view === 'main' ? (
                 <div>
                     <div className="pq-ping-sheet-header flex flex-col items-center text-center mb-6">

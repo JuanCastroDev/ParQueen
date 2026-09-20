@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AppView } from '../types';
 import {
+  dispatchAndroidSystemBack,
   editVehicleAfterOnboarding,
   resolveAndroidBack,
+  resolveAssistantAndroidBack,
   resolveMessagesAndroidBack,
   resolveOnboardingAndroidBack,
 } from './androidBackNavigation';
@@ -46,8 +48,7 @@ describe('resolveAndroidBack', () => {
       view: AppView.MAP,
     });
     expect(resolveAndroidBack({ ...base, currentView: AppView.AI_ASSISTANT })).toEqual({
-      type: 'navigate',
-      view: AppView.MAP,
+      type: 'delegateAssistant',
     });
     expect(resolveAndroidBack({ ...base, currentView: AppView.EDIT_PROFILE })).toEqual({
       type: 'navigate',
@@ -140,7 +141,7 @@ describe('resolveAndroidBack', () => {
       [AppView.PRIVACY_POLICY]: 'closeLegal',
       [AppView.TERMS_OF_USE]: 'closeLegal',
       [AppView.EDIT_PROFILE]: 'navigate',
-      [AppView.AI_ASSISTANT]: 'navigate',
+      [AppView.AI_ASSISTANT]: 'delegateAssistant',
       [AppView.PROFILE]: 'navigate',
       [AppView.SETTINGS]: 'navigate',
       [AppView.NOTIFICATIONS_SETTINGS]: 'navigate',
@@ -173,6 +174,12 @@ describe('resolveAndroidBack', () => {
   it('delegates ONBOARDING instead of unconditional minimize', () => {
     expect(resolveAndroidBack({ ...base, currentView: AppView.ONBOARDING })).toEqual({
       type: 'delegateOnboarding',
+    });
+  });
+
+  it('delegates Parking Tools instead of jumping straight to Map', () => {
+    expect(resolveAndroidBack({ ...base, currentView: AppView.AI_ASSISTANT })).toEqual({
+      type: 'delegateAssistant',
     });
   });
 });
@@ -214,5 +221,53 @@ describe('resolveOnboardingAndroidBack', () => {
 
   it('requests root minimize on the first onboarding slide', () => {
     expect(resolveOnboardingAndroidBack(0)).toBe('minimize');
+  });
+});
+
+describe('resolveAssistantAndroidBack', () => {
+  it('returns nested tools to the Parking Tools hub', () => {
+    expect(resolveAssistantAndroidBack(false)).toBe('backToHub');
+  });
+
+  it('leaves Parking Tools from the hub', () => {
+    expect(resolveAssistantAndroidBack(true)).toBe('leaveAssistant');
+  });
+});
+
+describe('dispatchAndroidSystemBack', () => {
+  it('dismisses the top overlay and does not resolve AppView navigation', () => {
+    const resolve = vi.fn();
+    const apply = vi.fn();
+    dispatchAndroidSystemBack(() => true, resolve, apply);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it('resolves and applies AppView navigation when no overlay consumes Back', () => {
+    const apply = vi.fn();
+    dispatchAndroidSystemBack(
+      () => false,
+      () => ({ type: 'navigate', view: AppView.MAP }),
+      apply,
+    );
+    expect(apply).toHaveBeenCalledWith({ type: 'navigate', view: AppView.MAP });
+  });
+
+  it('keeps Map as the home for bottom-nav roots', () => {
+    expect(resolveAndroidBack({ ...base, currentView: AppView.NOTIFICATIONS })).toEqual({
+      type: 'navigate',
+      view: AppView.MAP,
+    });
+    expect(resolveAndroidBack({ ...base, currentView: AppView.PROFILE })).toEqual({
+      type: 'navigate',
+      view: AppView.MAP,
+    });
+    expect(resolveAndroidBack({ ...base, currentView: AppView.MESSAGES })).toEqual({
+      type: 'delegateMessages',
+    });
+    expect(resolveMessagesAndroidBack({
+      activeConversationId: null,
+      openedFromPing: false,
+    })).toBe('leaveMessages');
   });
 });
