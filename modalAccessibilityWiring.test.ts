@@ -95,4 +95,26 @@ describe('shared modal accessibility wiring', () => {
     }
   });
 
+  it('registers Android Back overlays on shared modal plumbing and Map search', () => {
+    const modalA11y = read('hooks/useModalAccessibility.ts');
+    expect(modalA11y).toContain('registerAndroidBackOverlay');
+    expect(modalA11y).toContain('modalRootIsSuspended');
+
+    const search = read('views/street-parking/useSearch.ts');
+    expect(search).toContain("layer: 'transient'");
+    expect(search).toContain('registerAndroidBackOverlay');
+
+    const bottomSheet = read('views/street-parking/BottomSheet.tsx');
+    expect(bottomSheet).toContain('onNestedBack');
+    expect(bottomSheet).toContain('dismissFromBack');
+
+    const ping = read('views/street-parking/SpotModal.tsx');
+    expect(ping).toContain('onNestedBack');
+    expect(ping).toContain("view !== 'timePicker'");
+
+    const map = read('views/StreetParkingView.tsx');
+    expect(map).toContain('onNestedBack');
+    expect(map).toContain('spotDetailsBackStack');
+    expect(map).toContain("myCarDepartureView !== 'timePicker'");
+  });
 });

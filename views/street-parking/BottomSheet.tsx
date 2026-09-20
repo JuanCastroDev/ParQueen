@@ -6,12 +6,17 @@ interface BottomSheetProps {
     onClose: () => void;
     children: React.ReactNode;
     ariaLabel: string;
+    /**
+     * Optional inner Back (Ping Later, departure time picker, spot-stack).
+     * Escape / Android Back try this first; backdrop tap still closes the sheet.
+     */
+    onNestedBack?: () => boolean;
 }
 
 const SHEET_MS = 280;
 const DISMISS_PX = 80;
 
-export const BottomSheet: React.FC<BottomSheetProps> = ({ isOpen, onClose, children, ariaLabel }) => {
+export const BottomSheet: React.FC<BottomSheetProps> = ({ isOpen, onClose, children, ariaLabel, onNestedBack }) => {
     const [visible, setVisible] = useState(false);
     const sheetRef = useRef<HTMLDivElement>(null);
     const backdropRef = useRef<HTMLDivElement>(null);
@@ -96,7 +101,14 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({ isOpen, onClose, child
         dismissTimerRef.current = setTimeout(onClose, SHEET_MS);
     }, [onClose]);
 
-    useModalAccessibility({ isOpen, dialogRef: sheetRef, onEscape: dismiss });
+    const onNestedBackRef = useRef(onNestedBack);
+    onNestedBackRef.current = onNestedBack;
+    const dismissFromBack = useCallback(() => {
+        if (onNestedBackRef.current?.()) return;
+        dismiss();
+    }, [dismiss]);
+
+    useModalAccessibility({ isOpen, dialogRef: sheetRef, onEscape: dismissFromBack });
 
     // Non-passive touchmove so we can preventDefault and stop scroll fighting the drag.
     useEffect(() => {

@@ -60,9 +60,11 @@ import { logoutUser, deleteUser, unlinkFcmTokenBeforeDeletion } from './database
 import { ConfirmationResult, RecaptchaVerifier, signOut } from 'firebase/auth';
 import { useInAppLegalNavigation } from './hooks/useInAppLegalNavigation';
 import { applyAndroidBackAction, useAndroidSystemBack } from './hooks/useAndroidSystemBack';
-import { resolveAndroidBack } from './utils/androidBackNavigation';
+import { dispatchAndroidSystemBack, resolveAndroidBack } from './utils/androidBackNavigation';
+import { dismissTopAndroidBackOverlay } from './utils/androidBackOverlay';
 import type { MessagesAndroidBackHandle } from './views/MessagesView';
 import type { OnboardingAndroidBackHandle } from './views/OnboardingView';
+import type { AssistantAndroidBackHandle } from './views/AssistantView';
 import { App as CapacitorApp } from '@capacitor/app';
 import { legalViewFor } from './utils/inAppLegalNavigation';
 import type { PhoneVerificationSession } from './utils/phoneAuth';
@@ -132,6 +134,7 @@ export default function App() {
   const { setViewWithLegalReturn, closeLegal } = useInAppLegalNavigation(currentView, setCurrentView);
   const messagesAndroidBackRef = useRef<MessagesAndroidBackHandle | null>(null);
   const onboardingAndroidBackRef = useRef<OnboardingAndroidBackHandle | null>(null);
+  const assistantAndroidBackRef = useRef<AssistantAndroidBackHandle | null>(null);
   const androidBackStateRef = useRef({
     currentView,
     vehicleOnboarding,
@@ -148,29 +151,38 @@ export default function App() {
   useAndroidSystemBack({
     handleBack: () => {
       const state = androidBackStateRef.current;
-      const action = resolveAndroidBack({
-        currentView: state.currentView,
-        vehicleOnboarding: state.vehicleOnboarding,
-        locationAccess: state.locationAccess,
-      });
-      applyAndroidBackAction(action, {
-        currentView: state.currentView,
-        navigate: (view) => setCurrentView(view),
-        closeLegal: () => state.closeLegal(),
-        delegateMessages: () => {
-          messagesAndroidBackRef.current?.handleAndroidBack();
-        },
-        delegateOnboarding: () => {
-          const result = onboardingAndroidBackRef.current?.handleAndroidBack();
-          if (result !== 'handled') {
+      dispatchAndroidSystemBack(
+        dismissTopAndroidBackOverlay,
+        () => resolveAndroidBack({
+          currentView: state.currentView,
+          vehicleOnboarding: state.vehicleOnboarding,
+          locationAccess: state.locationAccess,
+        }),
+        (action) => applyAndroidBackAction(action, {
+          currentView: state.currentView,
+          navigate: (view) => setCurrentView(view),
+          closeLegal: () => state.closeLegal(),
+          delegateMessages: () => {
+            messagesAndroidBackRef.current?.handleAndroidBack();
+          },
+          delegateOnboarding: () => {
+            const result = onboardingAndroidBackRef.current?.handleAndroidBack();
+            if (result !== 'handled') {
+              void CapacitorApp.minimizeApp();
+            }
+          },
+          delegateAssistant: () => {
+            const result = assistantAndroidBackRef.current?.handleAndroidBack();
+            if (result !== 'handled') {
+              setCurrentView(AppView.MAP);
+            }
+          },
+          minimize: () => {
             void CapacitorApp.minimizeApp();
-          }
-        },
-        minimize: () => {
-          void CapacitorApp.minimizeApp();
-        },
-        clearVehicleOnboarding: () => setVehicleOnboarding(false),
-      });
+          },
+          clearVehicleOnboarding: () => setVehicleOnboarding(false),
+        }),
+      );
     },
   });
   const pushToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -954,6 +966,7 @@ export default function App() {
             <AssistantView
               onBack={() => setCurrentView(AppView.MAP)}
               onOpenMyCar={() => { setPendingMyCarOpen(true); setCurrentView(AppView.MAP); }}
+              androidBackRef={assistantAndroidBackRef}
             />
           </div>
         );

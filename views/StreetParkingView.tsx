@@ -1583,7 +1583,13 @@ export const MapView: React.FC<MapViewProps> = ({
             />
 
             {/* Spot details bottom sheet */}
-            <BottomSheet isOpen={!!selectedItem && !isSpotModalOpen} ariaLabel="Spot details" onClose={() => { setSelectedItem(null); setSelectedItemManageMode(false); setSpotDetailsBackStack(null); }}>
+            <BottomSheet isOpen={!!selectedItem && !isSpotModalOpen} ariaLabel="Spot details" onClose={() => { setSelectedItem(null); setSelectedItemManageMode(false); setSpotDetailsBackStack(null); }} onNestedBack={() => {
+                if (!spotDetailsBackStack) return false;
+                setSelectedItem(null);
+                setStackGroup(spotDetailsBackStack);
+                setSpotDetailsBackStack(null);
+                return true;
+            }}>
                 <SpotDetailsCard
                     selectedItem={selectedItem}
                     backLabel={spotDetailsBackStack ? `Back to ${spotDetailsBackStack.length} spots` : undefined}
@@ -2031,7 +2037,17 @@ export const MapView: React.FC<MapViewProps> = ({
             </BottomSheet>
 
             {/* Departure prompt — inline, no SpotModal required */}
-            <BottomSheet isOpen={showDepartureSheet} ariaLabel="Set departure time" onClose={() => setShowDepartureSheet(false)}>
+            <BottomSheet isOpen={showDepartureSheet} ariaLabel="Set departure time" onClose={() => setShowDepartureSheet(false)} onNestedBack={() => {
+                if (myCarPingSuccess || myCarDepartureView !== 'timePicker') return false;
+                setMyCarDepartureError(null);
+                if (departureSheetOriginRef.current === 'prompt') {
+                    setMyCarDepartureView('prompt');
+                } else {
+                    setShowDepartureSheet(false);
+                    setShowSessionSheet(true);
+                }
+                return true;
+            }}>
                 {savedSpot && (
                     <div>
                         {/* Success / already-shared state */}

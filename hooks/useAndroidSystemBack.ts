@@ -53,6 +53,7 @@ export type ApplyAndroidBackEffects = {
   closeLegal: () => void;
   delegateMessages: () => void;
   delegateOnboarding: () => void;
+  delegateAssistant: () => void;
   minimize: () => void;
   /** Called when leaving EDIT_VEHICLE so onboarding flag clears like visible onBack. */
   clearVehicleOnboarding?: () => void;
@@ -79,6 +80,9 @@ export function applyAndroidBackAction(
       return;
     case 'delegateOnboarding':
       effects.delegateOnboarding();
+      return;
+    case 'delegateAssistant':
+      effects.delegateAssistant();
       return;
     case 'minimize':
       effects.minimize();
