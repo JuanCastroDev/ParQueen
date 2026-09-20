@@ -260,7 +260,7 @@ const es: Record<string, string> = {
     'my_car.remove_confirm': '¿Quitar este lugar de Mi carro?',
     'my_car.remove': 'Quitar',
     // My Car — post-save offer
-    'my_car.car_saved': 'Carro guardado.',
+    'my_car.car_saved': 'Carro guardado',
     'my_car.help_another_driver': '¿Quieres ayudar a otro conductor cuando te vayas?',
     'my_car.share_when_leaving': 'Compartir cuando me vaya',
     'my_car.not_now': 'Ahora no',

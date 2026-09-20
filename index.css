@@ -3548,6 +3548,136 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   color: color-mix(in srgb, var(--color-text-secondary) 80%, transparent);
 }
 
+
+/* Post-save confirmation sheet — compact ParQueen blue glass */
+.pq-postsave {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 2px 0 4px;
+  gap: 0;
+}
+.pq-postsave-hero {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 2px 0 14px;
+}
+.pq-postsave-hero-glow {
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 45%, rgba(56, 140, 255, 0.42) 0%, rgba(56, 140, 255, 0.12) 42%, transparent 70%);
+  filter: blur(6px);
+  pointer-events: none;
+}
+.pq-postsave-hero-ring {
+  position: relative;
+  z-index: 1;
+  width: 58px;
+  height: 58px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(120% 100% at 30% 15%, rgba(120, 180, 255, 0.28) 0%, transparent 55%),
+    linear-gradient(165deg, #132848 0%, #0a1528 48%, #0c1c38 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent, #3b8cff) 28%, rgba(120, 160, 210, 0.14));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.22),
+    inset 0 -10px 24px rgba(30, 90, 200, 0.18),
+    0 8px 22px rgba(0, 6, 20, 0.35),
+    0 0 28px rgba(56, 140, 255, 0.22);
+}
+.pq-postsave-hero-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #e8f3ff;
+  filter: drop-shadow(0 0 8px rgba(90, 170, 255, 0.55));
+}
+.pq-postsave-title {
+  margin: 0 0 6px;
+  font-size: 1.2rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--color-text);
+}
+.pq-postsave-sub {
+  margin: 0 0 18px;
+  max-width: 16.5rem;
+  font-size: 0.8125rem;
+  font-weight: 450;
+  line-height: 1.4;
+  color: color-mix(in srgb, var(--color-text-secondary) 88%, transparent);
+}
+.pq-postsave-cta {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 13px 16px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent, #3b8cff) 34%, rgba(100, 150, 210, 0.16));
+  font-size: 0.875rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #eaf4ff;
+  background:
+    radial-gradient(120% 140% at 50% -10%, rgba(90, 160, 255, 0.38) 0%, rgba(40, 110, 230, 0.12) 45%, transparent 70%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.02) 40%, rgba(0, 0, 0, 0.18) 100%),
+    linear-gradient(165deg, #12305a 0%, #0a1a36 50%, #0c2248 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.2),
+    inset 0 0 28px rgba(56, 140, 255, 0.14),
+    0 8px 18px rgba(0, 6, 18, 0.28),
+    0 0 22px rgba(56, 140, 255, 0.2);
+  transition: transform 150ms ease-out, box-shadow 150ms ease-out, border-color 150ms ease-out;
+}
+.pq-postsave-cta svg {
+  color: #9ec8ff;
+  filter: drop-shadow(0 0 6px rgba(90, 170, 255, 0.45));
+  flex-shrink: 0;
+}
+.pq-postsave-cta:active {
+  transform: scale(0.985);
+}
+.pq-postsave-dismiss {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: color-mix(in srgb, var(--color-text-secondary) 78%, transparent);
+  transition: transform 150ms ease-out, color 150ms ease-out, background 150ms ease-out, border-color 150ms ease-out;
+}
+.pq-postsave-dismiss:active {
+  transform: scale(0.98);
+  color: var(--color-text);
+  background: rgba(255, 255, 255, 0.045);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pq-postsave-cta,
+  .pq-postsave-dismiss {
+    transition: none;
+  }
+  .pq-postsave-cta:active,
+  .pq-postsave-dismiss:active {
+    transform: none;
+  }
+}
 /* My Car saved-location map marker - unified ParQueen blue pin */
 .pq-mycar-map-marker {
   position: relative;

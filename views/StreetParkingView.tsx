@@ -1998,30 +1998,35 @@ export const MapView: React.FC<MapViewProps> = ({
             {/* Post-save offer — shown once after saveMySpot() succeeds */}
             <BottomSheet isOpen={showPostSaveOffer} ariaLabel="Ping your spot" onClose={() => { setShowPostSaveOffer(false); setShowSessionSheet(true); }}>
                 {savedSpot && (
-                    <div className="text-center">
-                        <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4"
-                            style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>
-                            <Car size={26} className="text-white" />
+                    <div className="pq-postsave">
+                        <div className="pq-postsave-hero" aria-hidden="true">
+                            <span className="pq-postsave-hero-glow" />
+                            <div className="pq-postsave-hero-ring">
+                                <div className="pq-postsave-hero-icon">
+                                    <Car size={26} strokeWidth={1.85} />
+                                </div>
+                            </div>
                         </div>
-                        <p className="text-xl font-extrabold text-[var(--color-text)] mb-1">{t('my_car.car_saved')}</p>
-                        <p className="text-sm text-[var(--color-text-secondary)] mb-6">
-                            {t('my_car.help_another_driver')}
-                        </p>
+                        <h2 className="pq-postsave-title">{t('my_car.car_saved')}</h2>
+                        <p className="pq-postsave-sub">{t('my_car.help_another_driver')}</p>
                         <button
+                            type="button"
                             onClick={() => {
                                 departureSheetOriginRef.current = 'post_save';
                                 departureSheetInitialViewRef.current = 'timePicker';
                                 setShowPostSaveOffer(false);
                                 setShowDepartureSheet(true);
                             }}
-                            className="w-full py-3.5 rounded-full text-white font-bold text-sm flex items-center justify-center gap-2 active:scale-95 transition-transform mb-2"
-                            style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>
-                            <Clock size={16} />
-                            {t('my_car.share_when_leaving')}
+                            className="pq-postsave-cta"
+                        >
+                            <Clock size={16} strokeWidth={2.2} />
+                            <span>{t('my_car.share_when_leaving')}</span>
                         </button>
                         <button
+                            type="button"
                             onClick={() => { setShowPostSaveOffer(false); setShowSessionSheet(true); }}
-                            className="w-full py-2.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-all">
+                            className="pq-postsave-dismiss"
+                        >
                             {t('my_car.not_now')}
                         </button>
                     </div>
