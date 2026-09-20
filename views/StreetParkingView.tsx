@@ -1695,6 +1695,7 @@ export const MapView: React.FC<MapViewProps> = ({
                                 aria-pressed={reminderEnabled}
                                 className={`pq-mycar-remind-tile${reminderEnabled ? ' is-on' : ''}`}
                             >
+                                <span className="pq-mycar-remind-on" aria-hidden="true">On</span>
                                 <div className="pq-mycar-remind-tile-icon">
                                     <Bell size={16} />
                                 </div>
@@ -1705,6 +1706,7 @@ export const MapView: React.FC<MapViewProps> = ({
                                 aria-expanded={showRemindPanel || !!parkingTimer.timer}
                                 className={`pq-mycar-remind-tile${parkingTimer.timer || showRemindPanel ? ' is-on' : ''}`}
                             >
+                                <span className="pq-mycar-remind-on" aria-hidden="true">On</span>
                                 <div className="pq-mycar-remind-tile-icon">
                                     <Clock size={16} />
                                 </div>
