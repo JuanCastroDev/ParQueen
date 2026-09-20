@@ -182,7 +182,7 @@ export const AssistantView = ({ onBack, onOpenMyCar }: AssistantViewProps = {}) 
           type="button"
           onClick={mode === 'hub' ? (onBack ?? (() => {})) : backToHub}
           aria-label={mode === 'hub' ? t('assistant.back_map_aria') : t('assistant.back_hub_aria')}
-          className="w-11 h-11 rounded-full flex items-center justify-center bg-[var(--color-overlay)] border border-[var(--color-border)] text-[var(--color-text)] hover:bg-white/10 active:scale-95 focus-visible:ring-2 focus-visible:ring-[#38bdf8] focus-visible:outline-none transition-all shrink-0"
+          className="pq-assist-back focus-visible:outline-none"
         >
           <ChevronLeft size={20} />
         </button>

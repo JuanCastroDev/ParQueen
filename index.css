@@ -1618,19 +1618,75 @@ html, body, #root {
 }
 
 /* ── AI Parking Assistant — tool cards & results ─────────────────────────────
-   One visual family for all three tools. Colours come from the theme variables
-   so light mode is a real design rather than an inversion. Sits above the
-   @tailwind directives with the rest of the semantic rules — see the banner
-   below, and utils/tailwindCascade.test.ts.
+   One visual family for all three tools. Material language matches map-search-
+   shell / map-ai-action / mobile-shell: deep navy glass, soft blue rim, restrained
+   ambient glow. Featured Scan relates to map-ai-action but stays quieter than Ping.
+   Colours come from theme / shell variables. Sits above the @tailwind directives
+   with the rest of the semantic rules — see the banner below, and
+   utils/tailwindCascade.test.ts.
    ───────────────────────────────────────────────────────────────────────── */
 .pq-tools-hub {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding-top: 2px;
 }
+/* Barely-perceptible navy/blue ambient behind the upper tool-card cluster */
+.pq-tools-hub::before {
+  content: '';
+  position: absolute;
+  left: -8%;
+  right: -8%;
+  top: -6%;
+  height: 58%;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(70% 55% at 50% 18%, rgba(56, 140, 255, 0.07) 0%, rgba(20, 60, 120, 0.03) 42%, transparent 72%);
+  opacity: 0.85;
+}
+.pq-tools-hub > * {
+  position: relative;
+  z-index: 1;
+}
 
-/* Featured Scan — richer navy/glass, compact, not a giant empty card */
+/* Floating-glass hub / tool back control — dark navy glass, soft rim, no neon */
+.pq-assist-back {
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 9999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--color-text);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.015) 42%, rgba(0, 0, 0, 0.16) 100%),
+    linear-gradient(165deg, #0c182c 0%, #08111f 55%, #0a1528 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 16%, rgba(100, 130, 170, 0.18));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.12),
+    0 6px 16px rgba(0, 4, 14, 0.28),
+    0 0 12px rgba(56, 140, 255, 0.06);
+  backdrop-filter: blur(18px) saturate(1.1);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
+  transition: transform 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out, background 150ms ease-out;
+}
+.pq-assist-back:hover {
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 24%, rgba(110, 150, 200, 0.22));
+  box-shadow:
+    inset 0 1px 0 rgba(230, 242, 255, 0.16),
+    0 8px 18px rgba(0, 4, 14, 0.32),
+    0 0 14px rgba(56, 140, 255, 0.09);
+}
+.pq-assist-back:active { transform: scale(0.95); }
+.pq-assist-back:focus-visible {
+  outline: 2px solid var(--mobile-shell-focus, #82bdff);
+  outline-offset: 2px;
+}
+
+/* Featured Scan — richer navy glass like map-ai-action; quieter glow than Ping */
 .pq-tool-featured {
   position: relative;
   display: flex;
@@ -1640,14 +1696,19 @@ html, body, #root {
   border-radius: 20px;
   overflow: hidden;
   background:
-    radial-gradient(120% 90% at 12% 0%, rgba(56, 148, 255, 0.22) 0%, transparent 55%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.02) 40%, rgba(0, 0, 0, 0.18) 100%),
-    linear-gradient(165deg, #0e1a30 0%, #08111f 52%, #0a1528 100%);
-  border: 1px solid rgba(120, 170, 230, 0.16);
+    radial-gradient(120% 90% at 18% 12%, rgba(77, 148, 255, 0.14) 0%, rgba(77, 148, 255, 0.03) 42%, transparent 68%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.02) 38%, rgba(0, 0, 0, 0.18) 100%),
+    linear-gradient(165deg, #0c1a30 0%, #08111f 48%, #0a1730 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 22%, rgba(90, 130, 180, 0.16));
   box-shadow:
-    inset 0 1px 0 rgba(210, 230, 255, 0.14),
+    inset 0 1px 0 rgba(236, 246, 255, 0.18),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.28),
     0 10px 26px rgba(0, 4, 14, 0.36),
-    0 0 28px rgba(56, 140, 255, 0.12);
+    0 2px 8px rgba(0, 4, 14, 0.20),
+    0 0 22px rgba(77, 148, 255, 0.12),
+    0 0 36px rgba(77, 148, 255, 0.05);
+  backdrop-filter: blur(22px) saturate(1.12);
+  -webkit-backdrop-filter: blur(22px) saturate(1.12);
   transition: transform 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
 }
 .pq-tool-featured::before {
@@ -1657,18 +1718,22 @@ html, body, #root {
   right: 12%;
   top: 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(180, 220, 255, 0.45), transparent);
+  background: linear-gradient(90deg, transparent, rgba(200, 230, 255, 0.42), transparent);
   pointer-events: none;
 }
 .pq-tool-featured:hover {
-  border-color: rgba(127, 193, 255, 0.28);
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 32%, rgba(110, 160, 220, 0.22));
   box-shadow:
-    inset 0 1px 0 rgba(210, 230, 255, 0.18),
+    inset 0 1px 0 rgba(236, 246, 255, 0.22),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.24),
     0 12px 28px rgba(0, 4, 14, 0.40),
-    0 0 32px rgba(56, 140, 255, 0.16);
+    0 2px 8px rgba(0, 4, 14, 0.22),
+    0 0 26px rgba(77, 148, 255, 0.15),
+    0 0 40px rgba(77, 148, 255, 0.06);
 }
 .pq-tool-featured:active { transform: scale(0.985); }
 
+/* Luminous glass well — translucent blue glass holding bright shell-accent icon */
 .pq-tool-featured-icon {
   position: relative;
   z-index: 1;
@@ -1678,12 +1743,17 @@ html, body, #root {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
-  background: linear-gradient(150deg, #1a6dff, #3aa0ff);
+  color: #38bdf8;
+  background:
+    radial-gradient(120% 100% at 50% 18%, rgba(77, 148, 255, 0.22) 0%, rgba(77, 148, 255, 0.05) 48%, transparent 72%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.02) 45%, rgba(0, 0, 0, 0.22) 100%),
+    linear-gradient(160deg, rgba(12, 28, 52, 0.92) 0%, rgba(6, 14, 28, 0.96) 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 28%, rgba(100, 140, 190, 0.20));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.26),
-    0 0 18px rgba(56, 148, 255, 0.38),
-    0 6px 16px rgba(20, 90, 220, 0.32);
+    inset 0 1px 0 rgba(236, 246, 255, 0.22),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.28),
+    0 0 16px rgba(56, 189, 248, 0.18),
+    0 4px 12px rgba(0, 4, 14, 0.28);
 }
 .pq-tool-featured-body {
   position: relative;
@@ -1704,10 +1774,10 @@ html, body, #root {
 .pq-tool-featured-desc {
   font-size: 12px;
   line-height: 1.35;
-  color: color-mix(in srgb, var(--color-text-secondary) 92%, transparent);
+  color: color-mix(in srgb, var(--color-text-secondary) 78%, transparent);
 }
 
-/* Secondary 2-col dashboard tiles */
+/* Secondary 2-col dashboard tiles — same navy glass family as Scan */
 .pq-tools-secondary {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1726,13 +1796,17 @@ html, body, #root {
   text-align: left;
   overflow: hidden;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.012) 45%, rgba(0, 0, 0, 0.14) 100%),
-    linear-gradient(180deg, #0c1526 0%, #080f1c 100%);
-  border: 1px solid rgba(120, 160, 210, 0.12);
+    radial-gradient(110% 80% at 20% 0%, rgba(77, 148, 255, 0.06) 0%, transparent 55%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.015) 42%, rgba(0, 0, 0, 0.16) 100%),
+    linear-gradient(165deg, #0c182c 0%, #08111f 52%, #0a1528 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 16%, rgba(90, 130, 180, 0.14));
   box-shadow:
-    inset 0 1px 0 rgba(210, 230, 255, 0.08),
-    0 8px 20px rgba(0, 4, 14, 0.28),
-    0 0 14px rgba(56, 140, 255, 0.04);
+    inset 0 1px 0 rgba(230, 242, 255, 0.12),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.22),
+    0 8px 20px rgba(0, 4, 14, 0.30),
+    0 0 14px rgba(56, 140, 255, 0.05);
+  backdrop-filter: blur(18px) saturate(1.08);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
   transition: transform 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
 }
 .pq-tool-tile::before {
@@ -1741,17 +1815,19 @@ html, body, #root {
   inset: 0;
   border-radius: inherit;
   pointer-events: none;
-  background: linear-gradient(145deg, rgba(120, 180, 255, 0.07), transparent 48%);
+  background: linear-gradient(145deg, rgba(120, 180, 255, 0.05), transparent 48%);
 }
 .pq-tool-tile:hover {
-  border-color: rgba(127, 193, 255, 0.20);
+  border-color: color-mix(in srgb, var(--mobile-shell-accent) 26%, rgba(110, 160, 220, 0.20));
   box-shadow:
-    inset 0 1px 0 rgba(210, 230, 255, 0.12),
-    0 10px 22px rgba(0, 4, 14, 0.32),
+    inset 0 1px 0 rgba(230, 242, 255, 0.16),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.18),
+    0 10px 22px rgba(0, 4, 14, 0.34),
     0 0 16px rgba(56, 140, 255, 0.08);
 }
 .pq-tool-tile:active { transform: scale(0.985); }
 
+/* Icon wells sit in dark glass; semantic red/green only as muted washes */
 .pq-tool-tile-icon {
   position: relative;
   z-index: 1;
@@ -1761,26 +1837,39 @@ html, body, #root {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
-  background: linear-gradient(150deg, #1a6dff, #3aa0ff);
+  color: #38bdf8;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(0, 0, 0, 0.18) 100%),
+    linear-gradient(160deg, rgba(10, 24, 44, 0.95) 0%, rgba(6, 14, 28, 0.98) 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 18%, rgba(90, 130, 180, 0.16));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.20),
-    0 0 12px rgba(56, 148, 255, 0.24),
-    0 4px 10px rgba(20, 90, 220, 0.24);
+    inset 0 1px 0 rgba(230, 242, 255, 0.14),
+    0 0 10px rgba(56, 189, 248, 0.10),
+    0 3px 8px rgba(0, 4, 14, 0.24);
 }
 .pq-tool--hydrant .pq-tool-tile-icon {
-  background: linear-gradient(150deg, #c83248, #f07362);
+  color: color-mix(in srgb, #f87171 82%, #fff 18%);
+  background:
+    radial-gradient(120% 100% at 50% 20%, rgba(248, 113, 113, 0.16) 0%, rgba(248, 113, 113, 0.04) 48%, transparent 70%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(0, 0, 0, 0.20) 100%),
+    linear-gradient(160deg, rgba(18, 14, 24, 0.96) 0%, rgba(8, 10, 20, 0.98) 100%);
+  border: 1px solid color-mix(in srgb, #f87171 22%, rgba(90, 110, 140, 0.16));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    0 0 12px rgba(240, 100, 90, 0.22),
-    0 4px 10px rgba(200, 50, 70, 0.22);
+    inset 0 1px 0 rgba(255, 220, 220, 0.10),
+    0 0 10px rgba(248, 113, 113, 0.10),
+    0 3px 8px rgba(0, 4, 14, 0.24);
 }
 .pq-tool--check .pq-tool-tile-icon {
-  background: linear-gradient(150deg, #0d9466, #2fd193);
+  color: color-mix(in srgb, #34d399 80%, #fff 20%);
+  background:
+    radial-gradient(120% 100% at 50% 20%, rgba(52, 211, 153, 0.14) 0%, rgba(52, 211, 153, 0.04) 48%, transparent 70%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(0, 0, 0, 0.20) 100%),
+    linear-gradient(160deg, rgba(10, 22, 28, 0.96) 0%, rgba(6, 14, 22, 0.98) 100%);
+  border: 1px solid color-mix(in srgb, #34d399 20%, rgba(90, 120, 140, 0.16));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    0 0 12px rgba(47, 209, 147, 0.20),
-    0 4px 10px rgba(15, 150, 100, 0.22);
+    inset 0 1px 0 rgba(220, 255, 240, 0.10),
+    0 0 10px rgba(52, 211, 153, 0.09),
+    0 3px 8px rgba(0, 4, 14, 0.24);
 }
 .pq-tool-tile-label {
   position: relative;
@@ -1796,13 +1885,13 @@ html, body, #root {
 .pq-tool-card {
   position: relative;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.055) 0%, rgba(255, 255, 255, 0.015) 42%, rgba(0, 0, 0, 0.14) 100%),
-    linear-gradient(180deg, #0c1526 0%, #080f1c 100%);
-  border: 1px solid rgba(120, 160, 210, 0.12);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.015) 42%, rgba(0, 0, 0, 0.14) 100%),
+    linear-gradient(165deg, #0c182c 0%, #08111f 55%, #0a1528 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 14%, rgba(90, 130, 180, 0.12));
   box-shadow:
-    inset 0 1px 0 rgba(210, 230, 255, 0.10),
+    inset 0 1px 0 rgba(230, 242, 255, 0.10),
     0 8px 22px rgba(0, 4, 14, 0.30),
-    0 0 18px rgba(56, 140, 255, 0.06);
+    0 0 16px rgba(56, 140, 255, 0.05);
   transition: transform 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
 }
 .pq-tool-icon {
@@ -1814,17 +1903,20 @@ html, body, #root {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
-  background: linear-gradient(150deg, #1a6dff, #3aa0ff);
+  color: #38bdf8;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(0, 0, 0, 0.18) 100%),
+    linear-gradient(160deg, rgba(10, 24, 44, 0.95) 0%, rgba(6, 14, 28, 0.98) 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 20%, rgba(90, 130, 180, 0.16));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.22),
-    0 0 14px rgba(56, 148, 255, 0.28),
-    0 4px 12px rgba(20, 90, 220, 0.28);
+    inset 0 1px 0 rgba(230, 242, 255, 0.14),
+    0 0 12px rgba(56, 189, 248, 0.12),
+    0 3px 10px rgba(0, 4, 14, 0.24);
 }
 .pq-tool-chevron {
   position: relative;
   z-index: 1;
-  color: rgba(160, 180, 205, 0.45);
+  color: color-mix(in srgb, var(--mobile-shell-text-muted, rgba(160, 180, 205, 0.55)) 70%, transparent);
 }
 
 .pq-tools-recent {
@@ -1837,8 +1929,9 @@ html, body, #root {
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: none;
-  color: color-mix(in srgb, var(--color-text-secondary) 88%, transparent);
+  color: color-mix(in srgb, var(--color-text-secondary) 78%, transparent);
 }
+/* Quieter than tool cards — darker translucent navy, minimal glow */
 .pq-tools-recent-empty-panel {
   display: flex;
   flex-direction: column;
@@ -1847,10 +1940,10 @@ html, body, #root {
   padding: 14px 14px 13px;
   border-radius: 16px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035) 0%, rgba(0, 0, 0, 0.10) 100%),
-    linear-gradient(180deg, #0a1322 0%, #070e18 100%);
-  border: 1px solid rgba(120, 160, 210, 0.09);
-  box-shadow: inset 0 1px 0 rgba(210, 230, 255, 0.05);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.028) 0%, rgba(0, 0, 0, 0.14) 100%),
+    linear-gradient(180deg, #08101c 0%, #060b14 100%);
+  border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 8%, rgba(70, 100, 140, 0.10));
+  box-shadow: inset 0 1px 0 rgba(210, 230, 255, 0.06);
 }
 .pq-tools-recent-empty-icon {
   display: flex;
@@ -1860,21 +1953,22 @@ html, body, #root {
   height: 28px;
   margin-bottom: 4px;
   border-radius: 9px;
-  color: rgba(160, 180, 205, 0.70);
-  background: rgba(120, 160, 210, 0.08);
+  color: color-mix(in srgb, #7aa0c4 70%, rgba(160, 180, 205, 0.55) 30%);
+  background: rgba(80, 120, 170, 0.08);
+  border: 1px solid rgba(100, 140, 180, 0.10);
 }
 .pq-tools-recent-empty-title {
   margin: 0;
   font-size: 13.5px;
   font-weight: 650;
   line-height: 1.3;
-  color: color-mix(in srgb, var(--color-text) 88%, transparent);
+  color: color-mix(in srgb, var(--color-text) 84%, transparent);
 }
 .pq-tools-recent-empty {
   margin: 0;
   font-size: 12px;
   line-height: 1.35;
-  color: color-mix(in srgb, var(--color-text-secondary) 82%, transparent);
+  color: color-mix(in srgb, var(--color-text-secondary) 72%, transparent);
 }
 
 /* Result surfaces. Tone is reinforced by an icon and words, never colour alone. */
@@ -1919,11 +2013,14 @@ html, body, #root {
 @media (prefers-reduced-motion: reduce) {
   .pq-tool-card,
   .pq-tool-featured,
-  .pq-tool-tile { transition: none; }
+  .pq-tool-tile,
+  .pq-assist-back { transition: none; }
   .pq-tool-card:active,
   .pq-tool-featured:active,
-  .pq-tool-tile:active { transform: none; }
+  .pq-tool-tile:active,
+  .pq-assist-back:active { transform: none; }
 }
+
 
 /* -- Nearby Activity ------------------------------------------------------
    Live-feed visual language. Same family as the AI Parking Assistant cards:
