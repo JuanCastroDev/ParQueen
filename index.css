@@ -3300,7 +3300,7 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   padding: 0 12px;
   border-radius: 14px;
   text-align: left;
-  overflow: hidden;
+  overflow: visible;
   background:
     radial-gradient(110% 80% at 12% 0%, rgba(77, 148, 255, 0.05) 0%, transparent 55%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.012) 42%, rgba(0, 0, 0, 0.14) 100%),
@@ -3334,40 +3334,43 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   pointer-events: none;
 }
 .pq-mycar-remind-tile.is-on {
-  border-color: rgba(77, 148, 255, 0.50);
-  color: #eaf4ff;
+  border-color: rgba(77, 148, 255, 0.62);
+  color: #f2f8ff;
   box-shadow:
-    inset 0 1px 0 rgba(200, 230, 255, 0.20),
-    inset 0 0 28px rgba(56, 140, 255, 0.12),
+    inset 0 1px 0 rgba(210, 235, 255, 0.24),
+    inset 0 0 34px rgba(56, 140, 255, 0.16),
     0 6px 16px rgba(0, 4, 14, 0.28),
-    0 0 22px rgba(56, 140, 255, 0.24);
+    0 0 28px rgba(56, 140, 255, 0.32);
   background:
-    radial-gradient(120% 100% at 14% 0%, rgba(77, 148, 255, 0.30) 0%, rgba(56, 140, 255, 0.10) 42%, transparent 70%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.02) 42%, rgba(0, 0, 0, 0.14) 100%),
-    linear-gradient(165deg, #102440 0%, #0b1a30 52%, #0d2038 100%);
+    radial-gradient(125% 110% at 16% 0%, rgba(77, 148, 255, 0.40) 0%, rgba(56, 140, 255, 0.14) 40%, transparent 68%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.025) 42%, rgba(0, 0, 0, 0.14) 100%),
+    linear-gradient(165deg, #123050 0%, #0c1c34 52%, #0e2440 100%);
 }
 .pq-mycar-remind-on {
   position: absolute;
-  top: 7px;
-  right: 8px;
-  z-index: 2;
-  padding: 1px 6px;
+  top: 6px;
+  right: 7px;
+  z-index: 3;
+  padding: 2px 7px;
   border-radius: 999px;
   font-size: 9px;
-  font-weight: 650;
-  letter-spacing: 0.02em;
-  line-height: 1.35;
-  color: #b9dcff;
-  background: rgba(56, 140, 255, 0.18);
-  border: 1px solid rgba(77, 148, 255, 0.34);
-  box-shadow: 0 0 8px rgba(56, 140, 255, 0.16);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.3;
+  text-transform: uppercase;
+  color: #d7ebff;
+  background: rgba(56, 140, 255, 0.28);
+  border: 1px solid rgba(120, 185, 255, 0.48);
+  box-shadow: 0 0 10px rgba(56, 140, 255, 0.28);
   opacity: 0;
+  visibility: hidden;
   transform: translateY(-1px);
   pointer-events: none;
-  transition: opacity 180ms ease-out, transform 180ms ease-out;
+  transition: opacity 180ms ease-out, transform 180ms ease-out, visibility 180ms ease-out;
 }
 .pq-mycar-remind-tile.is-on .pq-mycar-remind-on {
   opacity: 1;
+  visibility: visible;
   transform: translateY(0);
 }
 .pq-mycar-remind-tile-icon {
@@ -3383,10 +3386,10 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   transition: background 180ms ease-out, border-color 180ms ease-out, color 180ms ease-out, box-shadow 180ms ease-out;
 }
 .pq-mycar-remind-tile.is-on .pq-mycar-remind-tile-icon {
-  color: #9fd0ff;
-  background: rgba(56, 140, 255, 0.22);
-  border-color: rgba(100, 175, 255, 0.42);
-  box-shadow: 0 0 12px rgba(56, 140, 255, 0.28), inset 0 1px 0 rgba(220, 240, 255, 0.18);
+  color: #ffffff;
+  background: rgba(56, 140, 255, 0.34);
+  border-color: rgba(140, 200, 255, 0.55);
+  box-shadow: 0 0 14px rgba(56, 140, 255, 0.40), inset 0 1px 0 rgba(230, 245, 255, 0.28);
 }
 .pq-mycar-remind-tile-label {
   font-size: 12px;
