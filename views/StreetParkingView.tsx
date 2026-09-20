@@ -1039,17 +1039,42 @@ export const MapView: React.FC<MapViewProps> = ({
         if (!loc?.lat || !loc?.lng) return;
 
         const el = document.createElement('div');
-        el.style.cssText = 'position:relative;display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:10;overflow:visible';
+        el.className = 'pq-mycar-map-marker';
+        el.setAttribute('role', 'img');
+        el.setAttribute('aria-label', loc.address || t('my_car.last_parked_here'));
         el.innerHTML = `
-            <div style="width:46px;height:46px;flex-shrink:0;pointer-events:none;">
-              <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%;filter:drop-shadow(0px 4px 10px rgba(30,117,255,0.5));">
-                <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" fill="#1e75ff"/>
-                <g transform="translate(12,10) scale(0.38) translate(-12,-12)">
-                  <path d="m2 4 3 12h14l3-12-6 5-4-5-4 5-6-5z" fill="none" stroke="#facc15" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
-                  <line x1="5" y1="16" x2="19" y2="16" stroke="#facc15" stroke-width="2.2" stroke-linecap="round"/>
-                </g>
-              </svg>
-            </div>
+            <span class="pq-mycar-map-marker-halo" aria-hidden="true"></span>
+            <svg class="pq-mycar-map-marker-svg" viewBox="0 0 48 62" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <defs>
+                <linearGradient id="pqMycarPinBody" x1="24" y1="4" x2="24" y2="48" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#5aa8ff"/>
+                  <stop offset="48%" stop-color="#2f7fff"/>
+                  <stop offset="100%" stop-color="#1659d8"/>
+                </linearGradient>
+                <linearGradient id="pqMycarPinSheen" x1="14" y1="6" x2="34" y2="34" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#ffffff" stop-opacity="0.38"/>
+                  <stop offset="55%" stop-color="#ffffff" stop-opacity="0.06"/>
+                  <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+                </linearGradient>
+                <filter id="pqMycarPinSoft" x="-40%" y="-40%" width="180%" height="180%">
+                  <feDropShadow dx="0" dy="4" stdDeviation="3.5" flood-color="#1e75ff" flood-opacity="0.45"/>
+                </filter>
+              </defs>
+              <!-- unified pin + tip -->
+              <path filter="url(#pqMycarPinSoft)" fill="url(#pqMycarPinBody)" d="M24 3.5c-9.2 0-16.6 7.4-16.6 16.5 0 11.8 14.2 28.2 15.8 30 0.4 0.45 1.2 0.45 1.6 0 1.6-1.8 15.8-18.2 15.8-30C40.6 10.9 33.2 3.5 24 3.5z"/>
+              <path fill="url(#pqMycarPinSheen)" d="M24 3.5c-9.2 0-16.6 7.4-16.6 16.5 0 11.8 14.2 28.2 15.8 30 0.4 0.45 1.2 0.45 1.6 0 1.6-1.8 15.8-18.2 15.8-30C40.6 10.9 33.2 3.5 24 3.5z" opacity="0.9"/>
+              <circle cx="24" cy="20" r="10.2" fill="rgba(6,18,40,0.28)" stroke="rgba(210,235,255,0.28)" stroke-width="1"/>
+              <!-- car glyph -->
+              <g fill="none" stroke="#eaf6ff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M15.6 22.2h16.8l-1.4-4.1c-0.3-0.9-1.1-1.5-2.1-1.5H19.1c-0.9 0-1.8 0.6-2.1 1.5l-1.4 4.1z"/>
+                <path d="M14.4 22.2h19.2v3.4c0 0.7-0.6 1.3-1.3 1.3h-1.1c-0.5 0-0.9-0.3-1.1-0.7l-0.2-0.5H18.1l-0.2 0.5c-0.2 0.4-0.6 0.7-1.1 0.7h-1.1c-0.7 0-1.3-0.6-1.3-1.3v-3.4z" fill="rgba(234,246,255,0.12)"/>
+                <circle cx="18.2" cy="26.8" r="1.15" fill="#eaf6ff" stroke="none"/>
+                <circle cx="29.8" cy="26.8" r="1.15" fill="#eaf6ff" stroke="none"/>
+              </g>
+              <!-- ground anchor -->
+              <ellipse cx="24" cy="57.2" rx="5.2" ry="2.1" fill="rgba(30,117,255,0.35)"/>
+              <ellipse cx="24" cy="57.2" rx="2.4" ry="1.05" fill="rgba(210,235,255,0.85)"/>
+            </svg>
         `;
         el.title = loc.address || t('my_car.last_parked_here');
 
