@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { AppView } from '../types';
-import { MapPin, Check, Locate, X, Bell, Clock, ChevronRight, ChevronLeft, Users, Car, Navigation, CheckCircle2, Calendar } from 'lucide-react';
+import { MapPin, Check, Locate, X, Bell, Clock, ChevronRight, ChevronLeft, Users, Car, Navigation, CheckCircle2 } from 'lucide-react';
 import { db } from '../firebase';
 import { collection, addDoc, Timestamp, doc, deleteDoc, writeBatch, updateDoc, getDocs, getDoc, setDoc, where, query, orderBy, startAt, endAt, serverTimestamp, limit } from 'firebase/firestore';
 import { auth } from '../firebaseConfig';
@@ -32,6 +32,7 @@ const reverseGeocode = async (lng: number, lat: number): Promise<string> => {
 import { MapItem, MapViewProps } from './street-parking/types';
 import { SpotModal } from './street-parking/SpotModal';
 import { TimePicker } from './street-parking/TimePicker';
+import { GlassDatePicker } from './street-parking/GlassDatePicker';
 import { localDateStr, combineDateAndTime } from './street-parking/dateUtils';
 import { useSearch } from './street-parking/useSearch';
 import { useSpotData } from './street-parking/useSpotData';
@@ -2144,16 +2145,12 @@ export const MapView: React.FC<MapViewProps> = ({
 
                                 <div className="pq-depart-section">
                                     <p className="pq-depart-label">{t('ping_modal.date')}</p>
-                                    <label className="pq-depart-date">
-                                        <input
-                                            type="date"
+                                    <GlassDatePicker
+                                            id="pq-depart-date"
                                             value={myCarDepartureDate}
                                             min={localDateStr()}
-                                            onChange={e => { if (e.target.value) setMyCarDepartureDate(e.target.value); }}
-                                            className="pq-depart-date-input"
+                                            onChange={setMyCarDepartureDate}
                                         />
-                                        <Calendar size={16} strokeWidth={2} className="pq-depart-date-icon" aria-hidden="true" />
-                                    </label>
                                 </div>
 
                                 <div className="pq-depart-section">

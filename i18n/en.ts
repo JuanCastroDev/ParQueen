@@ -109,6 +109,7 @@ const en: Record<string, string> = {
     'ping_modal.schedule_subtitle': 'Choose the date and time for your Ping.',
     'ping_modal.schedule_helper': 'Nearby drivers will see your Ping at the scheduled time.',
     'ping_modal.today': 'Today',
+    'ping_modal.clear': 'Clear',
     'ping_modal.confirm': 'Ping Spot',
     'ping_modal.update': 'Update Spot',
     'ping_modal.set_departure': 'Set departure time',

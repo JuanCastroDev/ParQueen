@@ -109,6 +109,7 @@ const es: Record<string, string> = {
     'ping_modal.schedule_subtitle': 'Elige la fecha y la hora de tu Ping.',
     'ping_modal.schedule_helper': 'Los conductores cercanos verán tu Ping a la hora programada.',
     'ping_modal.today': 'Hoy',
+    'ping_modal.clear': 'Borrar',
     'ping_modal.confirm': 'Hacer ping',
     'ping_modal.update': 'Actualizar ping',
     'ping_modal.set_departure': 'Hora de salida',
