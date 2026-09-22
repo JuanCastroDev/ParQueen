@@ -13,12 +13,7 @@ function validateShadowAccuracy(value) {
   return { ok: true, value };
 }
 
-function evaluatePreSourceEligibility(input = {}) {
-  if (input.mode !== 'shadow') return { eligible: false, reason: 'mode_off' };
-  const samplingAuthorized = input.samplePermille === 0
-    ? input.operatorAuthorized === true
-    : input.sampleSelected === true;
-  if (!samplingAuthorized) return { eligible: false, reason: 'sample_not_authorized' };
+function evaluateSafeEvidence(input = {}) {
   const accuracy = validateShadowAccuracy(input.accuracyMeters);
   if (!accuracy.ok) return { eligible: false, reason: accuracy.reason };
   if (input.productionPath !== 'nyc_open_data_fallback') {
@@ -36,6 +31,21 @@ function evaluatePreSourceEligibility(input = {}) {
   return { eligible: true };
 }
 
+function evaluatePreSourceEligibility(input = {}) {
+  if (input.mode !== 'shadow') return { eligible: false, reason: 'mode_off' };
+  const samplingAuthorized = input.samplePermille === 0
+    ? input.operatorAuthorized === true
+    : input.sampleSelected === true;
+  if (!samplingAuthorized) return { eligible: false, reason: 'sample_not_authorized' };
+  return evaluateSafeEvidence(input);
+}
+
+function evaluateProductPathEligibility(input = {}) {
+  if (input.productPath !== 'on') return { eligible: false, reason: 'product_path_off' };
+  if (input.mode !== 'shadow') return { eligible: false, reason: 'mode_off' };
+  return evaluateSafeEvidence(input);
+}
+
 function deterministicSampleSelected(basis, samplePermille) {
   if (typeof basis !== 'string' || !basis || !Number.isInteger(samplePermille)
     || samplePermille <= 0 || samplePermille > 1000) return false;
@@ -48,5 +58,6 @@ module.exports = {
   MAX_SHADOW_ACCURACY_METERS,
   validateShadowAccuracy,
   evaluatePreSourceEligibility,
+  evaluateProductPathEligibility,
   deterministicSampleSelected,
 };

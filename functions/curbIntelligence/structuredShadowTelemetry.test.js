@@ -68,6 +68,12 @@ describe('strict cleaning-shadow structured telemetry', () => {
     expect(validateCleaningShadowTelemetry({ ...valid, engineVersion: '0212261301' }).ok).toBe(false);
   });
 
+  it('accepts the pre-release product cohort without treating it as organic sampled', () => {
+    const result = validateCleaningShadowTelemetry({ ...valid, cohort: 'pre_release_product' });
+    expect(result.ok).toBe(true);
+    expect(result.telemetry.cohort).toBe('pre_release_product');
+  });
+
   it('accepts the bounded relationship-timeout reason without accepting raw error details', () => {
     const result = validateCleaningShadowTelemetry({
       ...valid,

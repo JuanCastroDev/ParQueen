@@ -6,6 +6,7 @@ const {
   curbResolverMode,
   curbResolverUrl,
   curbShadowSamplePermille,
+  curbProductPath,
   readPrivateResolverConfig,
 } = require('./privateBlockfaceResolverConfig');
 
@@ -19,6 +20,8 @@ describe('private resolver backend configuration', () => {
     expect(curbResolverUrl.options.default).toBe('');
     expect(curbShadowSamplePermille.name).toBe('CURB_SHADOW_SAMPLE_PERMILLE');
     expect(curbShadowSamplePermille.options.default).toBe('0');
+    expect(curbProductPath.name).toBe('CURB_PRODUCT_PATH');
+    expect(curbProductPath.options.default).toBe('off');
   });
 
   it.each([undefined, '', 'OFF', 'enabled', 'invalid'])('keeps unsupported mode %s disabled', mode => {
@@ -26,15 +29,18 @@ describe('private resolver backend configuration', () => {
       mode: { value: () => mode },
       url: { value: () => 'https://example.run.app' },
     });
-    expect(config).toEqual({ mode: 'off', serviceUrl: '', samplePermille: 0 });
+    expect(config).toEqual({ mode: 'off', serviceUrl: '', samplePermille: 0, productPath: 'off' });
   });
 
   it('exposes the URL only when shadow is explicitly selected', () => {
     const config = readPrivateResolverConfig({
       mode: { value: () => 'shadow' },
       url: { value: () => 'https://example.run.app' },
+      productPath: { value: () => 'off' },
     });
-    expect(config).toEqual({ mode: 'shadow', serviceUrl: 'https://example.run.app', samplePermille: 0 });
+    expect(config).toEqual({
+      mode: 'shadow', serviceUrl: 'https://example.run.app', samplePermille: 0, productPath: 'off',
+    });
   });
 
   it.each([
@@ -45,17 +51,21 @@ describe('private resolver backend configuration', () => {
       mode: { value: () => 'shadow' },
       url: { value: () => 'https://example.run.app' },
       samplePermille: { value: () => value },
+      productPath: { value: () => 'off' },
     });
     expect(config.samplePermille).toBe(expected);
   });
 
   it('lists every curb string param in the project dotenv so the emulator cannot prompt', () => {
     const dotenv = readFileSync(PROJECT_DOTENV, 'utf8');
-    for (const name of [curbResolverMode.name, curbResolverUrl.name, curbShadowSamplePermille.name]) {
+    for (const name of [
+      curbResolverMode.name, curbResolverUrl.name, curbShadowSamplePermille.name, curbProductPath.name,
+    ]) {
       expect(dotenv).toMatch(new RegExp(`^${name}=`, 'm'));
     }
     expect(dotenv).toMatch(/^CURB_RESOLVER_MODE=shadow$/m);
     expect(dotenv).toMatch(/^CURB_SHADOW_SAMPLE_PERMILLE=100$/m); // Phase 2A.21 first organic cohort
+    expect(dotenv).toMatch(/^CURB_PRODUCT_PATH=on$/m);
     expect(dotenv).toMatch(
       /^CURB_RESOLVER_URL=https:\/\/parqueen-curb-resolver-spike-oxbozdhlwa-uc\.a\.run\.app$/m,
     );
@@ -63,8 +73,10 @@ describe('private resolver backend configuration', () => {
 
   it('does not read URL or sampling configuration while mode is off', () => {
     const unread = { value: vi.fn(() => { throw new Error('must stay unread'); }) };
-    expect(readPrivateResolverConfig({ mode: { value: () => 'off' }, url: unread, samplePermille: unread }))
-      .toEqual({ mode: 'off', serviceUrl: '', samplePermille: 0 });
+    expect(readPrivateResolverConfig({
+      mode: { value: () => 'off' }, url: unread, samplePermille: unread, productPath: unread,
+    }))
+      .toEqual({ mode: 'off', serviceUrl: '', samplePermille: 0, productPath: 'off' });
     expect(unread.value).not.toHaveBeenCalled();
   });
 });
