@@ -99,6 +99,27 @@ describe('minimum cleaning shadow controls', () => {
       .toEqual({ eligible: false, reason: 'product_path_off' });
     expect(evaluateProductPathEligibility({
       ...eligible, productPath: 'on', productionPath: 'sweepnyc',
+    })).toEqual({ eligible: true });
+    expect(evaluateProductPathEligibility({
+      ...eligible,
+      productPath: 'on',
+      productionPath: 'sweepnyc',
+      legacyEvidence: {
+        segment: {
+          source: 'sweepnyc', provenance: { provider: 'sweepnyc' }, status: 'active',
+          confidenceScore: 0.95, confidence: { level: 'community' },
+        },
+        activeRules: [{
+          type: 'streetCleaning', source: 'sweepnyc', status: 'active',
+          schedules: [
+            { side: 'East', days: ['Tue'], startTime: '08:30', endTime: '10:00' },
+            { side: 'West', days: ['Wed'], startTime: '08:30', endTime: '10:00' },
+          ],
+        }],
+      },
+    })).toEqual({ eligible: true });
+    expect(evaluatePreSourceEligibility({
+      ...eligible, productionPath: 'sweepnyc',
     })).toEqual({ eligible: false, reason: 'production_path_ineligible' });
   });
 });

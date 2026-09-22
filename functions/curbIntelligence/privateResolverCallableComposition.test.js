@@ -39,5 +39,6 @@ describe('createSegmentFromSweepNYC private resolver composition boundary', () =
     expect(observer).not.toMatch(/operatorAuthorized/);
     expect(observer).not.toMatch(/\boperator\s*:/);
     expect(observer).not.toMatch(/officialBlockFaceId|blockFaceId|blockfaceId/);
+    expect(observer).toContain('_publicCurbProductResult');
   });
 });

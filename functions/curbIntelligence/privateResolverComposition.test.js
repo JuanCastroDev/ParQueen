@@ -408,3 +408,100 @@ describe('private resolver minimum-shadow composition', () => {
     expect(runShadow).not.toHaveBeenCalled();
   });
 });
+
+const SWEEP_LEGACY = Object.freeze({
+  segment: {
+    source: 'sweepnyc', provenance: { provider: 'sweepnyc' }, status: 'active',
+    confidenceScore: 0.95, confidence: { level: 'community' },
+  },
+  activeRules: [{
+    type: 'streetCleaning', source: 'sweepnyc', status: 'active',
+    schedules: [
+      { side: 'East', days: ['Tue'], startTime: '08:30', endTime: '10:00' },
+      { side: 'West', days: ['Wed'], startTime: '08:30', endTime: '10:00' },
+    ],
+  }],
+});
+
+const SWEEP_INPUT = Object.freeze({
+  productionResult: {
+    success: true, segmentId: 'nyc_melville', parkingSide: 'West', streetName: 'MELVILLE STREET',
+  },
+  location: { lat: 40.712, lng: -74.006, accuracyMeters: 10 },
+  productionPath: 'sweepnyc',
+  streetContext: {
+    borough: 'MANHATTAN', onStreet: 'MELVILLE STREET',
+    crossStreetOne: 'JAMAICA AVENUE', crossStreetTwo: 'HILLSIDE AVENUE',
+  },
+  legacyEvidence: SWEEP_LEGACY,
+});
+
+describe('SweepNYC product-path side composition', () => {
+  it('auto-selects east or west from SweepNYC schedules with cohort=pre_release_product', async () => {
+    const applyProductOverlay = vi.fn();
+    for (const side of ['East', 'West']) {
+      const result = await observePrivateResolverShadow(SWEEP_INPUT, shadowOptions({
+        readConfig: () => ({ mode: 'shadow', serviceUrl: SERVICE_URL, samplePermille: 100, productPath: 'on' }),
+        operatorAuthorized: false,
+        applyProductOverlay,
+        runSweepSideResolution: async input => {
+          expect(input.cohort).toBe('pre_release_product');
+          return {
+            outcome: 'COMPLETED', skipOrFailureClass: 'none', curbState: 'SUPPORTED', parkingSide: side,
+          };
+        },
+        runShadow: vi.fn(async () => { throw new Error('organic shadow must not run'); }),
+      }));
+      expect(result.parkingSide).toBe(side);
+      expect(result.sideConfidence).toBe('high');
+      expect(result.streetName).toBe('MELVILLE STREET');
+      expect(JSON.stringify(result)).not.toMatch(/officialBlockFaceId|blockFaceId|BFI|0212261301/);
+    }
+    expect(applyProductOverlay).not.toHaveBeenCalled();
+  });
+
+  it('keeps the original SweepNYC result on UNKNOWN, timeout, 5xx, and CAUTION', async () => {
+    for (const execution of [
+      { outcome: 'UNKNOWN', skipOrFailureClass: 'relationship_unknown', curbState: 'UNKNOWN' },
+      { outcome: 'FAILED', skipOrFailureClass: 'execution_timeout', curbState: 'UNKNOWN' },
+      { outcome: 'FAILED', skipOrFailureClass: 'internal_failure', curbState: 'UNKNOWN' },
+      { outcome: 'COMPLETED', skipOrFailureClass: 'none', curbState: 'CAUTION', parkingSide: 'East' },
+    ]) {
+      const result = await observePrivateResolverShadow(SWEEP_INPUT, shadowOptions({
+        readConfig: () => ({ mode: 'shadow', serviceUrl: SERVICE_URL, samplePermille: 100, productPath: 'on' }),
+        operatorAuthorized: false,
+        runSweepSideResolution: async () => execution,
+      }));
+      expect(result).toBe(SWEEP_INPUT.productionResult);
+      expect(result.sideConfidence).toBeUndefined();
+    }
+  });
+
+  it('does not count SweepNYC product execution as organic sampled', async () => {
+    const runShadow = vi.fn();
+    await observePrivateResolverShadow(SWEEP_INPUT, shadowOptions({
+      readConfig: () => ({ mode: 'shadow', serviceUrl: SERVICE_URL, samplePermille: 1000, productPath: 'on' }),
+      operatorAuthorized: false,
+      runShadow,
+      runSweepSideResolution: async input => {
+        expect(input.cohort).toBe('pre_release_product');
+        return { outcome: 'COMPLETED', skipOrFailureClass: 'none', curbState: 'SUPPORTED', parkingSide: 'East' };
+      },
+    }));
+    expect(runShadow).not.toHaveBeenCalled();
+  });
+
+  it('leaves organic 1000‰ NYC Open Data sampled cohort on the shadow path', async () => {
+    const runShadow = vi.fn(async input => {
+      expect(input.cohort).toBe('sampled');
+      return { outcome: 'COMPLETED' };
+    });
+    await observePrivateResolverShadow(ELIGIBLE_INPUT, shadowOptions({
+      readConfig: () => ({ mode: 'shadow', serviceUrl: SERVICE_URL, samplePermille: 1000, productPath: 'off' }),
+      operatorAuthorized: false,
+      runShadow,
+      runSweepSideResolution: vi.fn(async () => { throw new Error('sweep runner must not run'); }),
+    }));
+    expect(runShadow).toHaveBeenCalledTimes(1);
+  });
+});

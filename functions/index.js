@@ -33,6 +33,7 @@ const { ADMIN_READ_VIEWS } = require('./adminReadViews');
 const { observePrivateResolverShadow } = require('./curbIntelligence/privateResolverComposition');
 const { createFallbackShadowEvidence } = require('./curbIntelligence/fallbackShadowEvidence');
 const { createProductOverlayPlan } = require('./curbIntelligence/productPathDecision');
+const { createSweepnycProductEvidence } = require('./curbIntelligence/createSweepnycProductEvidence');
 const { haversineDistMiles, filterCandidates, buildMessages, collectStaleTokens, MAX_CANDIDATES, FCM_BATCH } = require('./notifyFanout');
 const { createHash, createHmac, randomInt: secureRandomInt, randomUUID, timingSafeEqual } = require('crypto');
 
@@ -3752,7 +3753,22 @@ exports.adminReadView = onCall(
 // Called when the client finds no Firestore segment within 80m.
 // Tries SweepNYC first; falls back to NYC Open Data when SweepNYC has no usable data.
 
-async function _tryCreateFromSweepNYC(lat, lng) {
+async function _attachSweepnycProductEvidence(segmentId, segment, capture, ruleOverride) {
+  if (typeof capture !== 'function' || !segment) return;
+  try {
+    let rule = ruleOverride;
+    if (!rule) {
+      const snap = await db.doc(`streetSegments/${segmentId}/streetRules/sweepnyc_v1`).get();
+      if (!snap.exists) return;
+      rule = snap.data();
+    }
+    capture(createSweepnycProductEvidence({ segment, rule }));
+  } catch {
+    // In-memory product evidence cannot affect the established SweepNYC result.
+  }
+}
+
+async function _tryCreateFromSweepNYC(lat, lng, captureProductEvidence) {
     try {
     const SWEEPNYC_BASE = 'https://sweepnyc.nyc.gov/mappingapi/api';
     const PARSER_VERSION = '1.1';
@@ -3793,6 +3809,7 @@ async function _tryCreateFromSweepNYC(lat, lng) {
       const d = existingSnap.docs[0].data();
       if (d.status === 'archived') return { success: false, reason: 'archived_segment' };
       const ps = _detectCardinalSide(lat, lng, d.fromLat, d.fromLng, d.toLat, d.toLng, d.bearing ?? 90);
+      await _attachSweepnycProductEvidence(existingSnap.docs[0].id, d, captureProductEvidence);
       return {
         success: true,
         segmentId: existingSnap.docs[0].id,
@@ -3808,6 +3825,7 @@ async function _tryCreateFromSweepNYC(lat, lng) {
       const d = byDocIdSnap.data();
       if (d.status === 'archived') return { success: false, reason: 'archived_segment' };
       const ps = _detectCardinalSide(lat, lng, d.fromLat, d.fromLng, d.toLat, d.toLng, d.bearing ?? 90);
+      await _attachSweepnycProductEvidence(docId, d, captureProductEvidence);
       return {
         success: true,
         segmentId: docId,
@@ -3936,10 +3954,7 @@ async function _tryCreateFromSweepNYC(lat, lng) {
       refreshCount: 0,
     };
 
-    // ── Write segment + rules (try/catch prevents INTERNAL on Firestore errors) ───
-    try {
-      const segRef = db.doc(`streetSegments/${docId}`);
-      await segRef.set({
+    const segmentWrite = {
         cityId: 'nyc',
         streetName: streetCtx.street || first.street,
         fromCross: streetCtx.fromCross || first.fromCross,
@@ -3964,9 +3979,8 @@ async function _tryCreateFromSweepNYC(lat, lng) {
         editedBy: 'system:sweepnyc',
         createdAt: now,
         updatedAt: now,
-      });
-
-      await segRef.collection('streetRules').doc('sweepnyc_v1').set({
+      };
+    const ruleWrite = {
         type: 'streetCleaning',
         effectiveDate: now,
         supersededAt: null,
@@ -3981,11 +3995,19 @@ async function _tryCreateFromSweepNYC(lat, lng) {
         lastSourceSync: new Date().toISOString(),
         createdAt: now,
         updatedAt: now,
-      });
+      };
+
+    // ── Write segment + rules (try/catch prevents INTERNAL on Firestore errors) ───
+    try {
+      const segRef = db.doc(`streetSegments/${docId}`);
+      await segRef.set(segmentWrite);
+      await segRef.collection('streetRules').doc('sweepnyc_v1').set(ruleWrite);
     } catch (writeErr) {
       console.error('[SweepNYC] Firestore write error:', sanitizeError(writeErr));
       return { success: false, reason: 'firestore_write_failed', _diag: { stage: 'write', error: sanitizeError(writeErr) } };
     }
+
+    await _attachSweepnycProductEvidence(docId, segmentWrite, captureProductEvidence, ruleWrite);
 
     const finalStreetName = streetCtx.street || first.street;
     console.log('[SweepNYC] wrote segment', { status: segmentStatus, geometrySource });
@@ -4065,10 +4087,20 @@ async function _applyCurbProductOverlay(productionResult, decision) {
   });
 }
 
+function _publicCurbProductResult(productionResult, observed) {
+  if (!productionResult?.success || !observed || typeof observed !== 'object') return productionResult;
+  if (observed.sideConfidence !== 'high' || typeof observed.parkingSide !== 'string') {
+    return productionResult;
+  }
+  const parkingSide = observed.parkingSide.trim();
+  if (!['East', 'West', 'North', 'South'].includes(parkingSide)) return productionResult;
+  return { ...productionResult, parkingSide, sideConfidence: 'high' };
+}
+
 async function _observeCurbIntelligenceShadow(productionResult, lat, lng, accuracyMeters, shadowEvidence) {
   const observer = _callableHooks.curbShadowObserver || observePrivateResolverShadow;
   try {
-    await observer({
+    const observed = await observer({
       productionResult,
       location: { lat, lng, accuracyMeters },
       ...(shadowEvidence || {}),
@@ -4076,6 +4108,7 @@ async function _observeCurbIntelligenceShadow(productionResult, lat, lng, accura
       getSocrataToken: _socrataToken,
       applyProductOverlay: _callableHooks.curbProductOverlay || _applyCurbProductOverlay,
     });
+    return _publicCurbProductResult(productionResult, observed);
   } catch {
     // Shadow execution and product overlay must never affect the established callable result.
   }
@@ -4265,7 +4298,11 @@ exports.createSegmentFromSweepNYC = onCall(
       } else if (_callableHooks.sweepNYCResult) {
         productionResult = await _callableHooks.sweepNYCResult(lat, lng);
       } else {
-        const sweepResult = await _tryCreateFromSweepNYC(lat, lng);
+        const sweepResult = await _tryCreateFromSweepNYC(
+          lat,
+          lng,
+          evidence => { shadowEvidence = evidence; },
+        );
         if (sweepResult.success || !_SWEEPNYC_FALLBACK_REASONS.has(sweepResult.reason)) {
           productionResult = sweepResult;
         } else {

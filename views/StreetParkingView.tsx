@@ -210,6 +210,7 @@ export const MapView: React.FC<MapViewProps> = ({
     type SegmentMatch = {
         segmentId: string | null;
         parkingSide: string | null;
+        sideConfidence?: SavedSpot['sideConfidence'];
         restrictionVersionId: string | null;
         segmentStreetName: string | null;
         streetIntelStatus: 'found' | 'unavailable' | 'failed';
@@ -436,8 +437,14 @@ export const MapView: React.FC<MapViewProps> = ({
                 dbg('no active segments — calling createSegmentFromSweepNYC');
                 try {
                     const fn = httpsCallable(getFunctions(getApp(), 'us-central1'), 'createSegmentFromSweepNYC');
-                    const result = await fn({ lat: userLat, lng: userLng });
-                    const data = result.data as { success: boolean; segmentId?: string; parkingSide?: string; streetName?: string; reason?: string };
+                    const accuracyMeters = lastGpsAccuracyRef.current;
+                    const result = await fn({
+                        lat: userLat,
+                        lng: userLng,
+                        ...(typeof accuracyMeters === 'number' && Number.isFinite(accuracyMeters)
+                            ? { accuracyMeters } : {}),
+                    });
+                    const data = result.data as { success: boolean; segmentId?: string; parkingSide?: string; streetName?: string; reason?: string; sideConfidence?: string };
                     console.log('[matchNearestSegment] CF result:', { success: data.success, reason: data.reason ?? 'none' });
                     dbg(`CF result: success=${data.success} reason=${data.reason ?? 'none'}`);
                     if (!data.success || !data.segmentId) {
@@ -448,6 +455,7 @@ export const MapView: React.FC<MapViewProps> = ({
                     return {
                         segmentId: data.segmentId,
                         parkingSide: data.parkingSide ?? null,
+                        sideConfidence: data.sideConfidence === 'high' ? 'high' as const : undefined,
                         restrictionVersionId: null,
                         segmentStreetName: data.streetName ?? null,
                         streetIntelStatus: 'found' as const,
@@ -475,12 +483,20 @@ export const MapView: React.FC<MapViewProps> = ({
                 // Any failure falls through to the existing caution data below.
                 try {
                     const fn = httpsCallable(getFunctions(getApp(), 'us-central1'), 'createSegmentFromSweepNYC');
-                    const result = await fn({ lat: userLat, lng: userLng, revalidateSegmentId: nearest.id });
-                    const data = result.data as { success: boolean; segmentId?: string; parkingSide?: string; streetName?: string; reason?: string };
+                    const accuracyMeters = lastGpsAccuracyRef.current;
+                    const result = await fn({
+                        lat: userLat,
+                        lng: userLng,
+                        revalidateSegmentId: nearest.id,
+                        ...(typeof accuracyMeters === 'number' && Number.isFinite(accuracyMeters)
+                            ? { accuracyMeters } : {}),
+                    });
+                    const data = result.data as { success: boolean; segmentId?: string; parkingSide?: string; streetName?: string; reason?: string; sideConfidence?: string };
                     if (data.success && data.segmentId) {
                         return {
                             segmentId: data.segmentId,
                             parkingSide: data.parkingSide ?? null,
+                            sideConfidence: data.sideConfidence === 'high' ? 'high' as const : undefined,
                             restrictionVersionId: null,
                             segmentStreetName: data.streetName ?? nearest.streetName ?? null,
                             streetIntelStatus: 'found' as const,
@@ -492,10 +508,6 @@ export const MapView: React.FC<MapViewProps> = ({
                     console.warn('[Street Intelligence] legacy revalidation unavailable; retaining existing caution row:', e?.code ?? 'unknown');
                 }
             }
-
-            const parkingSide = nearest.source === 'sweepnyc'
-                ? detectCardinalSide(userLat, userLng, nearest.fromLat, nearest.fromLng, nearest.toLat, nearest.toLng, nearest.bearing ?? 90)
-                : detectParkingSide(userLat, userLng, nearest.fromLat, nearest.fromLng, nearest.toLat, nearest.toLng, nearest.evenSideIsPositiveCross ?? true);
 
             const rulesSnap = await getDocs(
                 query(
@@ -510,9 +522,39 @@ export const MapView: React.FC<MapViewProps> = ({
                 console.warn('[StreetIntelDebug] Existing segment found but no streetRules detected');
             }
 
+            let parkingSide = nearest.source === 'sweepnyc'
+                ? detectCardinalSide(userLat, userLng, nearest.fromLat, nearest.fromLng, nearest.toLat, nearest.toLng, nearest.bearing ?? 90)
+                : detectParkingSide(userLat, userLng, nearest.fromLat, nearest.fromLng, nearest.toLat, nearest.toLng, nearest.evenSideIsPositiveCross ?? true);
+            let sideConfidence: SavedSpot['sideConfidence'] | undefined;
+            const scheduleSides = [...new Set(
+                rulesSnap.docs.flatMap(d => ((d.data() as any).schedules || []))
+                    .map((s: any) => s?.side)
+                    .filter(Boolean),
+            )];
+            if (nearest.source === 'sweepnyc' && scheduleSides.length > 1) {
+                try {
+                    const fn = httpsCallable(getFunctions(getApp(), 'us-central1'), 'createSegmentFromSweepNYC');
+                    const accuracyMeters = lastGpsAccuracyRef.current;
+                    const result = await fn({
+                        lat: userLat,
+                        lng: userLng,
+                        ...(typeof accuracyMeters === 'number' && Number.isFinite(accuracyMeters)
+                            ? { accuracyMeters } : {}),
+                    });
+                    const data = result.data as { success?: boolean; parkingSide?: string; sideConfidence?: string };
+                    if (data.success && data.sideConfidence === 'high' && data.parkingSide) {
+                        parkingSide = data.parkingSide;
+                        sideConfidence = 'high';
+                    }
+                } catch (e: any) {
+                    console.warn('[Street Intelligence] curb side resolution unavailable; keeping manual side confirmation:', e?.code ?? 'unknown');
+                }
+            }
+
             return {
                 segmentId: nearest.id as string,
                 parkingSide,
+                sideConfidence,
                 restrictionVersionId,
                 segmentStreetName: nearest.streetName as string,
                 streetIntelStatus: 'found' as const,
@@ -578,7 +620,9 @@ export const MapView: React.FC<MapViewProps> = ({
             matchNearestSegment(lat, lng),
         ]);
         const gpsAccuracyMeters = lastGpsAccuracyRef.current ?? null;
-        const sideConfidence: SavedSpot['sideConfidence'] = !segmentMatch.parkingSide ? 'unknown'
+        const sideConfidence: SavedSpot['sideConfidence'] = segmentMatch.sideConfidence === 'high' && segmentMatch.parkingSide
+            ? 'high'
+            : !segmentMatch.parkingSide ? 'unknown'
             : (gpsAccuracyMeters === null || gpsAccuracyMeters > 30) ? 'low'
             : 'high';
         dbg(`segmentMatch: status=${segmentMatch.streetIntelStatus} sideConfidence=${sideConfidence}`);
@@ -610,6 +654,9 @@ export const MapView: React.FC<MapViewProps> = ({
     // Used after handoff — skips GPS, uses the already-known claimed Ping coordinates
     const saveMySpotFromCoords = async (lat: number, lng: number, address: string) => {
         const segmentMatch = await matchNearestSegment(lat, lng);
+        const sideConfidence: SavedSpot['sideConfidence'] = segmentMatch.sideConfidence === 'high' && segmentMatch.parkingSide
+            ? 'high'
+            : 'low';
         const spot: SavedSpot = {
             lat, lng, address,
             savedAt: Date.now(),
@@ -623,7 +670,7 @@ export const MapView: React.FC<MapViewProps> = ({
             streetIntelReason: segmentMatch.streetIntelReason,
             streetIntelCheckedAt: new Date().toISOString(),
             gpsAccuracyMeters: null,
-            sideConfidence: 'low',
+            sideConfidence,
             confirmedParkingSide: null,
         };
         localStorage.setItem(SAVED_SPOT_KEY, JSON.stringify(spot));
@@ -645,7 +692,9 @@ export const MapView: React.FC<MapViewProps> = ({
         try {
             const match = await matchNearestSegment(savedSpot.lat, savedSpot.lng);
             const gpsAccuracyMeters = lastGpsAccuracyRef.current ?? null;
-            const sideConfidence: SavedSpot['sideConfidence'] = !match.parkingSide ? 'unknown'
+            const sideConfidence: SavedSpot['sideConfidence'] = match.sideConfidence === 'high' && match.parkingSide
+                ? 'high'
+                : !match.parkingSide ? 'unknown'
                 : (gpsAccuracyMeters === null || gpsAccuracyMeters > 30) ? 'low'
                 : 'high';
             const updated: SavedSpot = {

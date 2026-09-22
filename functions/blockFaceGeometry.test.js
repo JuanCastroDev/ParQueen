@@ -185,13 +185,14 @@ describe('regressions: upstream call discipline', () => {
     expect(fallback).toBeGreaterThan(successGate);
   });
 
-  it('a cached segment means the callable is never invoked at all', () => {
+  it('a cached NYC Open Data segment means the populate callable is not invoked before nearest selection', () => {
     const guard = CLIENT_SRC.indexOf('if (!candidates.length)');
     const cf = CLIENT_SRC.indexOf("'createSegmentFromSweepNYC'", guard);
     const nearest = CLIENT_SRC.indexOf('const withDist', guard);
     expect(guard).toBeGreaterThan(-1);
     expect(cf).toBeGreaterThan(guard);
     expect(cf).toBeLessThan(nearest);
+    expect(CLIENT_SRC).toContain("nearest.source === 'sweepnyc' && scheduleSides.length > 1");
   });
 
   it('the server-side block-face dedup is still keyed on the full face', () => {
