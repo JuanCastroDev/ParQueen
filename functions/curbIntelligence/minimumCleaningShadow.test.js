@@ -104,7 +104,11 @@ describe('minimum cleaning-only shadow experiment', () => {
 
     expect(result).toEqual(expect.objectContaining({ outcome: 'COMPLETED', parkNycState: 'NOT_EVALUATED' }));
     expect(result.comparisonCategory).toBe('agreement');
+    expect(result.productSchedules[0]).toEqual(expect.objectContaining({
+      side: expect.any(String), days: expect.any(Array), startTime: expect.any(String), endTime: expect.any(String),
+    }));
     expect(JSON.stringify(result)).not.toContain('0212261301');
+    expect(JSON.stringify(result.productSchedules)).not.toMatch(/orderNumber|officialBlockFaceId|rawText/);
     expect(deps.sink.record).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(deps.sink.record.mock.calls[0][0])).not.toContain('0212261301');
   });

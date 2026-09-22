@@ -6,6 +6,7 @@ const { createFaceAssociationContext } = require('./dotFaceAssociation');
 const { associateCleaningRules } = require('./cleaningRuleAssociation');
 const { adaptLegacyCleaningEvidence } = require('./legacyCleaningAdapter');
 const { compareCleaningEvidence } = require('./cleaningComparison');
+const { publicProductSchedules } = require('./productPathDecision');
 
 const ENGINE_VERSION = '2a15-local-1';
 const RELATIONSHIP_TIMEOUT_MS = 3000;
@@ -207,7 +208,10 @@ async function runMinimumCleaningShadow(input = {}) {
     telemetry.skipOrFailureClass = telemetry.outcome === 'COMPLETED' ? 'none' : 'relationship_unknown';
     telemetry.latencyBucket = latencyBucket(now() - startedAt);
     await safeRecord(deps.sink, telemetry);
-    return publicResult(telemetry);
+    return {
+      ...publicResult(telemetry),
+      productSchedules: telemetry.outcome === 'COMPLETED' ? publicProductSchedules(cleaning.rules) : [],
+    };
   } catch {
     telemetry = {
       ...telemetry,

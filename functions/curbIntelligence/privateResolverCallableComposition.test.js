@@ -34,8 +34,10 @@ describe('createSegmentFromSweepNYC private resolver composition boundary', () =
     const observer = source.slice(observerStart, observerEnd);
     expect(observerStart).toBeGreaterThan(-1);
     expect(observerEnd).toBeGreaterThan(observerStart);
-    expect(observer).toContain('}, { getSocrataToken: _socrataToken });');
+    expect(observer).toContain('applyProductOverlay: _callableHooks.curbProductOverlay || _applyCurbProductOverlay');
+    expect(observer).toContain('}, {');
     expect(observer).not.toMatch(/operatorAuthorized/);
     expect(observer).not.toMatch(/\boperator\s*:/);
+    expect(observer).not.toMatch(/officialBlockFaceId|blockFaceId|blockfaceId/);
   });
 });

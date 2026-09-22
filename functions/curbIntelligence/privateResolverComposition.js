@@ -7,8 +7,10 @@ const { runMinimumCleaningShadow } = require('./minimumCleaningShadow');
 const { createMinimumShadowSources } = require('./minimumShadowSources');
 const {
   evaluatePreSourceEligibility,
+  evaluateProductPathEligibility,
   deterministicSampleSelected,
 } = require('./minimumShadowControl');
+const { decideProductPresentation } = require('./productPathDecision');
 
 const OVERALL_DEADLINE_MS = 8000;
 
@@ -36,6 +38,11 @@ async function boundedShadow(run, milliseconds, controller) {
   }
 }
 
+function executionCohort(config, productEligible) {
+  if (productEligible) return 'pre_release_product';
+  return config.samplePermille === 0 ? 'operator' : 'sampled';
+}
+
 async function observePrivateResolverShadow(input = {}, options = {}) {
   const productionResult = input.productionResult;
   const readConfig = options.readConfig || readPrivateResolverConfig;
@@ -51,17 +58,20 @@ async function observePrivateResolverShadow(input = {}, options = {}) {
   const samplePermille = Number.isInteger(config.samplePermille) ? config.samplePermille : 0;
   const sampleSelected = samplePermille > 0
     && deterministicSampleSelected(productionResult?.segmentId, samplePermille);
-  const eligibility = evaluatePreSourceEligibility({
+  const eligibilityInput = {
     mode: config.mode,
     samplePermille,
     operatorAuthorized: options.operatorAuthorized === true,
     sampleSelected,
+    productPath: config.productPath,
     accuracyMeters: input.location?.accuracyMeters,
     productionPath: input.productionPath,
     dotEvidence: input.dotEvidence,
     legacyEvidence: input.legacyEvidence,
-  });
-  if (!eligibility.eligible) return productionResult;
+  };
+  const productEligible = evaluateProductPathEligibility(eligibilityInput).eligible === true;
+  const shadowEligible = evaluatePreSourceEligibility(eligibilityInput).eligible === true;
+  if (!productEligible && !shadowEligible) return productionResult;
 
   const sourceDependenciesFactory = options.sourceDependenciesFactory || createMinimumShadowSources;
   let sources;
@@ -81,6 +91,7 @@ async function observePrivateResolverShadow(input = {}, options = {}) {
     || createOfficialDotRelationshipProvider;
   const runShadow = options.runShadow || runMinimumCleaningShadow;
   const controller = new AbortController();
+  let executionResult = null;
 
   try {
     const blockfaceResolver = resolverFactory({
@@ -93,10 +104,10 @@ async function observePrivateResolverShadow(input = {}, options = {}) {
       providerId: 'private-geosupport-function-3c',
       blockfaceResolver,
     });
-    await boundedShadow(() => runShadow({
+    executionResult = await boundedShadow(() => runShadow({
       location: input.location,
       legacyEvidence: input.legacyEvidence,
-      cohort: samplePermille === 0 ? 'operator' : 'sampled',
+      cohort: executionCohort(config, productEligible),
       signal: controller.signal,
       dependencies: {
         ...sources,
@@ -105,7 +116,16 @@ async function observePrivateResolverShadow(input = {}, options = {}) {
       },
     }), OVERALL_DEADLINE_MS, controller);
   } catch {
-    // Shadow evidence is observational. It must never affect the callable.
+    // Observational and product overlay failures must never replace the callable result.
+  }
+
+  if (productEligible && typeof options.applyProductOverlay === 'function') {
+    try {
+      const decision = decideProductPresentation(executionResult);
+      await options.applyProductOverlay(productionResult, decision, executionResult);
+    } catch {
+      // Overlay is fail-open. Legacy production result remains.
+    }
   }
 
   return productionResult;

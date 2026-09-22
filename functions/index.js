@@ -32,6 +32,7 @@ const {
 const { ADMIN_READ_VIEWS } = require('./adminReadViews');
 const { observePrivateResolverShadow } = require('./curbIntelligence/privateResolverComposition');
 const { createFallbackShadowEvidence } = require('./curbIntelligence/fallbackShadowEvidence');
+const { createProductOverlayPlan } = require('./curbIntelligence/productPathDecision');
 const { haversineDistMiles, filterCandidates, buildMessages, collectStaleTokens, MAX_CANDIDATES, FCM_BATCH } = require('./notifyFanout');
 const { createHash, createHmac, randomInt: secureRandomInt, randomUUID, timingSafeEqual } = require('crypto');
 
@@ -4024,6 +4025,46 @@ const _SWEEPNYC_FALLBACK_REASONS = new Set([
   'no_sweepnyc_data', 'no_sweepnyc_notes', 'no_signs', 'parse_failed',
 ]);
 
+async function _applyCurbProductOverlay(productionResult, decision) {
+  const plan = createProductOverlayPlan(productionResult, decision);
+  if (!plan) return;
+  const now = Timestamp.now();
+  const segRef = db.doc(`streetSegments/${plan.segmentId}`);
+  const ruleRef = segRef.collection('streetRules').doc(plan.ruleDocId);
+  await db.runTransaction(async tx => {
+    const [ruleSnap, segSnap] = await Promise.all([tx.get(ruleRef), tx.get(segRef)]);
+    if (!ruleSnap.exists || !segSnap.exists) return;
+    const rule = ruleSnap.data();
+    if (rule.type !== 'streetCleaning' || rule.source !== 'nyc_open_data') return;
+    const evidence = segSnap.data()?.blockFaceEvidence && typeof segSnap.data().blockFaceEvidence === 'object'
+      ? segSnap.data().blockFaceEvidence
+      : {};
+    tx.set(ruleRef, {
+      schedules: plan.schedules,
+      needsReview: plan.needsReview,
+      updatedAt: now,
+      lastSourceSync: new Date().toISOString(),
+    }, { merge: true });
+    tx.set(segRef, {
+      needsReview: plan.needsReview,
+      status: plan.status,
+      confidenceScore: plan.confidenceScore,
+      blockFaceEvidence: plan.needsReview ? evidence : {
+        ...evidence,
+        blockDecisive: true,
+        sideResolved: true,
+        parseComplete: true,
+      },
+      confidence: {
+        level: plan.needsReview ? 'unverified' : 'verified',
+        source: 'nyc_open_data',
+        lastVerifiedAt: now,
+      },
+      updatedAt: now,
+    }, { merge: true });
+  });
+}
+
 async function _observeCurbIntelligenceShadow(productionResult, lat, lng, accuracyMeters, shadowEvidence) {
   const observer = _callableHooks.curbShadowObserver || observePrivateResolverShadow;
   try {
@@ -4031,9 +4072,12 @@ async function _observeCurbIntelligenceShadow(productionResult, lat, lng, accura
       productionResult,
       location: { lat, lng, accuracyMeters },
       ...(shadowEvidence || {}),
-    }, { getSocrataToken: _socrataToken });
+    }, {
+      getSocrataToken: _socrataToken,
+      applyProductOverlay: _callableHooks.curbProductOverlay || _applyCurbProductOverlay,
+    });
   } catch {
-    // Shadow execution must never affect the established callable behavior.
+    // Shadow execution and product overlay must never affect the established callable result.
   }
   return productionResult;
 }
@@ -4688,6 +4732,19 @@ async function _fallbackToNYCOpenData(lat, lng, revalidation = null, captureShad
         ? _detectCardinalSide(lat, lng, d.fromLat, d.fromLng, d.toLat, d.toLng, d.bearing ?? 90)
         : dotSideToCardinal(sideOfStreet);
       console.log('[NYCOpenData] dedup hit block-face segment');
+      if (typeof captureShadowEvidence === 'function') {
+        try {
+          const ruleSnap = await db.doc(`streetSegments/${docId}/streetRules/nyc_open_data_v1`).get();
+          captureShadowEvidence(createFallbackShadowEvidence({
+            selectedRows: bestGroup,
+            queryEvidence,
+            segment: d,
+            rule: ruleSnap.exists ? ruleSnap.data() : { type: 'streetCleaning', source: 'nyc_open_data', schedules: [] },
+          }));
+        } catch {
+          // In-memory capture cannot affect the cached production result.
+        }
+      }
       return { success: true, segmentId: docId, parkingSide: ps, streetName: d.streetName,
         _diag: { stage: 'dedup_nyc_od', provider: 'nyc_open_data', selectionReason } };
     }

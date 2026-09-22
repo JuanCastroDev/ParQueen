@@ -4,6 +4,7 @@ const {
   MAX_SHADOW_ACCURACY_METERS,
   validateShadowAccuracy,
   evaluatePreSourceEligibility,
+  evaluateProductPathEligibility,
   deterministicSampleSelected,
 } = require('./minimumShadowControl');
 
@@ -83,5 +84,21 @@ describe('minimum cleaning shadow controls', () => {
       operatorAuthorized: false,
       requestData: { operator: true, operatorAuthorized: true },
     })).toEqual({ eligible: false, reason: 'sample_not_authorized' });
+  });
+
+  it('authorizes the product path without sampling or operator flags', () => {
+    expect(evaluateProductPathEligibility({
+      ...eligible,
+      productPath: 'on',
+      samplePermille: 100,
+      operatorAuthorized: false,
+      sampleSelected: false,
+      requestData: { operator: true, curbProduct: true },
+    })).toEqual({ eligible: true });
+    expect(evaluateProductPathEligibility({ ...eligible, productPath: 'off' }))
+      .toEqual({ eligible: false, reason: 'product_path_off' });
+    expect(evaluateProductPathEligibility({
+      ...eligible, productPath: 'on', productionPath: 'sweepnyc',
+    })).toEqual({ eligible: false, reason: 'production_path_ineligible' });
   });
 });

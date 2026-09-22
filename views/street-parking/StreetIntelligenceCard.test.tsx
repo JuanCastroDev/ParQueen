@@ -313,4 +313,25 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         const withInvalidFreshness = await renderCard();
         expect(renderedText(withInvalidFreshness.renderer)).not.toContain('Data updated:');
     });
+
+    it('still renders the existing Street Intelligence card for NYC Open Data without infrastructure language', async () => {
+        segmentData = {
+            status: 'active',
+            source: 'nyc_open_data',
+            needsReview: false,
+            confidenceScore: 1,
+            provenance: { provider: 'nyc_open_data' },
+            blockFaceEvidence: { blockDecisive: true, sideResolved: true, parseComplete: true },
+        };
+        streetRuleRows = [{
+            id: 'nyc_open_data_v1',
+            data: { ...MELVILLE_RULE, source: 'nyc_open_data', lastSourceSync: '2026-08-29' },
+        }];
+        const { renderer } = await renderCard();
+        const text = renderedText(renderer);
+        expect(text).toContain('Safe Until');
+        expect(text).toContain('Parking info available');
+        expect(text).toContain('NYC Open Data fallback');
+        expect(text).not.toMatch(/Curb resolver|BFI|blockface|cohort|shadow|CSCL/i);
+    });
 });

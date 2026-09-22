@@ -108,7 +108,7 @@ function runBoundedCleaningShadow({ signal, dependencies }) {
 
 function shadowOptions(overrides = {}) {
   return {
-    readConfig: () => ({ mode: 'shadow', serviceUrl: SERVICE_URL, samplePermille: 0 }),
+    readConfig: () => ({ mode: 'shadow', serviceUrl: SERVICE_URL, samplePermille: 0, productPath: 'off' }),
     operatorAuthorized: true,
     sourceDependenciesFactory: () => reviewedSources(),
     getIdToken: vi.fn(async () => 'short-lived-token'),
@@ -244,7 +244,7 @@ describe('private resolver minimum-shadow composition', () => {
       expect(JSON.stringify(input)).not.toContain('nyc-od:public-segment');
     });
     await observePrivateResolverShadow(ELIGIBLE_INPUT, shadowOptions({
-      readConfig: () => ({ mode: 'shadow', serviceUrl: SERVICE_URL, samplePermille: 1000 }),
+      readConfig: () => ({ mode: 'shadow', serviceUrl: SERVICE_URL, samplePermille: 1000, productPath: 'off' }),
       operatorAuthorized: false,
       runShadow,
     }));
@@ -357,5 +357,54 @@ describe('private resolver minimum-shadow composition', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('runs the product path without organic sampling and applies a confident overlay', async () => {
+    const applyProductOverlay = vi.fn();
+    const runShadow = vi.fn(async input => {
+      expect(input.cohort).toBe('pre_release_product');
+      return {
+        outcome: 'COMPLETED',
+        skipOrFailureClass: 'none',
+        curbState: 'SUPPORTED',
+        cleaningState: 'SUPPORTED',
+        comparisonCategory: 'schedule_difference',
+        productSchedules: [{ side: 'East', days: ['Tue'], startTime: '08:30', endTime: '10:00' }],
+      };
+    });
+    const result = await observePrivateResolverShadow(ELIGIBLE_INPUT, shadowOptions({
+      readConfig: () => ({ mode: 'shadow', serviceUrl: SERVICE_URL, samplePermille: 100, productPath: 'on' }),
+      operatorAuthorized: false,
+      runShadow,
+      applyProductOverlay,
+    }));
+    expect(result).toBe(ELIGIBLE_INPUT.productionResult);
+    expect(runShadow).toHaveBeenCalledTimes(1);
+    expect(applyProductOverlay).toHaveBeenCalledTimes(1);
+    expect(applyProductOverlay.mock.calls[0][1]).toEqual(expect.objectContaining({ apply: true, caution: false }));
+  });
+
+  it('does not apply overlay after timeout or internal failure', async () => {
+    const applyProductOverlay = vi.fn();
+    await observePrivateResolverShadow(ELIGIBLE_INPUT, shadowOptions({
+      readConfig: () => ({ mode: 'shadow', serviceUrl: SERVICE_URL, samplePermille: 100, productPath: 'on' }),
+      operatorAuthorized: false,
+      runShadow: async () => ({ outcome: 'FAILED', skipOrFailureClass: 'internal_failure' }),
+      applyProductOverlay,
+    }));
+    expect(applyProductOverlay.mock.calls[0][1].apply).toBe(false);
+  });
+
+  it('does not let the client enable product execution', async () => {
+    const runShadow = vi.fn();
+    await observePrivateResolverShadow({
+      ...ELIGIBLE_INPUT,
+      requestData: { productPath: 'on', operatorAuthorized: true },
+    }, shadowOptions({
+      readConfig: () => ({ mode: 'shadow', serviceUrl: SERVICE_URL, samplePermille: 100, productPath: 'off' }),
+      operatorAuthorized: false,
+      runShadow,
+    }));
+    expect(runShadow).not.toHaveBeenCalled();
   });
 });
