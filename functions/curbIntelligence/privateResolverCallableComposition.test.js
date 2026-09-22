@@ -41,4 +41,12 @@ describe('createSegmentFromSweepNYC private resolver composition boundary', () =
     expect(observer).not.toMatch(/officialBlockFaceId|blockFaceId|blockfaceId/);
     expect(observer).toContain('_publicCurbProductResult');
   });
+
+  it('loads active SweepNYC streetRules instead of only sweepnyc_v1', () => {
+    const attachStart = source.indexOf('async function _attachSweepnycProductEvidence');
+    const attach = source.slice(attachStart, source.indexOf('async function _tryCreateFromSweepNYC', attachStart));
+    expect(attach).toContain("db.collection(`streetSegments/${segmentId}/streetRules`)");
+    expect(attach).toContain(".where('supersededAt', '==', null)");
+    expect(attach).not.toMatch(/officialBlockFaceId|blockFaceId|blockfaceId/);
+  });
 });

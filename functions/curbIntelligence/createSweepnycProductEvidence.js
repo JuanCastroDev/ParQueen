@@ -17,8 +17,11 @@ function resolverBorough(value) {
   return null;
 }
 
-function createSweepnycProductEvidence({ segment, rule } = {}) {
-  if (!segment || !rule) return null;
+function createSweepnycProductEvidence({ segment, rule, activeRules } = {}) {
+  const rules = Array.isArray(activeRules) && activeRules.length
+    ? activeRules.filter(Boolean)
+    : (rule ? [rule] : []);
+  if (!segment || !rules.length) return null;
   return {
     productionPath: 'sweepnyc',
     streetContext: {
@@ -29,7 +32,7 @@ function createSweepnycProductEvidence({ segment, rule } = {}) {
     },
     legacyEvidence: {
       segment,
-      activeRules: [rule],
+      activeRules: rules,
     },
   };
 }
