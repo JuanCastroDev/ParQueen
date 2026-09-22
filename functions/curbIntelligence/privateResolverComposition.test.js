@@ -407,6 +407,28 @@ describe('private resolver minimum-shadow composition', () => {
     }));
     expect(runShadow).not.toHaveBeenCalled();
   });
+
+  it('logs a privacy-safe product skip when SweepNYC evidence is present but accuracy is missing', async () => {
+    const logger = { info: vi.fn() };
+    const runShadow = vi.fn();
+    await observePrivateResolverShadow({
+      ...SWEEP_INPUT,
+      location: { lat: 40.712, lng: -74.006 },
+    }, shadowOptions({
+      readConfig: () => ({ mode: 'shadow', serviceUrl: SERVICE_URL, samplePermille: 100, productPath: 'on' }),
+      operatorAuthorized: false,
+      logger,
+      runShadow,
+    }));
+    expect(runShadow).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'curb_product_skip',
+      reason: 'accuracy_missing',
+      accuracyPresent: false,
+      productionPath: 'sweepnyc',
+    }));
+    expect(JSON.stringify(logger.info.mock.calls)).not.toMatch(/officialBlockFaceId|blockFaceId|BFI|0212261301/);
+  });
 });
 
 const SWEEP_LEGACY = Object.freeze({
@@ -503,5 +525,27 @@ describe('SweepNYC product-path side composition', () => {
       runSweepSideResolution: vi.fn(async () => { throw new Error('sweep runner must not run'); }),
     }));
     expect(runShadow).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs a privacy-safe product skip when SweepNYC evidence is present but accuracy is missing', async () => {
+    const logger = { info: vi.fn() };
+    const runShadow = vi.fn();
+    await observePrivateResolverShadow({
+      ...SWEEP_INPUT,
+      location: { lat: 40.712, lng: -74.006 },
+    }, shadowOptions({
+      readConfig: () => ({ mode: 'shadow', serviceUrl: SERVICE_URL, samplePermille: 100, productPath: 'on' }),
+      operatorAuthorized: false,
+      logger,
+      runShadow,
+    }));
+    expect(runShadow).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'curb_product_skip',
+      reason: 'accuracy_missing',
+      accuracyPresent: false,
+      productionPath: 'sweepnyc',
+    }));
+    expect(JSON.stringify(logger.info.mock.calls)).not.toMatch(/officialBlockFaceId|blockFaceId|BFI|0212261301/);
   });
 });

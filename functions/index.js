@@ -3756,13 +3756,23 @@ exports.adminReadView = onCall(
 async function _attachSweepnycProductEvidence(segmentId, segment, capture, ruleOverride) {
   if (typeof capture !== 'function' || !segment) return;
   try {
-    let rule = ruleOverride;
-    if (!rule) {
-      const snap = await db.doc(`streetSegments/${segmentId}/streetRules/sweepnyc_v1`).get();
-      if (!snap.exists) return;
-      rule = snap.data();
+    let rules = [];
+    if (ruleOverride) {
+      rules = Array.isArray(ruleOverride) ? ruleOverride.filter(Boolean) : [ruleOverride];
+    } else {
+      const snap = await db.collection(`streetSegments/${segmentId}/streetRules`)
+        .where('supersededAt', '==', null)
+        .get();
+      rules = snap.docs.map(doc => doc.data()).filter(rule => (
+        rule && rule.type === 'streetCleaning' && rule.source === 'sweepnyc'
+      ));
+      if (!rules.length) {
+        const fallback = await db.doc(`streetSegments/${segmentId}/streetRules/sweepnyc_v1`).get();
+        if (fallback.exists) rules = [fallback.data()];
+      }
     }
-    capture(createSweepnycProductEvidence({ segment, rule }));
+    if (!rules.length) return;
+    capture(createSweepnycProductEvidence({ segment, activeRules: rules }));
   } catch {
     // In-memory product evidence cannot affect the established SweepNYC result.
   }
@@ -3808,6 +3818,7 @@ async function _tryCreateFromSweepNYC(lat, lng, captureProductEvidence) {
     if (!existingSnap.empty) {
       const d = existingSnap.docs[0].data();
       if (d.status === 'archived') return { success: false, reason: 'archived_segment' };
+      console.log('[SweepNYC] dedup hit');
       const ps = _detectCardinalSide(lat, lng, d.fromLat, d.fromLng, d.toLat, d.toLng, d.bearing ?? 90);
       await _attachSweepnycProductEvidence(existingSnap.docs[0].id, d, captureProductEvidence);
       return {
@@ -3824,6 +3835,7 @@ async function _tryCreateFromSweepNYC(lat, lng, captureProductEvidence) {
     if (byDocIdSnap.exists) {
       const d = byDocIdSnap.data();
       if (d.status === 'archived') return { success: false, reason: 'archived_segment' };
+      console.log('[SweepNYC] dedup hit');
       const ps = _detectCardinalSide(lat, lng, d.fromLat, d.fromLng, d.toLat, d.toLng, d.bearing ?? 90);
       await _attachSweepnycProductEvidence(docId, d, captureProductEvidence);
       return {

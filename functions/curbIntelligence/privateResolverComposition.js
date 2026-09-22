@@ -74,9 +74,25 @@ async function observePrivateResolverShadow(input = {}, options = {}) {
     dotEvidence: input.dotEvidence,
     legacyEvidence: input.legacyEvidence,
   };
-  const productEligible = evaluateProductPathEligibility(eligibilityInput).eligible === true;
-  const shadowEligible = evaluatePreSourceEligibility(eligibilityInput).eligible === true;
-  if (!productEligible && !shadowEligible) return productionResult;
+  const productDecision = evaluateProductPathEligibility(eligibilityInput);
+  const shadowDecision = evaluatePreSourceEligibility(eligibilityInput);
+  const productEligible = productDecision.eligible === true;
+  const shadowEligible = shadowDecision.eligible === true;
+  if (!productEligible && !shadowEligible) {
+    try {
+      const logger = options.logger || console;
+      logger.info({
+        event: 'curb_product_skip',
+        reason: productDecision.reason || shadowDecision.reason || 'ineligible',
+        accuracyPresent: Number.isFinite(input.location?.accuracyMeters),
+        hasProductionPath: typeof input.productionPath === 'string' && Boolean(input.productionPath),
+        productionPath: typeof input.productionPath === 'string' ? input.productionPath : 'none',
+      });
+    } catch {
+      // Skip logs must never affect the callable result.
+    }
+    return productionResult;
+  }
 
   const sourceDependenciesFactory = options.sourceDependenciesFactory || createMinimumShadowSources;
   let sources;
