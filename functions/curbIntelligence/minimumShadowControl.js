@@ -13,22 +13,30 @@ function validateShadowAccuracy(value) {
   return { ok: true, value };
 }
 
-function evaluateSafeEvidence(input = {}) {
-  const accuracy = validateShadowAccuracy(input.accuracyMeters);
-  if (!accuracy.ok) return { eligible: false, reason: accuracy.reason };
-  if (input.productionPath !== 'nyc_open_data_fallback') {
-    return { eligible: false, reason: 'production_path_ineligible' };
-  }
-  const dotSnapshot = createReusedDotSnapshot(input.dotEvidence);
-  if (dotSnapshot.completeness.state !== 'COMPLETE') {
-    return { eligible: false, reason: dotSnapshot.completeness.reason };
-  }
+function evaluateLegacyUsable(input = {}) {
   const legacy = adaptLegacyCleaningEvidence(input.legacyEvidence);
   if (legacy.availability === 'UNAVAILABLE' || legacy.availability === 'NONE') {
     return { eligible: false, reason: 'legacy_evidence_missing' };
   }
   if (legacy.availability !== 'USABLE') return { eligible: false, reason: 'legacy_evidence_malformed' };
   return { eligible: true };
+}
+
+function evaluateSafeEvidence(input = {}, options = {}) {
+  const accuracy = validateShadowAccuracy(input.accuracyMeters);
+  if (!accuracy.ok) return { eligible: false, reason: accuracy.reason };
+  const allowSweepnycProduct = options.allowSweepnycProduct === true
+    && input.productionPath === 'sweepnyc';
+  if (!allowSweepnycProduct && input.productionPath !== 'nyc_open_data_fallback') {
+    return { eligible: false, reason: 'production_path_ineligible' };
+  }
+  if (!allowSweepnycProduct) {
+    const dotSnapshot = createReusedDotSnapshot(input.dotEvidence);
+    if (dotSnapshot.completeness.state !== 'COMPLETE') {
+      return { eligible: false, reason: dotSnapshot.completeness.reason };
+    }
+  }
+  return evaluateLegacyUsable(input);
 }
 
 function evaluatePreSourceEligibility(input = {}) {
@@ -43,7 +51,7 @@ function evaluatePreSourceEligibility(input = {}) {
 function evaluateProductPathEligibility(input = {}) {
   if (input.productPath !== 'on') return { eligible: false, reason: 'product_path_off' };
   if (input.mode !== 'shadow') return { eligible: false, reason: 'mode_off' };
-  return evaluateSafeEvidence(input);
+  return evaluateSafeEvidence(input, { allowSweepnycProduct: true });
 }
 
 function deterministicSampleSelected(basis, samplePermille) {

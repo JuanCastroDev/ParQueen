@@ -213,17 +213,15 @@ describe('NYC Open Data fallback — query correctness', () => {
 });
 
 describe('NYC Open Data fallback — when Socrata is reached at all', () => {
-  it('7. a cached streetSegments hit calls the CF (and therefore Socrata) zero times', () => {
-    // The only zero-request guarantee lives client-side: the CF is invoked solely
-    // when the geohash query found no active segment. (The server-side dedup on
-    // streetSegments/{docId} runs AFTER the fetch, so it prevents a duplicate
-    // WRITE, not a duplicate Socrata request.)
+  it('7. a cached NYC Open Data streetSegments hit does not invoke the CF', () => {
     const guard = CLIENT_SRC.indexOf('if (!candidates.length)');
     expect(guard).toBeGreaterThan(-1);
-    const cfIdx = CLIENT_SRC.indexOf("'createSegmentFromSweepNYC'", guard);
     const nearestIdx = CLIENT_SRC.indexOf('const withDist', guard);
-    expect(cfIdx).toBeGreaterThan(guard);
-    expect(cfIdx).toBeLessThan(nearestIdx); // call sits inside the guarded block
+    const firstCf = CLIENT_SRC.indexOf("'createSegmentFromSweepNYC'", guard);
+    expect(firstCf).toBeGreaterThan(guard);
+    expect(firstCf).toBeLessThan(nearestIdx);
+    const sweepSideCf = CLIENT_SRC.indexOf('nearest.source === \'sweepnyc\' && scheduleSides.length > 1');
+    expect(sweepSideCf).toBeGreaterThan(nearestIdx);
   });
 
   it('8. a successful SweepNYC lookup bypasses the Socrata fallback', () => {

@@ -53,6 +53,32 @@ function decideProductPresentation(result) {
   return { apply: true, caution, schedules, reason: 'usable' };
 }
 
+const CARDINALS = new Set(['East', 'West', 'North', 'South']);
+
+function decideSweepSidePresentation(result) {
+  if (!result || result.outcome !== 'COMPLETED') {
+    return { apply: false, reason: result?.skipOrFailureClass || 'unusable' };
+  }
+  if (result.skipOrFailureClass === 'execution_timeout'
+    || result.skipOrFailureClass === 'internal_failure') {
+    return { apply: false, reason: result.skipOrFailureClass };
+  }
+  if (result.curbState === 'UNKNOWN') return { apply: false, reason: 'unknown' };
+  if (result.curbState === 'CAUTION') return { apply: false, caution: true, reason: 'caution' };
+  const parkingSide = typeof result.parkingSide === 'string' ? result.parkingSide.trim() : '';
+  if (!CARDINALS.has(parkingSide)) return { apply: false, reason: 'unusable' };
+  return { apply: true, caution: false, parkingSide, reason: 'usable' };
+}
+
+function applySweepSideToProductionResult(productionResult, parkingSide) {
+  if (!productionResult?.success || !CARDINALS.has(parkingSide)) return productionResult;
+  return {
+    ...productionResult,
+    parkingSide,
+    sideConfidence: 'high',
+  };
+}
+
 function createProductOverlayPlan(productionResult, decision) {
   if (!decision?.apply || !productionResult?.success || typeof productionResult.segmentId !== 'string'
     || !productionResult.segmentId || !Array.isArray(decision.schedules) || !decision.schedules.length) {
@@ -71,5 +97,7 @@ function createProductOverlayPlan(productionResult, decision) {
 module.exports = {
   publicProductSchedules,
   decideProductPresentation,
+  decideSweepSidePresentation,
+  applySweepSideToProductionResult,
   createProductOverlayPlan,
 };

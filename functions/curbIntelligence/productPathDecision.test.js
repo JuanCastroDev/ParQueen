@@ -3,6 +3,8 @@
 const {
   publicProductSchedules,
   decideProductPresentation,
+  decideSweepSidePresentation,
+  applySweepSideToProductionResult,
   createProductOverlayPlan,
 } = require('./productPathDecision');
 
@@ -91,5 +93,33 @@ describe('pre-release Curb product-path decision', () => {
     expect(plan.ruleDocId).toBe('nyc_open_data_v1');
     expect(plan.status).toBe('active');
     expect(JSON.stringify(plan)).not.toMatch(/officialBlockFaceId|blockFaceId|BFI/);
+  });
+
+  it('selects a confident SweepNYC side without replacing schedules', () => {
+    expect(decideSweepSidePresentation({
+      outcome: 'COMPLETED', skipOrFailureClass: 'none', curbState: 'SUPPORTED', parkingSide: 'East',
+    })).toEqual({ apply: true, caution: false, parkingSide: 'East', reason: 'usable' });
+    expect(decideSweepSidePresentation({
+      outcome: 'COMPLETED', skipOrFailureClass: 'none', curbState: 'SUPPORTED', parkingSide: 'West',
+    }).parkingSide).toBe('West');
+    expect(decideSweepSidePresentation({
+      outcome: 'UNKNOWN', skipOrFailureClass: 'relationship_unknown', curbState: 'UNKNOWN',
+    }).apply).toBe(false);
+    expect(decideSweepSidePresentation({
+      outcome: 'FAILED', skipOrFailureClass: 'execution_timeout', curbState: 'UNKNOWN',
+    }).apply).toBe(false);
+    expect(decideSweepSidePresentation({
+      outcome: 'FAILED', skipOrFailureClass: 'internal_failure', curbState: 'UNKNOWN',
+    }).apply).toBe(false);
+    expect(decideSweepSidePresentation({
+      outcome: 'COMPLETED', skipOrFailureClass: 'none', curbState: 'CAUTION', parkingSide: 'East',
+    })).toEqual({ apply: false, caution: true, reason: 'caution' });
+    const production = { success: true, segmentId: 'nyc_1', parkingSide: 'West', streetName: 'MELVILLE STREET' };
+    expect(applySweepSideToProductionResult(production, 'East')).toEqual({
+      success: true, segmentId: 'nyc_1', parkingSide: 'East', streetName: 'MELVILLE STREET', sideConfidence: 'high',
+    });
+    expect(createProductOverlayPlan(production, decideSweepSidePresentation({
+      outcome: 'COMPLETED', skipOrFailureClass: 'none', curbState: 'SUPPORTED', parkingSide: 'East',
+    }))).toBe(null);
   });
 });

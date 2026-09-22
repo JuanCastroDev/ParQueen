@@ -10,7 +10,12 @@ const {
   evaluateProductPathEligibility,
   deterministicSampleSelected,
 } = require('./minimumShadowControl');
-const { decideProductPresentation } = require('./productPathDecision');
+const {
+  decideProductPresentation,
+  decideSweepSidePresentation,
+  applySweepSideToProductionResult,
+} = require('./productPathDecision');
+const { runSweepSideResolution } = require('./sweepSideResolution');
 
 const OVERALL_DEADLINE_MS = 8000;
 
@@ -90,8 +95,10 @@ async function observePrivateResolverShadow(input = {}, options = {}) {
   const relationshipProviderFactory = options.relationshipProviderFactory
     || createOfficialDotRelationshipProvider;
   const runShadow = options.runShadow || runMinimumCleaningShadow;
+  const runSweepSide = options.runSweepSideResolution || runSweepSideResolution;
   const controller = new AbortController();
   let executionResult = null;
+  const sweepProduct = productEligible && input.productionPath === 'sweepnyc';
 
   try {
     const blockfaceResolver = resolverFactory({
@@ -104,9 +111,10 @@ async function observePrivateResolverShadow(input = {}, options = {}) {
       providerId: 'private-geosupport-function-3c',
       blockfaceResolver,
     });
-    executionResult = await boundedShadow(() => runShadow({
+    const shared = {
       location: input.location,
       legacyEvidence: input.legacyEvidence,
+      streetContext: input.streetContext,
       cohort: executionCohort(config, productEligible),
       signal: controller.signal,
       dependencies: {
@@ -114,9 +122,22 @@ async function observePrivateResolverShadow(input = {}, options = {}) {
         blockfaceResolver,
         officialRelationshipProvider,
       },
-    }), OVERALL_DEADLINE_MS, controller);
+    };
+    executionResult = await boundedShadow(
+      () => (sweepProduct ? runSweepSide(shared) : runShadow(shared)),
+      OVERALL_DEADLINE_MS,
+      controller,
+    );
   } catch {
     // Observational and product overlay failures must never replace the callable result.
+  }
+
+  if (productEligible && sweepProduct) {
+    const decision = decideSweepSidePresentation(executionResult);
+    if (decision.apply && !decision.caution) {
+      return applySweepSideToProductionResult(productionResult, decision.parkingSide);
+    }
+    return productionResult;
   }
 
   if (productEligible && typeof options.applyProductOverlay === 'function') {
