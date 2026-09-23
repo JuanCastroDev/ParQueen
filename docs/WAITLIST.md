@@ -3,6 +3,13 @@
 Double opt-in email waitlist for the public marketing site
 (`parqueen-marketing` Hosting target, same Firebase project).
 
+| | |
+|---|---|
+| Production / poster hostname | `https://join.parqueen.app` |
+| Poster signup URL (QR code) | `https://join.parqueen.app/join` |
+| Confirmation links | `https://join.parqueen.app/confirm` |
+| Staging | `https://parqueen-marketing.web.app` |
+
 ## Flow
 
 1. The visitor enters an email on the marketing site and completes the
@@ -269,8 +276,8 @@ RFC 8058 one-click unsubscribe:
 | `WAITLIST_ID_PEPPER` | secret | new, random 32-byte hex — **never rotate** without re-keying records |
 | `WAITLIST_RATE_LIMIT_PEPPER` | secret | new, random 32-byte hex |
 | `TURNSTILE_SECRET_KEY` | secret | Cloudflare Turnstile secret |
-| `WAITLIST_CONFIRM_BASE_URL` | param | `https://parqueen-marketing.web.app` (still staging during cutover) |
-| `WAITLIST_ALLOWED_HOSTNAMES` | param | `parqueen-marketing.web.app,parqueen.app` (cutover: both hosts) |
+| `WAITLIST_CONFIRM_BASE_URL` | param | `https://join.parqueen.app` (branded poster hostname) |
+| `WAITLIST_ALLOWED_HOSTNAMES` | param | `parqueen-marketing.web.app,parqueen.app,join.parqueen.app` |
 
 The two params have **no code default**. Their values live in the tracked
 `functions/.env.parkqueen-46475363-ccf36`, which the Functions emulator (with or
@@ -280,17 +287,20 @@ suggestion, so an unset value still stops non-interactive runs. That file holds
 public configuration only — never secrets. `functions/.env.local` stays
 ignored and is only for personal local overrides.
 
-Domain cutover happens in two reviewed commits:
+**Current state.** `join.parqueen.app` is a verified Firebase custom domain
+and the hostname printed on posters. `WAITLIST_CONFIRM_BASE_URL` points at it,
+so confirmation links open `https://join.parqueen.app/confirm`.
+`WAITLIST_ALLOWED_HOSTNAMES` accepts three hosts, so a signup verifies from the
+poster page, the apex, or staging:
 
-1. **Current (transitional) state:** `WAITLIST_ALLOWED_HOSTNAMES` accepts both
-   `parqueen-marketing.web.app` and `parqueen.app`, so signups verify on either
-   host. `WAITLIST_CONFIRM_BASE_URL` stays on staging, so confirmation links
-   still open `https://parqueen-marketing.web.app/confirm`. The Cloudflare
-   Turnstile widget must list both hostnames too.
-2. **After `parqueen.app` serves the marketing site:** set
-   `WAITLIST_CONFIRM_BASE_URL=https://parqueen.app`, deploy, and repeat the
-   confirmation test. Remove `parqueen-marketing.web.app` from the allowed
-   hostnames only once staging should stop accepting signups.
+- `join.parqueen.app` — poster / QR traffic, and the host in confirmation links
+- `parqueen.app` — the apex marketing site
+- `parqueen-marketing.web.app` — staging; keep it until staging should stop
+  accepting signups
+
+The Cloudflare Turnstile widget must list the same three hostnames. Drop a host
+from the allowed list only in its own reviewed commit, and repeat the
+confirmation test after each change.
 
 Parameter changes take effect only after the waitlist functions are
 redeployed.
@@ -307,9 +317,9 @@ redeployed.
    Hosting (log presence only — never the value), then remove the check.
 6. One real signup and confirmation to our own inbox.
 7. Verify unsubscribe end to end with our own inbox before public launch.
-8. At domain cutover, follow the two-step parameter change under
-   Configuration, redeploying the waitlist functions after each step and
-   repeating step 6.
+8. After any change to the two waitlist params under Configuration, redeploy
+   the four waitlist functions and repeat step 6 against the hostname in
+   `WAITLIST_CONFIRM_BASE_URL`.
 
 ## Tests
 
