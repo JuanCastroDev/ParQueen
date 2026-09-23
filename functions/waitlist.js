@@ -132,23 +132,71 @@ function buildConfirmUrl(baseUrl, token) {
 }
 
 function confirmationEmail(confirmUrl) {
+    // Derived, so the copy cannot drift away from the real token lifetime.
+    const expiryHours = TOKEN_TTL_MS / (60 * 60 * 1000);
+    const expiry = `This link expires in ${expiryHours} hours.`;
     const subject = 'Confirm your spot on the ParQueen waitlist';
     const text = [
-        'Thanks for joining the ParQueen waitlist.',
+        'ParQueen — Early access',
         '',
-        'Confirm your spot:',
+        'Confirm your spot.',
+        '',
+        "You're one step away from joining the ParQueen waitlist.",
+        '',
+        'Confirm your email:',
         confirmUrl,
         '',
-        'This link expires in 48 hours.',
+        expiry,
         "If you didn't request this, you can ignore this email.",
         '',
         'ParQueen · New York',
     ].join('\n');
-    const html = `<!doctype html><html><body style="margin:0;padding:32px;background:#f4f4f1;font-family:Helvetica,Arial,sans-serif;color:#0a0d11">
-<p style="margin:0 0 16px;font-size:16px">Thanks for joining the ParQueen waitlist.</p>
-<p style="margin:0 0 24px"><a href="${confirmUrl}" style="display:inline-block;padding:12px 20px;background:#087ff5;color:#ffffff;text-decoration:none;font-weight:700;border-radius:10px">Confirm my spot</a></p>
-<p style="margin:0 0 8px;font-size:13px;color:#4b5259">This link expires in 48 hours.</p>
-<p style="margin:0;font-size:13px;color:#4b5259">If you didn't request this, you can ignore this email.</p>
+
+    // Email HTML: tables, inline styles, no images, no webfonts, no
+    // JavaScript. The brand is set in type, so the email is intact when a
+    // client blocks remote content. Dark clients keep the navy; light
+    // clients get it too, because every colour is explicit.
+    const html = `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>${subject}</title>
+</head>
+<body style="margin:0;padding:0;background:#020b18;color:#e8f1ff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0">Confirm your email to finish joining the ParQueen waitlist.</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#020b18">
+<tr><td align="center" style="padding:32px 16px">
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;background:#071321;border:1px solid #16304d;border-radius:16px">
+<tr><td style="padding:40px 32px 0">
+<p style="margin:0;font-size:22px;font-weight:bold;letter-spacing:-0.5px;color:#ffffff">ParQueen</p>
+</td></tr>
+<tr><td style="padding:32px 32px 0">
+<p style="margin:0 0 12px;font-size:12px;font-weight:bold;letter-spacing:2px;text-transform:uppercase;color:#45d9ff">Early access</p>
+<h1 style="margin:0;font-size:32px;line-height:1.1;font-weight:bold;letter-spacing:-1px;color:#ffffff">Confirm your spot.</h1>
+<p style="margin:16px 0 0;font-size:16px;line-height:1.5;color:#a9bfd9">You&rsquo;re one step away from joining the ParQueen waitlist.</p>
+</td></tr>
+<tr><td style="padding:32px 32px 0">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+<td bgcolor="#1573ff" style="border-radius:12px">
+<a href="${confirmUrl}" style="display:inline-block;padding:16px 28px;font-size:16px;font-weight:bold;color:#ffffff;text-decoration:none;border-radius:12px">Confirm my email</a>
+</td></tr></table>
+</td></tr>
+<tr><td style="padding:24px 32px 0">
+<p style="margin:0;font-size:13px;line-height:1.5;color:#7e97b5">${expiry}</p>
+<p style="margin:8px 0 0;font-size:13px;line-height:1.5;color:#7e97b5">If you didn&rsquo;t request this, you can ignore this email.</p>
+</td></tr>
+<tr><td style="padding:24px 32px 40px">
+<p style="margin:0 0 8px;font-size:12px;line-height:1.6;color:#5d7a9c">If the button does not work, paste this link into your browser:</p>
+<p style="margin:0;font-size:12px;line-height:1.6;word-break:break-all"><a href="${confirmUrl}" style="color:#6fb6ff;text-decoration:underline">${confirmUrl}</a></p>
+</td></tr>
+<tr><td style="padding:0 32px 32px">
+<hr style="border:0;border-top:1px solid #16304d;margin:0 0 16px">
+<p style="margin:0;font-size:12px;color:#5d7a9c">ParQueen &middot; New York</p>
+</td></tr>
+</table>
+</td></tr>
+</table>
 </body></html>`;
     return { subject, text, html };
 }

@@ -108,13 +108,46 @@ describe('WL-U — waitlist pure helpers', () => {
         expect(waitlist.parseHostnameList(undefined)).toEqual([]);
     });
 
-    it('WL-U12 writes a plain confirmation email with the link and the 48-hour expiry', () => {
-        const { subject, text, html } = waitlist.confirmationEmail('https://parqueen.app/confirm#t=abc');
+    it('WL-U12 writes a branded confirmation email with the link and the real expiry', () => {
+        const url = 'https://join.parqueen.app/confirm#t=abc';
+        const { subject, text, html } = waitlist.confirmationEmail(url);
         expect(subject).toBe('Confirm your spot on the ParQueen waitlist');
-        expect(text).toContain('https://parqueen.app/confirm#t=abc');
-        expect(text).toContain('48 hours');
-        expect(html).toContain('Confirm my spot');
+
+        // The plain-text alternative stays a usable email on its own.
+        expect(text).toContain('ParQueen');
+        expect(text).toContain('Confirm your spot.');
+        expect(text).toContain(url);
+        expect(text).toContain('This link expires in 48 hours.');
+        expect(text).toContain("If you didn't request this");
+
+        // The copy states the lifetime the backend actually enforces.
+        expect(waitlist.TOKEN_TTL_MS / 3600000).toBe(48);
+        expect(html).toContain('This link expires in 48 hours.');
+
+        // A waitlist confirmation, never an account verification.
+        expect(html).toContain('Confirm my email');
+        expect(html).not.toMatch(/verify (your )?account/i);
+        expect(text).not.toMatch(/verify (your )?account/i);
+
+        // Readable with remote content blocked, and safe in every client.
         expect(html).not.toMatch(/<img/i);
+        expect(html).not.toMatch(/<script/i);
+        expect(html).not.toMatch(/fonts\.googleapis|@font-face|@import/i);
+        expect(html).toContain('>ParQueen<');
+        expect(html).toContain('Early access');
+
+        // The link is the confirm URL, in the button and as pasteable text.
+        expect(html.match(new RegExp(`href="${url.replace('#', '#')}"`, 'g'))).toHaveLength(2);
+        expect(html).toContain(`>${url}</a>`);
+    });
+
+    it('WL-U13 keeps the confirmation link on the configured base and in the fragment', () => {
+        const token = 'z'.repeat(43);
+        const url = waitlist.buildConfirmUrl('https://join.parqueen.app', token);
+        expect(url).toBe(`https://join.parqueen.app/confirm#t=${token}`);
+        // The token must never reach a server as a query parameter.
+        expect(url).not.toContain('?');
+        expect(waitlist.confirmationEmail(url).html).toContain(url);
     });
 });
 
