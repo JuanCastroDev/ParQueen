@@ -37,6 +37,9 @@ const { createSweepnycProductEvidence } = require('./curbIntelligence/createSwee
 const { runProductMeterLookup } = require('./curbIntelligence/productMeterLookup');
 const { persistPublicMeterRule } = require('./curbIntelligence/persistPublicMeterRule');
 const { logMeterEvent, METER_EVENTS } = require('./curbIntelligence/productMeterModel');
+const { runProductRestrictionLookup } = require('./curbIntelligence/productRestrictionLookup');
+const { persistPublicRestrictionRules } = require('./curbIntelligence/persistPublicRestrictionRules');
+const { logRestrictionEvent, RESTRICTION_EVENTS } = require('./curbIntelligence/productRestrictionModel');
 const {
   countUsableStreetIntelligence,
   decideDedupPath,
@@ -886,6 +889,8 @@ const _callableHooks = {
   curbShadowObserver: null,  // ({productionResult, location}) => Promise<same productionResult>
   productMeterLookup: null,
   persistPublicMeterRule: null,
+  productRestrictionLookup: null,
+  persistPublicRestrictionRules: null,
 };
 exports._callableHooks = _callableHooks;
 
@@ -4227,19 +4232,29 @@ async function _observeCurbIntelligenceShadow(productionResult, lat, lng, accura
   const observer = _callableHooks.curbShadowObserver || observePrivateResolverShadow;
   const meterLookup = _callableHooks.productMeterLookup || runProductMeterLookup;
   const persistMeter = _callableHooks.persistPublicMeterRule || persistPublicMeterRule;
+  const restrictionLookup = _callableHooks.productRestrictionLookup || runProductRestrictionLookup;
+  const persistRestrictions = _callableHooks.persistPublicRestrictionRules || persistPublicRestrictionRules;
   const location = { lat, lng, accuracyMeters };
+  const sharedLookupInput = {
+    productionResult,
+    location,
+    parkingSide: productionResult?.parkingSide,
+    streetContext: shadowEvidence?.streetContext,
+  };
   const meterPromise = Promise.resolve().then(() => {
     logMeterEvent({ event: METER_EVENTS.LOOKUP_ATTEMPTED, state: 'attempted', reason: 'started' });
-    return meterLookup({
-      productionResult,
-      location,
-      parkingSide: productionResult?.parkingSide,
-      streetContext: shadowEvidence?.streetContext,
-    }, {
+    return meterLookup(sharedLookupInput, {
       fetchFn: fetch,
       getSocrataToken: _socrataToken,
     });
   }).catch(() => ({ state: 'unavailable', reason: 'lookup_failed', event: METER_EVENTS.OMITTED, product: null }));
+  const restrictionPromise = Promise.resolve().then(() => {
+    logRestrictionEvent({ event: RESTRICTION_EVENTS.LOOKUP_ATTEMPTED, state: 'attempted', reason: 'started' });
+    return restrictionLookup(sharedLookupInput, {
+      fetchFn: fetch,
+      getSocrataToken: _socrataToken,
+    });
+  }).catch(() => ({ state: 'unavailable', reason: 'lookup_failed', event: RESTRICTION_EVENTS.OMITTED, rules: [] }));
 
   let publicResult = productionResult;
   try {
@@ -4279,6 +4294,21 @@ async function _observeCurbIntelligenceShadow(productionResult, lat, lng, accura
     }
   } catch {
     // Meter lookup is fail-soft: cleaning results stay intact.
+  }
+
+  try {
+    const restrictions = await restrictionPromise;
+    logRestrictionEvent(restrictions);
+    if (publicResult?.success && publicResult.segmentId) {
+      await persistRestrictions({
+        db,
+        Timestamp,
+        segmentId: publicResult.segmentId,
+        lookup: restrictions,
+      });
+    }
+  } catch {
+    // Restriction lookup is fail-soft: cleaning and meter results stay intact.
   }
   return publicResult;
 }

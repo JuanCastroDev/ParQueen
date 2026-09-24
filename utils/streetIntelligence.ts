@@ -2,11 +2,22 @@ import { formatDaysLabel } from './streetIntelDays';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+export type CurbRuleType =
+  | 'streetCleaning'
+  | 'meter'
+  | 'noParking'
+  | 'noStanding'
+  | 'noStopping'
+  | 'timeLimited'
+  | 'curbRestrictionSet';
+
 export interface CleaningSchedule {
   side: string;
   days: string[];      // ["Mon", "Thu"]
-  startTime: string;   // "08:00"
-  endTime: string;     // "11:00"
+  startTime?: string;   // "08:00"
+  endTime?: string;     // "11:00"
+  anytime?: boolean;
+  type?: CurbRuleType;
   ruleType?: string;   // "metered_no_parking_window" for short metered-street windows; absent for classic ASP
 }
 
@@ -19,12 +30,13 @@ export interface MeterSchedule {
 
 export interface StreetRuleDoc {
   id: string;
-  type: 'streetCleaning' | 'meter';
+  type: CurbRuleType;
   effectiveDate: any;         // Firestore Timestamp
   supersededAt: any | null;
   schedules: CleaningSchedule[] | MeterSchedule[];
   source: string;
   lastSourceSync: string | null;
+  restrictionSchemaVersion?: number;
   meterTerms?: {
     maxStayMinutes?: number;
     rateDisplay?: string;
@@ -92,10 +104,12 @@ export interface SuspensionDoc {
 
 export interface SafeUntilResult {
   activeNow: boolean;
-  safeUntil: Date | null;    // null = no cleaning rule for this side
+  safeUntil: Date | null;    // null = no movement restriction for this side
   nextDay: string | null;    // e.g. "Thursday"
   nextTime: string | null;   // e.g. "8:00 AM"
   scheduleDescription: string | null; // "Mon & Thu · 8–11 AM"
+  restrictionKind?: CurbRuleType | null;
+  anytime?: boolean;
 }
 
 // ─── Geocoding & Geometry ─────────────────────────────────────────────────────
@@ -315,73 +329,130 @@ function isSuspendedOnDateKey(dateKey: string, affectsType: string, suspensions:
   );
 }
 
+const PROHIBITIVE_TYPES = new Set(['streetCleaning', 'noParking', 'noStanding', 'noStopping']);
+
+function isProhibitive(schedule: CleaningSchedule): boolean {
+  const type = schedule.type || 'streetCleaning';
+  return PROHIBITIVE_TYPES.has(type);
+}
+
+function describeSchedule(sched: CleaningSchedule): string {
+  const daysLabel = formatDaysLabel(sched.days);
+  if (sched.anytime) return `${daysLabel} · Anytime`;
+  if (!sched.startTime || !sched.endTime) return daysLabel;
+  const [sh, sm] = sched.startTime.split(':').map(Number);
+  const [eh, em] = sched.endTime.split(':').map(Number);
+  return `${daysLabel} · ${fmtClock(sh, sm)}–${fmtClock(eh, em)}`;
+}
+
+function fmtClock(h: number, m: number) {
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const hour = h % 12 || 12;
+  return m === 0 ? `${hour} ${ampm}` : `${hour}:${String(m).padStart(2, '0')} ${ampm}`;
+}
+
+function kindOf(sched: CleaningSchedule): CurbRuleType {
+  return sched.type || 'streetCleaning';
+}
+
+function isHolidaySensitive(sched: CleaningSchedule): boolean {
+  const type = kindOf(sched);
+  return type === 'streetCleaning';
+}
+
 export function computeSafeUntil(
   schedules: CleaningSchedule[],
   parkingSide: string,
   suspensions: SuspensionDoc[],
   now: Date = new Date(),
 ): SafeUntilResult {
-  const sideSchedules = schedules.filter((s) => s.side === parkingSide);
+  const sideSchedules = schedules.filter((s) => s.side === parkingSide && isProhibitive(s));
 
   if (!sideSchedules.length) {
-    return { activeNow: false, safeUntil: null, nextDay: null, nextTime: null, scheduleDescription: null };
+    return { activeNow: false, safeUntil: null, nextDay: null, nextTime: null, scheduleDescription: null, restrictionKind: null };
   }
 
-  // Build human-readable schedule description from first matching rule
-  const first = sideSchedules[0];
-  const daysLabel = formatDaysLabel(first.days);
-  const [sh, sm] = first.startTime.split(':').map(Number);
-  const [eh, em] = first.endTime.split(':').map(Number);
-  const fmt = (h: number, m: number) => {
-    const ampm = h >= 12 ? 'PM' : 'AM';
-    const hour = h % 12 || 12;
-    return m === 0 ? `${hour} ${ampm}` : `${hour}:${String(m).padStart(2, '0')} ${ampm}`;
-  };
-  const scheduleDescription = `${daysLabel} · ${fmt(sh, sm)}–${fmt(eh, em)}`;
-
+  const fmt = fmtClock;
   const todayKey = toNYCDateKey(now);
   const todayName = nycWeekday(now);
   const nowMinutes = nycMinutesSinceMidnight(now);
 
-  // Check if currently inside a cleaning window (NYC wall-clock time)
-  for (const sched of sideSchedules) {
-    if (sched.days.includes(todayName)) {
-      const startMin = parseMinutes(sched.startTime);
-      const endMin = parseMinutes(sched.endTime);
-      if (nowMinutes >= startMin && nowMinutes < endMin && !isSuspendedOnDateKey(todayKey, 'streetCleaning', suspensions)) {
-        const end = nycWallClockToInstant(todayKey, sched.endTime);
-        return { activeNow: true, safeUntil: end, nextDay: null, nextTime: null, scheduleDescription };
-      }
-    }
+  const anytime = sideSchedules.filter(sched => sched.anytime === true);
+  if (anytime.length) {
+    const active = [...anytime].sort((a, b) => (
+      (a.type === 'noStopping' ? 3 : a.type === 'noStanding' ? 2 : 1)
+      - (b.type === 'noStopping' ? 3 : b.type === 'noStanding' ? 2 : 1)
+    )).at(-1) || anytime[0];
+    return {
+      activeNow: true,
+      safeUntil: null,
+      nextDay: null,
+      nextTime: null,
+      scheduleDescription: describeSchedule(active),
+      restrictionKind: kindOf(active),
+      anytime: true,
+    };
   }
 
-  // Find next cleaning window within the next MAX_FORWARD_SEARCH_DAYS_AHEAD NYC civil calendar days
+  const rankedActive: CleaningSchedule[] = [];
+  for (const sched of sideSchedules) {
+    if (!sched.startTime || !sched.endTime || !sched.days.includes(todayName)) continue;
+    const startMin = parseMinutes(sched.startTime);
+    const endMin = parseMinutes(sched.endTime);
+    if (nowMinutes >= startMin && nowMinutes < endMin) {
+      if (isHolidaySensitive(sched) && isSuspendedOnDateKey(todayKey, 'streetCleaning', suspensions)) continue;
+      rankedActive.push(sched);
+    }
+  }
+  if (rankedActive.length) {
+    const active = rankedActive.sort((a, b) => (
+      (a.type === 'noStopping' ? 3 : a.type === 'noStanding' ? 2 : 1)
+      - (b.type === 'noStopping' ? 3 : b.type === 'noStanding' ? 2 : 1)
+    )).at(-1) || rankedActive[0];
+    const end = nycWallClockToInstant(todayKey, active.endTime as string);
+    return {
+      activeNow: true,
+      safeUntil: end,
+      nextDay: null,
+      nextTime: null,
+      scheduleDescription: describeSchedule(active),
+      restrictionKind: kindOf(active),
+    };
+  }
+
+  let best: { sched: CleaningSchedule; start: Date; dayName: string } | null = null;
   for (let daysAhead = 0; daysAhead <= MAX_FORWARD_SEARCH_DAYS_AHEAD; daysAhead++) {
     const candidateKey = addNYCDateKeyDays(todayKey, daysAhead);
     const dayName = weekdayOfNYCDateKey(candidateKey);
-
     for (const sched of sideSchedules) {
-      if (!sched.days.includes(dayName)) continue;
-
-      // Skip if this window already passed today
+      if (!sched.startTime || !sched.endTime || !sched.days.includes(dayName)) continue;
       if (daysAhead === 0 && parseMinutes(sched.startTime) <= nowMinutes) continue;
-      if (isSuspendedOnDateKey(candidateKey, 'streetCleaning', suspensions)) continue;
-
+      if (isHolidaySensitive(sched) && isSuspendedOnDateKey(candidateKey, 'streetCleaning', suspensions)) continue;
       const start = nycWallClockToInstant(candidateKey, sched.startTime);
-      const fullDay = FULL_DAY_NAMES[DAY_NAMES.indexOf(dayName)];
-      const [h, m] = sched.startTime.split(':').map(Number);
-      return {
-        activeNow: false,
-        safeUntil: start,
-        nextDay: fullDay,
-        nextTime: fmt(h, m),
-        scheduleDescription,
-      };
+      if (!best || start.getTime() < best.start.getTime()) best = { sched, start, dayName };
     }
+    if (best) break;
   }
-
-  // No cleaning found in 14 days (all suspended or no rules hit)
-  return { activeNow: false, safeUntil: null, nextDay: null, nextTime: null, scheduleDescription };
+  if (!best) {
+    return {
+      activeNow: false,
+      safeUntil: null,
+      nextDay: null,
+      nextTime: null,
+      scheduleDescription: describeSchedule(sideSchedules[0]),
+      restrictionKind: kindOf(sideSchedules[0]),
+    };
+  }
+  const [h, m] = best.sched.startTime!.split(':').map(Number);
+  const fullDay = FULL_DAY_NAMES[DAY_NAMES.indexOf(best.dayName)];
+  return {
+    activeNow: false,
+    safeUntil: best.start,
+    nextDay: fullDay,
+    nextTime: fmt(h, m),
+    scheduleDescription: describeSchedule(best.sched),
+    restrictionKind: kindOf(best.sched),
+  };
 }
 
 // ─── Block Complexity ─────────────────────────────────────────────────────────

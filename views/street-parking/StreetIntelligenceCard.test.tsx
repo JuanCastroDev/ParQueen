@@ -390,4 +390,61 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         expect(text).not.toContain('Metered parking');
         expect(text).not.toContain('No meter');
     });
+
+    it('T. prohibition-only card shows No Parking Anytime without inventing a clock', async () => {
+        streetRuleRows = [{
+            id: 'dot_restrictions_v1',
+            data: {
+                type: 'curbRestrictionSet',
+                source: 'nyc_open_data',
+                restrictionSchemaVersion: 1,
+                schedules: [{ side: 'West', days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], anytime: true, type: 'noParking' }],
+            },
+        }];
+        segmentData = {
+            status: 'active',
+            source: 'nyc_open_data',
+            confidenceScore: 0.95,
+            provenance: { provider: 'nyc_open_data' },
+            blockFaceEvidence: { blockDecisive: true, sideResolved: true, parseComplete: true },
+        };
+        const { renderer, getResult } = await renderCard();
+        const text = renderedText(renderer);
+        expect(text).toContain('Parking restricted');
+        expect(text).toContain('No Parking');
+        expect(text).toContain('Anytime');
+        expect(text).not.toContain('Safe Until');
+        expect(getResult().anytime).toBe(true);
+        expect(getResult().safeUntil).toBeNull();
+    });
+
+    it('L. active No Standing shows restricted now instead of a future Safe Until', async () => {
+        vi.setSystemTime(new Date('2026-08-24T16:30:00-04:00'));
+        streetRuleRows = [{
+            id: 'dot_restrictions_v1',
+            data: {
+                type: 'curbRestrictionSet',
+                source: 'nyc_open_data',
+                restrictionSchemaVersion: 1,
+                schedules: [{
+                    side: 'West', days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
+                    startTime: '16:00', endTime: '19:00', type: 'noStanding',
+                }],
+            },
+        }];
+        segmentData = {
+            status: 'active',
+            source: 'nyc_open_data',
+            confidenceScore: 0.95,
+            provenance: { provider: 'nyc_open_data' },
+            blockFaceEvidence: { blockDecisive: true, sideResolved: true, parseComplete: true },
+        };
+        const { renderer, getResult } = await renderCard();
+        const text = renderedText(renderer);
+        expect(text).toContain('Parking restricted now');
+        expect(text).toContain('No Standing');
+        expect(text).not.toContain('Safe Until');
+        expect(getResult().activeNow).toBe(true);
+        expect(getResult().restrictionKind).toBe('noStanding');
+    });
 });

@@ -113,6 +113,9 @@ export const StreetIntelligenceCard = ({
   const [scheduleCount, setScheduleCount] = useState(0);
   const [meterWindows, setMeterWindows] = useState<MeterWindow[]>([]);
   const [meterTerms, setMeterTerms] = useState<{ maxStayMinutes?: number; rateDisplay?: string } | null>(null);
+  const [restrictionWindows, setRestrictionWindows] = useState<CleaningSchedule[]>([]);
+  const [timeLimitedWindows, setTimeLimitedWindows] = useState<CleaningSchedule[]>([]);
+  const [cleaningWindows, setCleaningWindows] = useState<CleaningSchedule[]>([]);
   const [availableSides, setAvailableSides] = useState<string[]>([]);
   const [presentation, setPresentation] = useState<StreetIntelligencePresentation>({
     state: 'unknown', source: null, lastSourceSync: null, reasons: [],
@@ -136,6 +139,9 @@ export const StreetIntelligenceCard = ({
     setAvailableSides([]);
     setMeterWindows([]);
     setMeterTerms(null);
+    setRestrictionWindows([]);
+    setTimeLimitedWindows([]);
+    setCleaningWindows([]);
     setPresentation({ state: 'unknown', source: null, lastSourceSync: null, reasons: [] });
 
     const load = async () => {
@@ -173,9 +179,19 @@ export const StreetIntelligenceCard = ({
         const suspensions = suspSnap.docs
           .map(d => ({ id: d.id, ...d.data() } as SuspensionDoc))
           .filter(s => s.status !== 'archived');
-        const cleaningRules = rules.filter(r => r.type !== 'meter');
+        const cleaningRules = rules.filter(r => r.type === 'streetCleaning' || !r.type);
         const meterRules = rules.filter(r => r.type === 'meter');
-        const allSchedules: CleaningSchedule[] = cleaningRules.flatMap(r => (r.schedules || []) as CleaningSchedule[]);
+        const restrictionSet = rules.filter(r => r.type === 'curbRestrictionSet' || r.type === 'noParking' || r.type === 'noStanding' || r.type === 'noStopping' || r.type === 'timeLimited');
+        const allSchedules: CleaningSchedule[] = cleaningRules.flatMap(r => ((r.schedules || []) as CleaningSchedule[]).map(s => ({ ...s, type: 'streetCleaning' as const })));
+        const restrictionSchedules: CleaningSchedule[] = restrictionSet.flatMap(r => ((r.schedules || []) as CleaningSchedule[]).map(s => ({
+          ...s,
+          type: (s.type || r.type) as CleaningSchedule['type'],
+        })));
+        const movement = [
+          ...allSchedules,
+          ...restrictionSchedules.filter(s => s.type === 'noParking' || s.type === 'noStanding' || s.type === 'noStopping'),
+        ];
+        const timeLimited = restrictionSchedules.filter(s => s.type === 'timeLimited');
         const meters: MeterWindow[] = meterRules.flatMap(r => (r.schedules || []) as MeterWindow[]);
         const terms = meterRules.find(r => r.meterTerms)?.meterTerms || null;
 
@@ -183,6 +199,9 @@ export const StreetIntelligenceCard = ({
         setScheduleCount(allSchedules.length);
         setMeterWindows(meters);
         setMeterTerms(terms);
+        setRestrictionWindows(restrictionSchedules.filter(s => s.type === 'noParking' || s.type === 'noStanding' || s.type === 'noStopping'));
+        setTimeLimitedWindows(timeLimited);
+        setCleaningWindows(allSchedules);
 
         if (nextPresentation.state === 'unknown') {
           cdbg('UI branch: unknown/unavailable');
@@ -193,6 +212,7 @@ export const StreetIntelligenceCard = ({
         if (!effectiveSide) {
           const sides = [...new Set([
             ...allSchedules.map(s => s.side),
+            ...restrictionSchedules.map(s => s.side),
             ...meters.map(s => s.side),
           ])].filter(Boolean);
           cdbg(`UI branch: side-picker schedules=${allSchedules.length}`);
@@ -202,7 +222,7 @@ export const StreetIntelligenceCard = ({
         }
 
         cdbg(`computeSafeUntil input: scheduleCount=${allSchedules.length} suspensionCount=${suspensions.length}`);
-        const r = computeSafeUntil(allSchedules, effectiveSide, suspensions);
+        const r = computeSafeUntil(movement, effectiveSide, suspensions);
         cdbg(`computeSafeUntil result: activeNow=${r.activeNow} hasUpcoming=${Boolean(r.nextDay)} hasDescription=${Boolean(r.scheduleDescription)}`);
 
         const branch = r.scheduleDescription === null
@@ -311,6 +331,32 @@ export const StreetIntelligenceCard = ({
   const effectiveSideLabel = sideLabel(effectiveSide);
   const sideHeader = `${streetName} · ${effectiveSideLabel}${confirmedParkingSide ? ' ✓' : ''}`;
   const sideMeters = meterWindows.filter(window => !window.side || window.side === effectiveSide);
+  const sideRestrictions = restrictionWindows.filter(window => !window.side || window.side === effectiveSide);
+  const sideTimeLimits = timeLimitedWindows.filter(window => !window.side || window.side === effectiveSide);
+  const kindTitle = (kind?: string | null) => {
+    if (kind === 'noStanding') return t('street_intel.no_standing');
+    if (kind === 'noStopping') return t('street_intel.no_stopping');
+    if (kind === 'noParking') return t('street_intel.no_parking');
+    return t('street_intel.street_cleaning');
+  };
+  const restrictionDetails = sideRestrictions.length ? (
+    <div className="pq-mycar-intel-reason" style={{ marginTop: 10, marginBottom: 0 }}>
+      {sideRestrictions.map((window, index) => (
+        <div key={`${window.type}-${index}`} className={index ? 'mt-2' : undefined}>
+          <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)] mb-1">
+            {kindTitle(window.type)}
+          </span>
+          <span className="block">{window.anytime ? t('street_intel.anytime') : formatMeterWindowLabel({
+            side: window.side,
+            days: window.days,
+            startTime: window.startTime || '00:00',
+            endTime: window.endTime || '00:00',
+          })}</span>
+        </div>
+      ))}
+    </div>
+  ) : null;
+  const sideCleaning = cleaningWindows.filter(window => !window.side || window.side === effectiveSide);
   const meterDetails = sideMeters.length ? (
     <div className="pq-mycar-intel-reason" style={{ marginTop: 10, marginBottom: 0 }}>
       <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)] mb-1">
@@ -325,20 +371,38 @@ export const StreetIntelligenceCard = ({
       )}
     </div>
   ) : null;
-  const cleaningDetails = result.scheduleDescription ? (
+  const cleaningDetails = sideCleaning.length ? (
     <div className="pq-mycar-intel-reason" style={{ marginTop: 10, marginBottom: 0 }}>
       <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)] mb-1">
         {t('street_intel.street_cleaning')}
       </span>
-      <span className="block">{result.scheduleDescription}</span>
+      <span className="block">{formatMeterWindowLabel({
+        side: sideCleaning[0].side,
+        days: sideCleaning[0].days,
+        startTime: sideCleaning[0].startTime || '00:00',
+        endTime: sideCleaning[0].endTime || '00:00',
+      })}</span>
     </div>
-  ) : sideMeters.length ? (
+  ) : (sideMeters.length || sideRestrictions.length) ? (
     <p className="pq-mycar-intel-reason" style={{ marginTop: 10, marginBottom: 0 }}>
       {t('street_intel.no_cleaning_schedule_found')}
     </p>
   ) : null;
+  const timeLimitDetails = sideTimeLimits.length ? (
+    <div className="pq-mycar-intel-reason" style={{ marginTop: 10, marginBottom: 0 }}>
+      <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)] mb-1">
+        {t('street_intel.time_limited')}
+      </span>
+      <span className="block">{formatMaxStay((sideTimeLimits[0] as any).hourLimit ? Number((sideTimeLimits[0] as any).hourLimit) * 60 : undefined) || formatMeterWindowLabel({
+        side: sideTimeLimits[0].side,
+        days: sideTimeLimits[0].days,
+        startTime: sideTimeLimits[0].startTime || '00:00',
+        endTime: sideTimeLimits[0].endTime || '00:00',
+      })}</span>
+    </div>
+  ) : null;
 
-  if (!result.scheduleDescription && !sideMeters.length) {
+  if (!result.scheduleDescription && !sideMeters.length && !sideRestrictions.length) {
     return (
       <div className="pq-mycar-intel">
         <div className="pq-mycar-intel-street">
@@ -407,12 +471,20 @@ export const StreetIntelligenceCard = ({
             <p className={`pq-mycar-intel-datetime ${datetimeTone}`}>
               {presentation.state === 'caution'
                 ? t('street_intel.may_be_active_now')
-                : t('street_intel.active_now')}
+                : result.anytime
+                  ? t('street_intel.restricted')
+                  : result.restrictionKind && result.restrictionKind !== 'streetCleaning'
+                    ? t('street_intel.restricted_now')
+                    : t('street_intel.active_now')}
             </p>
             <p className="pq-mycar-intel-reason" style={{ marginTop: 4, marginBottom: 0 }}>
               {presentation.state === 'caution'
                 ? t('street_intel.may_be_active_now_body')
-                : t('street_intel.active_now_body')}
+                : result.restrictionKind && result.restrictionKind !== 'streetCleaning'
+                  ? (result.anytime
+                    ? `${kindTitle(result.restrictionKind)} · ${t('street_intel.anytime')}`
+                    : t('street_intel.until', { time: result.safeUntil ? result.safeUntil.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : '' }))
+                  : t('street_intel.active_now_body')}
             </p>
           </div>
         </div>
@@ -447,7 +519,9 @@ export const StreetIntelligenceCard = ({
         </>
       ) : null}
 
+      {restrictionDetails}
       {cleaningDetails}
+      {timeLimitDetails}
       {meterDetails}
 
       <div className="pq-mycar-intel-chips">

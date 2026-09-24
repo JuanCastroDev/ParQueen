@@ -201,7 +201,36 @@ describe('J existing 100‰ shadow behavior unchanged', () => {
     );
     expect(INDEX_SRC).toContain('_observeCurbIntelligenceShadow(productionResult, lat, lng, accuracyMeters, shadowEvidence)');
     expect(INDEX_SRC).toContain('productMeterLookup');
+    expect(INDEX_SRC).toContain('productRestrictionLookup');
     expect(INDEX_SRC).not.toMatch(/CURB_SHADOW_SAMPLE_PERMILLE\s*=/);
     expect(INDEX_SRC).not.toMatch(/maxScale\s*:/);
+  });
+});
+
+describe('W-Y restriction cache usable + one-shot migration', () => {
+  const { countUsableProhibitionSchedules, hasRestrictionEvaluation, shouldCallRestrictionMigrationRefresh } = require('./streetIntelRefresh');
+
+  it('W. a cached prohibition is usable Street Intelligence', () => {
+    const prohibition = [{
+      type: 'curbRestrictionSet',
+      restrictionSchemaVersion: 1,
+      schedules: [{ days: ['Mon'], startTime: '16:00', endTime: '19:00', anytime: false }],
+    }];
+    expect(countUsableProhibitionSchedules(prohibition)).toBe(1);
+    expect(countUsableStreetIntelligence(prohibition)).toBe(1);
+    expect(shouldCallEmptyCacheRefresh(countUsableStreetIntelligence(prohibition), false)).toBe(false);
+  });
+
+  it('X. legacy cache without a restriction evaluation refreshes once', () => {
+    expect(hasRestrictionEvaluation([{ type: 'streetCleaning', schedules: [usableRule.schedules[0]] }])).toBe(false);
+    expect(shouldCallRestrictionMigrationRefresh(1, false, false)).toBe(true);
+    expect(CLIENT_SRC).toContain('shouldCallRestrictionMigrationRefresh');
+    expect(CLIENT_SRC).toContain("logStreetIntelEvent('cache_hit_restriction_refresh'");
+  });
+
+  it('Y. evaluated restriction cache does not refresh again', () => {
+    expect(shouldCallRestrictionMigrationRefresh(1, true, false)).toBe(false);
+    expect(shouldCallRestrictionMigrationRefresh(1, false, true)).toBe(false);
+    expect(CLIENT_SRC).toContain('restrictionRefreshAttemptedRef');
   });
 });
