@@ -12,8 +12,9 @@ const EVENTS = Object.freeze({
   DEADLINE_SELECTED: 'restriction_deadline_selected',
 });
 
+const { emitStructuredLog } = require('../streetIntelStructuredLog');
+
 function logRestrictionEvent(result, write) {
-  const emit = typeof write === 'function' ? write : console.log;
   const event = result?.event || EVENTS.OMITTED;
   const payload = {
     message: event,
@@ -24,7 +25,7 @@ function logRestrictionEvent(result, write) {
   if (typeof result?.reason === 'string' && result.reason) payload.reason = result.reason;
   if (Number.isInteger(result?.ruleCount)) payload.ruleCount = result.ruleCount;
   if (Number.isInteger(result?.windowCount)) payload.windowCount = result.windowCount;
-  emit(JSON.stringify(payload));
+  emitStructuredLog(payload, write);
   return payload;
 }
 
