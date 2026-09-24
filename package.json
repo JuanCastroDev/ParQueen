@@ -14,6 +14,7 @@
     "install:functions": "npm install --prefix functions",
     "test:functions": "firebase emulators:exec --only functions,firestore,auth,storage \"sh -c 'echo FUNCTIONS_VITEST_START; vitest run --config vite.functions.config.ts'\"",
     "test:watch": "vitest",
+    "test:street-intel": "vitest run utils/streetIntelDays.test.ts utils/streetIntelMeter.test.ts utils/streetIntelRefresh.test.ts utils/streetIntelligence.test.ts utils/streetIntelligencePresentation.test.ts utils/streetIntelligenceDiagnosticPrivacy.test.ts functions/streetIntelDays.test.js functions/streetIntelDailyToken.test.js functions/streetIntelRefresh.test.js functions/streetIntelStructuredLog.test.js functions/nycOpenDataRestriction.test.js functions/curbIntelligence/productMeterLookup.test.js functions/curbIntelligence/productRestrictionLookup.test.js functions/curbIntelligence/persistPublicRestrictionRules.test.js functions/curbIntelligence/privateResolverCallableComposition.test.js views/street-parking/StreetIntelligenceCard.test.tsx i18n/streetIntelligenceSafetyCopy.test.ts i18n/streetIntelCopyParity.test.ts utils/streetIntelRelease.test.ts",
     "cap:sync": "npm run build && npx cap sync",
     "cap:copy": "npm run build && npx cap copy",
     "cap:open:android": "npx cap open android",

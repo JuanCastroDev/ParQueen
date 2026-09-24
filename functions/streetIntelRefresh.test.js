@@ -123,6 +123,9 @@ describe('G no request loop / duplicate storm', () => {
     expect(shouldCallEmptyCacheRefresh(0, true)).toBe(false);
     expect(CLIENT_SRC).toContain("logStreetIntelEvent('cache_hit_empty_no_retry'");
     expect(CLIENT_SRC).toMatch(/emptyRulesRefreshAttemptedRef\.current\.has\(nearest\.id\)/);
+    expect(CLIENT_SRC).toContain('runMatchNearestSegment');
+    expect(CLIENT_SRC).toContain('matchInFlightRef');
+    expect(CLIENT_SRC).toContain('saveInFlightRef');
   });
 
   it('empty refresh rewrites sweepnyc_v1 in place and does not create a second nyc_ doc', () => {

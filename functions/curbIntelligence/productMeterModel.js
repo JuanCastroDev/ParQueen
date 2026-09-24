@@ -123,8 +123,9 @@ function toPublicMeterProduct(association, parkingSide) {
   };
 }
 
+const { emitStructuredLog } = require('../streetIntelStructuredLog');
+
 function logMeterEvent(result, write) {
-  const emit = typeof write === 'function' ? write : console.log;
   const event = result?.event || METER_EVENTS.OMITTED;
   const payload = {
     message: event,
@@ -138,7 +139,7 @@ function logMeterEvent(result, write) {
     payload.hasFixedRate = Boolean(result.product.rate);
     payload.hasMaxStay = Number.isInteger(result.product.maxStayMinutes);
   }
-  emit(JSON.stringify(payload));
+  emitStructuredLog(payload, write);
   return payload;
 }
 

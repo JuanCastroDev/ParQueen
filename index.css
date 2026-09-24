@@ -3604,6 +3604,7 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   align-items: center;
   gap: 7px;
   margin-bottom: 8px;
+  min-width: 0;
 }
 .pq-mycar-intel-street p {
   font-size: 10px;
@@ -3612,6 +3613,10 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   text-transform: uppercase;
   color: color-mix(in srgb, var(--color-text-secondary) 68%, transparent);
   line-height: 1.25;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .pq-mycar-intel-hero {
   display: flex;

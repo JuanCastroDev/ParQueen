@@ -116,8 +116,9 @@ function shouldCallEmptyCacheRefresh(usableCount, alreadyAttempted) {
   return true;
 }
 
+const { emitStructuredLog } = require('./streetIntelStructuredLog');
+
 function logStreetIntelEvent(event, extra, write) {
-  const emit = typeof write === 'function' ? write : console.log;
   const payload = {
     message: event,
     event,
@@ -131,7 +132,7 @@ function logStreetIntelEvent(event, extra, write) {
       payload[key] = value;
     }
   }
-  emit(JSON.stringify(payload));
+  emitStructuredLog(payload, write);
   return payload;
 }
 

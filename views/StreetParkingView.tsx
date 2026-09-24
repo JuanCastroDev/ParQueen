@@ -119,6 +119,8 @@ export const MapView: React.FC<MapViewProps> = ({
     const lastGpsAccuracyRef = useRef<number | null>(null);
     const emptyRulesRefreshAttemptedRef = useRef<Set<string>>(new Set());
     const restrictionRefreshAttemptedRef = useRef<Set<string>>(new Set());
+    const matchInFlightRef = useRef<Map<string, Promise<any>>>(new Map());
+    const saveInFlightRef = useRef(false);
 
     // Show first-run tutorial once map is ready and user is authenticated
     useEffect(() => {
@@ -373,7 +375,7 @@ export const MapView: React.FC<MapViewProps> = ({
         const { lat, lng } = savedSpot;
         console.log('[segmentRetry] retrying saved location');
         (async () => {
-            const match = await matchNearestSegment(lat, lng);
+            const match = await runMatchNearestSegment(lat, lng);
             if (!match.segmentId) { console.warn('[segmentRetry] retry also returned null, status:', match.streetIntelStatus); return; }
             console.log('[segmentRetry] retry succeeded');
             const updated = { ...savedSpot, ...match, streetIntelCheckedAt: new Date().toISOString() };
@@ -638,6 +640,17 @@ export const MapView: React.FC<MapViewProps> = ({
         }
     };
 
+    const runMatchNearestSegment = (userLat: number, userLng: number) => {
+        const key = `${userLat.toFixed(5)},${userLng.toFixed(5)}`;
+        const existing = matchInFlightRef.current.get(key);
+        if (existing) return existing;
+        const pending = matchNearestSegment(userLat, userLng).finally(() => {
+            matchInFlightRef.current.delete(key);
+        });
+        matchInFlightRef.current.set(key, pending);
+        return pending;
+    };
+
     const [simSaveLoading, setSimSaveLoading] = useState(false);
     const simulateMyCarSave = async () => {
         if (!isDebugMode) return;
@@ -647,7 +660,7 @@ export const MapView: React.FC<MapViewProps> = ({
         setSimSaveLoading(true);
         dbg('--- SIMULATED MY CAR SAVE ---');
         try {
-            const match = await matchNearestSegment(lat, lng);
+            const match = await runMatchNearestSegment(lat, lng);
             dbg(`match: status=${match.streetIntelStatus} reason=${match.streetIntelReason ?? 'none'}`);
             const spot: SavedSpot = {
                 lat, lng,
@@ -684,11 +697,14 @@ export const MapView: React.FC<MapViewProps> = ({
 
     const saveMySpot = async () => {
         if (!userLocation) return;
+        if (saveInFlightRef.current) return;
+        saveInFlightRef.current = true;
+        try {
         const [lng, lat] = userLocation;
         dbg('saveMySpot started');
         const [address, segmentMatch] = await Promise.all([
             reverseGeocode(lng, lat),
-            matchNearestSegment(lat, lng),
+            runMatchNearestSegment(lat, lng),
         ]);
         const gpsAccuracyMeters = lastGpsAccuracyRef.current ?? null;
         const sideConfidence: SavedSpot['sideConfidence'] = segmentMatch.sideConfidence === 'high' && segmentMatch.parkingSide
@@ -720,11 +736,14 @@ export const MapView: React.FC<MapViewProps> = ({
         localStorage.setItem(SAVED_SPOT_KEY, JSON.stringify(spot));
         setSavedSpot(spot);
         setShowPostSaveOffer(true);
+        } finally {
+            saveInFlightRef.current = false;
+        }
     };
 
     // Used after handoff — skips GPS, uses the already-known claimed Ping coordinates
     const saveMySpotFromCoords = async (lat: number, lng: number, address: string) => {
-        const segmentMatch = await matchNearestSegment(lat, lng);
+        const segmentMatch = await runMatchNearestSegment(lat, lng);
         const sideConfidence: SavedSpot['sideConfidence'] = segmentMatch.sideConfidence === 'high' && segmentMatch.parkingSide
             ? 'high'
             : 'low';
@@ -761,7 +780,7 @@ export const MapView: React.FC<MapViewProps> = ({
         if (!savedSpot || retryingStreetIntel) return;
         setRetryingStreetIntel(true);
         try {
-            const match = await matchNearestSegment(savedSpot.lat, savedSpot.lng);
+            const match = await runMatchNearestSegment(savedSpot.lat, savedSpot.lng);
             const gpsAccuracyMeters = lastGpsAccuracyRef.current ?? null;
             const sideConfidence: SavedSpot['sideConfidence'] = match.sideConfidence === 'high' && match.parkingSide
                 ? 'high'

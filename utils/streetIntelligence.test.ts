@@ -418,6 +418,13 @@ describe('toNYCDateKey', () => {
     expect(toNYCDateKey(new Date('2026-08-28T00:00:00-04:00'))).toBe('2026-08-28');
   });
 
+  it('a midnight cleaning window becomes the next SAFE UNTIL after 11:50 PM', () => {
+    const overnight = [{ side: 'West', days: ['Fri'], startTime: '00:00', endTime: '01:00' }];
+    const result = computeSafeUntil(overnight, 'West', [], new Date('2026-08-27T23:50:00-04:00'));
+    expect(result.activeNow).toBe(false);
+    expect(result.nextTime).toBe('12 AM');
+  });
+
   it('winter EST boundary: the UTC rollover happens an hour earlier (7 PM, not 8 PM) but the NYC date is still correct', () => {
     // 7:01 PM EST → UTC is already 00:01 the next day.
     expect(toNYCDateKey(new Date('2026-01-15T19:01:00-05:00'))).toBe('2026-01-15');
