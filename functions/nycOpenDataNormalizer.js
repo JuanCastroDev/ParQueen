@@ -1,5 +1,7 @@
 'use strict';
 
+const { expandDailyDays, CANONICAL_WEEKDAYS } = require('./streetIntelDays');
+
 // Expands common street type abbreviations to full DOT words.
 // Applied BEFORE ordinal stripping so "81st" doesn't collide with "St" expansion.
 const SUFFIX_EXPAND = [
@@ -398,7 +400,7 @@ const _NYCOD_DAYS = {
   MON: 'Mon', TUE: 'Tue', TUES: 'Tue', WED: 'Wed', WEDS: 'Wed',
   THU: 'Thu', THUR: 'Thu', THURS: 'Thu', FRI: 'Fri', SAT: 'Sat', SUN: 'Sun',
 };
-const _NYCOD_WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const _NYCOD_WEEK = CANONICAL_WEEKDAYS.slice();
 
 // Parentheticals that are pictogram or administrative notes, never schedule.
 const _NYCOD_NOISE = [
@@ -469,9 +471,8 @@ const _meridiemOf = raw => {
 function parseNYCODDays(raw) {
   const cleaned = String(raw || '').toUpperCase().replace(/\bAND\b/g, ' ').replace(/&/g, ' ').replace(/,/g, ' ').trim();
   if (!cleaned) return [];
-  // "ALL DAYS" is an explicit every-day marker in the source text, not an
-  // inference drawn from a missing day list.
-  if (/^ALL\s+DAYS?$/.test(cleaned) || cleaned === 'DAILY') return _NYCOD_WEEK.slice();
+  const daily = expandDailyDays(cleaned);
+  if (daily) return daily;
   const range = cleaned.match(/^([A-Z]+)\s*(?:-|THRU|THROUGH)\s*([A-Z]+)$/);
   if (range) {
     const a = _NYCOD_DAYS[range[1]], b = _NYCOD_DAYS[range[2]];

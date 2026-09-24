@@ -1,12 +1,8 @@
 import { computeCrossRaw } from './streetIntelligence';
+import { parseSweepNYCDayList } from './streetIntelDays';
 
 // Must stay in sync with PARSER_VERSION in functions/index.js CF #27.
 export const PARSER_VERSION = '1.0';
-
-const DAY_ABBR: Record<string, string> = {
-  Monday: 'Mon', Tuesday: 'Tue', Wednesday: 'Wed', Thursday: 'Thu',
-  Friday: 'Fri', Saturday: 'Sat', Sunday: 'Sun',
-};
 
 function parseAmPmTime(t: string): string {
   const m = t.match(/^(\d+)(?::(\d+))?\s*(AM|PM)$/i);
@@ -27,7 +23,7 @@ export function parseSweepNYCSign(signText: string): {
   );
   if (!m) return null;
   const [, daysRaw, startRaw, endRaw, street, fromCross, toCross, side] = m;
-  const days = daysRaw.split(/,\s*/).map(d => DAY_ABBR[d.trim()] || d.trim()).filter(Boolean);
+  const days = parseSweepNYCDayList(daysRaw);
   if (!days.length) return null;
   return {
     street, fromCross, toCross, side,

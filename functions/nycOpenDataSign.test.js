@@ -240,8 +240,8 @@ describe('wiring and non-regression', () => {
   it('the SweepNYC primary path still uses its own parser, unchanged', () => {
     expect(INDEX_SRC).toMatch(/_parseSweepNYCSign\(signText, streetCtx\)/);
     expect(INDEX_SRC).toMatch(/function _parseSweepNYCSign\(signText, streetCtx\) \{/);
-    // Branch 1 anchor of the SweepNYC parser is untouched.
-    expect(INDEX_SRC).toMatch(/\(\?:\\s\+\\\(Side:\\s\*\(\\w\+\)\\\)\)\?\$/);
+    expect(INDEX_SRC).toMatch(/parseSweepNYCDayList\(/);
+    expect(INDEX_SRC).toContain('\\(Side:\\s*(\\w+)\\)');
   });
 
   it('unparsed signs are surfaced by count without logging their text', () => {

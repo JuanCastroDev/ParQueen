@@ -1,4 +1,4 @@
-import * as geofire from 'geofire-common';
+import { formatDaysLabel } from './streetIntelDays';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -318,7 +318,7 @@ export function computeSafeUntil(
 
   // Build human-readable schedule description from first matching rule
   const first = sideSchedules[0];
-  const daysLabel = first.days.join(' & ');
+  const daysLabel = formatDaysLabel(first.days);
   const [sh, sm] = first.startTime.split(':').map(Number);
   const [eh, em] = first.endTime.split(':').map(Number);
   const fmt = (h: number, m: number) => {
