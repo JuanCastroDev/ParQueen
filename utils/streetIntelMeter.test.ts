@@ -17,6 +17,42 @@ describe('meter copy and SAFE UNTIL isolation', () => {
     expect(cleaningOnly.scheduleDescription).not.toContain('7 PM');
   });
 
+  it('J/K. earliest prohibition wins and meter hours are ignored', () => {
+    const now = new Date('2026-08-24T10:00:00-04:00');
+    const standing = [{
+      side: 'West', days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'], startTime: '16:00', endTime: '19:00', type: 'noStanding' as const,
+    }];
+    const mixed = computeSafeUntil([...CLEANING, ...standing], 'West', [], now);
+    const cleaningOnly = computeSafeUntil(CLEANING, 'West', [], now);
+    expect(mixed.nextTime).toBe('4 PM');
+    expect(cleaningOnly.nextTime).not.toBe('4 PM');
+    const withMeterShaped = computeSafeUntil([
+      ...CLEANING,
+      { side: 'West', days: ['Mon'], startTime: '09:00', endTime: '19:00', type: 'meter' as const },
+    ], 'West', [], now);
+    expect(withMeterShaped.nextTime).toBe(cleaningOnly.nextTime);
+  });
+
+  it('L. an active No Standing window is restricted now', () => {
+    const now = new Date('2026-08-24T16:30:00-04:00');
+    const standing = [{
+      side: 'West', days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'], startTime: '16:00', endTime: '19:00', type: 'noStanding' as const,
+    }];
+    const result = computeSafeUntil([...CLEANING, ...standing], 'West', [], now);
+    expect(result.activeNow).toBe(true);
+    expect(result.restrictionKind).toBe('noStanding');
+  });
+
+  it('A. No Parking Anytime has no future clock', () => {
+    const result = computeSafeUntil([{
+      side: 'West', days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], anytime: true, type: 'noParking' as const,
+    }], 'West', [], new Date('2026-08-24T10:00:00-04:00'));
+    expect(result.activeNow).toBe(true);
+    expect(result.anytime).toBe(true);
+    expect(result.safeUntil).toBeNull();
+    expect(result.nextTime).toBeNull();
+  });
+
   it('formats source-backed meter hours without claiming free parking', () => {
     expect(formatMeterWindowLabel(METER[0])).toBe('Mon & Tue & Wed & Thu & Fri & Sat · 9 AM–7 PM');
     expect(formatMaxStay(120)).toBe('2 hr maximum');

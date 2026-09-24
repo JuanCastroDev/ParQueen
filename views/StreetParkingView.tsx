@@ -20,7 +20,7 @@ import { getTitleForCrowns } from '../utils/crowns';
 import { createUserLocationGeohashPersister } from '../utils/userLocationGeohash';
 import { getCurrentPosition, isGeolocationAvailable, watchPosition, type LocationWatchHandle } from '../utils/geolocation';
 import { derivePingLifecycle, getPingExpiresAtMs, getPingPhase, timestampToMillis } from '../utils/pingLifecycle';
-import { countUsableStreetIntelligence, shouldCallEmptyCacheRefresh, logStreetIntelEvent } from '../utils/streetIntelRefresh';
+import { countUsableStreetIntelligence, shouldCallEmptyCacheRefresh, shouldCallRestrictionMigrationRefresh, hasRestrictionEvaluation, logStreetIntelEvent } from '../utils/streetIntelRefresh';
 
 
 const reverseGeocode = async (lng: number, lat: number): Promise<string> => {
@@ -118,6 +118,7 @@ export const MapView: React.FC<MapViewProps> = ({
     // Tracks last GPS accuracy reading from watchPosition — used at saveMySpot time
     const lastGpsAccuracyRef = useRef<number | null>(null);
     const emptyRulesRefreshAttemptedRef = useRef<Set<string>>(new Set());
+    const restrictionRefreshAttemptedRef = useRef<Set<string>>(new Set());
 
     // Show first-run tutorial once map is ready and user is authenticated
     useEffect(() => {
@@ -549,6 +550,38 @@ export const MapView: React.FC<MapViewProps> = ({
                     console.warn('[Street Intelligence] empty-rules refresh retained the nearby row:', data.reason ?? 'unknown');
                 } catch (e: any) {
                     console.warn('[Street Intelligence] empty-rules refresh unavailable; retaining nearby row:', e?.code ?? 'unknown');
+                }
+            } else if (shouldCallRestrictionMigrationRefresh(
+                usableCount,
+                hasRestrictionEvaluation(nearbyRules),
+                restrictionRefreshAttemptedRef.current.has(nearest.id),
+            )) {
+                restrictionRefreshAttemptedRef.current.add(nearest.id);
+                logStreetIntelEvent('cache_hit_restriction_refresh', { via: 'nearby_80m', usableCount });
+                try {
+                    const fn = httpsCallable(getFunctions(getApp(), 'us-central1'), 'createSegmentFromSweepNYC');
+                    const accuracyMeters = lastGpsAccuracyRef.current;
+                    const result = await fn({
+                        lat: userLat,
+                        lng: userLng,
+                        ...(typeof accuracyMeters === 'number' && Number.isFinite(accuracyMeters)
+                            ? { accuracyMeters } : {}),
+                    });
+                    const data = result.data as { success: boolean; segmentId?: string; parkingSide?: string; streetName?: string; reason?: string; sideConfidence?: string };
+                    if (data.success && data.segmentId) {
+                        return {
+                            segmentId: data.segmentId,
+                            parkingSide: data.parkingSide ?? null,
+                            sideConfidence: data.sideConfidence === 'high' ? 'high' as const : undefined,
+                            restrictionVersionId: null,
+                            segmentStreetName: data.streetName ?? nearest.streetName ?? null,
+                            streetIntelStatus: 'found' as const,
+                            streetIntelReason: null,
+                        };
+                    }
+                    console.warn('[Street Intelligence] restriction migration retained the nearby row:', data.reason ?? 'unknown');
+                } catch (e: any) {
+                    console.warn('[Street Intelligence] restriction migration unavailable; retaining nearby row:', e?.code ?? 'unknown');
                 }
             } else if (usableCount > 0) {
                 logStreetIntelEvent('cache_hit_usable', { via: 'nearby_80m', usableCount });

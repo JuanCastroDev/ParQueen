@@ -41,7 +41,10 @@ describe('createSegmentFromSweepNYC private resolver composition boundary', () =
     expect(observer).not.toMatch(/officialBlockFaceId|blockFaceId|blockfaceId/);
     expect(observer).toContain('productMeterLookup');
     expect(observer).toContain('persistMeter');
+    expect(observer).toContain('productRestrictionLookup');
+    expect(observer).toContain('persistRestrictions');
     expect(observer).toContain('_publicCurbProductResult');
+    expect(observer).toContain('Restriction lookup is fail-soft');
   });
 
   it('loads active SweepNYC streetRules instead of only sweepnyc_v1', () => {

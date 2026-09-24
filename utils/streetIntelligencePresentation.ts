@@ -79,7 +79,8 @@ function hasConflictingSchedules(rules: Record<string, any>[]): boolean {
   const bySide = new Map<string, Map<string, Set<string>>>();
 
   for (const rule of rules) {
-    if (rule?.type === 'meter') continue;
+    if (rule?.type === 'meter' || rule?.type === 'curbRestrictionSet' || rule?.type === 'noParking'
+      || rule?.type === 'noStanding' || rule?.type === 'noStopping' || rule?.type === 'timeLimited') continue;
     const source = typeof rule?.source === 'string' ? rule.source : '';
     if (!source) continue;
     for (const schedule of Array.isArray(rule.schedules) ? rule.schedules : []) {

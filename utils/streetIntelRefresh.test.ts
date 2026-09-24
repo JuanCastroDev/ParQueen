@@ -3,6 +3,7 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import {
   countUsableSchedules,
+  countUsableStreetIntelligence,
   hasUsableSchedules,
   shouldCallEmptyCacheRefresh,
   logStreetIntelEvent,
@@ -28,6 +29,16 @@ describe('client empty-rules cache helper', () => {
 
   it('G. a second empty match does not refresh', () => {
     expect(shouldCallEmptyCacheRefresh(0, true)).toBe(false);
+  });
+
+  it('W/X/Y. prohibition cache is usable and restriction migration is one-shot', () => {
+    expect(countUsableStreetIntelligence([{
+      type: 'curbRestrictionSet',
+      restrictionSchemaVersion: 1,
+      schedules: [{ days: ['Mon'], startTime: '16:00', endTime: '19:00' }],
+    }])).toBe(1);
+    expect(CLIENT_SRC).toContain('shouldCallRestrictionMigrationRefresh');
+    expect(CLIENT_SRC).toContain('restrictionRefreshAttemptedRef');
   });
 
   it('H. logs stay privacy-safe JSON', () => {
