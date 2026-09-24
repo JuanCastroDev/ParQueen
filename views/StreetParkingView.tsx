@@ -20,7 +20,7 @@ import { getTitleForCrowns } from '../utils/crowns';
 import { createUserLocationGeohashPersister } from '../utils/userLocationGeohash';
 import { getCurrentPosition, isGeolocationAvailable, watchPosition, type LocationWatchHandle } from '../utils/geolocation';
 import { derivePingLifecycle, getPingExpiresAtMs, getPingPhase, timestampToMillis } from '../utils/pingLifecycle';
-import { countUsableSchedules, shouldCallEmptyCacheRefresh, logStreetIntelEvent } from '../utils/streetIntelRefresh';
+import { countUsableStreetIntelligence, shouldCallEmptyCacheRefresh, logStreetIntelEvent } from '../utils/streetIntelRefresh';
 
 
 const reverseGeocode = async (lng: number, lat: number): Promise<string> => {
@@ -520,7 +520,7 @@ export const MapView: React.FC<MapViewProps> = ({
             const restrictionVersionId = rulesSnap.docs[0]?.id || null;
             dbg(`streetRules count: ${rulesSnap.docs.length}`);
             const nearbyRules = rulesSnap.docs.map(d => d.data());
-            const usableCount = countUsableSchedules(nearbyRules);
+            const usableCount = countUsableStreetIntelligence(nearbyRules);
             const alreadyAttemptedEmptyRefresh = emptyRulesRefreshAttemptedRef.current.has(nearest.id);
             if (shouldCallEmptyCacheRefresh(usableCount, alreadyAttemptedEmptyRefresh)) {
                 emptyRulesRefreshAttemptedRef.current.add(nearest.id);

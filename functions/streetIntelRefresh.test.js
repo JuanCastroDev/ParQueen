@@ -8,7 +8,9 @@ const {
   ALLOWED_EXTRA_KEYS,
   isUsableSchedule,
   countUsableSchedules,
+  countUsableStreetIntelligence,
   hasUsableSchedules,
+  hasUsableStreetIntelligence,
   decideDedupPath,
   shouldCallEmptyCacheRefresh,
   logStreetIntelEvent,
@@ -39,11 +41,24 @@ describe('usable streetRules schedules', () => {
     expect(countUsableSchedules([{ type: 'meter', schedules: [usableRule.schedules[0]] }])).toBe(0);
     expect(countUsableSchedules([])).toBe(0);
   });
+
+  it('K. meter-only rules count as usable Street Intelligence', () => {
+    const meterOnly = [{ type: 'meter', schedules: [usableRule.schedules[0]] }];
+    expect(hasUsableStreetIntelligence(meterOnly)).toBe(true);
+    expect(hasUsableSchedules(meterOnly)).toBe(false);
+    expect(decideDedupPath(countUsableStreetIntelligence(meterOnly))).toBe('fast');
+    expect(shouldCallEmptyCacheRefresh(countUsableStreetIntelligence(meterOnly), false)).toBe(false);
+  });
+
+  it('L. truly empty cache still refreshes', () => {
+    expect(hasUsableStreetIntelligence([])).toBe(false);
+    expect(shouldCallEmptyCacheRefresh(countUsableStreetIntelligence([]), false)).toBe(true);
+  });
 });
 
 describe('A-B client 80m cache refresh gate', () => {
   it('A. usable nearby schedules do not request a callable refresh', () => {
-    expect(shouldCallEmptyCacheRefresh(2, false)).toBe(false);
+    expect(CLIENT_SRC).toContain('countUsableStreetIntelligence(nearbyRules)');
     expect(CLIENT_SRC).toContain("logStreetIntelEvent('cache_hit_usable'");
     const refreshIf = CLIENT_SRC.slice(
       CLIENT_SRC.indexOf('if (shouldCallEmptyCacheRefresh(usableCount'),
@@ -64,7 +79,7 @@ describe('A-B client 80m cache refresh gate', () => {
 
 describe('C-D SweepNYC dedup refresh gate', () => {
   it('C. usable stored schedules stay on the fast path', () => {
-    expect(decideDedupPath(1)).toBe('fast');
+    expect(INDEX_SRC).toContain('countUsableStreetIntelligence(rules)');
     expect(INDEX_SRC).toContain("logStreetIntelEvent('dedup_hit_usable'");
     expect(INDEX_SRC).toMatch(/if \(decideDedupPath\(usableCount\) === 'fast'\)/);
   });
@@ -184,7 +199,9 @@ describe('J existing 100‰ shadow behavior unchanged', () => {
       INDEX_SRC.indexOf('exports.createSegmentFromSweepNYC = onCall('),
       INDEX_SRC.indexOf('function _existingNYCOpenDataResult'),
     );
-    expect(callable).toContain('_observeCurbIntelligenceShadow(productionResult, lat, lng, accuracyMeters, shadowEvidence)');
+    expect(INDEX_SRC).toContain('_observeCurbIntelligenceShadow(productionResult, lat, lng, accuracyMeters, shadowEvidence)');
+    expect(INDEX_SRC).toContain('productMeterLookup');
     expect(INDEX_SRC).not.toMatch(/CURB_SHADOW_SAMPLE_PERMILLE\s*=/);
+    expect(INDEX_SRC).not.toMatch(/maxScale\s*:/);
   });
 });

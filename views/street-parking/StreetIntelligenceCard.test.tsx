@@ -334,4 +334,60 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         expect(text).toContain('NYC Open Data fallback');
         expect(text).not.toMatch(/Curb resolver|BFI|blockface|cohort|shadow|CSCL/i);
     });
+
+    it('A. shows cleaning and matched meter independently of SAFE UNTIL', async () => {
+        streetRuleRows = [
+            { id: 'rule1', data: MELVILLE_RULE },
+            {
+                id: 'park_nyc_v1',
+                data: {
+                    type: 'meter',
+                    source: 'park_nyc',
+                    schedules: [{ side: 'West', days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], startTime: '09:00', endTime: '19:00' }],
+                    meterTerms: { maxStayMinutes: 120, rateDisplay: '$3.50/hour' },
+                },
+            },
+        ];
+        const { renderer, getResult } = await renderCard();
+        const text = renderedText(renderer);
+        expect(text).toContain('Safe Until');
+        expect(text).toContain('Street cleaning');
+        expect(text).toContain('Metered parking');
+        expect(text).toContain('$3.50/hour');
+        expect(text).toContain('2 hr maximum');
+        expect(getResult().scheduleDescription).toContain('Mon & Thu');
+        expect(getResult().scheduleDescription).not.toContain('9');
+    });
+
+    it('C. meter-only does not render the generic unavailable card', async () => {
+        streetRuleRows = [{
+            id: 'park_nyc_v1',
+            data: {
+                type: 'meter',
+                source: 'park_nyc',
+                schedules: [{ side: 'West', days: ['Mon', 'Sat'], startTime: '09:00', endTime: '19:00' }],
+            },
+        }];
+        segmentData = {
+            status: 'active',
+            source: 'park_nyc',
+            confidenceScore: 0.95,
+            provenance: { provider: 'park_nyc' },
+        };
+        const { renderer, getResult } = await renderCard();
+        const text = renderedText(renderer);
+        expect(text).toContain('Metered parking');
+        expect(text).toContain('No street-cleaning schedule found');
+        expect(text).not.toContain('Parking rule data is unavailable for this location.');
+        expect(text).not.toContain('Safe Until');
+        expect(getResult().scheduleDescription).toBeNull();
+    });
+
+    it('B. cleaning-only omits the meter section', async () => {
+        const { renderer } = await renderCard();
+        const text = renderedText(renderer);
+        expect(text).toContain('Street cleaning');
+        expect(text).not.toContain('Metered parking');
+        expect(text).not.toContain('No meter');
+    });
 });

@@ -7,6 +7,9 @@ import {
   StreetRuleDoc, SuspensionDoc, SafeUntilResult, CleaningSchedule,
 } from '../../utils/streetIntelligence';
 import {
+  formatMeterWindowLabel, formatMeterStatus, formatMaxStay, MeterWindow,
+} from '../../utils/streetIntelMeter';
+import {
   classifyStreetIntelligence,
   StreetIntelligenceCautionReason,
   StreetIntelligencePresentation,
@@ -51,6 +54,7 @@ const fmtSourceDate = (value: string, locale: string) => {
 const sourceLabel = (source: StreetIntelligenceSource) => {
   if (source === 'admin') return t('street_intel.source_admin');
   if (source === 'sweepnyc') return t('street_intel.source_sweepnyc');
+  if (source === 'park_nyc') return t('street_intel.source_park_nyc');
   return t('street_intel.source_nyc_open_data');
 };
 
@@ -107,6 +111,8 @@ export const StreetIntelligenceCard = ({
 
   const [result, setResult] = useState<SafeUntilResult | null>(null);
   const [scheduleCount, setScheduleCount] = useState(0);
+  const [meterWindows, setMeterWindows] = useState<MeterWindow[]>([]);
+  const [meterTerms, setMeterTerms] = useState<{ maxStayMinutes?: number; rateDisplay?: string } | null>(null);
   const [availableSides, setAvailableSides] = useState<string[]>([]);
   const [presentation, setPresentation] = useState<StreetIntelligencePresentation>({
     state: 'unknown', source: null, lastSourceSync: null, reasons: [],
@@ -128,6 +134,8 @@ export const StreetIntelligenceCard = ({
     setLoadError(false);
     setResult(null);
     setAvailableSides([]);
+    setMeterWindows([]);
+    setMeterTerms(null);
     setPresentation({ state: 'unknown', source: null, lastSourceSync: null, reasons: [] });
 
     const load = async () => {
@@ -165,10 +173,16 @@ export const StreetIntelligenceCard = ({
         const suspensions = suspSnap.docs
           .map(d => ({ id: d.id, ...d.data() } as SuspensionDoc))
           .filter(s => s.status !== 'archived');
-        const allSchedules: CleaningSchedule[] = rules.flatMap(r => r.schedules || []);
+        const cleaningRules = rules.filter(r => r.type !== 'meter');
+        const meterRules = rules.filter(r => r.type === 'meter');
+        const allSchedules: CleaningSchedule[] = cleaningRules.flatMap(r => (r.schedules || []) as CleaningSchedule[]);
+        const meters: MeterWindow[] = meterRules.flatMap(r => (r.schedules || []) as MeterWindow[]);
+        const terms = meterRules.find(r => r.meterTerms)?.meterTerms || null;
 
         cdbg(`total schedules: ${allSchedules.length}`);
         setScheduleCount(allSchedules.length);
+        setMeterWindows(meters);
+        setMeterTerms(terms);
 
         if (nextPresentation.state === 'unknown') {
           cdbg('UI branch: unknown/unavailable');
@@ -177,7 +191,10 @@ export const StreetIntelligenceCard = ({
         }
 
         if (!effectiveSide) {
-          const sides = [...new Set(allSchedules.map(s => s.side))].filter(Boolean);
+          const sides = [...new Set([
+            ...allSchedules.map(s => s.side),
+            ...meters.map(s => s.side),
+          ])].filter(Boolean);
           cdbg(`UI branch: side-picker schedules=${allSchedules.length}`);
           setAvailableSides(sides);
           onResult?.(null);
@@ -293,8 +310,35 @@ export const StreetIntelligenceCard = ({
 
   const effectiveSideLabel = sideLabel(effectiveSide);
   const sideHeader = `${streetName} · ${effectiveSideLabel}${confirmedParkingSide ? ' ✓' : ''}`;
+  const sideMeters = meterWindows.filter(window => !window.side || window.side === effectiveSide);
+  const meterDetails = sideMeters.length ? (
+    <div className="pq-mycar-intel-reason" style={{ marginTop: 10, marginBottom: 0 }}>
+      <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)] mb-1">
+        {t('street_intel.metered_parking')}
+      </span>
+      <span className="block">{formatMeterWindowLabel(sideMeters[0])}</span>
+      <span className="block text-[var(--color-text-secondary)]">{formatMeterStatus(sideMeters)}</span>
+      {(meterTerms?.rateDisplay || formatMaxStay(meterTerms?.maxStayMinutes)) && (
+        <span className="block text-[var(--color-text-secondary)]">
+          {[meterTerms?.rateDisplay, formatMaxStay(meterTerms?.maxStayMinutes)].filter(Boolean).join(' · ')}
+        </span>
+      )}
+    </div>
+  ) : null;
+  const cleaningDetails = result.scheduleDescription ? (
+    <div className="pq-mycar-intel-reason" style={{ marginTop: 10, marginBottom: 0 }}>
+      <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)] mb-1">
+        {t('street_intel.street_cleaning')}
+      </span>
+      <span className="block">{result.scheduleDescription}</span>
+    </div>
+  ) : sideMeters.length ? (
+    <p className="pq-mycar-intel-reason" style={{ marginTop: 10, marginBottom: 0 }}>
+      {t('street_intel.no_cleaning_schedule_found')}
+    </p>
+  ) : null;
 
-  if (!result.scheduleDescription) {
+  if (!result.scheduleDescription && !sideMeters.length) {
     return (
       <div className="pq-mycar-intel">
         <div className="pq-mycar-intel-street">
@@ -352,7 +396,9 @@ export const StreetIntelligenceCard = ({
         </div>
       )}
 
-      {result.activeNow ? (
+      {result.scheduleDescription ? (
+        <>
+          {result.activeNow ? (
         <div className="pq-mycar-intel-hero">
           <div className={`pq-mycar-intel-hero-icon ${iconTone}`}>
             <AlertTriangle size={18} />
@@ -398,10 +444,11 @@ export const StreetIntelligenceCard = ({
           <p className="text-sm text-[var(--color-text-secondary)]">{t('street_intel.no_upcoming')}</p>
         </div>
       )}
+        </>
+      ) : null}
 
-      <p className="pq-mycar-intel-reason">
-        {t('street_intel.because', { schedule: result.scheduleDescription })}
-      </p>
+      {cleaningDetails}
+      {meterDetails}
 
       <div className="pq-mycar-intel-chips">
         <span className="pq-mycar-intel-chip">

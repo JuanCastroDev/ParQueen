@@ -10,14 +10,25 @@ export interface CleaningSchedule {
   ruleType?: string;   // "metered_no_parking_window" for short metered-street windows; absent for classic ASP
 }
 
+export interface MeterSchedule {
+  side: string;
+  days: string[];
+  startTime: string;
+  endTime: string;
+}
+
 export interface StreetRuleDoc {
   id: string;
-  type: 'streetCleaning';
+  type: 'streetCleaning' | 'meter';
   effectiveDate: any;         // Firestore Timestamp
   supersededAt: any | null;
-  schedules: CleaningSchedule[];
+  schedules: CleaningSchedule[] | MeterSchedule[];
   source: string;
   lastSourceSync: string | null;
+  meterTerms?: {
+    maxStayMinutes?: number;
+    rateDisplay?: string;
+  };
 }
 
 export interface SegmentDoc {
@@ -238,11 +249,11 @@ const NYC_CLOCK_FORMAT = new Intl.DateTimeFormat('en-US', {
   minute: '2-digit',
 });
 
-function nycWeekday(date: Date): string {
+export function nycWeekday(date: Date): string {
   return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' }).format(date);
 }
 
-function nycMinutesSinceMidnight(date: Date): number {
+export function nycMinutesSinceMidnight(date: Date): number {
   const parts = Object.fromEntries(NYC_CLOCK_FORMAT.formatToParts(date).map((p) => [p.type, p.value]));
   return Number(parts.hour) * 60 + Number(parts.minute);
 }

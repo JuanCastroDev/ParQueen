@@ -8,6 +8,8 @@ const ALLOWED_EXTRA_KEYS = new Set([
   'parsedCount',
   'sweepReason',
   'usableCount',
+  'cleaningCount',
+  'meterCount',
 ]);
 
 const STREET_INTEL_EVENTS = Object.freeze({
@@ -44,8 +46,30 @@ function countUsableSchedules(rules) {
   return count;
 }
 
+function countUsableMeterSchedules(rules) {
+  if (!Array.isArray(rules)) return 0;
+  let count = 0;
+  for (const rule of rules) {
+    if (!rule || typeof rule !== 'object') continue;
+    if (rule.type !== 'meter') continue;
+    const schedules = Array.isArray(rule.schedules) ? rule.schedules : [];
+    for (const schedule of schedules) {
+      if (isUsableSchedule(schedule)) count += 1;
+    }
+  }
+  return count;
+}
+
+function countUsableStreetIntelligence(rules) {
+  return countUsableSchedules(rules) + countUsableMeterSchedules(rules);
+}
+
 function hasUsableSchedules(rules) {
   return countUsableSchedules(rules) > 0;
+}
+
+function hasUsableStreetIntelligence(rules) {
+  return countUsableStreetIntelligence(rules) > 0;
 }
 
 function decideDedupPath(usableCount) {
@@ -83,7 +107,10 @@ module.exports = {
   ALLOWED_EXTRA_KEYS,
   isUsableSchedule,
   countUsableSchedules,
+  countUsableMeterSchedules,
+  countUsableStreetIntelligence,
   hasUsableSchedules,
+  hasUsableStreetIntelligence,
   decideDedupPath,
   shouldCallEmptyCacheRefresh,
   logStreetIntelEvent,

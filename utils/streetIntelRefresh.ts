@@ -6,6 +6,8 @@ const ALLOWED_EXTRA_KEYS = new Set([
   'parsedCount',
   'sweepReason',
   'usableCount',
+  'cleaningCount',
+  'meterCount',
 ]);
 
 export const STREET_INTEL_EVENTS = {
@@ -44,8 +46,31 @@ export function countUsableSchedules(rules: unknown): number {
   return count;
 }
 
+export function countUsableMeterSchedules(rules: unknown): number {
+  if (!Array.isArray(rules)) return 0;
+  let count = 0;
+  for (const rule of rules) {
+    if (!rule || typeof rule !== 'object') continue;
+    const rec = rule as { type?: unknown; schedules?: unknown };
+    if (rec.type !== 'meter') continue;
+    const schedules = Array.isArray(rec.schedules) ? rec.schedules : [];
+    for (const schedule of schedules) {
+      if (isUsableSchedule(schedule)) count += 1;
+    }
+  }
+  return count;
+}
+
+export function countUsableStreetIntelligence(rules: unknown): number {
+  return countUsableSchedules(rules) + countUsableMeterSchedules(rules);
+}
+
 export function hasUsableSchedules(rules: unknown): boolean {
   return countUsableSchedules(rules) > 0;
+}
+
+export function hasUsableStreetIntelligence(rules: unknown): boolean {
+  return countUsableStreetIntelligence(rules) > 0;
 }
 
 export function shouldCallEmptyCacheRefresh(usableCount: number, alreadyAttempted: boolean): boolean {

@@ -34,8 +34,11 @@ const { observePrivateResolverShadow } = require('./curbIntelligence/privateReso
 const { createFallbackShadowEvidence } = require('./curbIntelligence/fallbackShadowEvidence');
 const { createProductOverlayPlan } = require('./curbIntelligence/productPathDecision');
 const { createSweepnycProductEvidence } = require('./curbIntelligence/createSweepnycProductEvidence');
+const { runProductMeterLookup } = require('./curbIntelligence/productMeterLookup');
+const { persistPublicMeterRule } = require('./curbIntelligence/persistPublicMeterRule');
+const { logMeterEvent, METER_EVENTS } = require('./curbIntelligence/productMeterModel');
 const {
-  countUsableSchedules,
+  countUsableStreetIntelligence,
   decideDedupPath,
   logStreetIntelEvent,
 } = require('./streetIntelRefresh');
@@ -881,6 +884,8 @@ const _callableHooks = {
   hydrantResponse: null,  // (lat, lng) => Promise<{ok, meters}> — replaces the NYC DEP lookup
   smartRepliesResponse: null,  // (lastMessage, context) => Promise<{text}> — replaces GoogleGenAI call
   curbShadowObserver: null,  // ({productionResult, location}) => Promise<same productionResult>
+  productMeterLookup: null,
+  persistPublicMeterRule: null,
 };
 exports._callableHooks = _callableHooks;
 
@@ -3784,14 +3789,14 @@ async function _attachSweepnycProductEvidence(segmentId, segment, capture, ruleO
   }
 }
 
-async function _loadUsableCleaningRules(segmentId) {
+async function _loadActiveStreetRules(segmentId) {
   const snap = await db.collection(`streetSegments/${segmentId}/streetRules`)
     .where('supersededAt', '==', null)
     .get();
-  let rules = snap.docs.map(doc => doc.data()).filter(rule => rule && rule.type === 'streetCleaning');
-  if (!rules.length) {
+  let rules = snap.docs.map(doc => doc.data()).filter(Boolean);
+  if (!rules.some(rule => rule.type === 'streetCleaning')) {
     const fallback = await db.doc(`streetSegments/${segmentId}/streetRules/sweepnyc_v1`).get();
-    if (fallback.exists) rules = [fallback.data()];
+    if (fallback.exists) rules = [...rules.filter(rule => rule.type !== 'streetCleaning'), fallback.data()];
   }
   return rules;
 }
@@ -3800,8 +3805,8 @@ async function _considerSweepnycDedup({ segmentId, segment, lat, lng, capturePro
   if (segment.status === 'archived') {
     return { action: 'return', value: { success: false, reason: 'archived_segment' } };
   }
-  const rules = await _loadUsableCleaningRules(segmentId);
-  const usableCount = countUsableSchedules(rules);
+  const rules = await _loadActiveStreetRules(segmentId);
+  const usableCount = countUsableStreetIntelligence(rules);
   if (decideDedupPath(usableCount) === 'fast') {
     logStreetIntelEvent('dedup_hit_usable', { via, usableCount });
     const ps = _detectCardinalSide(lat, lng, segment.fromLat, segment.fromLng, segment.toLat, segment.toLng, segment.bearing ?? 90);
@@ -4220,20 +4225,62 @@ function _publicCurbProductResult(productionResult, observed) {
 
 async function _observeCurbIntelligenceShadow(productionResult, lat, lng, accuracyMeters, shadowEvidence) {
   const observer = _callableHooks.curbShadowObserver || observePrivateResolverShadow;
+  const meterLookup = _callableHooks.productMeterLookup || runProductMeterLookup;
+  const persistMeter = _callableHooks.persistPublicMeterRule || persistPublicMeterRule;
+  const location = { lat, lng, accuracyMeters };
+  const meterPromise = Promise.resolve().then(() => {
+    logMeterEvent({ event: METER_EVENTS.LOOKUP_ATTEMPTED, state: 'attempted', reason: 'started' });
+    return meterLookup({
+      productionResult,
+      location,
+      parkingSide: productionResult?.parkingSide,
+      streetContext: shadowEvidence?.streetContext,
+    }, {
+      fetchFn: fetch,
+      getSocrataToken: _socrataToken,
+    });
+  }).catch(() => ({ state: 'unavailable', reason: 'lookup_failed', event: METER_EVENTS.OMITTED, product: null }));
+
+  let publicResult = productionResult;
   try {
     const observed = await observer({
       productionResult,
-      location: { lat, lng, accuracyMeters },
+      location,
       ...(shadowEvidence || {}),
     }, {
       getSocrataToken: _socrataToken,
       applyProductOverlay: _callableHooks.curbProductOverlay || _applyCurbProductOverlay,
     });
-    return _publicCurbProductResult(productionResult, observed);
+    publicResult = _publicCurbProductResult(productionResult, observed);
   } catch {
     // Shadow execution and product overlay must never affect the established callable result.
   }
-  return productionResult;
+
+  try {
+    const meter = await meterPromise;
+    logMeterEvent(meter);
+    if (meter?.state === 'supported') {
+      const persisted = await persistMeter({
+        db,
+        Timestamp,
+        segmentId: publicResult?.success ? publicResult.segmentId : null,
+        meter,
+        productionResult: publicResult,
+      });
+      if (persisted?.success) {
+        publicResult = {
+          ...(publicResult && typeof publicResult === 'object' ? publicResult : {}),
+          success: true,
+          segmentId: persisted.segmentId,
+          parkingSide: persisted.parkingSide || publicResult?.parkingSide,
+          streetName: persisted.streetName || publicResult?.streetName,
+        };
+      }
+    }
+  } catch {
+    // Meter lookup is fail-soft: cleaning results stay intact.
+  }
+  return publicResult;
 }
 
 // ─── Hydrant proximity (NYC DEP) ─────────────────────────────────────────────

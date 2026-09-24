@@ -222,4 +222,33 @@ describe('classifyStreetIntelligence', () => {
     });
   });
 
+  it('treats a park_nyc meter-only rule as supported intelligence', () => {
+    const meterRule = {
+      source: 'park_nyc',
+      type: 'meter',
+      schedules: [{ side: 'West', days: ['Mon'], startTime: '09:00', endTime: '19:00' }],
+      lastSourceSync: '2026-09-24',
+    };
+    const segment = {
+      status: 'active',
+      source: 'park_nyc',
+      confidenceScore: 0.95,
+      provenance: { provider: 'park_nyc' },
+    };
+    expect(classifyStreetIntelligence(segment, [meterRule])).toMatchObject({
+      state: 'supported',
+      source: 'park_nyc',
+    });
+  });
+
+  it('does not treat meter hours as a cleaning-schedule conflict', () => {
+    const meterRule = {
+      source: 'park_nyc',
+      type: 'meter',
+      schedules: [{ side: 'West', days: ['Mon'], startTime: '09:00', endTime: '19:00' }],
+    };
+    const result = classifyStreetIntelligence(sweepSegment, [sweepRule, meterRule]);
+    expect(result.state).toBe('supported');
+    expect(result.reasons).not.toContain('conflicting_schedules');
+  });
 });
