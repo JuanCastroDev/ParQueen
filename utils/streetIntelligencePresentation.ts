@@ -1,5 +1,5 @@
 export type StreetIntelligencePresentationState = 'supported' | 'caution' | 'unknown';
-export type StreetIntelligenceSource = 'admin' | 'sweepnyc' | 'nyc_open_data';
+export type StreetIntelligenceSource = 'admin' | 'sweepnyc' | 'nyc_open_data' | 'park_nyc';
 
 /**
  * Why a result is not fully confident. The UI names the actual doubt instead of
@@ -21,7 +21,7 @@ export interface StreetIntelligencePresentation {
   reasons: StreetIntelligenceCautionReason[];
 }
 
-const SOURCES: StreetIntelligenceSource[] = ['admin', 'sweepnyc', 'nyc_open_data'];
+const SOURCES: StreetIntelligenceSource[] = ['admin', 'sweepnyc', 'nyc_open_data', 'park_nyc'];
 
 /**
  * All three are authoritative publishers: ParQueen's own reviewed data, SweepNYC,
@@ -79,6 +79,7 @@ function hasConflictingSchedules(rules: Record<string, any>[]): boolean {
   const bySide = new Map<string, Map<string, Set<string>>>();
 
   for (const rule of rules) {
+    if (rule?.type === 'meter') continue;
     const source = typeof rule?.source === 'string' ? rule.source : '';
     if (!source) continue;
     for (const schedule of Array.isArray(rule.schedules) ? rule.schedules : []) {
