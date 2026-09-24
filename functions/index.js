@@ -34,6 +34,11 @@ const { observePrivateResolverShadow } = require('./curbIntelligence/privateReso
 const { createFallbackShadowEvidence } = require('./curbIntelligence/fallbackShadowEvidence');
 const { createProductOverlayPlan } = require('./curbIntelligence/productPathDecision');
 const { createSweepnycProductEvidence } = require('./curbIntelligence/createSweepnycProductEvidence');
+const {
+  countUsableSchedules,
+  decideDedupPath,
+  logStreetIntelEvent,
+} = require('./streetIntelRefresh');
 const { haversineDistMiles, filterCandidates, buildMessages, collectStaleTokens, MAX_CANDIDATES, FCM_BATCH } = require('./notifyFanout');
 const { createHash, createHmac, randomInt: secureRandomInt, randomUUID, timingSafeEqual } = require('crypto');
 
@@ -3778,6 +3783,52 @@ async function _attachSweepnycProductEvidence(segmentId, segment, capture, ruleO
   }
 }
 
+async function _loadUsableCleaningRules(segmentId) {
+  const snap = await db.collection(`streetSegments/${segmentId}/streetRules`)
+    .where('supersededAt', '==', null)
+    .get();
+  let rules = snap.docs.map(doc => doc.data()).filter(rule => rule && rule.type === 'streetCleaning');
+  if (!rules.length) {
+    const fallback = await db.doc(`streetSegments/${segmentId}/streetRules/sweepnyc_v1`).get();
+    if (fallback.exists) rules = [fallback.data()];
+  }
+  return rules;
+}
+
+async function _considerSweepnycDedup({ segmentId, segment, lat, lng, captureProductEvidence, via }) {
+  if (segment.status === 'archived') {
+    return { action: 'return', value: { success: false, reason: 'archived_segment' } };
+  }
+  const rules = await _loadUsableCleaningRules(segmentId);
+  const usableCount = countUsableSchedules(rules);
+  if (decideDedupPath(usableCount) === 'fast') {
+    logStreetIntelEvent('dedup_hit_usable', { via, usableCount });
+    const ps = _detectCardinalSide(lat, lng, segment.fromLat, segment.fromLng, segment.toLat, segment.toLng, segment.bearing ?? 90);
+    await _attachSweepnycProductEvidence(segmentId, segment, captureProductEvidence);
+    return {
+      action: 'return',
+      value: {
+        success: true,
+        segmentId,
+        parkingSide: ps,
+        streetName: segment.streetName,
+        _diag: {
+          stage: via,
+          geometrySource: 'existing',
+          segmentStatus: segment.status ?? null,
+          signsCount: null,
+          parsedCount: null,
+          parseFailureCount: null,
+          extractedStreetName: null,
+          extractedSide: ps,
+        },
+      },
+    };
+  }
+  logStreetIntelEvent('dedup_hit_empty_refresh', { via, usableCount });
+  return { action: 'refresh', segmentId, segment };
+}
+
 async function _tryCreateFromSweepNYC(lat, lng, captureProductEvidence) {
     try {
     const SWEEPNYC_BASE = 'https://sweepnyc.nyc.gov/mappingapi/api';
@@ -3808,6 +3859,8 @@ async function _tryCreateFromSweepNYC(lat, lng, captureProductEvidence) {
 
     const objectId = String(apiData.ObjectId);
     const docId = `nyc_${objectId}`;
+    let refreshExistingId = null;
+    let refreshExistingData = null;
 
     // ── Dedup: cslSegmentId index first, then deterministic doc ID ───────────────
     const existingSnap = await db.collection('streetSegments')
@@ -3816,35 +3869,32 @@ async function _tryCreateFromSweepNYC(lat, lng, captureProductEvidence) {
       .get();
 
     if (!existingSnap.empty) {
-      const d = existingSnap.docs[0].data();
-      if (d.status === 'archived') return { success: false, reason: 'archived_segment' };
-      console.log('[SweepNYC] dedup hit');
-      const ps = _detectCardinalSide(lat, lng, d.fromLat, d.fromLng, d.toLat, d.toLng, d.bearing ?? 90);
-      await _attachSweepnycProductEvidence(existingSnap.docs[0].id, d, captureProductEvidence);
-      return {
-        success: true,
+      const considered = await _considerSweepnycDedup({
         segmentId: existingSnap.docs[0].id,
-        parkingSide: ps,
-        streetName: d.streetName,
-        _diag: { stage: 'dedup_index', geometrySource: 'existing', segmentStatus: d.status ?? null, signsCount: null, parsedCount: null, parseFailureCount: null, extractedStreetName: null, extractedSide: ps },
-      };
-    }
-
-    // Secondary dedup: deterministic doc ID (handles race before index propagates)
-    const byDocIdSnap = await db.doc(`streetSegments/${docId}`).get();
-    if (byDocIdSnap.exists) {
-      const d = byDocIdSnap.data();
-      if (d.status === 'archived') return { success: false, reason: 'archived_segment' };
-      console.log('[SweepNYC] dedup hit');
-      const ps = _detectCardinalSide(lat, lng, d.fromLat, d.fromLng, d.toLat, d.toLng, d.bearing ?? 90);
-      await _attachSweepnycProductEvidence(docId, d, captureProductEvidence);
-      return {
-        success: true,
-        segmentId: docId,
-        parkingSide: ps,
-        streetName: d.streetName,
-        _diag: { stage: 'dedup_docid', geometrySource: 'existing', segmentStatus: d.status ?? null, signsCount: null, parsedCount: null, parseFailureCount: null, extractedStreetName: null, extractedSide: ps },
-      };
+        segment: existingSnap.docs[0].data(),
+        lat,
+        lng,
+        captureProductEvidence,
+        via: 'dedup_index',
+      });
+      if (considered.action === 'return') return considered.value;
+      refreshExistingId = considered.segmentId;
+      refreshExistingData = considered.segment;
+    } else {
+      const byDocIdSnap = await db.doc(`streetSegments/${docId}`).get();
+      if (byDocIdSnap.exists) {
+        const considered = await _considerSweepnycDedup({
+          segmentId: docId,
+          segment: byDocIdSnap.data(),
+          lat,
+          lng,
+          captureProductEvidence,
+          via: 'dedup_docid',
+        });
+        if (considered.action === 'return') return considered.value;
+        refreshExistingId = considered.segmentId;
+        refreshExistingData = considered.segment;
+      }
     }
 
     // ── Parse sign texts ──────────────────────────────────────────────────────────
@@ -3872,6 +3922,7 @@ async function _tryCreateFromSweepNYC(lat, lng, captureProductEvidence) {
     const signsRaw = Array.isArray(notes.Signs) ? notes.Signs : [];
     console.log('[SweepNYC] Signs count:', signsRaw.length);
     if (!signsRaw.length) {
+      logStreetIntelEvent('parser_attempted', { signsCount: 0, parsedCount: 0 });
       return {
         success: false,
         reason: 'no_signs',
@@ -3905,9 +3956,66 @@ async function _tryCreateFromSweepNYC(lat, lng, captureProductEvidence) {
     }
     console.log('[SweepNYC] parsed sign count:', parsed.length);
     Promise.all(failurePromises).catch(() => {});
+    logStreetIntelEvent('parser_attempted', { signsCount: signsRaw.length, parsedCount: parsed.length });
 
     if (!parsed.length) {
       return { success: false, reason: 'parse_failed', _diag: { stage: 'parse', signsCount: signsRaw.length, parsedCount: 0, extractedStreetName: streetCtx.street, extractedSide: streetCtx.side } };
+    }
+
+    if (refreshExistingId) {
+      const now = Timestamp.now();
+      const d = refreshExistingData || {};
+      const parkingSide = _detectCardinalSide(lat, lng, d.fromLat, d.fromLng, d.toLat, d.toLng, d.bearing ?? 90);
+      const provenance = {
+        provider: 'sweepnyc',
+        sweepNYCObjectId: apiData.ObjectId,
+        fetchedAt: now,
+        parserVersion: PARSER_VERSION,
+        rawSignTexts: signsRaw.map(s => (s && s.SignText) || ''),
+        geometrySource: (d.provenance && d.provenance.geometrySource) || 'existing',
+        refreshedAt: now,
+        refreshCount: ((d.provenance && d.provenance.refreshCount) || 0) + 1,
+      };
+      const ruleWrite = {
+        type: 'streetCleaning',
+        effectiveDate: now,
+        supersededAt: null,
+        status: 'active',
+        schedules: parsed.map(p => {
+          const s = { side: p.side, days: p.days, startTime: p.startTime, endTime: p.endTime };
+          if (p.ruleType) s.ruleType = p.ruleType;
+          return s;
+        }),
+        source: 'sweepnyc',
+        provenance,
+        lastSourceSync: new Date().toISOString(),
+        createdAt: now,
+        updatedAt: now,
+      };
+      try {
+        await db.doc(`streetSegments/${refreshExistingId}/streetRules/sweepnyc_v1`).set(ruleWrite);
+        await db.doc(`streetSegments/${refreshExistingId}`).set({ updatedAt: now }, { merge: true });
+      } catch (writeErr) {
+        console.error('[SweepNYC] Firestore write error:', sanitizeError(writeErr));
+        return { success: false, reason: 'firestore_write_failed', _diag: { stage: 'empty_rules_refresh', error: sanitizeError(writeErr) } };
+      }
+      await _attachSweepnycProductEvidence(refreshExistingId, d, captureProductEvidence, ruleWrite);
+      return {
+        success: true,
+        segmentId: refreshExistingId,
+        parkingSide,
+        streetName: d.streetName,
+        _diag: {
+          stage: 'empty_rules_refresh',
+          geometrySource: 'existing',
+          segmentStatus: d.status ?? null,
+          signsCount: signsRaw.length,
+          parsedCount: parsed.length,
+          parseFailureCount: failurePromises.length,
+          extractedStreetName: streetCtx.street,
+          extractedSide: streetCtx.side,
+        },
+      };
     }
 
     // ── Street geometry ───────────────────────────────────────────────────────────
@@ -4318,6 +4426,7 @@ exports.createSegmentFromSweepNYC = onCall(
         if (sweepResult.success || !_SWEEPNYC_FALLBACK_REASONS.has(sweepResult.reason)) {
           productionResult = sweepResult;
         } else {
+          logStreetIntelEvent('fallback_attempted', { sweepReason: sweepResult.reason });
           console.log('[SweepNYC→NYCOpenData] falling back, sweepReason:', sweepResult.reason);
           productionResult = await _fallbackToNYCOpenData(
             lat,

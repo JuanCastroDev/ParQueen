@@ -178,7 +178,7 @@ describe('regressions: upstream call discipline', () => {
 
   it('a SweepNYC success returns before Socrata is ever queried', () => {
     const start = INDEX_SRC.indexOf('exports.createSegmentFromSweepNYC');
-    const seg = INDEX_SRC.slice(start, start + 2000);
+    const seg = INDEX_SRC.slice(start, INDEX_SRC.indexOf('function _existingNYCOpenDataResult', start));
     const successGate = seg.indexOf('if (sweepResult.success || !_SWEEPNYC_FALLBACK_REASONS.has(sweepResult.reason))');
     const fallback = seg.search(/_fallbackToNYCOpenData\(\s*lat,\s*lng/);
     expect(successGate).toBeGreaterThan(-1);
