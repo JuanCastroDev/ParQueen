@@ -39,6 +39,7 @@ const {
   decideDedupPath,
   logStreetIntelEvent,
 } = require('./streetIntelRefresh');
+const { parseSweepNYCDayList, CANONICAL_WEEKDAYS } = require('./streetIntelDays');
 const { haversineDistMiles, filterCandidates, buildMessages, collectStaleTokens, MAX_CANDIDATES, FCM_BATCH } = require('./notifyFanout');
 const { createHash, createHmac, randomInt: secureRandomInt, randomUUID, timingSafeEqual } = require('crypto');
 
@@ -5161,13 +5162,12 @@ function _extractStreetContext(apiData, notes) {
 // Maps "Except Sunday" / "Except Sunday and Holidays" → the days that DO apply.
 // Unrecognised tokens (Holidays, Public, etc.) are silently ignored.
 function _exceptDaysToDays(exceptStr) {
-  const ALL_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   const excluded = new Set();
   for (const t of exceptStr.split(/\s+and\s+|\s*,\s*|\s+/)) {
     const abbr = _DAY_ABBR[t] || _DAY_ABBR[t.toLowerCase()];
     if (abbr) excluded.add(abbr);
   }
-  return ALL_DAYS.filter(d => !excluded.has(d));
+  return CANONICAL_WEEKDAYS.filter(d => !excluded.has(d));
 }
 
 const _SIDE_MAP = { N: 'North', S: 'South', E: 'East', W: 'West', NORTH: 'North', SOUTH: 'South', EAST: 'East', WEST: 'West' };
@@ -5175,36 +5175,58 @@ const _SIDE_MAP = { N: 'North', S: 'South', E: 'East', W: 'West', NORTH: 'North'
 function _parseSweepNYCSign(signText, streetCtx) {
   if (!signText) return null;
   const ctx = streetCtx || {};
+  const normalized = String(signText).replace(/\s+/g, ' ').trim();
+
+  const timeRange = String.raw`(\d+(?::\d+)?\s*[AP]\.?M\.?)\s*[-–]\s*(\d+(?::\d+)?\s*[AP]\.?M\.?)`;
+  const locationTail = String.raw`(?:\s+on\s+(.+?)(?:\s+from\s+(.+?)\s+to\s+(.+?))?)?(?:\s+\(Side:\s*(\w+)\))?$`;
 
   // Branch 1: Classic ASP — "No Parking <days> <time>-<time> [on <street> ...] [(Side: X)]"
-  const m = signText.match(
-    /No Parking\s+(.+?)\s+(\d+(?::\d+)?\s*[AP]\.?M\.?)\s*[-–]\s*(\d+(?::\d+)?\s*[AP]\.?M\.?)(?:\s+on\s+(.+?)(?:\s+from\s+(.+?)\s+to\s+(.+?))?)?(?:\s+\(Side:\s*(\w+)\))?$/i,
-  );
+  const m = normalized.match(new RegExp(String.raw`^No Parking\s+(.+?)\s+${timeRange}${locationTail}`, 'i'));
 
   if (m) {
     const [, daysRaw, startRaw, endRaw, streetInSign, fromCrossInSign, toCrossInSign, sideInSign] = m;
-    const dayTokens = daysRaw.trim().split(/[\s,]+/).map(d => d.trim()).filter(Boolean);
-    const days = dayTokens
-      .map(d => _DAY_ABBR[d] || _DAY_ABBR[d.toUpperCase()] || (d.length <= 3 ? d.charAt(0).toUpperCase() + d.slice(1).toLowerCase() : null))
-      .filter(Boolean);
-    if (!days.length) return null;
-    const sideRaw = ctx.side || sideInSign || null;
-    return {
-      street: ctx.street || streetInSign || 'Unknown Street',
-      fromCross: ctx.fromCross || fromCrossInSign || null,
-      toCross: ctx.toCross || toCrossInSign || null,
-      side: sideRaw ? (_SIDE_MAP[String(sideRaw).toUpperCase()] || sideRaw) : null,
-      days,
-      startTime: _parseFlexibleTime(startRaw),
-      endTime: _parseFlexibleTime(endRaw),
-    };
+    const days = parseSweepNYCDayList(daysRaw);
+    if (days.length) {
+      const sideRaw = ctx.side || sideInSign || null;
+      return {
+        street: ctx.street || streetInSign || 'Unknown Street',
+        fromCross: ctx.fromCross || fromCrossInSign || null,
+        toCross: ctx.toCross || toCrossInSign || null,
+        side: sideRaw ? (_SIDE_MAP[String(sideRaw).toUpperCase()] || sideRaw) : null,
+        days,
+        startTime: _parseFlexibleTime(startRaw),
+        endTime: _parseFlexibleTime(endRaw),
+      };
+    }
   }
 
-  // Branch 2: Metered short window — "No Parking <time>-<time> Except <days> on <street> [from <cross> to <cross>] [(Side: X)]"
-  // e.g. "No Parking 8:30AM-9AM Except Sunday on Maran Place from White Plains Road to Cruger Avenue (Side: South)"
-  const m2 = signText.match(
-    /No Parking\s+(\d+(?::\d+)?\s*[AP]\.?M\.?)\s*[-–]\s*(\d+(?::\d+)?\s*[AP]\.?M\.?)\s+Except\s+(.+?)\s+on\s+(.+?)(?:\s+from\s+(.+?)\s+to\s+(.+?))?(?:\s+\(Side:\s*(\w+)\))?$/i,
-  );
+  // Branch 1b: time then every-day marker — "No Parking 8:30AM-9AM DAILY [on ...]"
+  const mDaily = normalized.match(new RegExp(
+    String.raw`^No Parking\s+${timeRange}\s+(DAILY|EVERYDAY|EVERY\s+DAY|ALL\s+DAYS|7\s+DAYS|SEVEN\s+DAYS)${locationTail}`,
+    'i',
+  ));
+  if (mDaily) {
+    const [, startRawD, endRawD, _dailyRaw, streetInSignD, fromCrossInSignD, toCrossInSignD, sideInSignD] = mDaily;
+    const days = parseSweepNYCDayList(_dailyRaw);
+    if (days.length) {
+      const sideRawD = ctx.side || sideInSignD || null;
+      return {
+        street: ctx.street || streetInSignD || 'Unknown Street',
+        fromCross: ctx.fromCross || fromCrossInSignD || null,
+        toCross: ctx.toCross || toCrossInSignD || null,
+        side: sideRawD ? (_SIDE_MAP[String(sideRawD).toUpperCase()] || sideRawD) : null,
+        days,
+        startTime: _parseFlexibleTime(startRawD),
+        endTime: _parseFlexibleTime(endRawD),
+      };
+    }
+  }
+
+  // Branch 2: Metered short window — "No Parking <time>-<time> Except <days> on <street> ..."
+  const m2 = normalized.match(new RegExp(
+    String.raw`^No Parking\s+${timeRange}\s+Except\s+(.+?)\s+on\s+(.+?)(?:\s+from\s+(.+?)\s+to\s+(.+?))?(?:\s+\(Side:\s*(\w+)\))?$`,
+    'i',
+  ));
 
   if (!m2) return null;
 
