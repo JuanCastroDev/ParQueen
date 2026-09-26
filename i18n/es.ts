@@ -969,6 +969,9 @@ const es: Record<string, string> = {
     'messages.smart_replies_aria': 'Respuestas sugeridas',
 
     // Street Intelligence — tarjeta + hoja de sesión
+    'street_intel.verifying_curb': 'Verificando el bordillo exacto y las reglas de estacionamiento…',
+    'street_intel.choose_curb': 'Elige el bordillo resaltado donde estacionaste.',
+    'street_intel.could_not_verify': 'ParQueen no pudo verificar el bordillo ni las reglas de estacionamiento aquí.',
     'street_intel.caution_side_unresolved': 'Encontramos el horario, pero no pudimos confirmar tu lado de la calle.',
     'street_intel.caution_block_not_decisive': 'No pudimos identificar una sola cara de la cuadra, así que el horario podría ser de la cuadra vecina.',
     'street_intel.caution_conflicting_schedules': 'Esta cuadra tiene registros de limpieza contradictorios.',

@@ -11,9 +11,7 @@ import {
 } from '../../utils/streetIntelMeter';
 import {
   classifyStreetIntelligence,
-  StreetIntelligenceCautionReason,
   StreetIntelligencePresentation,
-  StreetIntelligenceSource,
 } from '../../utils/streetIntelligencePresentation';
 import { t, useLang } from '../../i18n';
 
@@ -24,7 +22,13 @@ interface Props {
   sideConfidence: 'high' | 'low' | 'unknown';
   confirmedParkingSide: string | null;
   onConfirmSide: (side: string) => void;
-  onResult?: (result: SafeUntilResult | null) => void;
+  onResult?: (result: StreetIntelligenceCardResult) => void;
+}
+
+export interface StreetIntelligenceCardResult {
+  movementResult: SafeUntilResult | null;
+  cleaningAvailable: boolean;
+  nextCleaningAt: Date | null;
 }
 
 const fmtSafeUntil = (d: Date) => {
@@ -33,60 +37,16 @@ const fmtSafeUntil = (d: Date) => {
   return `${day} at ${time}`;
 };
 
-const fmtSourceDate = (value: string, locale: string) => {
-  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
-  if (!match) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
-    return null;
-  }
-  return date.toLocaleDateString(locale, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    timeZone: 'UTC',
-  });
-};
-
-const sourceLabel = (source: StreetIntelligenceSource) => {
-  if (source === 'admin') return t('street_intel.source_admin');
-  if (source === 'sweepnyc') return t('street_intel.source_sweepnyc');
-  if (source === 'park_nyc') return t('street_intel.source_park_nyc');
-  return t('street_intel.source_nyc_open_data');
-};
-
 export const StreetIntelligenceUnavailableCard = () => (
   <div className="pq-mycar-intel-unavailable">
     <div className="pq-mycar-intel-street">
       <AlertTriangle size={14} className="text-[var(--color-text-secondary)] shrink-0" />
       <p className="text-sm font-semibold text-[var(--color-text)]" style={{ textTransform: 'none', letterSpacing: '-0.01em', fontSize: 14 }}>
-        {t('street_intel.data_unavailable')}
+        {t('street_intel.could_not_verify')}
       </p>
     </div>
-    <p className="pq-mycar-intel-reason" style={{ marginBottom: 0 }}>
-      {t('street_intel.decision_caution')}
-    </p>
   </div>
 );
-
-/**
- * Every caution state names the doubt, so the UI never has to fall back on a
- * generic "review recommended" over a result the data actually supports.
- */
-const CAUTION_REASON_KEY: Record<StreetIntelligenceCautionReason, string> = {
-  side_unresolved: 'street_intel.caution_side_unresolved',
-  block_not_decisive: 'street_intel.caution_block_not_decisive',
-  conflicting_schedules: 'street_intel.caution_conflicting_schedules',
-  incomplete_parse: 'street_intel.caution_incomplete_parse',
-  flagged_for_review: 'street_intel.caution_flagged_for_review',
-  low_confidence: 'street_intel.caution_low_confidence',
-};
-
-const cautionCopy = (reasons: StreetIntelligenceCautionReason[]): string | null =>
-  reasons.length > 0 ? t(CAUTION_REASON_KEY[reasons[0]]) : null;
 
 const SIDE_KEY_MAP: Record<string, string> = {
   North: 'street_intel.side_north',
@@ -102,15 +62,13 @@ export const StreetIntelligenceCard = ({
   sideConfidence, confirmedParkingSide, onConfirmSide,
   onResult,
 }: Props) => {
-  const lang = useLang();
-  const locale = lang === 'es' ? 'es-US' : 'en-US';
+  useLang();
   const sideLabel = (side: string) => SIDE_KEY_MAP[side] ? t(SIDE_KEY_MAP[side]) : side;
 
   // Effective side: user-confirmed takes priority, then GPS only if confidence is high
   const effectiveSide = confirmedParkingSide || (sideConfidence === 'high' ? parkingSide : null);
 
   const [result, setResult] = useState<SafeUntilResult | null>(null);
-  const [scheduleCount, setScheduleCount] = useState(0);
   const [meterWindows, setMeterWindows] = useState<MeterWindow[]>([]);
   const [meterTerms, setMeterTerms] = useState<{ maxStayMinutes?: number; rateDisplay?: string } | null>(null);
   const [restrictionWindows, setRestrictionWindows] = useState<CleaningSchedule[]>([]);
@@ -154,12 +112,8 @@ export const StreetIntelligenceCard = ({
         const todayKey = toNYCDateKey(new Date());
         const horizonKey = addNYCDateKeyDays(todayKey, MAX_FORWARD_SEARCH_DAYS_AHEAD);
 
-        const [segSnap, rulesSnap, suspSnap] = await Promise.all([
+        const [segSnap, suspSnap] = await Promise.all([
           getDoc(doc(db, 'streetSegments', segmentId)),
-          getDocs(query(
-            collection(db, 'streetSegments', segmentId, 'streetRules'),
-            where('supersededAt', '==', null),
-          )),
           getDocs(query(
             collection(db, 'suspensions'),
             where('date', '>=', todayKey),
@@ -169,9 +123,23 @@ export const StreetIntelligenceCard = ({
         ]);
         if (cancelled) return;
 
-        const rules = rulesSnap.docs.map(d => ({ id: d.id, ...d.data() } as StreetRuleDoc));
-        cdbg(`streetRules count: ${rules.length}`);
         const segment = segSnap.exists() ? segSnap.data() : null;
+        const activeRuleSetVersion = segment?.protocolVersion === 2
+          ? segment.activeRuleSetVersion : null;
+        const rulesSnap = await getDocs(activeRuleSetVersion
+          ? query(
+            collection(db, 'streetSegments', segmentId, 'streetRules'),
+            where('ruleSetVersion', '==', activeRuleSetVersion),
+          )
+          : query(
+            collection(db, 'streetSegments', segmentId, 'streetRules'),
+            where('supersededAt', '==', null),
+          ));
+        if (cancelled) return;
+        const rules = rulesSnap.docs
+          .map(d => ({ id: d.id, ...d.data() } as StreetRuleDoc & { ruleSetVersion?: string }))
+          .filter(rule => !activeRuleSetVersion || rule.ruleSetVersion === activeRuleSetVersion);
+        cdbg(`streetRules count: ${rules.length}`);
         const nextPresentation = classifyStreetIntelligence(segment, rules);
         cdbg(`presentation state: ${nextPresentation.state} | source: ${nextPresentation.source ?? 'none'}`);
         setPresentation(nextPresentation);
@@ -196,7 +164,6 @@ export const StreetIntelligenceCard = ({
         const terms = meterRules.find(r => r.meterTerms)?.meterTerms || null;
 
         cdbg(`total schedules: ${allSchedules.length}`);
-        setScheduleCount(allSchedules.length);
         setMeterWindows(meters);
         setMeterTerms(terms);
         setRestrictionWindows(restrictionSchedules.filter(s => s.type === 'noParking' || s.type === 'noStanding' || s.type === 'noStopping'));
@@ -205,7 +172,7 @@ export const StreetIntelligenceCard = ({
 
         if (nextPresentation.state === 'unknown') {
           cdbg('UI branch: unknown/unavailable');
-          onResult?.(null);
+          onResult?.({ movementResult: null, cleaningAvailable: false, nextCleaningAt: null });
           return;
         }
 
@@ -217,7 +184,7 @@ export const StreetIntelligenceCard = ({
           ])].filter(Boolean);
           cdbg(`UI branch: side-picker schedules=${allSchedules.length}`);
           setAvailableSides(sides);
-          onResult?.(null);
+          onResult?.({ movementResult: null, cleaningAvailable: false, nextCleaningAt: null });
           return;
         }
 
@@ -233,11 +200,22 @@ export const StreetIntelligenceCard = ({
         cdbg(`UI branch: ${branch}`);
 
         setResult(r);
-        onResult?.(r);
+        const cleaningResult = computeSafeUntil(allSchedules, effectiveSide, suspensions);
+        const nextCleaningAt = cleaningResult.scheduleDescription
+          && cleaningResult.activeNow !== true
+          && cleaningResult.safeUntil
+          && cleaningResult.safeUntil.getTime() > Date.now()
+          ? cleaningResult.safeUntil : null;
+        onResult?.({
+          movementResult: r,
+          cleaningAvailable: Boolean(nextCleaningAt),
+          nextCleaningAt,
+        });
       } catch {
         cdbg('load failed');
         console.warn('StreetIntelligenceCard load failed');
         setLoadError(true);
+        onResult?.({ movementResult: null, cleaningAvailable: false, nextCleaningAt: null });
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -258,16 +236,6 @@ export const StreetIntelligenceCard = ({
     </div>
   ) : null;
 
-  const freshnessDate = presentation.lastSourceSync
-    ? fmtSourceDate(presentation.lastSourceSync, locale)
-    : null;
-  const metadataBlock = presentation.source ? (
-    <div className="pq-mycar-intel-meta">
-      <p>{t('street_intel.source_label', { source: sourceLabel(presentation.source) })}</p>
-      {freshnessDate && <p>{t('street_intel.data_updated', { date: freshnessDate })}</p>}
-    </div>
-  ) : null;
-
   if (loading) {
     return (
       <div className="pq-mycar-intel animate-pulse">
@@ -279,15 +247,12 @@ export const StreetIntelligenceCard = ({
   }
 
   if (loadError) {
-    return (
-      <div className="pq-mycar-intel-unavailable">
-        <p className="text-sm text-[var(--color-text-secondary)] mb-2">{t('street_intel.load_error')}</p>
-        <p className="pq-mycar-intel-reason" style={{ marginBottom: 0 }}>{t('street_intel.decision_caution')}</p>
-      </div>
-    );
+    return <StreetIntelligenceUnavailableCard />;
   }
 
-  if (presentation.state === 'unknown') return <StreetIntelligenceUnavailableCard />;
+  if (presentation.state === 'unknown' || presentation.state === 'caution') {
+    return <StreetIntelligenceUnavailableCard />;
+  }
 
   if (!effectiveSide) {
     if (availableSides.length === 0) return null;
@@ -295,19 +260,13 @@ export const StreetIntelligenceCard = ({
       <div className="pq-mycar-intel pq-mycar-intel--caution">
         <div className="pq-mycar-intel-street">
           <AlertTriangle size={14} className="text-[var(--color-warning)] shrink-0" />
-          <p style={{ color: 'var(--color-warning)' }}>
-            {presentation.state === 'caution'
-              ? t('street_intel.needs_review')
-              : t('street_intel.info_available')}
-          </p>
+          <p>{t('street_intel.info_available')}</p>
         </div>
         <p className="text-sm text-white font-semibold mb-1">
           {t('street_intel.which_side')}
         </p>
         <p className="pq-mycar-intel-reason">
-          {presentation.state === 'caution'
-            ? t('street_intel.schedules_found_estimate', { street: streetName })
-            : t('street_intel.schedules_found_street', { street: streetName })}
+          {t('street_intel.schedules_found_street', { street: streetName })}
         </p>
         <div className="pq-mycar-intel-side-btns">
           {availableSides.map(side => (
@@ -320,7 +279,6 @@ export const StreetIntelligenceCard = ({
             </button>
           ))}
         </div>
-        {metadataBlock}
         {debugBlock}
       </div>
     );
@@ -409,17 +367,11 @@ export const StreetIntelligenceCard = ({
           <Leaf size={14} className="text-[var(--color-text-secondary)]" />
           <p>{sideHeader}</p>
         </div>
-        <p className="pq-mycar-intel-reason" style={{ marginBottom: presentation.state === 'caution' ? 12 : 0 }}>
+        <p className="pq-mycar-intel-reason" style={{ marginBottom: 0 }}>
           {confirmedParkingSide
             ? t('street_intel.no_schedule_for_side', { side: effectiveSideLabel.toLowerCase() })
             : t('street_intel.no_schedule_unknown')}
         </p>
-        {metadataBlock}
-        {presentation.state === 'caution' && (
-          <p className="pq-mycar-intel-reason" style={{ marginBottom: 0, marginTop: 8 }}>
-            {cautionCopy(presentation.reasons) ?? t('street_intel.decision_caution')}
-          </p>
-        )}
         {debugBlock}
       </div>
     );
@@ -427,18 +379,12 @@ export const StreetIntelligenceCard = ({
 
   const toneClass = result.activeNow
     ? 'pq-mycar-intel--danger'
-    : presentation.state === 'caution'
-    ? 'pq-mycar-intel--caution'
     : 'pq-mycar-intel--safe';
   const iconTone = result.activeNow
     ? 'is-danger'
-    : presentation.state === 'caution'
-    ? 'is-caution'
     : 'is-safe';
   const datetimeTone = result.activeNow
     ? 'is-danger'
-    : presentation.state === 'caution'
-    ? 'is-caution'
     : '';
 
   return (
@@ -447,18 +393,6 @@ export const StreetIntelligenceCard = ({
         <Leaf size={14} className="text-[var(--color-text-secondary)]" />
         <p>{sideHeader}</p>
       </div>
-
-      {presentation.state === 'caution' && (
-        <div className="pq-mycar-intel-caution-banner">
-          <div className="flex items-center gap-2 mb-1">
-            <AlertTriangle size={16} className="text-[var(--color-warning)] shrink-0" />
-            <p className="text-sm font-bold text-[var(--color-warning)]">{t('street_intel.needs_review')}</p>
-          </div>
-          <p className="text-xs text-[var(--color-text-secondary)]">
-            {cautionCopy(presentation.reasons) ?? t('street_intel.needs_review_body')}
-          </p>
-        </div>
-      )}
 
       {result.scheduleDescription ? (
         <>
@@ -469,18 +403,14 @@ export const StreetIntelligenceCard = ({
           </div>
           <div>
             <p className={`pq-mycar-intel-datetime ${datetimeTone}`}>
-              {presentation.state === 'caution'
-                ? t('street_intel.may_be_active_now')
-                : result.anytime
+              {result.anytime
                   ? t('street_intel.restricted')
                   : result.restrictionKind && result.restrictionKind !== 'streetCleaning'
                     ? t('street_intel.restricted_now')
                     : t('street_intel.active_now')}
             </p>
             <p className="pq-mycar-intel-reason" style={{ marginTop: 4, marginBottom: 0 }}>
-              {presentation.state === 'caution'
-                ? t('street_intel.may_be_active_now_body')
-                : result.restrictionKind && result.restrictionKind !== 'streetCleaning'
+              {result.restrictionKind && result.restrictionKind !== 'streetCleaning'
                   ? (result.anytime
                     ? `${kindTitle(result.restrictionKind)} · ${t('street_intel.anytime')}`
                     : t('street_intel.until', { time: result.safeUntil ? result.safeUntil.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : '' }))
@@ -491,15 +421,11 @@ export const StreetIntelligenceCard = ({
       ) : result.nextDay ? (
         <div className="pq-mycar-intel-hero">
           <div className={`pq-mycar-intel-hero-icon ${iconTone}`}>
-            {presentation.state === 'caution'
-              ? <AlertTriangle size={18} />
-              : <CheckCircle size={18} />}
+            <CheckCircle size={18} />
           </div>
           <div>
             <p className="pq-mycar-intel-label">
-              {presentation.state === 'caution'
-                ? t('street_intel.estimated_window')
-                : t('street_intel.safe_until_label')}
+              {t('street_intel.safe_until_label')}
             </p>
             <p className={`pq-mycar-intel-datetime ${datetimeTone}`}>
               {result.safeUntil ? fmtSafeUntil(result.safeUntil) : `${result.nextDay} ${result.nextTime}`}
@@ -509,9 +435,7 @@ export const StreetIntelligenceCard = ({
       ) : (
         <div className="pq-mycar-intel-hero">
           <div className={`pq-mycar-intel-hero-icon ${iconTone}`}>
-            {presentation.state === 'caution'
-              ? <AlertTriangle size={18} />
-              : <CheckCircle size={18} />}
+            <CheckCircle size={18} />
           </div>
           <p className="text-sm text-[var(--color-text-secondary)]">{t('street_intel.no_upcoming')}</p>
         </div>
@@ -524,33 +448,6 @@ export const StreetIntelligenceCard = ({
       {timeLimitDetails}
       {meterDetails}
 
-      <div className="pq-mycar-intel-chips">
-        <span className="pq-mycar-intel-chip">
-          {scheduleCount === 1
-            ? t('street_intel.schedules_count_one')
-            : t('street_intel.schedules_count', { count: String(scheduleCount) })}
-        </span>
-        {presentation.state === 'caution' ? (
-          <span className="pq-mycar-intel-chip is-warning">
-            {t('street_intel.needs_review')}
-          </span>
-        ) : (
-          <span className="pq-mycar-intel-chip is-accent">
-            {t('street_intel.info_available')}
-          </span>
-        )}
-        {confirmedParkingSide && (
-          <span className="pq-mycar-intel-chip is-warning">
-            {t('street_intel.you_confirmed')}
-          </span>
-        )}
-      </div>
-      {metadataBlock}
-      {presentation.state === 'caution' && (
-        <p className="pq-mycar-intel-reason" style={{ marginTop: 10, marginBottom: 0 }}>
-          {cautionCopy(presentation.reasons) ?? t('street_intel.decision_caution')}
-        </p>
-      )}
       {debugBlock}
     </div>
   );

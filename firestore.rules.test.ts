@@ -161,6 +161,25 @@ beforeEach(async () => {
     await testEnv.clearFirestore();
 });
 
+describe('curbIdentities — server-only canonical curb identity', () => {
+    const ID = 'curb2_private-test';
+
+    beforeEach(async () => {
+        await seed('curbIdentities', ID, { officialBlockFaceId: '1000000001' });
+    });
+
+    it('denies direct reads to anonymous, signed-in, and admin-token clients', async () => {
+        await assertFails(getDoc(doc(anonDb(), 'curbIdentities', ID)));
+        await assertFails(getDoc(doc(ownerDb(), 'curbIdentities', ID)));
+        await assertFails(getDoc(doc(adminDb(), 'curbIdentities', ID)));
+    });
+
+    it('denies direct writes to signed-in and admin-token clients', async () => {
+        await assertFails(setDoc(doc(ownerDb(), 'curbIdentities', 'owner-write'), { value: 1 }));
+        await assertFails(setDoc(doc(adminDb(), 'curbIdentities', 'admin-write'), { value: 1 }));
+    });
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // SPOTS — PRIVATE HISTORY (occupied)
 // ═══════════════════════════════════════════════════════════════════════════════

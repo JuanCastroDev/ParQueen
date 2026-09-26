@@ -40,6 +40,13 @@ const { logMeterEvent, METER_EVENTS } = require('./curbIntelligence/productMeter
 const { runProductRestrictionLookup } = require('./curbIntelligence/productRestrictionLookup');
 const { persistPublicRestrictionRules } = require('./curbIntelligence/persistPublicRestrictionRules');
 const { logRestrictionEvent, RESTRICTION_EVENTS } = require('./curbIntelligence/productRestrictionModel');
+const { runCanonicalCurbOrchestrator } = require('./curbIntelligence/canonicalCurbOrchestrator');
+const { createCsclCandidateStore } = require('./curbIntelligence/csclSocrataAdapter');
+const { createPlanimetricCurbStore } = require('./curbIntelligence/planimetricCurbAdapter');
+const { createParkNycCandidateStore } = require('./curbIntelligence/parkNycSocrataAdapter');
+const { createPrivateBlockfaceResolver } = require('./curbIntelligence/privateBlockfaceResolver');
+const { readPrivateResolverConfig } = require('./curbIntelligence/privateBlockfaceResolverConfig');
+const { createCurbTelemetry } = require('./curbIntelligence/curbTelemetry');
 const {
   countUsableStreetIntelligence,
   decideDedupPath,
@@ -891,6 +898,7 @@ const _callableHooks = {
   persistPublicMeterRule: null,
   productRestrictionLookup: null,
   persistPublicRestrictionRules: null,
+  canonicalCurbOrchestrator: null,
 };
 exports._callableHooks = _callableHooks;
 
@@ -4313,6 +4321,111 @@ async function _observeCurbIntelligenceShadow(productionResult, lat, lng, accura
   return publicResult;
 }
 
+function _canonicalSweepQueryPoint(identity) {
+  const line = identity?.roadway?.geometry?.coordinates?.[0];
+  if (!Array.isArray(line) || line.length < 2) return null;
+  const first = line[0];
+  const last = line[line.length - 1];
+  if (![first, last].every(point => Array.isArray(point)
+    && Number.isFinite(point[0]) && Number.isFinite(point[1]))) return null;
+  const lng = (first[0] + last[0]) / 2;
+  const lat = (first[1] + last[1]) / 2;
+  const east = (last[0] - first[0]) * 111320 * Math.cos(lat * Math.PI / 180);
+  const north = (last[1] - first[1]) * 111320;
+  const length = Math.hypot(east, north);
+  const halfWidth = Number(identity.roadway.streetWidthFeet) * 0.3048 / 2;
+  const direction = identity.csclSide === 'LEFT' ? 1 : identity.csclSide === 'RIGHT' ? -1 : 0;
+  if (!length || !direction || !Number.isFinite(halfWidth) || halfWidth <= 0) return null;
+  return {
+    lat: lat + direction * (east / length) * halfWidth / 111320,
+    lng: lng + direction * (-north / length) * halfWidth
+      / (111320 * Math.cos(lat * Math.PI / 180)),
+  };
+}
+
+async function _queryCanonicalSweepEvidence({ identity, signal }) {
+  const point = _canonicalSweepQueryPoint(identity);
+  if (!point || signal?.aborted) return { complete: false, rows: [] };
+  const url = 'https://sweepnyc.nyc.gov/mappingapi/api/highlight/sweepinfo'
+    + `?lat=${point.lat}&lon=${point.lng}&t=${Date.now()}&radius=0.1`;
+  let data;
+  try {
+    const response = await fetch(url, { signal });
+    if (!response?.ok) return { complete: false, rows: [] };
+    data = await response.json();
+  } catch {
+    return { complete: false, rows: [] };
+  }
+  let notes;
+  try {
+    notes = typeof data?.Notes === 'string' ? JSON.parse(data.Notes) : data?.Notes;
+  } catch {
+    return { complete: false, rows: [] };
+  }
+  if (!notes || typeof notes !== 'object') return { complete: false, rows: [] };
+  const context = _extractStreetContext(data, notes);
+  if (!context.street || !context.fromCross || !context.toCross || !context.side) {
+    return { complete: true, rows: [] };
+  }
+  const schedules = (Array.isArray(notes.Signs) ? notes.Signs : [])
+    .map(sign => _parseSweepNYCSign(sign?.SignText, context))
+    .filter(Boolean)
+    .map(schedule => ({
+      days: schedule.days,
+      startTime: schedule.startTime,
+      endTime: schedule.endTime,
+    }));
+  return {
+    complete: true,
+    rows: schedules.length ? [{
+      borough: identity.names.borough,
+      onStreet: context.street,
+      fromStreet: context.fromCross,
+      toStreet: context.toCross,
+      side: context.side,
+      schedules,
+    }] : [],
+  };
+}
+
+async function _runCanonicalCurbV2(requestData) {
+  let config;
+  try {
+    config = readPrivateResolverConfig();
+  } catch {
+    return { protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' };
+  }
+  if (config?.mode !== 'shadow' || config?.productPath !== 'on') {
+    return { protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' };
+  }
+
+  const getSocrataToken = _socrataToken;
+  const blockfaceResolver = createPrivateBlockfaceResolver({
+    mode: 'shadow',
+    serviceUrl: config.serviceUrl,
+  });
+  return runCanonicalCurbOrchestrator(requestData, {
+    db,
+    Timestamp,
+    candidateStore: createCsclCandidateStore({
+      fetchFn: fetch,
+      getSocrataToken,
+      candidateLimit: 100,
+    }),
+    planimetricStore: createPlanimetricCurbStore({ fetchFn: fetch }),
+    parkNycStore: createParkNycCandidateStore({
+      fetchFn: fetch,
+      getSocrataToken,
+    }),
+    blockfaceResolver,
+    sweepSource: { query: _queryCanonicalSweepEvidence },
+    fetchFn: fetch,
+    getSocrataToken,
+    telemetry: createCurbTelemetry({ logger: console }),
+    requestNonceFactory: randomUUID,
+  });
+}
+
 // ─── Hydrant proximity (NYC DEP) ─────────────────────────────────────────────
 // NYC prohibits parking within 15 ft of either side of a hydrant. The nearest
 // hydrant is resolved server-side so the client never handles the Socrata
@@ -4474,6 +4587,11 @@ exports.createSegmentFromSweepNYC = onCall(
 
     const uid = request.auth.uid;
     await checkRateLimit(uid, 'createSegmentFromSweepNYC', { limit: 30, windowSec: 3600 });
+
+    if (request.data?.protocolVersion === 2) {
+      const orchestrate = _callableHooks.canonicalCurbOrchestrator || _runCanonicalCurbV2;
+      return orchestrate(request.data);
+    }
 
     const { lat, lng, accuracyMeters, revalidateSegmentId } = request.data || {};
     if (typeof lat !== 'number' || typeof lng !== 'number')

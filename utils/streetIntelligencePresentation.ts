@@ -127,6 +127,22 @@ export function classifyStreetIntelligence(
 
   if (!segment || !Array.isArray(rules) || rules.length === 0) return unknown;
   if (segment.status !== 'active' && segment.status !== 'needs_review') return unknown;
+  if (segment.protocolVersion === 2) {
+    const version = segment.activeRuleSetVersion;
+    if (segment.status !== 'active' || typeof version !== 'string' || !version
+      || rules.some(rule => rule.protocolVersion !== 2 || rule.ruleSetVersion !== version
+        || !isSource(rule.source))) return unknown;
+    const usableSchedules = rules.flatMap(rule => Array.isArray(rule.schedules) ? rule.schedules : []);
+    if (usableSchedules.length === 0) return unknown;
+    const normalizedSources = rules.map(rule => rule.source).filter(isSource);
+    const distinctSources = [...new Set(normalizedSources)];
+    return {
+      state: 'supported',
+      source: distinctSources.length === 1 ? distinctSources[0] : null,
+      lastSourceSync: latestSourceSync(rules),
+      reasons: [],
+    };
+  }
   if (!isSource(segment.source) || !isSource(segment.provenance?.provider)) return unknown;
   if (segment.source !== segment.provenance.provider) return unknown;
   if (typeof segment.confidenceScore !== 'number' || !Number.isFinite(segment.confidenceScore)) return unknown;

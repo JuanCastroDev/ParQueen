@@ -107,6 +107,10 @@ function fingerprint(rule, schedule) {
 }
 
 async function runProductRestrictionLookup(input = {}, options = {}) {
+  if (input.identity) {
+    const { runCanonicalDotLookup } = require('./canonicalDotLookup');
+    return runCanonicalDotLookup(input, options);
+  }
   const streetContext = input.streetContext || {};
   const parkingSide = ['East', 'West', 'North', 'South'].includes(input.parkingSide)
     ? input.parkingSide : null;

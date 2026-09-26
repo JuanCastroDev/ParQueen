@@ -1,6 +1,7 @@
 'use strict';
 
 const { normalizeBlockFaceId } = require('./curbIdentity');
+const { CURB_RESOLUTION_POLICY } = require('./curbResolutionPolicy');
 
 const isNonnegativeFinite = value => Number.isFinite(value) && value >= 0;
 
@@ -14,8 +15,10 @@ function unknown(reasons, uncertaintyMeters = null, roadwayIntervals = null, sid
 }
 
 function classifyCurbResolution(evidence) {
+  const modelErrorMeters = evidence?.modelErrorMeters
+    ?? CURB_RESOLUTION_POLICY.modelErrorMeters;
   if (!evidence || !isNonnegativeFinite(evidence.reportedAccuracyMeters)
-    || !isNonnegativeFinite(evidence.modelErrorMeters)
+    || !isNonnegativeFinite(modelErrorMeters)
     || !isNonnegativeFinite(evidence.bestRoadwayDistanceMeters)
     || !Number.isFinite(evidence.signedOffsetMeters)
     || (evidence.nextRoadwayDistanceMeters != null
@@ -23,7 +26,7 @@ function classifyCurbResolution(evidence) {
     return unknown(['invalid_evidence']);
   }
 
-  const uncertaintyMeters = evidence.reportedAccuracyMeters + evidence.modelErrorMeters;
+  const uncertaintyMeters = evidence.reportedAccuracyMeters + modelErrorMeters;
   const best = interval(evidence.bestRoadwayDistanceMeters, uncertaintyMeters);
   const next = evidence.nextRoadwayDistanceMeters == null
     ? null : interval(evidence.nextRoadwayDistanceMeters, uncertaintyMeters);

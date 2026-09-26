@@ -3,7 +3,7 @@
 const { parseMeterSchedule } = require('./parkNycNormalizer');
 const { associateParkNycRules } = require('./parkNycAssociation');
 const { toPublicMeterProduct, logMeterEvent, publicRate, METER_EVENTS } = require('./productMeterModel');
-const { runProductMeterLookup } = require('./productMeterLookup');
+const { runProductMeterLookup, runCanonicalMeterLookup } = require('./productMeterLookup');
 
 const version = { resourceId: 'e7yp-wx55', rowsUpdatedAt: '2026-09-01T10:21:51Z', viewLastModified: '2026-09-01T10:20:59Z' };
 const point = { lat: 40.70958, lng: -74.00504 };
@@ -181,5 +181,41 @@ describe('product meter lookup fail-soft and parallelism', () => {
       },
     });
     expect(parkCalls).toBe(1);
+  });
+
+  it('uses one supplied canonical identity without a second CSCL resolution', async () => {
+    const candidateStore = { queryCandidates: vi.fn() };
+    const canonical = {
+      schemaVersion: 2,
+      jurisdiction: 'NYC',
+      officialBlockFaceId: '1234567890',
+      csclSide: 'LEFT',
+      roadway: {
+        geometry: {
+          type: 'MultiLineString',
+          coordinates: [[[-74.00515, 40.70943], [-74.00494, 40.70962]]],
+        },
+        streetWidthFeet: 40,
+      },
+      names: {
+        borough: 'Manhattan',
+        onStreet: 'GOLD STREET',
+        fromStreet: 'BEEKMAN STREET',
+        toStreet: 'ANN STREET',
+        aliases: [],
+      },
+      side: { cardinal: 'West' },
+    };
+    const result = await runCanonicalMeterLookup({ identity: canonical }, {
+      candidateStore,
+      parkNycStore: {
+        async query() { return { candidateSnapshot: snapshot([meter()]) }; },
+      },
+    });
+    expect(result).toMatchObject({
+      state: 'supported',
+      product: { category: 'meter', source: 'park_nyc', side: 'West' },
+    });
+    expect(candidateStore.queryCandidates).not.toHaveBeenCalled();
   });
 });
