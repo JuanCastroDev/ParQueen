@@ -78,4 +78,3 @@
 - [ ] **Step 3: Commit, push, open a new PR, and inspect all CI results.**
 - [ ] **Step 4: Merge normally only if no new failures appear.**
 - [ ] **Step 5: Deploy only `createSegmentFromSweepNYC`, verify the new revision/config/traffic/log structure passively, and leave Hosting unchanged.**
-

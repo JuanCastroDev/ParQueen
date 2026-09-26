@@ -192,4 +192,21 @@ describe('canonical curb persistence', () => {
     expect(result).toEqual({ copied: false, reason: 'cache_curb_mismatch', rules: [] });
     expect(emit).toHaveBeenCalledWith('cache_curb_mismatch', { protocolVersion: 2 });
   });
+
+  it('copies legacy rules only when street, side, and official relationship all match', async () => {
+    const legacyRules = [{
+      category: 'cleaning',
+      source: 'sweepNyc',
+      schedules: [{ side: 'North', days: ['Mon'], startTime: '08:00', endTime: '08:30' }],
+    }];
+    const result = await migrateCompatibleLegacyRules({
+      identity: identity(),
+      legacySegment: { streetName: 'MARAN PLACE', parkingSide: 'North', distanceMeters: 70 },
+      legacyRules,
+      relationshipMatches: true,
+    });
+
+    expect(result).toMatchObject({ copied: true, reason: 'compatible' });
+    expect(result.rules).toHaveLength(1);
+  });
 });

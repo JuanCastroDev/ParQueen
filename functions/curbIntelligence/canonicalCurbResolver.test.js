@@ -70,6 +70,27 @@ const options = (candidates, extra = {}) => ({
 });
 
 describe('resolveCanonicalCurb', () => {
+  it('distinguishes complete empty coverage from incomplete candidate coverage', async () => {
+    const empty = await resolveCanonicalCurb(location(), options([]));
+    const incomplete = await resolveCanonicalCurb(
+      location(),
+      options([record()], {
+        candidateStore: store([record()], { state: 'INCOMPLETE', reason: 'coverage_gap' }),
+      }),
+    );
+
+    expect(empty).toEqual({
+      state: 'UNSUPPORTED',
+      reasons: ['canonical_candidate_missing'],
+      candidateCount: 0,
+    });
+    expect(incomplete).toEqual({
+      state: 'UNSUPPORTED',
+      reasons: ['candidate_coverage_incomplete'],
+      candidateCount: 1,
+    });
+  });
+
   it('supports a clear residential curb and the opposite side with different identities', async () => {
     const north = await resolveCanonicalCurb(location(), options([record()]));
     const south = await resolveCanonicalCurb(
@@ -141,6 +162,20 @@ describe('resolveCanonicalCurb', () => {
     expect(serialized).not.toContain('1000000001');
     expect(serialized).not.toContain('2000000001');
     expect(serialized).not.toContain('globalid');
+  });
+
+  it('keeps one mid-block curb identity and side across ±3m, ±5m, and ±10m along-street jitter', async () => {
+    const metersToLongitude = meters => meters / (111320 * Math.cos(40.7 * Math.PI / 180));
+    const offsets = [-10, -5, -3, 0, 3, 5, 10];
+    const results = await Promise.all(offsets.map(offset => resolveCanonicalCurb(
+      location({ lat: 40.70006, lng: -74 + metersToLongitude(offset), accuracyMeters: 1 }),
+      options([record()]),
+    )));
+
+    expect(results.every(result => result.state === 'SUPPORTED')).toBe(true);
+    expect(new Set(results.map(result => result.publicCurb.segmentId)).size).toBe(1);
+    expect(new Set(results.map(result => result.publicCurb.streetName))).toEqual(new Set(['MARAN PLACE']));
+    expect(new Set(results.map(result => result.publicCurb.sideLabel))).toEqual(new Set(['North']));
   });
 
   it('fails closed for poor GPS, multi-level conflict, and incomplete CSCL evidence', async () => {
@@ -265,7 +300,9 @@ describe('resolveCanonicalCurb', () => {
       ]),
     );
 
-    expect(result).toEqual({ state: 'UNSUPPORTED', reasons: ['intersection_complex'] });
+    expect(result).toEqual({
+      state: 'UNSUPPORTED', reasons: ['intersection_complex'], candidateCount: 3,
+    });
   });
 
   it('fails closed when the CSCL result exceeds the 100-candidate cap', async () => {
@@ -279,6 +316,7 @@ describe('resolveCanonicalCurb', () => {
     expect(result).toEqual({
       state: 'UNSUPPORTED',
       reasons: ['candidate_coverage_incomplete'],
+      candidateCount: 101,
     });
   });
 

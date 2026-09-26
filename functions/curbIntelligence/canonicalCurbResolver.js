@@ -17,7 +17,11 @@ const BOROUGHS = Object.freeze({
 });
 const privateCandidateSets = new WeakMap();
 
-const unsupported = reasons => ({ state: 'UNSUPPORTED', reasons: [...new Set(reasons)] });
+const unsupported = (reasons, diagnostics = {}) => ({
+  state: 'UNSUPPORTED',
+  reasons: [...new Set(reasons)],
+  ...diagnostics,
+});
 
 function locationQuality(location) {
   return classifyCanonicalCurb({
@@ -207,30 +211,40 @@ async function resolveCanonicalCurb(location, options = {}) {
 
   const rawRecords = Array.isArray(retrieved?.candidates) ? retrieved.candidates : [];
   const records = rawRecords.slice(0, CURB_RESOLUTION_POLICY.maximumCsclCandidates);
-  const candidateSetComplete = retrieved?.completeness?.state === 'COMPLETE'
-    && rawRecords.length <= CURB_RESOLUTION_POLICY.maximumCsclCandidates
+  const sourceCandidateSetComplete = retrieved?.completeness?.state === 'COMPLETE'
+    && rawRecords.length <= CURB_RESOLUTION_POLICY.maximumCsclCandidates;
+  if (!sourceCandidateSetComplete) {
+    return unsupported(['candidate_coverage_incomplete'], { candidateCount: rawRecords.length });
+  }
+  if (!records.length) return unsupported(['canonical_candidate_missing'], { candidateCount: 0 });
+  const candidateSetComplete = sourceCandidateSetComplete
     && runtime?.resolution?.candidateCompleteness?.state === 'COMPLETE'
     && runtime?.resolution?.searchEnvelopeComplete === true;
-  if (!candidateSetComplete) return unsupported(['candidate_coverage_incomplete']);
-  if (!records.length) return unsupported(['canonical_candidate_missing']);
+  if (!candidateSetComplete) {
+    return unsupported(['candidate_coverage_incomplete'], { candidateCount: records.length });
+  }
   const sourceVersionConsistent = new Set(records.map(sourceVersionKey)).size === 1
     && !records.some(record => !record?.sourceVersion?.version);
-  if (!sourceVersionConsistent) return unsupported(['source_version_problem']);
+  if (!sourceVersionConsistent) {
+    return unsupported(['source_version_problem'], { candidateCount: records.length });
+  }
   if (records.some(record => !roadwaySupported(record))) {
-    return unsupported(['unsupported_roadway_status']);
+    return unsupported(['unsupported_roadway_status'], { candidateCount: records.length });
   }
 
   const ranked = rankGroups({ lat: location.lat, lng: location.lng }, records);
-  if (!ranked.length) return unsupported(['implausible_geometry']);
+  if (!ranked.length) return unsupported(['implausible_geometry'], { candidateCount: 0 });
   const uncertainty = location.accuracyMeters + CURB_RESOLUTION_POLICY.modelErrorMeters;
   const bestDistance = ranked[0].best.projection.distanceMeters;
   const materialRanked = ranked.filter(value => (
     value.best.projection.distanceMeters - uncertainty <= bestDistance + uncertainty
   ));
-  if (materialRanked.length > 2) return unsupported(['intersection_complex']);
+  if (materialRanked.length > 2) {
+    return unsupported(['intersection_complex'], { candidateCount: materialRanked.length });
+  }
   const candidates = materialRanked.map(buildCandidate).filter(Boolean);
   if (candidates.length !== materialRanked.length || candidates.length === 0) {
-    return unsupported(['candidate_incomplete']);
+    return unsupported(['candidate_incomplete'], { candidateCount: materialRanked.length });
   }
 
   const levelOrRoadbedAmbiguous = new Set(materialRanked.map(value => (
@@ -278,7 +292,9 @@ async function resolveCanonicalCurb(location, options = {}) {
       publicCurb: toPublicCurb(selected.identity),
     };
   }
-  if (decision.state !== 'AMBIGUOUS') return unsupported(decision.reasons);
+  if (decision.state !== 'AMBIGUOUS') {
+    return unsupported(decision.reasons, { candidateCount: considered.length });
+  }
   const tokenContext = typeof options.requestNonceDigest === 'string'
     ? { requestNonceDigest: options.requestNonceDigest }
     : { requestNonce: options.requestNonce };
@@ -286,7 +302,7 @@ async function resolveCanonicalCurb(location, options = {}) {
     publicCandidate(candidate, tokenContext, index)
   ));
   if (publicCandidates.some(candidate => !candidate.token)) {
-    return unsupported(['candidate_token_unavailable']);
+    return unsupported(['candidate_token_unavailable'], { candidateCount: considered.length });
   }
   const result = {
     state: 'AMBIGUOUS',
