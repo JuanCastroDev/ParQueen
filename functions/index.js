@@ -4431,7 +4431,7 @@ async function _runCanonicalCurbV2(requestData) {
     sweepSource: { query: _queryCanonicalSweepEvidence },
     fetchFn: fetch,
     getSocrataToken,
-    telemetry: createCurbTelemetry({ logger: console }),
+    telemetry: createCurbTelemetry(),
     requestNonceFactory: randomUUID,
   });
 }

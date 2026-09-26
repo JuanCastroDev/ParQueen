@@ -34,11 +34,13 @@ describe('curb telemetry privacy', () => {
     const payload = buildCurbTelemetryPayload('curb_resolution_ambiguous', {
       protocolVersion: 2,
       reason: 'intersection_complex',
+      failureDetail: 'endpoint_or_intersection_ambiguous',
       sourceCategory: 'cscl',
       ruleCategory: 'cleaning',
       candidateCount: 4,
       latencyMs: 1250,
       sampleCount: 3,
+      accuracyMeters: 8,
       cacheHit: false,
       hasCandidateToken: true,
       lat: 1,
@@ -59,11 +61,13 @@ describe('curb telemetry privacy', () => {
       event: 'curb_resolution_ambiguous',
       protocolVersion: 2,
       reason: 'intersection_complex',
+      failureDetail: 'endpoint_or_intersection_ambiguous',
       sourceCategory: 'cscl',
       ruleCategory: 'cleaning',
       candidateCountBucket: '3_plus',
       latencyBucket: '1000_2499ms',
       sampleCountBucket: '3',
+      accuracyBucket: '5_10m',
       cacheHit: false,
       hasCandidateToken: true,
     });
@@ -76,11 +80,33 @@ describe('curb telemetry privacy', () => {
     expect(JSON.stringify(payload)).not.toContain('test-only');
   });
 
+  it.each([
+    [5, 'le_5m'],
+    [5.01, '5_10m'],
+    [10.01, '10_20m'],
+    [20.01, '20_40m'],
+    [40.01, 'gt_40m'],
+    [Number.NaN, 'unknown'],
+  ])('buckets reported accuracy %s without retaining the raw value', (accuracyMeters, accuracyBucket) => {
+    const payload = buildCurbTelemetryPayload('curb_resolution_attempted', {
+      protocolVersion: 2,
+      accuracyMeters,
+    });
+
+    expect(payload).toEqual({
+      event: 'curb_resolution_attempted',
+      protocolVersion: 2,
+      accuracyBucket,
+    });
+    expect(payload).not.toHaveProperty('accuracyMeters');
+  });
+
   it('rejects unknown events and unsupported categorical values', () => {
     expect(buildCurbTelemetryPayload('unknown_event', {})).toBeNull();
     expect(buildCurbTelemetryPayload('source_conflict', {
       protocolVersion: 2,
       reason: 'raw upstream response',
+      failureDetail: 'raw-private-failure',
       sourceCategory: 'unknown-private-source',
       ruleCategory: 'private-rule',
     })).toEqual({ event: 'source_conflict', protocolVersion: 2 });
@@ -94,5 +120,27 @@ describe('curb telemetry privacy', () => {
       protocolVersion: 2, latencyMs: 100, cacheHit: true,
     })).not.toThrow();
     expect(logger.info).toHaveBeenCalledOnce();
+  });
+
+  it('uses the Firebase structured logger by default', () => {
+    const { logger } = require('firebase-functions');
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
+    try {
+      const telemetry = createCurbTelemetry();
+      telemetry.emit('curb_resolution_high', {
+        protocolVersion: 2,
+        latencyMs: 100,
+        cacheHit: true,
+      });
+
+      expect(info).toHaveBeenCalledWith({
+        event: 'curb_resolution_high',
+        protocolVersion: 2,
+        latencyBucket: '0_249ms',
+        cacheHit: true,
+      });
+    } finally {
+      info.mockRestore();
+    }
   });
 });

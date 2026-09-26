@@ -69,6 +69,7 @@ async function execute(request, dependencies) {
   emit(dependencies.telemetry, 'curb_resolution_attempted', {
     protocolVersion: 2,
     sampleCount: request.location.sampleCount,
+    accuracyMeters: request.location.accuracyMeters,
     hasCandidateToken: Boolean(request.candidateToken),
   });
   let resolution;
@@ -122,7 +123,12 @@ async function execute(request, dependencies) {
       });
     }
     emit(dependencies.telemetry, 'curb_resolution_unsupported', {
-      protocolVersion: 2, reason, latencyMs: Date.now() - startedAt,
+      protocolVersion: 2,
+      reason,
+      failureDetail: resolution?.reasons?.[0],
+      candidateCount: resolution?.candidateCount,
+      ...(request.candidateToken ? {} : { sourceCategory: 'cscl' }),
+      latencyMs: Date.now() - startedAt,
     });
     return unsupported(reason);
   }

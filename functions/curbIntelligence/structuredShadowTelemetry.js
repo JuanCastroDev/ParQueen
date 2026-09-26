@@ -1,5 +1,7 @@
 'use strict';
 
+const { emitStructuredLog } = require('../streetIntelStructuredLog');
+
 const ALLOWED_FIELDS = new Set([
   'event', 'schemaVersion', 'engineVersion', 'cohort', 'outcome', 'skipOrFailureClass',
   'curbState', 'cleaningState', 'comparisonCategory', 'legacyAvailability',
@@ -75,12 +77,11 @@ function validateCleaningShadowTelemetry(input) {
 }
 
 function createStructuredCloudLoggingSink(options = {}) {
-  const logger = options.logger || console;
   return Object.freeze({
     async record(input) {
       const result = validateCleaningShadowTelemetry(input);
       if (!result.ok) return { accepted: false, reason: result.reason };
-      logger.info(result.telemetry);
+      emitStructuredLog(result.telemetry, options.write, options.logger);
       return { accepted: true };
     },
   });
