@@ -11,13 +11,14 @@ const callable = source.slice(start, end);
 describe('createSegmentFromSweepNYC private resolver composition boundary', () => {
   it('routes protocol V2 through the canonical orchestrator after auth and rate limiting', () => {
     expect(callable).toContain("await checkRateLimit(uid, 'createSegmentFromSweepNYC'");
-    expect(callable).toContain('if (request.data?.protocolVersion === 2)');
-    expect(callable).toContain('_callableHooks.canonicalCurbOrchestrator || _runCanonicalCurbV2');
-    expect(callable).toContain('return orchestrate(request.data)');
+    expect(callable).toContain('selectCanonicalV2Handler(');
+    expect(callable).toContain('_callableHooks.canonicalCurbOrchestrator');
+    expect(callable).toContain('_runCanonicalCurbV2');
+    expect(callable).toContain('return canonicalV2Handler(request.data)');
     expect(callable.indexOf('await checkRateLimit(uid')).toBeLessThan(
-      callable.indexOf('if (request.data?.protocolVersion === 2)'),
+      callable.indexOf('const canonicalV2Handler = selectCanonicalV2Handler('),
     );
-    expect(callable.indexOf('if (request.data?.protocolVersion === 2)')).toBeLessThan(
+    expect(callable.indexOf('if (canonicalV2Handler)')).toBeLessThan(
       callable.indexOf('const { lat, lng, accuracyMeters, revalidateSegmentId }'),
     );
     const v2Start = source.indexOf('async function _runCanonicalCurbV2');
