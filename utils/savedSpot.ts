@@ -8,6 +8,8 @@
  * field back-fills that were already happening on read.
  */
 
+import { parseCanonicalCurbResponse } from './canonicalCurbClient';
+
 export const SAVED_SPOT_KEY = 'pq_saved_spot';
 
 /** Sessions older than this are dropped on read, as they always have been. */
@@ -15,6 +17,7 @@ export const SAVED_SPOT_TTL_MS = 24 * 60 * 60 * 1000;
 
 export type SideConfidence = 'high' | 'low' | 'unknown';
 export type StreetIntelStatus = 'found' | 'unavailable' | 'failed';
+export type CurbResolutionStatus = 'resolving' | 'high_confidence' | 'ambiguous' | 'unsupported';
 
 export interface SavedSpot {
   lat: number;
@@ -32,6 +35,11 @@ export interface SavedSpot {
   streetIntelStatus: StreetIntelStatus | null;
   streetIntelReason: string | null;
   streetIntelCheckedAt: string | null;
+  // Canonical curb V2. Null denotes a readable pre-V2 session.
+  curbProtocolVersion: 2 | null;
+  curbResolutionStatus: CurbResolutionStatus | null;
+  curbSelector: import('./canonicalCurbClient').CanonicalCurbSelector | null;
+  curbRefreshAttempted: boolean;
   // Side confidence — drives whether to show Safe Until or ask the user to confirm
   gpsAccuracyMeters: number | null;
   sideConfidence: SideConfidence;
@@ -100,6 +108,31 @@ export function readSavedSpot(now: number = Date.now()): SavedSpot | null {
     if (!s.sideConfidence) { s.sideConfidence = s.parkingSide ? 'low' : 'unknown'; changed = true; }
     if (s.confirmedParkingSide === undefined) { s.confirmedParkingSide = null; changed = true; }
     if (typeof s.address !== 'string') { s.address = ''; changed = true; }
+    if (s.curbProtocolVersion !== 2 && s.curbProtocolVersion !== null) {
+      s.curbProtocolVersion = null; changed = true;
+    }
+    if (s.curbResolutionStatus !== null
+      && !['resolving', 'high_confidence', 'ambiguous', 'unsupported'].includes(s.curbResolutionStatus)) {
+      s.curbResolutionStatus = null; changed = true;
+    }
+    if (s.curbSelector === undefined) { s.curbSelector = null; changed = true; }
+    if (s.curbResolutionStatus === 'ambiguous') {
+      try {
+        const parsed = parseCanonicalCurbResponse({
+          protocolVersion: 2,
+          status: 'ambiguous',
+          selector: s.curbSelector,
+        });
+        s.curbSelector = parsed.status === 'ambiguous' ? parsed.selector : null;
+      } catch {
+        s.curbResolutionStatus = 'unsupported';
+        s.curbSelector = null;
+        s.streetIntelStatus = 'unavailable';
+        s.streetIntelReason = 'candidate_incomplete';
+        changed = true;
+      }
+    }
+    if (typeof s.curbRefreshAttempted !== 'boolean') { s.curbRefreshAttempted = false; changed = true; }
     if (changed) store.setItem(SAVED_SPOT_KEY, JSON.stringify(s));
 
     return s as SavedSpot;

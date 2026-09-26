@@ -99,6 +99,7 @@ function parkingSideFromGeometry(location, geometry) {
 }
 
 async function runProductMeterLookup(input = {}, options = {}) {
+  if (input.identity) return runCanonicalMeterLookup(input, options);
   const location = input.location;
   if (!location || !Number.isFinite(location.lat) || !Number.isFinite(location.lng)) {
     return unavailable('invalid_location');
@@ -195,6 +196,86 @@ async function runProductMeterLookup(input = {}, options = {}) {
   return publicMeter.state === 'supported' ? publicMeter : publicMeter;
 }
 
+function canonicalCurbPoint(identity) {
+  const line = identity?.roadway?.geometry?.coordinates?.[0];
+  if (!Array.isArray(line) || line.length < 2) return null;
+  const first = line[0];
+  const last = line[line.length - 1];
+  if (![first, last].every(point => Array.isArray(point)
+    && Number.isFinite(point[0]) && Number.isFinite(point[1]))) return null;
+  const lng = (first[0] + last[0]) / 2;
+  const lat = (first[1] + last[1]) / 2;
+  const eastMeters = (last[0] - first[0]) * 111320 * Math.cos(lat * Math.PI / 180);
+  const northMeters = (last[1] - first[1]) * 111320;
+  const length = Math.hypot(eastMeters, northMeters);
+  const halfWidthMeters = Number(identity.roadway.streetWidthFeet) * 0.3048 / 2;
+  if (!length || !Number.isFinite(halfWidthMeters) || halfWidthMeters <= 0) return null;
+  const direction = identity.csclSide === 'LEFT' ? 1 : identity.csclSide === 'RIGHT' ? -1 : 0;
+  if (!direction) return null;
+  const offsetEast = direction * (-northMeters / length) * halfWidthMeters;
+  const offsetNorth = direction * (eastMeters / length) * halfWidthMeters;
+  return {
+    lat: lat + offsetNorth / 111320,
+    lng: lng + offsetEast / (111320 * Math.cos(lat * Math.PI / 180)),
+  };
+}
+
+async function runCanonicalMeterLookup(input = {}, options = {}) {
+  const identity = input.identity;
+  const center = canonicalCurbPoint(identity);
+  const side = identity?.side?.cardinal;
+  const sideLetter = letterForCardinal(side);
+  const names = identity?.names;
+  if (!center || !sideLetter || !names?.borough || !names?.onStreet
+    || !names?.fromStreet || !names?.toStreet) return unavailable('invalid_identity');
+  const store = options.parkNycStore || createParkNycCandidateStore({
+    fetchFn: options.fetchFn,
+    getSocrataToken: options.getSocrataToken,
+    candidateLimit: MAX_PARK_CANDIDATES,
+  });
+  let response;
+  try {
+    response = await store.query({
+      lat: center.lat,
+      lng: center.lng,
+      searchRadiusMeters: 150,
+      signal: input.signal,
+    });
+  } catch {
+    return unavailable('park_nyc_unavailable');
+  }
+  if (!response?.candidateSnapshot) return unavailable('park_nyc_unavailable');
+  const association = associateParkNycRules({
+    curbIdentity: {
+      state: 'SUPPORTED',
+      officialIdentity: {
+        officialBlockFaceId: identity.officialBlockFaceId,
+        csclSide: identity.csclSide,
+      },
+    },
+    resolvedPoint: center,
+    officialNames: nameSet([names.onStreet, ...(names.aliases || [])]),
+    officialBounds: [osmNameToDOT(names.fromStreet), osmNameToDOT(names.toStreet)],
+    borough: names.borough.toUpperCase(),
+    side: sideLetter,
+    officialRoadwayEvidence: {
+      officialBlockFaceId: identity.officialBlockFaceId,
+      csclSide: identity.csclSide,
+      selectedGeometry: identity.roadway.geometry,
+      streetWidthFeet: identity.roadway.streetWidthFeet,
+      modelUncertaintyMeters: 3,
+      candidateCoverageComplete: true,
+      competingRoadways: [],
+    },
+    candidateSnapshot: response.candidateSnapshot,
+  });
+  const product = toPublicMeterProduct(association, side);
+  if (product.state === 'supported' && product.product) {
+    product.product = { ...product.product, category: 'meter' };
+  }
+  return product;
+}
+
 function meterHostSegmentId(hint, parkingSide) {
   const line = hint?.geometry?.coordinates?.[0];
   const mid = Array.isArray(line) && line.length
@@ -213,6 +294,7 @@ function meterHostSegmentId(hint, parkingSide) {
 
 module.exports = {
   runProductMeterLookup,
+  runCanonicalMeterLookup,
   meterHostSegmentId,
   SOURCE_DEADLINE_MS,
   METER_EVENTS,

@@ -19,6 +19,12 @@ import { VehicleIcon } from '../utils/vehicleIcon';
 import { getTitleForCrowns } from '../utils/crowns';
 import { createUserLocationGeohashPersister } from '../utils/userLocationGeohash';
 import { getCurrentPosition, isGeolocationAvailable, watchPosition, type LocationWatchHandle } from '../utils/geolocation';
+import { aggregateLocationSamples, collectLocationBurst } from '../utils/locationBurst';
+import {
+    buildCanonicalCurbRequest,
+    parseCanonicalCurbResponse,
+    type CanonicalCurbResponse,
+} from '../utils/canonicalCurbClient';
 import { derivePingLifecycle, getPingExpiresAtMs, getPingPhase, timestampToMillis } from '../utils/pingLifecycle';
 import { countUsableStreetIntelligence, shouldCallEmptyCacheRefresh, shouldCallRestrictionMigrationRefresh, hasRestrictionEvaluation, logStreetIntelEvent } from '../utils/streetIntelRefresh';
 
@@ -47,14 +53,70 @@ import { ParkingActivitySheet } from './street-parking/ParkingActivitySheet';
 import { HeaderBar } from './street-parking/HeaderBar';
 import { NavigationBar } from './street-parking/NavigationBar';
 import { StreetIntelligenceCard, StreetIntelligenceUnavailableCard } from './street-parking/StreetIntelligenceCard';
+import { VisualCurbSelector } from './street-parking/VisualCurbSelector';
 import { useParkingTimer } from './street-parking/useParkingTimer';
-import { SAVED_SPOT_KEY, readSavedSpot, type SavedSpot } from '../utils/savedSpot';
+import { SAVED_SPOT_KEY, readSavedSpot, writeSavedSpot, type SavedSpot } from '../utils/savedSpot';
 import { usePingPhaseClock } from './street-parking/usePingPhaseClock';
 import { AppTour, TOUR_KEY } from './street-parking/AppTour';
 import { resolveNotificationPing } from '../utils/notificationPing';
 import { AccessibleModal } from '../components/AccessibleModal';
 import { shouldShowMapPrimaryNavigation } from './street-parking/mobileNavigationVisibility';
 import { isLegacyNYCOpenDataSegment } from '../utils/streetIntelligenceLegacy';
+
+const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpot,
+    'segmentId' | 'parkingSide' | 'restrictionVersionId' | 'segmentStreetName'
+    | 'streetIntelStatus' | 'streetIntelReason' | 'streetIntelCheckedAt'
+    | 'curbProtocolVersion' | 'curbResolutionStatus' | 'curbSelector'
+    | 'sideConfidence' | 'confirmedParkingSide'
+> => {
+    const checkedAt = new Date().toISOString();
+    if (response.status === 'high_confidence') {
+        return {
+            segmentId: response.segmentId,
+            parkingSide: response.sideLabel,
+            restrictionVersionId: null,
+            segmentStreetName: response.streetName,
+            streetIntelStatus: 'found',
+            streetIntelReason: null,
+            streetIntelCheckedAt: checkedAt,
+            curbProtocolVersion: 2,
+            curbResolutionStatus: 'high_confidence',
+            curbSelector: null,
+            sideConfidence: 'high',
+            confirmedParkingSide: null,
+        };
+    }
+    if (response.status === 'ambiguous') {
+        return {
+            segmentId: null,
+            parkingSide: null,
+            restrictionVersionId: null,
+            segmentStreetName: null,
+            streetIntelStatus: null,
+            streetIntelReason: 'intersection_complex',
+            streetIntelCheckedAt: checkedAt,
+            curbProtocolVersion: 2,
+            curbResolutionStatus: 'ambiguous',
+            curbSelector: response.selector,
+            sideConfidence: 'unknown',
+            confirmedParkingSide: null,
+        };
+    }
+    return {
+        segmentId: null,
+        parkingSide: null,
+        restrictionVersionId: null,
+        segmentStreetName: null,
+        streetIntelStatus: 'unavailable',
+        streetIntelReason: response.reason,
+        streetIntelCheckedAt: checkedAt,
+        curbProtocolVersion: 2,
+        curbResolutionStatus: 'unsupported',
+        curbSelector: null,
+        sideConfidence: 'unknown',
+        confirmedParkingSide: null,
+    };
+};
 
 
 export const MapView: React.FC<MapViewProps> = ({
@@ -117,6 +179,9 @@ export const MapView: React.FC<MapViewProps> = ({
     ));
     // Tracks last GPS accuracy reading from watchPosition — used at saveMySpot time
     const lastGpsAccuracyRef = useRef<number | null>(null);
+    const lastGpsSampleRef = useRef<{
+        lat: number; lng: number; accuracyMeters: number; timestampMs: number;
+    } | null>(null);
     const emptyRulesRefreshAttemptedRef = useRef<Set<string>>(new Set());
     const restrictionRefreshAttemptedRef = useRef<Set<string>>(new Set());
     const matchInFlightRef = useRef<Map<string, Promise<any>>>(new Map());
@@ -236,6 +301,12 @@ export const MapView: React.FC<MapViewProps> = ({
     const [reminderEnabled, setReminderEnabled] = useState<boolean>(
         () => localStorage.getItem('streetCleaningReminder') !== 'false'
     );
+    const [cleaningAvailable, setCleaningAvailable] = useState(false);
+    const [nextCleaningAt, setNextCleaningAt] = useState<Date | null>(null);
+    useEffect(() => {
+        setCleaningAvailable(false);
+        setNextCleaningAt(null);
+    }, [savedSpot?.sessionId, savedSpot?.segmentId]);
     const [showSessionSheet, setShowSessionSheet] = useState(false);
     const [showDepartureSheet, setShowDepartureSheet] = useState(false);
 
@@ -357,30 +428,56 @@ export const MapView: React.FC<MapViewProps> = ({
         });
     }, [isDebugMode, dbg]);
 
-    // Retry segmentId lookup once per session for legacy saved spots that have no streetIntelStatus.
-    // Skip if a fresh lookup already ran (streetIntelStatus is set) — the UI should show that result.
+    const requestCanonicalCurb = useCallback(async (
+        seedLat: number,
+        seedLng: number,
+        candidateToken?: string,
+        captureBurst = true,
+    ): Promise<CanonicalCurbResponse> => {
+        const now = Date.now();
+        const observed = lastGpsSampleRef.current;
+        const liveSeed = observed
+            && observed.lat === seedLat && observed.lng === seedLng
+            ? observed : undefined;
+        const fixedCoordinateSample = {
+            lat: seedLat,
+            lng: seedLng,
+            accuracyMeters: lastGpsAccuracyRef.current ?? 100,
+            timestampMs: now,
+        };
+        const location = captureBurst
+            ? await collectLocationBurst({ seed: liveSeed })
+            : aggregateLocationSamples([fixedCoordinateSample], now);
+        if (!location) throw new Error('location_unavailable');
+        const callable = httpsCallable(getFunctions(getApp(), 'us-central1'), 'createSegmentFromSweepNYC');
+        const result = await callable(buildCanonicalCurbRequest(location, candidateToken));
+        return parseCanonicalCurbResponse(result.data);
+    }, []);
+
+    // Pre-V2 sessions remain readable and receive at most one lazy canonical refresh.
+    // Existing segment/side data is replaced only by a validated high-confidence V2 result.
     const segmentRetrySessionRef = useRef<string | null>(null);
     useEffect(() => {
         if (!showSessionSheet || !savedSpot) return;
-        if (savedSpot.segmentId !== null) return;                // already have segment
+        if (savedSpot.curbProtocolVersion === 2 || savedSpot.curbRefreshAttempted) return;
         if (segmentRetrySessionRef.current === savedSpot.sessionId) return; // already retried this session
-        // Skip for unavailable (SweepNYC returned real no-data) — retrying won't help.
-        // Allow retry for failed (technical error) — one automatic retry per session.
-        if (savedSpot.streetIntelStatus === 'unavailable') {
-            console.log('[segmentRetry] skipped — streetIntelStatus=unavailable reason=' + (savedSpot.streetIntelReason ?? 'none'));
-            return;
-        }
         segmentRetrySessionRef.current = savedSpot.sessionId;
-        // Use the saved spot's own coordinates — not current GPS — so retry targets the parked location
-        const { lat, lng } = savedSpot;
-        console.log('[segmentRetry] retrying saved location');
+        const attempted: SavedSpot = { ...savedSpot, curbRefreshAttempted: true };
+        setSavedSpot(attempted);
+        writeSavedSpot(attempted);
         (async () => {
-            const match = await runMatchNearestSegment(lat, lng);
-            if (!match.segmentId) { console.warn('[segmentRetry] retry also returned null, status:', match.streetIntelStatus); return; }
-            console.log('[segmentRetry] retry succeeded');
-            const updated = { ...savedSpot, ...match, streetIntelCheckedAt: new Date().toISOString() };
-            setSavedSpot(updated);
-            localStorage.setItem(SAVED_SPOT_KEY, JSON.stringify(updated));
+            try {
+                const response = await requestCanonicalCurb(savedSpot.lat, savedSpot.lng, undefined, false);
+                if (response.status !== 'high_confidence') return;
+                const updated: SavedSpot = {
+                    ...attempted,
+                    ...canonicalResponseFields(response),
+                };
+                setSavedSpot(updated);
+                writeSavedSpot(updated);
+            } catch {
+                // The durable attempt flag prevents a reload-triggered retry loop.
+            }
         })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [showSessionSheet, savedSpot?.sessionId]);
@@ -675,6 +772,10 @@ export const MapView: React.FC<MapViewProps> = ({
                 streetIntelStatus: match.streetIntelStatus,
                 streetIntelReason: match.streetIntelReason,
                 streetIntelCheckedAt: new Date().toISOString(),
+                curbProtocolVersion: null,
+                curbResolutionStatus: null,
+                curbSelector: null,
+                curbRefreshAttempted: false,
                 gpsAccuracyMeters: null,
                 sideConfidence: 'unknown',
                 confirmedParkingSide: null,
@@ -702,40 +803,48 @@ export const MapView: React.FC<MapViewProps> = ({
         try {
         const [lng, lat] = userLocation;
         dbg('saveMySpot started');
-        const [address, segmentMatch] = await Promise.all([
-            reverseGeocode(lng, lat),
-            runMatchNearestSegment(lat, lng),
-        ]);
         const gpsAccuracyMeters = lastGpsAccuracyRef.current ?? null;
-        const sideConfidence: SavedSpot['sideConfidence'] = segmentMatch.sideConfidence === 'high' && segmentMatch.parkingSide
-            ? 'high'
-            : !segmentMatch.parkingSide ? 'unknown'
-            : (gpsAccuracyMeters === null || gpsAccuracyMeters > 30) ? 'low'
-            : 'high';
-        dbg(`segmentMatch: status=${segmentMatch.streetIntelStatus} sideConfidence=${sideConfidence}`);
-        const spot: SavedSpot = {
+        const resolvingSpot: SavedSpot = {
             lat,
             lng,
-            address,
+            address: '',
             savedAt: Date.now(),
             sessionId: crypto.randomUUID(),
             linkedPingId: null,
-            segmentId: segmentMatch.segmentId,
-            parkingSide: segmentMatch.parkingSide,
-            restrictionVersionId: segmentMatch.restrictionVersionId,
-            segmentStreetName: segmentMatch.segmentStreetName,
-            streetIntelStatus: segmentMatch.streetIntelStatus,
-            streetIntelReason: segmentMatch.streetIntelReason,
-            streetIntelCheckedAt: new Date().toISOString(),
+            segmentId: null,
+            parkingSide: null,
+            restrictionVersionId: null,
+            segmentStreetName: null,
+            streetIntelStatus: null,
+            streetIntelReason: null,
+            streetIntelCheckedAt: null,
+            curbProtocolVersion: 2,
+            curbResolutionStatus: 'resolving',
+            curbSelector: null,
+            curbRefreshAttempted: true,
             gpsAccuracyMeters,
-            sideConfidence,
+            sideConfidence: 'unknown',
             confirmedParkingSide: null,
         };
-        const cardCondition = !!(spot.segmentId && spot.segmentStreetName);
-        dbg(`StreetIntelligenceCard will render: ${cardCondition} status=${spot.streetIntelStatus}`);
-        localStorage.setItem(SAVED_SPOT_KEY, JSON.stringify(spot));
-        setSavedSpot(spot);
+        writeSavedSpot(resolvingSpot);
+        setSavedSpot(resolvingSpot);
         setShowPostSaveOffer(true);
+
+        const [addressResult, curbResult] = await Promise.allSettled([
+            reverseGeocode(lng, lat),
+            requestCanonicalCurb(lat, lng),
+        ]);
+        const response = curbResult.status === 'fulfilled'
+            ? curbResult.value
+            : ({ protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' } as const);
+        const spot: SavedSpot = {
+            ...resolvingSpot,
+            address: addressResult.status === 'fulfilled' ? addressResult.value : '',
+            ...canonicalResponseFields(response),
+        };
+        dbg(`canonical curb: status=${spot.curbResolutionStatus}`);
+        writeSavedSpot(spot);
+        setSavedSpot(spot);
         } finally {
             saveInFlightRef.current = false;
         }
@@ -743,30 +852,70 @@ export const MapView: React.FC<MapViewProps> = ({
 
     // Used after handoff — skips GPS, uses the already-known claimed Ping coordinates
     const saveMySpotFromCoords = async (lat: number, lng: number, address: string) => {
-        const segmentMatch = await runMatchNearestSegment(lat, lng);
-        const sideConfidence: SavedSpot['sideConfidence'] = segmentMatch.sideConfidence === 'high' && segmentMatch.parkingSide
-            ? 'high'
-            : 'low';
-        const spot: SavedSpot = {
+        const resolvingSpot: SavedSpot = {
             lat, lng, address,
             savedAt: Date.now(),
             sessionId: crypto.randomUUID(),
             linkedPingId: null,
-            segmentId: segmentMatch.segmentId,
-            parkingSide: segmentMatch.parkingSide,
-            restrictionVersionId: segmentMatch.restrictionVersionId,
-            segmentStreetName: segmentMatch.segmentStreetName,
-            streetIntelStatus: segmentMatch.streetIntelStatus,
-            streetIntelReason: segmentMatch.streetIntelReason,
-            streetIntelCheckedAt: new Date().toISOString(),
+            segmentId: null,
+            parkingSide: null,
+            restrictionVersionId: null,
+            segmentStreetName: null,
+            streetIntelStatus: null,
+            streetIntelReason: null,
+            streetIntelCheckedAt: null,
+            curbProtocolVersion: 2,
+            curbResolutionStatus: 'resolving',
+            curbSelector: null,
+            curbRefreshAttempted: true,
             gpsAccuracyMeters: null,
-            sideConfidence,
+            sideConfidence: 'unknown',
             confirmedParkingSide: null,
         };
-        localStorage.setItem(SAVED_SPOT_KEY, JSON.stringify(spot));
-        setSavedSpot(spot);
+        writeSavedSpot(resolvingSpot);
+        setSavedSpot(resolvingSpot);
         setShowSessionSheet(true);
+        let response: CanonicalCurbResponse;
+        try {
+            response = await requestCanonicalCurb(lat, lng, undefined, false);
+        } catch {
+            response = { protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' };
+        }
+        const spot: SavedSpot = { ...resolvingSpot, ...canonicalResponseFields(response) };
+        writeSavedSpot(spot);
+        setSavedSpot(spot);
     };
+
+    const [curbSelectionLoading, setCurbSelectionLoading] = useState(false);
+    const handleCanonicalCurbSelection = useCallback(async (candidateToken: string) => {
+        if (!savedSpot || savedSpot.curbResolutionStatus !== 'ambiguous'
+            || !savedSpot.curbSelector || curbSelectionLoading) return;
+        setCurbSelectionLoading(true);
+        try {
+            const response = await requestCanonicalCurb(savedSpot.lat, savedSpot.lng, candidateToken);
+            const updated: SavedSpot = {
+                ...savedSpot,
+                ...canonicalResponseFields(response),
+                curbRefreshAttempted: true,
+            };
+            setSavedSpot(updated);
+            writeSavedSpot(updated);
+        } catch {
+            const updated: SavedSpot = {
+                ...savedSpot,
+                ...canonicalResponseFields({
+                    protocolVersion: 2,
+                    status: 'unsupported',
+                    reason: 'source_unavailable',
+                }),
+                curbRefreshAttempted: true,
+            };
+            setSavedSpot(updated);
+            writeSavedSpot(updated);
+        } finally {
+            setCurbSelectionLoading(false);
+        }
+    }, [curbSelectionLoading, requestCanonicalCurb, savedSpot]);
 
     const handleConfirmSide = useCallback((side: string) => {
         if (!savedSpot) return;
@@ -780,22 +929,15 @@ export const MapView: React.FC<MapViewProps> = ({
         if (!savedSpot || retryingStreetIntel) return;
         setRetryingStreetIntel(true);
         try {
-            const match = await runMatchNearestSegment(savedSpot.lat, savedSpot.lng);
-            const gpsAccuracyMeters = lastGpsAccuracyRef.current ?? null;
-            const sideConfidence: SavedSpot['sideConfidence'] = match.sideConfidence === 'high' && match.parkingSide
-                ? 'high'
-                : !match.parkingSide ? 'unknown'
-                : (gpsAccuracyMeters === null || gpsAccuracyMeters > 30) ? 'low'
-                : 'high';
+            const response = await requestCanonicalCurb(savedSpot.lat, savedSpot.lng);
             const updated: SavedSpot = {
-                ...savedSpot, ...match,
-                streetIntelCheckedAt: new Date().toISOString(),
-                gpsAccuracyMeters,
-                sideConfidence,
-                confirmedParkingSide: null,
+                ...savedSpot,
+                ...canonicalResponseFields(response),
+                curbRefreshAttempted: true,
+                gpsAccuracyMeters: lastGpsAccuracyRef.current ?? null,
             };
             setSavedSpot(updated);
-            localStorage.setItem(SAVED_SPOT_KEY, JSON.stringify(updated));
+            writeSavedSpot(updated);
         } finally {
             setRetryingStreetIntel(false);
         }
@@ -826,6 +968,15 @@ export const MapView: React.FC<MapViewProps> = ({
         } catch (e) {
             console.warn('Could not write cleaning reminder:', (e as any)?.code ?? 'unknown');
         }
+    };
+
+    const deactivateCleaningReminder = () => {
+        if (!auth.currentUser) return;
+        setDoc(doc(db, 'parkingSessions', auth.currentUser.uid), {
+            reminderEnabled: false,
+            nextCleaningAt: null,
+            reminderAt: null,
+        }, { merge: true }).catch(() => {});
     };
 
     const endSession = () => {
@@ -1025,6 +1176,16 @@ export const MapView: React.FC<MapViewProps> = ({
                 (position) => {
                     const { longitude, latitude, accuracy } = position.coords;
                     lastGpsAccuracyRef.current = accuracy ?? null;
+                    if (Number.isFinite(accuracy) && (accuracy as number) > 0) {
+                        lastGpsSampleRef.current = {
+                            lat: latitude,
+                            lng: longitude,
+                            accuracyMeters: accuracy as number,
+                            timestampMs: Date.now(),
+                        };
+                    } else {
+                        lastGpsSampleRef.current = null;
+                    }
                     const newLocation: [number, number] = [longitude, latitude];
                     setUserLocation(newLocation);
 
@@ -1791,7 +1952,17 @@ export const MapView: React.FC<MapViewProps> = ({
 
                         {/* 2 — Safety / status hero */}
                         <section className="pq-mycar-safety" aria-label="Street intelligence">
-                        {savedSpot.segmentId && savedSpot.segmentStreetName ? (
+                        {savedSpot.curbResolutionStatus === 'resolving' ? (
+                            <div className="pq-mycar-intel-unavailable" role="status" aria-live="polite">
+                                <p className="pq-mycar-intel-reason">{t('street_intel.verifying_curb')}</p>
+                            </div>
+                        ) : savedSpot.curbResolutionStatus === 'ambiguous' && savedSpot.curbSelector ? (
+                            <VisualCurbSelector
+                                selector={savedSpot.curbSelector}
+                                onSelect={handleCanonicalCurbSelection}
+                                loading={curbSelectionLoading}
+                            />
+                        ) : savedSpot.segmentId && savedSpot.segmentStreetName ? (
                             <StreetIntelligenceCard
                                 segmentId={savedSpot.segmentId}
                                 parkingSide={savedSpot.parkingSide}
@@ -1800,30 +1971,19 @@ export const MapView: React.FC<MapViewProps> = ({
                                 confirmedParkingSide={savedSpot.confirmedParkingSide ?? null}
                                 onConfirmSide={handleConfirmSide}
                                 onResult={r => {
-                                    if (r?.safeUntil) {
-                                        writeCleaningReminder(r.safeUntil, reminderEnabled, savedSpot.segmentStreetName);
+                                    setCleaningAvailable(r.cleaningAvailable);
+                                    setNextCleaningAt(r.nextCleaningAt);
+                                    if (r.cleaningAvailable && r.nextCleaningAt) {
+                                        writeCleaningReminder(r.nextCleaningAt, reminderEnabled, savedSpot.segmentStreetName);
+                                    } else {
+                                        deactivateCleaningReminder();
                                     }
                                 }}
                             />
                         ) : savedSpot.streetIntelStatus === 'unavailable' || savedSpot.streetIntelStatus === 'failed' ? (
                             <div className="pq-mycar-intel-unavailable">
-                                <div className="pq-mycar-intel-street">
-                                    <MapPin size={14} className="text-[var(--color-text-secondary)]" />
-                                    <p>
-                                        {savedSpot.streetIntelStatus === 'failed' ? t('street_intel.failed_title') :
-                                         savedSpot.streetIntelReason === 'no_sweepnyc_notes' || savedSpot.streetIntelReason === 'no_signs' ? t('street_intel.unavailable_title_no_data') :
-                                         t('street_intel.unavailable_title_general')}
-                                    </p>
-                                </div>
-                                <p className="pq-mycar-intel-reason">
-                                    {savedSpot.streetIntelStatus === 'failed'
-                                        ? t('street_intel.failed_body')
-                                        : savedSpot.streetIntelReason === 'no_sweepnyc_notes' || savedSpot.streetIntelReason === 'no_signs'
-                                        ? t('street_intel.unavailable_body_no_data')
-                                        : t('street_intel.unavailable_body_general')}
-                                </p>
                                 <p className="pq-mycar-intel-reason" style={{ marginBottom: 0 }}>
-                                    {t('street_intel.check_signs')}
+                                    {t('street_intel.could_not_verify')}
                                 </p>
                                 <button
                                     onClick={handleRetryStreetIntel}
@@ -1850,16 +2010,19 @@ export const MapView: React.FC<MapViewProps> = ({
                         <div className="pq-mycar-remind-grid">
                             <button
                                 onClick={() => {
+                                    if (!cleaningAvailable || !nextCleaningAt) return;
                                     const next = !reminderEnabled;
                                     setReminderEnabled(next);
                                     localStorage.setItem('streetCleaningReminder', String(next));
-                                    if (auth.currentUser) {
-                                        setDoc(doc(db, 'parkingSessions', auth.currentUser.uid), { reminderEnabled: next }, { merge: true }).catch(() => {});
+                                    if (next) {
+                                        writeCleaningReminder(nextCleaningAt, true, savedSpot.segmentStreetName);
+                                    } else {
+                                        deactivateCleaningReminder();
                                     }
                                 }}
-                                disabled={!savedSpot.segmentId}
-                                aria-pressed={reminderEnabled}
-                                className={`pq-mycar-remind-tile${reminderEnabled ? ' is-on' : ''}`}
+                                disabled={!cleaningAvailable || !nextCleaningAt}
+                                aria-pressed={cleaningAvailable && reminderEnabled}
+                                className={`pq-mycar-remind-tile${cleaningAvailable && reminderEnabled ? ' is-on' : ''}`}
                             >
                                 <span className="pq-mycar-remind-on" aria-hidden="true">On</span>
                                 <div className="pq-mycar-remind-tile-icon">
@@ -1882,7 +2045,7 @@ export const MapView: React.FC<MapViewProps> = ({
                             </button>
                         </div>
 
-                        {reminderEnabled && (
+                        {cleaningAvailable && nextCleaningAt && reminderEnabled && (
                             <p className="pq-mycar-remind-note">
                                 We'll remind you <strong>1 hour before</strong> cleaning, and again at <strong>30 minutes before</strong> street cleaning starts
                             </p>

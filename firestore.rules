@@ -628,6 +628,12 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Canonical curb identities contain official GIS identifiers and resolver
+    // evidence. They are Admin SDK/server-only; no client role can read or write.
+    match /curbIdentities/{curbKey} {
+      allow read, write: if false;
+    }
+
     // All streetSegments/streetRules mutations are admin-callable-only
     // (adminAddSegment, adminUpdateSegmentStatus, adminAddCleaningRule,
     // adminSupersedeRule, adminBackfillStreetIntelligence — all

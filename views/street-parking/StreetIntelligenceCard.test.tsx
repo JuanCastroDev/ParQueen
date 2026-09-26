@@ -202,14 +202,14 @@ describe('StreetIntelligenceCard — date-bounded suspension fetch', () => {
             { id: 'archived-today', data: { cityId: 'nyc', date: todayKey, type: 'holiday', label: 'Archived', affectsTypes: ['streetCleaning'], source: 'admin', status: 'archived' } },
         ];
         const { getResult: getResultArchived } = await renderCard();
-        expect(getResultArchived().activeNow).toBe(true);
+        expect(getResultArchived().movementResult.activeNow).toBe(true);
 
         // Same date, but non-archived: must suppress the active window.
         suspensionRows = [
             { id: 'active-today', data: { cityId: 'nyc', date: todayKey, type: 'holiday', label: 'Active', affectsTypes: ['streetCleaning'], source: 'admin', status: 'active' } },
         ];
         const { getResult: getResultActive } = await renderCard();
-        expect(getResultActive().activeNow).toBe(false);
+        expect(getResultActive().movementResult.activeNow).toBe(false);
     });
 
     it('multiple applicable suspensions in range are all available to computeSafeUntil (no artificial limit(1))', async () => {
@@ -245,7 +245,7 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         segmentExists = false;
         const { renderer } = await renderCard();
         const text = renderedText(renderer);
-        expect(text).toContain('Parking rule data is unavailable for this location.');
+        expect(text).toContain('ParQueen could not verify the curb and parking rules here.');
         expect(text).not.toContain('Safe Until');
         expect(text).not.toContain('ParQueen Verified');
     });
@@ -254,22 +254,20 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         segmentData = { ...SUPPORTED_ADMIN_SEGMENT, status: undefined };
         const { renderer } = await renderCard();
         const text = renderedText(renderer);
-        expect(text).toContain('Parking rule data is unavailable for this location.');
+        expect(text).toContain('ParQueen could not verify the curb and parking rules here.');
         expect(text).not.toContain('Parking info available');
         expect(text).not.toContain('ParQueen Verified');
     });
 
-    it('needs_review places textual caution before the calculated time and removes verified treatment', async () => {
+    it('needs_review fails closed with calm consumer copy and no review terminology', async () => {
         segmentData = { ...SUPPORTED_ADMIN_SEGMENT, status: 'needs_review' };
         const { renderer } = await renderCard();
         const text = renderedText(renderer);
-        expect(text).toContain('Needs review');
-        expect(text).toContain('Estimated parking window');
-        expect(text.indexOf('Needs review')).toBeLessThan(text.indexOf('Estimated parking window'));
-        expect(text).not.toContain('ParQueen Verified');
+        expect(text).toBe('ParQueen could not verify the curb and parking rules here.');
+        expect(text).not.toMatch(/review|confidence|provider|source|updated|schedule count/i);
     });
 
-    it('fallback data receives caution rather than an unsupported verified label', async () => {
+    it('fallback caution exposes no provider or source metadata', async () => {
         segmentData = {
             status: 'needs_review',
             source: 'nyc_open_data',
@@ -280,16 +278,15 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         streetRuleRows = [{ id: 'rule1', data: { ...MELVILLE_RULE, source: 'nyc_open_data', needsReview: true } }];
         const { renderer } = await renderCard();
         const text = renderedText(renderer);
-        expect(text).toContain('Needs review');
-        expect(text).toContain('NYC Open Data fallback');
-        expect(text).not.toContain('ParQueen Verified');
+        expect(text).toBe('ParQueen could not verify the curb and parking rules here.');
+        expect(text).not.toMatch(/NYC Open Data|provider|source|review/i);
     });
 
     it('answers a supported result declaratively, without defensive copy', async () => {
         const { renderer } = await renderCard();
         const text = renderedText(renderer);
         expect(text).toContain('Safe Until');
-        expect(text).toContain('Parking info available');
+        expect(text).not.toContain('Parking info available');
         // A supported answer is declarative. Safety copy belongs only to a
         // concrete caution/unknown reason, not every successful calculation.
         expect(text).not.toContain('Check posted signs and current NYC rules before parking.');
@@ -299,19 +296,89 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         expect(text).not.toMatch(/guarantee(?:d|s)? legal parking/i);
     });
 
-    it('renders source and freshness only when reliable metadata exists', async () => {
+    it('consumes only the active canonical V2 rule generation', async () => {
+        segmentData = {
+            status: 'active',
+            protocolVersion: 2,
+            activeRuleSetVersion: 'curbrules2_current',
+        };
+        streetRuleRows = [
+            {
+                id: 'stale',
+                data: {
+                    ...MELVILLE_RULE,
+                    protocolVersion: 2,
+                    ruleSetVersion: 'curbrules2_stale',
+                    schedules: [{ side: 'West', days: ['Tue'], startTime: '03:00', endTime: '04:00' }],
+                    source: 'nyc_open_data',
+                },
+            },
+            {
+                id: 'current',
+                data: {
+                    ...MELVILLE_RULE,
+                    protocolVersion: 2,
+                    ruleSetVersion: 'curbrules2_current',
+                    source: 'nyc_open_data',
+                },
+            },
+        ];
+
+        const { renderer, getResult } = await renderCard();
+        expect(renderedText(renderer)).toContain('Safe Until');
+        expect(getResult().movementResult.scheduleDescription).toContain('Mon & Thu');
+        expect(getResult().movementResult.scheduleDescription).not.toContain('Tue');
+    });
+
+    it('renders a meter-only canonical V2 generation', async () => {
+        segmentData = {
+            status: 'active',
+            protocolVersion: 2,
+            activeRuleSetVersion: 'curbrules2_meter',
+        };
+        streetRuleRows = [{
+            id: 'meter',
+            data: {
+                type: 'meter',
+                source: 'park_nyc',
+                protocolVersion: 2,
+                ruleSetVersion: 'curbrules2_meter',
+                supersededAt: null,
+                schedules: [{ side: 'West', days: ['Mon', 'Sat'], startTime: '09:00', endTime: '19:00' }],
+                meterTerms: { maxStayMinutes: 120, rateDisplay: '$3.50/hour' },
+            },
+        }];
+
+        const { renderer, getResult } = await renderCard();
+        const text = renderedText(renderer);
+        expect(text).toContain('Metered parking');
+        expect(text).toContain('$3.50/hour');
+        expect(text).not.toContain('ParQueen could not verify the curb and parking rules here.');
+        expect(getResult().cleaningAvailable).toBe(false);
+    });
+
+    it('omits implementation and review metadata from normal consumer output', async () => {
+        streetRuleRows = [{
+            id: 'rule1',
+            data: { ...MELVILLE_RULE, lastSourceSync: '2026-08-29' },
+        }];
+        const { renderer } = await renderCard({ confirmedParkingSide: 'West' });
+        const text = renderedText(renderer);
+        expect(text).not.toMatch(/needs review|provider|source:|data updated|cleaning schedules?|you confirmed|confidence/i);
+    });
+
+    it('never renders source or freshness metadata in the consumer card', async () => {
         streetRuleRows = [{ id: 'rule1', data: { ...MELVILLE_RULE, lastSourceSync: '2026-08-29' } }];
         const withMetadata = await renderCard();
-        expect(renderedText(withMetadata.renderer)).toContain('Source: ParQueen admin data');
-        expect(renderedText(withMetadata.renderer)).toContain('Data updated: Aug 29, 2026');
+        expect(renderedText(withMetadata.renderer)).not.toMatch(/Source:|Data updated:/);
 
         streetRuleRows = [{ id: 'rule1', data: { ...MELVILLE_RULE, lastSourceSync: null } }];
         const withoutFreshness = await renderCard();
-        expect(renderedText(withoutFreshness.renderer)).not.toContain('Data updated:');
+        expect(renderedText(withoutFreshness.renderer)).not.toMatch(/Source:|Data updated:/);
 
         streetRuleRows = [{ id: 'rule1', data: { ...MELVILLE_RULE, lastSourceSync: '2026-13-01' } }];
         const withInvalidFreshness = await renderCard();
-        expect(renderedText(withInvalidFreshness.renderer)).not.toContain('Data updated:');
+        expect(renderedText(withInvalidFreshness.renderer)).not.toMatch(/Source:|Data updated:/);
     });
 
     it('still renders the existing Street Intelligence card for NYC Open Data without infrastructure language', async () => {
@@ -330,8 +397,8 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         const { renderer } = await renderCard();
         const text = renderedText(renderer);
         expect(text).toContain('Safe Until');
-        expect(text).toContain('Parking info available');
-        expect(text).toContain('NYC Open Data fallback');
+        expect(text).not.toContain('Parking info available');
+        expect(text).not.toContain('NYC Open Data fallback');
         expect(text).not.toMatch(/Curb resolver|BFI|blockface|cohort|shadow|CSCL/i);
     });
 
@@ -355,8 +422,10 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         expect(text).toContain('Metered parking');
         expect(text).toContain('$3.50/hour');
         expect(text).toContain('2 hr maximum');
-        expect(getResult().scheduleDescription).toContain('Mon & Thu');
-        expect(getResult().scheduleDescription).not.toContain('9');
+        expect(getResult().movementResult.scheduleDescription).toContain('Mon & Thu');
+        expect(getResult().movementResult.scheduleDescription).not.toContain('9');
+        expect(getResult().cleaningAvailable).toBe(true);
+        expect(getResult().nextCleaningAt).toBeInstanceOf(Date);
     });
 
     it('C. meter-only does not render the generic unavailable card', async () => {
@@ -378,9 +447,11 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         const text = renderedText(renderer);
         expect(text).toContain('Metered parking');
         expect(text).toContain('No street-cleaning schedule found');
-        expect(text).not.toContain('Parking rule data is unavailable for this location.');
+        expect(text).not.toContain('ParQueen could not verify the curb and parking rules here.');
         expect(text).not.toContain('Safe Until');
-        expect(getResult().scheduleDescription).toBeNull();
+        expect(getResult().movementResult.scheduleDescription).toBeNull();
+        expect(getResult().cleaningAvailable).toBe(false);
+        expect(getResult().nextCleaningAt).toBeNull();
     });
 
     it('B. cleaning-only omits the meter section', async () => {
@@ -389,6 +460,14 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         expect(text).toContain('Street cleaning');
         expect(text).not.toContain('Metered parking');
         expect(text).not.toContain('No meter');
+    });
+
+    it('an active cleaning window does not promise a future cleaning alert', async () => {
+        vi.setSystemTime(new Date('2026-08-24T09:00:00-04:00'));
+        const { getResult } = await renderCard();
+        expect(getResult().movementResult.activeNow).toBe(true);
+        expect(getResult().cleaningAvailable).toBe(false);
+        expect(getResult().nextCleaningAt).toBeNull();
     });
 
     it('T. prohibition-only card shows No Parking Anytime without inventing a clock', async () => {
@@ -414,8 +493,9 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         expect(text).toContain('No Parking');
         expect(text).toContain('Anytime');
         expect(text).not.toContain('Safe Until');
-        expect(getResult().anytime).toBe(true);
-        expect(getResult().safeUntil).toBeNull();
+        expect(getResult().movementResult.anytime).toBe(true);
+        expect(getResult().movementResult.safeUntil).toBeNull();
+        expect(getResult().cleaningAvailable).toBe(false);
     });
 
     it('L. active No Standing shows restricted now instead of a future Safe Until', async () => {
@@ -444,7 +524,8 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         expect(text).toContain('Parking restricted now');
         expect(text).toContain('No Standing');
         expect(text).not.toContain('Safe Until');
-        expect(getResult().activeNow).toBe(true);
-        expect(getResult().restrictionKind).toBe('noStanding');
+        expect(getResult().movementResult.activeNow).toBe(true);
+        expect(getResult().movementResult.restrictionKind).toBe('noStanding');
+        expect(getResult().cleaningAvailable).toBe(false);
     });
 });

@@ -241,6 +241,8 @@ const baseSpot = {
   sessionId: 'abc', linkedPingId: null, segmentId: 'seg1', parkingSide: 'North',
   restrictionVersionId: 'v1', segmentStreetName: 'Main St',
   streetIntelStatus: 'found' as const, streetIntelReason: null, streetIntelCheckedAt: null,
+  curbProtocolVersion: 2 as const, curbResolutionStatus: 'high_confidence' as const,
+  curbSelector: null, curbRefreshAttempted: false,
   gpsAccuracyMeters: 8, sideConfidence: 'high' as const, confirmedParkingSide: null,
 };
 
@@ -250,6 +252,23 @@ describe('readSavedSpot', () => {
   it('round-trips a saved spot', () => {
     writeSavedSpot(baseSpot);
     expect(readSavedSpot()).toEqual(baseSpot);
+  });
+
+  it('keeps a pre-V2 saved session readable and marks canonical refresh unattempted', () => {
+    const legacy = { ...baseSpot } as Record<string, unknown>;
+    delete legacy.curbProtocolVersion;
+    delete legacy.curbResolutionStatus;
+    delete legacy.curbSelector;
+    delete legacy.curbRefreshAttempted;
+    localStorage.setItem(SAVED_SPOT_KEY, JSON.stringify(legacy));
+
+    expect(readSavedSpot()).toMatchObject({
+      segmentId: 'seg1',
+      curbProtocolVersion: null,
+      curbResolutionStatus: null,
+      curbSelector: null,
+      curbRefreshAttempted: false,
+    });
   });
 
   it('returns null when nothing is saved', () => {

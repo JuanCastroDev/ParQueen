@@ -969,6 +969,9 @@ const en: Record<string, string> = {
     'messages.smart_replies_aria': 'Suggested replies',
 
     // Street Intelligence — card + session sheet
+    'street_intel.verifying_curb': 'Verifying the exact curb and parking rules…',
+    'street_intel.choose_curb': 'Choose the highlighted curb where you parked.',
+    'street_intel.could_not_verify': 'ParQueen could not verify the curb and parking rules here.',
     'street_intel.caution_side_unresolved': "We found the schedule, but couldn't confidently match your side of the street.",
     'street_intel.caution_block_not_decisive': "We couldn't pin this to a single block face, so the schedule may belong to a neighbouring block.",
     'street_intel.caution_conflicting_schedules': 'This block has conflicting street-cleaning records.',

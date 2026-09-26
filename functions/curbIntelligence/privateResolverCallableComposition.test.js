@@ -9,6 +9,27 @@ const end = source.indexOf('function _existingNYCOpenDataResult', start);
 const callable = source.slice(start, end);
 
 describe('createSegmentFromSweepNYC private resolver composition boundary', () => {
+  it('routes protocol V2 through the canonical orchestrator after auth and rate limiting', () => {
+    expect(callable).toContain("await checkRateLimit(uid, 'createSegmentFromSweepNYC'");
+    expect(callable).toContain('if (request.data?.protocolVersion === 2)');
+    expect(callable).toContain('_callableHooks.canonicalCurbOrchestrator || _runCanonicalCurbV2');
+    expect(callable).toContain('return orchestrate(request.data)');
+    expect(callable.indexOf('await checkRateLimit(uid')).toBeLessThan(
+      callable.indexOf('if (request.data?.protocolVersion === 2)'),
+    );
+    expect(callable.indexOf('if (request.data?.protocolVersion === 2)')).toBeLessThan(
+      callable.indexOf('const { lat, lng, accuracyMeters, revalidateSegmentId }'),
+    );
+    const v2Start = source.indexOf('async function _runCanonicalCurbV2');
+    const v2 = source.slice(v2Start, source.indexOf('// ─── Hydrant proximity', v2Start));
+    expect(v2).toContain('candidateStore: createCsclCandidateStore');
+    expect(v2).toContain('planimetricStore: createPlanimetricCurbStore');
+    expect(v2).toContain('parkNycStore: createParkNycCandidateStore');
+    expect(v2).toContain('sweepSource: { query: _queryCanonicalSweepEvidence }');
+    expect(v2).toContain('blockfaceResolver');
+    expect(v2).not.toMatch(/\.set\(|\.add\(|\.update\(/);
+  });
+
   it('declares the dedicated curb caller runtime identity on this function only', () => {
     expect(callable).toContain("serviceAccount: 'parqueen-curb-caller@parkqueen-46475363-ccf36.iam.gserviceaccount.com'");
     expect(callable).not.toContain("serviceAccount: 'parqueen-user@parkqueen-46475363-ccf36.iam.gserviceaccount.com'");
