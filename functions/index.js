@@ -2,6 +2,7 @@ const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore");
 const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
 const { onObjectFinalized } = require("firebase-functions/v2/storage");
+const { onInit } = require('firebase-functions/core');
 const { defineString, defineSecret } = require("firebase-functions/params");
 const { GoogleGenAI, Type } = require("@google/genai");
 const geminiApiKey = defineSecret("GEMINI_API_KEY");
@@ -40,13 +41,10 @@ const { logMeterEvent, METER_EVENTS } = require('./curbIntelligence/productMeter
 const { runProductRestrictionLookup } = require('./curbIntelligence/productRestrictionLookup');
 const { persistPublicRestrictionRules } = require('./curbIntelligence/persistPublicRestrictionRules');
 const { logRestrictionEvent, RESTRICTION_EVENTS } = require('./curbIntelligence/productRestrictionModel');
-const { runCanonicalCurbOrchestrator } = require('./curbIntelligence/canonicalCurbOrchestrator');
-const { createCsclCandidateStore } = require('./curbIntelligence/csclSocrataAdapter');
-const { createPlanimetricCurbStore } = require('./curbIntelligence/planimetricCurbAdapter');
-const { createParkNycCandidateStore } = require('./curbIntelligence/parkNycSocrataAdapter');
-const { createPrivateBlockfaceResolver } = require('./curbIntelligence/privateBlockfaceResolver');
-const { readPrivateResolverConfig } = require('./curbIntelligence/privateBlockfaceResolverConfig');
-const { createCurbTelemetry } = require('./curbIntelligence/curbTelemetry');
+const {
+  createCanonicalV2ModuleLoader,
+  selectCanonicalV2Handler,
+} = require('./curbIntelligence/canonicalV2ModuleLoader');
 const {
   countUsableStreetIntelligence,
   decideDedupPath,
@@ -55,6 +53,9 @@ const {
 const { parseSweepNYCDayList, CANONICAL_WEEKDAYS } = require('./streetIntelDays');
 const { haversineDistMiles, filterCandidates, buildMessages, collectStaleTokens, MAX_CANDIDATES, FCM_BATCH } = require('./notifyFanout');
 const { createHash, createHmac, randomInt: secureRandomInt, randomUUID, timingSafeEqual } = require('crypto');
+
+const canonicalV2ModuleLoader = createCanonicalV2ModuleLoader();
+onInit(() => { canonicalV2ModuleLoader.initialize(); });
 
 function stableId(...parts) {
   return createHash('sha256').update(parts.map(part => String(part)).join('\u001f')).digest('hex');
@@ -4389,6 +4390,15 @@ async function _queryCanonicalSweepEvidence({ identity, signal }) {
 }
 
 async function _runCanonicalCurbV2(requestData) {
+  const {
+    runCanonicalCurbOrchestrator,
+    createCsclCandidateStore,
+    createPlanimetricCurbStore,
+    createParkNycCandidateStore,
+    createPrivateBlockfaceResolver,
+    readPrivateResolverConfig,
+    createCurbTelemetry,
+  } = canonicalV2ModuleLoader.get();
   let config;
   try {
     config = readPrivateResolverConfig();
@@ -4588,10 +4598,12 @@ exports.createSegmentFromSweepNYC = onCall(
     const uid = request.auth.uid;
     await checkRateLimit(uid, 'createSegmentFromSweepNYC', { limit: 30, windowSec: 3600 });
 
-    if (request.data?.protocolVersion === 2) {
-      const orchestrate = _callableHooks.canonicalCurbOrchestrator || _runCanonicalCurbV2;
-      return orchestrate(request.data);
-    }
+    const canonicalV2Handler = selectCanonicalV2Handler(
+      request.data,
+      _callableHooks.canonicalCurbOrchestrator,
+      _runCanonicalCurbV2,
+    );
+    if (canonicalV2Handler) return canonicalV2Handler(request.data);
 
     const { lat, lng, accuracyMeters, revalidateSegmentId } = request.data || {};
     if (typeof lat !== 'number' || typeof lng !== 'number')
