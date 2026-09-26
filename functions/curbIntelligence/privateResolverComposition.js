@@ -16,6 +16,7 @@ const {
   applySweepSideToProductionResult,
 } = require('./productPathDecision');
 const { runSweepSideResolution } = require('./sweepSideResolution');
+const { emitStructuredLog } = require('../streetIntelStructuredLog');
 
 const OVERALL_DEADLINE_MS = 8000;
 
@@ -80,14 +81,13 @@ async function observePrivateResolverShadow(input = {}, options = {}) {
   const shadowEligible = shadowDecision.eligible === true;
   if (!productEligible && !shadowEligible) {
     try {
-      const logger = options.logger || console;
-      logger.info({
+      emitStructuredLog({
         event: 'curb_product_skip',
         reason: productDecision.reason || shadowDecision.reason || 'ineligible',
         accuracyPresent: Number.isFinite(input.location?.accuracyMeters),
         hasProductionPath: typeof input.productionPath === 'string' && Boolean(input.productionPath),
         productionPath: typeof input.productionPath === 'string' ? input.productionPath : 'none',
-      });
+      }, options.write, options.logger);
     } catch {
       // Skip logs must never affect the callable result.
     }

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Node.js 22 Firebase Functions, Vitest, TypeScript/JavaScript, Firebase structured logging.
 
-**Spec:** `C:\Users\jayca\.codex\attachments\9d4a0141-0e44-43fb-aa68-87f55e3f5203\Pasted text.txt`
+**Spec:** Phase 2A.32 real-world curb consistency / intersection stability field-failure request.
 
 ## Global Constraints
 

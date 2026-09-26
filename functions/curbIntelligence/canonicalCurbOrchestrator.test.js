@@ -143,6 +143,9 @@ describe('runCanonicalCurbOrchestrator', () => {
     expect(valid.resolveCanonicalCurb).not.toHaveBeenCalled();
     expect(rejected).toEqual({ protocolVersion: 2, status: 'unsupported', reason: 'candidate_incomplete' });
     expect(invalid.loadCanonicalRules).not.toHaveBeenCalled();
+    expect(invalid.telemetry.emit).toHaveBeenCalledWith('curb_resolution_unsupported', expect.not.objectContaining({
+      sourceCategory: 'cscl',
+    }));
   });
 
   it('reuses an exact canonical cache hit and never queries a radius cache or sources', async () => {

@@ -94,6 +94,19 @@ describe('strict cleaning-shadow structured telemetry', () => {
     expect(typeof logger.info.mock.calls[0][0]).toBe('object');
   });
 
+  it('uses the Firebase structured logger by default', async () => {
+    const { logger } = require('firebase-functions');
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
+    try {
+      const sink = createStructuredCloudLoggingSink();
+      await sink.record(valid);
+
+      expect(info).toHaveBeenCalledWith(valid);
+    } finally {
+      info.mockRestore();
+    }
+  });
+
   it('rejects invalid payloads without logging them', async () => {
     const logger = { info: vi.fn() };
     const sink = createStructuredCloudLoggingSink({ logger });

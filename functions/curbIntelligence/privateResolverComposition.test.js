@@ -429,6 +429,27 @@ describe('private resolver minimum-shadow composition', () => {
     }));
     expect(JSON.stringify(logger.info.mock.calls)).not.toMatch(/officialBlockFaceId|blockFaceId|BFI|0212261301/);
   });
+
+  it('uses the Firebase structured logger for product skips by default', async () => {
+    const { logger } = require('firebase-functions');
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
+    try {
+      await observePrivateResolverShadow({
+        ...SWEEP_INPUT,
+        location: { lat: 40.712, lng: -74.006 },
+      }, shadowOptions({
+        readConfig: () => ({ mode: 'shadow', serviceUrl: SERVICE_URL, samplePermille: 100, productPath: 'on' }),
+        operatorAuthorized: false,
+      }));
+
+      expect(info).toHaveBeenCalledWith(expect.objectContaining({
+        event: 'curb_product_skip',
+        reason: 'accuracy_missing',
+      }));
+    } finally {
+      info.mockRestore();
+    }
+  });
 });
 
 const SWEEP_LEGACY = Object.freeze({

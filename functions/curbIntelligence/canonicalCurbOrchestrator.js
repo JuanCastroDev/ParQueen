@@ -127,7 +127,7 @@ async function execute(request, dependencies) {
       reason,
       failureDetail: resolution?.reasons?.[0],
       candidateCount: resolution?.candidateCount,
-      sourceCategory: 'cscl',
+      ...(request.candidateToken ? {} : { sourceCategory: 'cscl' }),
       latencyMs: Date.now() - startedAt,
     });
     return unsupported(reason);
