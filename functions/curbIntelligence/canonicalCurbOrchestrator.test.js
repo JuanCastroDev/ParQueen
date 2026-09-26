@@ -105,7 +105,7 @@ describe('runCanonicalCurbOrchestrator', () => {
   it('returns unsupported and starts no sources when identity resolution fails', async () => {
     const deps = dependencies({
       resolveCanonicalCurb: vi.fn(async () => ({
-        state: 'UNSUPPORTED', reasons: ['candidate_coverage_incomplete'],
+        state: 'UNSUPPORTED', reasons: ['candidate_coverage_incomplete'], candidateCount: 2,
       })),
     });
 
@@ -114,6 +114,15 @@ describe('runCanonicalCurbOrchestrator', () => {
     });
     expect(deps.loadCanonicalRules).not.toHaveBeenCalled();
     expect(deps.persistCanonicalCurb).not.toHaveBeenCalled();
+    expect(deps.telemetry.emit).toHaveBeenCalledWith('curb_resolution_attempted', expect.objectContaining({
+      accuracyMeters: 5,
+    }));
+    expect(deps.telemetry.emit).toHaveBeenCalledWith('curb_resolution_unsupported', expect.objectContaining({
+      reason: 'candidate_incomplete',
+      failureDetail: 'candidate_coverage_incomplete',
+      candidateCount: 2,
+      sourceCategory: 'cscl',
+    }));
   });
 
   it('routes candidate tokens through fresh visual selection and rejects invalid selection before sources', async () => {
