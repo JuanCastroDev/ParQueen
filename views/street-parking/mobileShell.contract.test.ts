@@ -81,7 +81,11 @@ describe('mobile shell layout contract', () => {
     expect(css).toContain('--mobile-shell-surface:');
     expect(css).toContain('--mobile-shell-border:');
     expect(css).toContain('--mobile-shell-accent:');
-    expect(css).toContain('--mobile-shell-focus: #82bdff');
+    expect(ruleBetween(css, ':root {', '.dark {', ':root'))
+      .toContain('--mobile-shell-focus: #3d8fff');
+
+    expect(ruleBetween(css, '.dark {', 'html, body, #root', '\\.dark'))
+      .toContain('--mobile-shell-focus: #86c2ff');
     expect(css).toMatch(/\.map-search-shell,[^}]*backdrop-filter:\s*blur\(/s);
     expect(css).toMatch(/\.map-ai-action\s*\{[^}]*min-height:\s*44px/s);
     expect(css).toMatch(/\.map-ai-action:focus-visible,[^}]*outline:\s*2px solid var\(--mobile-shell-focus\)/s);
