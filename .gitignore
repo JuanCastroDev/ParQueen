@@ -42,6 +42,11 @@ firebase-debug.log
 test-results/
 .audit-worktrees/
 
+# Phase 2A.35B official snapshots and generated private topology artifacts.
+# Commit only manifests, tiny public fixtures, and aggregate reports.
+data/curb-topology/snapshots/
+data/curb-topology/artifacts/
+
 # Capacitor / native local artifacts (Phase 1+)
 android/.gradle/
 android/app/build/

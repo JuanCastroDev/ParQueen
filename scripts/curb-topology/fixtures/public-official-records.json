@@ -1,0 +1,83 @@
+{
+  "provenance": {
+    "csclItemId": "9163b04952354da2bf748abe1788e985",
+    "csclServiceItemId": "82854419a16044aaa75a038b3706235b",
+    "csclRelease": "1790406804292",
+    "nodeServiceItemId": "d013f7e945794662bc073938b5890186",
+    "nodeRelease": "1790406806913",
+    "pavementResourceId": "vs44-rznx",
+    "pavementRelease": "1714164498"
+  },
+  "centerlines": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [[-74.0179319168746, 40.7061831036515], [-74.0175756745458, 40.7068481053071]]
+      },
+      "properties": {
+        "PHYSICALID": 3,
+        "L_BLOCKFACEID": 212262587,
+        "R_BLOCKFACEID": 1222601917,
+        "STNAME_LABEL": "BATTERY PL",
+        "STATUS": "2",
+        "BOROUGHCODE": "1",
+        "RW_TYPE": 1,
+        "FROM_LEVEL_CODE": 13,
+        "TO_LEVEL_CODE": 13,
+        "B5SC": "112670",
+        "FULL_STREET_NAME": "BATTERY PL",
+        "SEGMENT_TYPE": null
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [-73.795869952238, 40.7813573687836] },
+      "properties": { "NODEID": 9054611, "MASTER_FLAG": "N", "SAFTYPE": null, "GROUND_ELEV": null }
+    }
+  ],
+  "streetNames": [
+    {
+      "OBJECTID": 15802217,
+      "PRE_MODIFIER": null,
+      "PRE_DIRECTIONAL": null,
+      "PRE_TYPE": null,
+      "BASIC_NAME": "CUS D'AMATO",
+      "POST_TYPE": "WAY",
+      "POST_DIRECTIONAL": null,
+      "POST_MODIFIER": null,
+      "FULL_NAME": null,
+      "JOINID": null
+    }
+  ],
+  "curatedCases": [
+    { "case": "ordinary Manhattan grid block", "officialPhysicalId": "3", "boroughCode": "1", "street": "BATTERY PL" },
+    { "case": "Bronx named residential street", "officialPhysicalId": "35231", "boroughCode": "2", "street": "E  168 ST" },
+    { "case": "Brooklyn irregular street", "officialPhysicalId": "36519", "boroughCode": "3", "street": "6 AVE" },
+    { "case": "Queens numbered/hyphenated street", "officialPhysicalId": "7212", "boroughCode": "4", "street": "GRAND CENTRAL PY ET 23 S-N EB" },
+    { "case": "Staten Island residential road", "officialPhysicalId": "15157", "boroughCode": "5", "street": "BLOOMINGDALE RD" },
+    { "case": "long sparse-vertex segment", "officialPhysicalId": "179088", "boroughCode": "4", "street": "HIGHLANDS-MIDTOWN EAST FERRY RTE" },
+    { "case": "intersection", "derivedTest": "topology.test.js complete incident-street context", "seedOfficialPhysicalId": "3" },
+    { "case": "divided roadway", "derivedTest": "topology.test.js divided-road ambiguity", "seedOfficialPhysicalId": "3" },
+    { "case": "reversed geometry", "derivedTest": "topology.test.js consistent reversal", "seedOfficialPhysicalId": "3" },
+    { "case": "ambiguous topology", "derivedTest": "topology.test.js multiple endpoint streets", "seedOfficialPhysicalId": "3" },
+    { "case": "non-conflated Pavement Edge", "officialSourceId": "0.0", "resourceId": "vs44-rznx" },
+    { "case": "conflicting BFI", "derivedTest": "topology.test.js same BFI conflicting sides", "seedOfficialPhysicalId": "3" }
+  ],
+  "pavementEdges": [
+    {
+      "the_geom": {
+        "type": "MultiLineString",
+        "coordinates": [[[-73.87546905849592, 40.65530069299723], [-73.87532013402401, 40.65495735059064]]]
+      },
+      "source_id": "0.0",
+      "feat_code": "2260",
+      "sub_code": "226000",
+      "status": "New",
+      "blockf_id": "0",
+      "conflated": "0"
+    }
+  ]
+}
