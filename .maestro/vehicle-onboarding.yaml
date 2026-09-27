@@ -1,0 +1,214 @@
+appId: app.parqueen
+androidWebViewHierarchy: devtools
+---
+- launchApp:
+    clearState: true
+
+- waitForAnimationToEnd
+
+# ── Onboarding ──────────────────────────────────────────────
+
+- assertVisible: "Get Started"
+
+- tapOn:
+    text: "Get Started"
+    retryTapIfNoChange: true
+    waitToSettleTimeoutMs: 3000
+
+- assertVisible: "See spots opening near you"
+
+- tapOn:
+    text: "Continue"
+    retryTapIfNoChange: true
+    waitToSettleTimeoutMs: 3000
+
+- assertVisible: "Save your car. Know the rules."
+
+- tapOn:
+    text: "Continue"
+    retryTapIfNoChange: true
+    waitToSettleTimeoutMs: 3000
+
+# ── Step 1: Phone ───────────────────────────────────────────
+
+- assertVisible: "Step 1 of 4"
+
+- assertVisible:
+    id: "phone-input"
+
+- tapOn:
+    id: "phone-input"
+
+- inputText: ${QA_PHONE}
+
+- hideKeyboard
+
+- tapOn:
+    text: "Send code"
+    retryTapIfNoChange: true
+
+# ── Step 2: OTP ─────────────────────────────────────────────
+
+- extendedWaitUntil:
+    visible: "Enter the 6-digit code"
+    timeout: 20000
+
+- assertVisible: "Step 2 of 4"
+
+- assertVisible:
+    id: "otp-input"
+
+- tapOn:
+    id: "otp-input"
+
+- inputText: ${QA_OTP}
+
+# ── Step 3: Username ────────────────────────────────────────
+
+- extendedWaitUntil:
+    visible: "Choose your username"
+    timeout: 20000
+
+- assertVisible: "Step 3 of 4"
+
+- assertVisible:
+    id: "username-input"
+
+- tapOn:
+    id: "username-input"
+
+- inputText: ${QA_USERNAME}
+
+- extendedWaitUntil:
+    visible: "Username available"
+    timeout: 15000
+
+- hideKeyboard
+
+- tapOn:
+    text: "Continue"
+    retryTapIfNoChange: true
+    waitToSettleTimeoutMs: 3000
+
+# ── Step 4: Vehicle onboarding ──────────────────────────────
+
+- extendedWaitUntil:
+    visible: "Choose your vehicle type"
+    timeout: 20000
+
+- assertVisible: "Step 4 of 4"
+- assertVisible: "Choose your vehicle type"
+
+# Vehicle type
+- tapOn:
+    id: "vehicle-type-sedan"
+
+- tapOn:
+    text: "Next"
+    retryTapIfNoChange: true
+
+# Vehicle brand
+- extendedWaitUntil:
+    visible: "Choose your vehicle brand"
+    timeout: 10000
+
+- assertVisible:
+    id: "brand-search"
+
+- tapOn:
+    id: "brand-search"
+
+- inputText: "Toyota"
+
+- hideKeyboard
+
+- assertVisible:
+    id: "vehicle-brand-toyota"
+
+- tapOn:
+    id: "vehicle-brand-toyota"
+
+- tapOn:
+    text: "Next"
+    retryTapIfNoChange: true
+
+# Vehicle color
+- extendedWaitUntil:
+    visible: "Choose your vehicle color"
+    timeout: 10000
+
+- assertVisible:
+    id: "vehicle-color-blue"
+
+- tapOn:
+    id: "vehicle-color-blue"
+
+- tapOn:
+    text: "Save vehicle"
+    retryTapIfNoChange: true
+
+# Persistence confirmation
+- extendedWaitUntil:
+    visible: "Vehicle saved!"
+    timeout: 15000
+
+- assertVisible: "Vehicle saved!"
+- assertVisible: "Other drivers will see this during a handoff."
+
+- takeScreenshot: vehicle-saved
+
+- tapOn:
+    text: "Continue to the app"
+    retryTapIfNoChange: true
+
+# ── Location primer ─────────────────────────────────────────
+# The OS may already have a resolved location permission.
+# Only handle the primer if it actually appears.
+
+- runFlow:
+    when:
+      visible: "See parking near you"
+    commands:
+      - assertVisible: "Enable location"
+      - assertVisible: "Not now"
+      - takeScreenshot: new-user-location-primer
+      - tapOn:
+          text: "Not now"
+          retryTapIfNoChange: true
+
+# ── First map arrival ───────────────────────────────────────
+
+- extendedWaitUntil:
+    visible: "Welcome to ParQueen"
+    timeout: 20000
+
+- assertVisible: "Start Tour"
+- assertVisible: "Skip"
+
+- takeScreenshot: new-user-first-map
+
+- tapOn:
+    text: "Skip"
+    retryTapIfNoChange: true
+
+- assertVisible: "Map"
+- assertVisible: "Nearby Activity"
+- assertVisible: "Ping Your Spot"
+- assertVisible: "Messages.*"
+- assertVisible: "Profile"
+
+# ── Verify persisted vehicle in Profile ─────────────────────
+
+- tapOn:
+    text: "Profile"
+    retryTapIfNoChange: true
+
+- extendedWaitUntil:
+    visible: "Profile"
+    timeout: 10000
+
+- extendedWaitUntil:
+    visible: "Blue Toyota.*Sedan"
+    timeout: 15000
+
+- takeScreenshot: vehicle-persisted-profile

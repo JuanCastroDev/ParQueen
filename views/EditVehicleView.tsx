@@ -454,6 +454,7 @@ export const EditVehicleView = ({ user, onBack, isOnboarding, onSkip }: Props) =
                 return (
                   <button
                     key={typeName}
+                    id={`vehicle-type-${typeName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
                     role="radio"
                     aria-checked={active}
                     onClick={() => setVehicleType(typeName)}
@@ -653,6 +654,7 @@ export const EditVehicleView = ({ user, onBack, isOnboarding, onSkip }: Props) =
                       return (
                         <button
                           key={b}
+                          id={`vehicle-brand-${b.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
                           role="radio"
                           aria-checked={active}
                           onClick={() => setVehicleBrand(b)}
@@ -867,6 +869,7 @@ export const EditVehicleView = ({ user, onBack, isOnboarding, onSkip }: Props) =
                 return (
                   <button
                     key={c.name}
+                    id={`vehicle-color-${c.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
                     role="radio"
                     aria-checked={isSelected}
                     aria-label={clabels[c.name] ?? c.name}
