@@ -1,0 +1,87 @@
+appId: app.parqueen
+androidWebViewHierarchy: devtools
+---
+- launchApp:
+    clearState: true
+
+- waitForAnimationToEnd
+
+- assertVisible: "Get Started"
+
+- tapOn:
+    text: "Get Started"
+    retryTapIfNoChange: true
+    waitToSettleTimeoutMs: 3000
+
+- assertVisible: "See spots opening near you"
+
+- tapOn:
+    text: "Continue"
+    retryTapIfNoChange: true
+    waitToSettleTimeoutMs: 3000
+
+- assertVisible: "Save your car. Know the rules."
+
+- tapOn:
+    text: "Continue"
+    retryTapIfNoChange: true
+    waitToSettleTimeoutMs: 3000
+
+- assertVisible: "Step 1 of 4"
+- assertVisible: "What's your number?"
+
+- assertVisible:
+    id: "phone-input"
+
+- tapOn:
+    id: "phone-input"
+    retryTapIfNoChange: true
+
+- inputText: ${QA_PHONE}
+
+- hideKeyboard
+
+- assertVisible: "Send code"
+
+- tapOn:
+    text: "Send code"
+    retryTapIfNoChange: true
+
+- extendedWaitUntil:
+    visible: "Enter the 6-digit code"
+    timeout: 20000
+
+- assertVisible: "Step 2 of 4"
+- assertVisible: "Enter the 6-digit code"
+
+- takeScreenshot: otp-screen
+
+- assertVisible:
+    id: "otp-input"
+
+- tapOn:
+    id: "otp-input"
+
+- inputText: ${QA_OTP}
+
+- extendedWaitUntil:
+    visible: "Welcome to ParQueen"
+    timeout: 20000
+
+- assertVisible: "Welcome to ParQueen"
+- assertVisible: "Start Tour"
+- assertVisible: "Skip"
+
+- takeScreenshot: authenticated-existing-user
+
+- tapOn:
+    text: "Skip"
+    retryTapIfNoChange: true
+
+- assertVisible: "Map"
+- assertVisible: "Nearby Activity"
+- assertVisible: "Ping Your Spot"
+- assertVisible: "Messages.*"
+- assertVisible: "Profile"
+
+- takeScreenshot: authenticated-map

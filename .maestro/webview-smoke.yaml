@@ -1,0 +1,9 @@
+appId: app.parqueen
+androidWebViewHierarchy: devtools
+---
+- launchApp:
+    clearState: true
+
+- waitForAnimationToEnd
+
+- assertVisible: "Get Started"

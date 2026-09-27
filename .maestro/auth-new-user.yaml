@@ -1,0 +1,150 @@
+appId: app.parqueen
+androidWebViewHierarchy: devtools
+---
+- launchApp:
+    clearState: true
+
+- waitForAnimationToEnd
+
+# ── Onboarding ──────────────────────────────────────────────
+
+- assertVisible: "Get Started"
+
+- tapOn:
+    text: "Get Started"
+    retryTapIfNoChange: true
+    waitToSettleTimeoutMs: 3000
+
+- assertVisible: "See spots opening near you"
+
+- tapOn:
+    text: "Continue"
+    retryTapIfNoChange: true
+    waitToSettleTimeoutMs: 3000
+
+- assertVisible: "Save your car. Know the rules."
+
+- tapOn:
+    text: "Continue"
+    retryTapIfNoChange: true
+    waitToSettleTimeoutMs: 3000
+
+# ── Step 1: Phone ───────────────────────────────────────────
+
+- assertVisible: "Step 1 of 4"
+
+- assertVisible:
+    id: "phone-input"
+
+- tapOn:
+    id: "phone-input"
+
+- inputText: ${QA_PHONE}
+
+- hideKeyboard
+
+- tapOn:
+    text: "Send code"
+    retryTapIfNoChange: true
+
+# ── Step 2: OTP ─────────────────────────────────────────────
+
+- extendedWaitUntil:
+    visible: "Enter the 6-digit code"
+    timeout: 20000
+
+- assertVisible: "Step 2 of 4"
+
+- assertVisible:
+    id: "otp-input"
+
+- tapOn:
+    id: "otp-input"
+
+- inputText: ${QA_OTP}
+
+# ── Step 3: Username ────────────────────────────────────────
+
+- extendedWaitUntil:
+    visible: "Choose your username"
+    timeout: 20000
+
+- assertVisible: "Step 3 of 4"
+
+- assertVisible:
+    id: "username-input"
+
+- tapOn:
+    id: "username-input"
+
+- inputText: ${QA_USERNAME}
+
+- extendedWaitUntil:
+    visible: "Username available"
+    timeout: 15000
+
+- hideKeyboard
+
+- tapOn:
+    text: "Continue"
+    retryTapIfNoChange: true
+    waitToSettleTimeoutMs: 3000
+
+# ── Step 4: Vehicle onboarding ──────────────────────────────
+
+- extendedWaitUntil:
+    visible: "Choose your vehicle type"
+    timeout: 20000
+
+- assertVisible: "Step 4 of 4"
+- assertVisible: "Choose your vehicle type"
+- assertVisible: "Skip for now"
+
+- takeScreenshot: new-user-step-4-vehicle
+
+- tapOn:
+    text: "Skip for now"
+    retryTapIfNoChange: true
+
+- assertVisible: "Add your vehicle later?"
+- assertVisible: "Got it, skip for now"
+
+- tapOn:
+    text: "Got it, skip for now"
+    retryTapIfNoChange: true
+
+# ── Location primer ─────────────────────────────────────────
+# The OS may already have a resolved location permission.
+# Only handle the primer if it actually appears.
+
+- runFlow:
+    when:
+      visible: "See parking near you"
+    commands:
+      - assertVisible: "Enable location"
+      - assertVisible: "Not now"
+      - takeScreenshot: new-user-location-primer
+      - tapOn:
+          text: "Not now"
+          retryTapIfNoChange: true
+
+# ── First map arrival ───────────────────────────────────────
+
+- extendedWaitUntil:
+    visible: "Welcome to ParQueen"
+    timeout: 20000
+
+- assertVisible: "Start Tour"
+- assertVisible: "Skip"
+
+- takeScreenshot: new-user-first-map
+
+- tapOn:
+    text: "Skip"
+    retryTapIfNoChange: true
+
+- assertVisible: "Map"
+- assertVisible: "Nearby Activity"
+- assertVisible: "Ping Your Spot"
+- assertVisible: "Messages.*"
+- assertVisible: "Profile"
