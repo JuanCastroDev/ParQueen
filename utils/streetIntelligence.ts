@@ -1,3 +1,4 @@
+import * as geofire from 'geofire-common';
 import { formatDaysLabel } from './streetIntelDays';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
