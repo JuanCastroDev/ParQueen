@@ -1,0 +1,39 @@
+appId: app.parqueen
+androidWebViewHierarchy: devtools
+---
+- setLocation:
+    latitude: 40.8275
+    longitude: -73.9258
+
+- extendedWaitUntil:
+    visible: "Heading to this spot"
+    timeout: 10000
+
+- extendedWaitUntil:
+    visible: "I've arrived"
+    timeout: 15000
+
+- tapOn:
+    text: "I've arrived"
+    retryTapIfNoChange: true
+
+- extendedWaitUntil:
+    visible: "Did you get the spot?"
+    timeout: 15000
+
+- assertVisible: "Yes, I'm in!"
+- assertVisible: "No luck"
+
+- tapOn:
+    text: "Yes, I'm in!"
+    retryTapIfNoChange: true
+
+- extendedWaitUntil:
+    visible: "You're parked!"
+    timeout: 20000
+
+- assertVisible: "maestrofinder3436 helped you claim this spot."
+- assertVisible: "+1 Crown earned"
+- assertVisible: "Saved to My Car"
+
+- takeScreenshot: core-handoff-success
