@@ -27,10 +27,20 @@ export const LOCATION_BURST_POLICY = {
   maximumSeedAgeMs: 5_000,
   maximumSampleAgeMs: 10_000,
   maximumReportedAccuracyMeters: 100,
+  maximumCanonicalAccuracyMeters: 50,
+  maximumCanonicalConsistencyMeters: 12,
   accuracyFloorMeters: 3,
   minimumOutlierDistanceMeters: 15,
   oldestSampleFreshnessWeight: 0.5,
 } as const;
+
+export const isCanonicalLocationReady = (
+  location: AggregatedLocation | null,
+): location is AggregatedLocation =>
+  location !== null
+  && location.sampleCount >= LOCATION_BURST_POLICY.minimumTargetSamples
+  && location.accuracyMeters <= LOCATION_BURST_POLICY.maximumCanonicalAccuracyMeters
+  && location.consistencyMeters <= LOCATION_BURST_POLICY.maximumCanonicalConsistencyMeters;
 
 const EARTH_RADIUS_METERS = 6_371_000;
 
@@ -242,7 +252,13 @@ export async function collectLocationBurst(input: {
           };
           if (!isValidSample(nextSample, observedAt)) return;
           samples.push(nextSample);
-          if (samples.length >= LOCATION_BURST_POLICY.targetSamples) finish();
+          const aggregate = aggregateLocationSamples(samples, observedAt);
+          if (
+            isCanonicalLocationReady(aggregate)
+            || samples.length >= LOCATION_BURST_POLICY.targetSamples
+          ) {
+            finish();
+          }
         },
         fail,
         {
