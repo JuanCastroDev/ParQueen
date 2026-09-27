@@ -1,0 +1,57 @@
+{
+  "manifestSchemaVersion": 1,
+  "normalizationVersion": "curb-topology-v1",
+  "acquisition": {
+    "timestamp": "2026-09-27T13:12:00.000Z"
+  },
+  "sources": [
+    {
+      "role": "cscl_centerline",
+      "name": "Published CSCL File Geodatabase — Centerline",
+      "officialUrl": "https://www.arcgis.com/sharing/rest/content/items/9163b04952354da2bf748abe1788e985/data",
+      "resourceId": "9163b04952354da2bf748abe1788e985:Centerline",
+      "releaseId": "cscl-pub-item-9163b04952354da2bf748abe1788e985-modified-1790471518000",
+      "schemaVersion": "cscl-pub-centerline-v1",
+      "byteSize": 189452306,
+      "rowCount": 122311,
+      "sha256": "53724ae1ba972cc04c3d8606d2d7e7c538b0df8cce0f2be041407e6efcac9329",
+      "requiredFields": ["PHYSICALID", "L_BLOCKFACEID", "R_BLOCKFACEID", "BOROUGHCODE", "FULL_STREET_NAME", "B5SC", "B7SC", "STATUS", "RW_TYPE", "SEGMENT_TYPE", "FROM_LEVEL_CODE", "TO_LEVEL_CODE", "BPHYS_ID"]
+    },
+    {
+      "role": "cscl_node",
+      "name": "Published CSCL File Geodatabase — Node",
+      "officialUrl": "https://www.arcgis.com/sharing/rest/content/items/9163b04952354da2bf748abe1788e985/data",
+      "resourceId": "9163b04952354da2bf748abe1788e985:Node",
+      "releaseId": "cscl-pub-item-9163b04952354da2bf748abe1788e985-modified-1790471518000",
+      "schemaVersion": "cscl-pub-node-v1",
+      "byteSize": 22913180,
+      "rowCount": 79250,
+      "sha256": "a94812a6fbb46a7dd05b2f77f5552cb2c59ca627e2a4cf7e0b31bffa67f15731",
+      "requiredFields": ["NODEID", "MASTER_FLAG", "SAFTYPE", "GROUND_ELEV"]
+    },
+    {
+      "role": "cscl_street_name",
+      "name": "Published CSCL File Geodatabase — StreetName",
+      "officialUrl": "https://www.arcgis.com/sharing/rest/content/items/9163b04952354da2bf748abe1788e985/data",
+      "resourceId": "9163b04952354da2bf748abe1788e985:StreetName",
+      "releaseId": "cscl-pub-item-9163b04952354da2bf748abe1788e985-modified-1790471518000",
+      "schemaVersion": "cscl-pub-street-name-v1",
+      "byteSize": 14332797,
+      "rowCount": 69726,
+      "sha256": "0b11213da5a757451254ffdc9705c3b475dfc3e5d8360d12932f8efe0d7903e8",
+      "requiredFields": ["B7SC", "BASIC_NAME", "FULL_NAME", "JOINID"]
+    },
+    {
+      "role": "pavement_edge",
+      "name": "NYC Planimetric Database: Pavement Edge",
+      "officialUrl": "https://data.cityofnewyork.us/resource/vs44-rznx.json",
+      "resourceId": "vs44-rznx",
+      "releaseId": "vs44-rznx-rows-1714164498",
+      "schemaVersion": "pavement-edge-v1",
+      "byteSize": 537422317,
+      "rowCount": 178947,
+      "sha256": "182502a981ec6548533c6eaa612a632decf0541b923c45f3dc90aabc69266fa9",
+      "requiredFields": ["source_id", "status", "blockf_id", "conflated", "the_geom"]
+    }
+  ]
+}

@@ -22,17 +22,23 @@ const shardBytes = (records, options) => Buffer.from(`${canonicalJson({
 const chunkPartition = (records, options) => {
   const chunks = [];
   let current = [];
+  const emptyShardBytes = shardBytes([], options).length;
+  let currentBytes = emptyShardBytes;
   for (const record of records) {
-    const candidate = [...current, record];
-    const exceedsCount = candidate.length > options.maxRecordsPerShard;
-    const exceedsBytes = options.maxShardBytes && shardBytes(candidate, options).length > options.maxShardBytes;
+    const recordBytes = Buffer.byteLength(canonicalJson(record));
+    const separatorBytes = current.length === 0 ? 0 : 1;
+    const candidateBytes = currentBytes + separatorBytes + recordBytes;
+    const exceedsCount = current.length + 1 > options.maxRecordsPerShard;
+    const exceedsBytes = options.maxShardBytes && candidateBytes > options.maxShardBytes;
     if ((exceedsCount || exceedsBytes) && current.length > 0) {
       chunks.push(current);
       current = [record];
+      currentBytes = emptyShardBytes + recordBytes;
     } else {
-      current = candidate;
+      current.push(record);
+      currentBytes = candidateBytes;
     }
-    if (options.maxShardBytes && shardBytes(current, options).length > options.maxShardBytes) {
+    if (options.maxShardBytes && currentBytes > options.maxShardBytes) {
       throw new TypeError(`single topology record exceeds maxShardBytes: ${record.bfi}`);
     }
   }

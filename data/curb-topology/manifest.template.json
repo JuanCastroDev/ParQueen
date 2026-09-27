@@ -1,0 +1,19 @@
+{
+  "manifestSchemaVersion": 1,
+  "normalizationVersion": "curb-topology-v1",
+  "acquisition": { "timestamp": "<ISO-8601 acquisition time; excluded from identity>" },
+  "sources": [
+    {
+      "role": "<cscl_centerline|cscl_node|cscl_street_name|pavement_edge>",
+      "name": "<official source name>",
+      "officialUrl": "<official download URL>",
+      "resourceId": "<official resource/layer ID>",
+      "releaseId": "<stable release/update ID>",
+      "schemaVersion": "<supported adapter schema>",
+      "byteSize": 1,
+      "rowCount": 1,
+      "sha256": "<64 lowercase hex characters>",
+      "requiredFields": ["<source field>"]
+    }
+  ]
+}

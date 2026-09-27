@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 
 
@@ -20,8 +21,42 @@ LAYERS = {
 }
 
 
+def json_default(value: object) -> object:
+    """Encode official date values deterministically without coercing other types."""
+    isoformat = getattr(value, "isoformat", None)
+    if callable(isoformat):
+        return isoformat()
+    raise TypeError(f"Object of type {value.__class__.__name__} is not JSON serializable")
+
+
+def normalize_json_value(value: object) -> object:
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    if isinstance(value, dict):
+        return {key: normalize_json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [normalize_json_value(item) for item in value]
+    return value
+
+
 def canonical_json(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return json.dumps(
+        normalize_json_value(value),
+        default=json_default,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def iter_records(frame: object):
+    """Yield GeoJSON features or plain records for non-spatial GDB tables."""
+    iterfeatures = getattr(frame, "iterfeatures", None)
+    if callable(iterfeatures):
+        yield from iterfeatures(drop_id=True)
+        return
+    yield from frame.to_dict(orient="records")
 
 
 def extract(gdb: Path, output: Path) -> dict[str, dict[str, object]]:
@@ -34,13 +69,13 @@ def extract(gdb: Path, output: Path) -> dict[str, dict[str, object]]:
     inventory: dict[str, dict[str, object]] = {}
     for layer, filename in LAYERS.items():
         frame = pyogrio.read_dataframe(gdb, layer=layer)
-        if frame.crs is not None:
+        if getattr(frame, "crs", None) is not None:
             frame = frame.to_crs(4326)
         target = output / filename
         digest = hashlib.sha256()
         with target.open("wb") as handle:
-            for feature in json.loads(frame.to_json(drop_id=True))["features"]:
-                line = (canonical_json(feature) + "\n").encode("utf-8")
+            for record in iter_records(frame):
+                line = (canonical_json(record) + "\n").encode("utf-8")
                 handle.write(line)
                 digest.update(line)
         inventory[layer] = {

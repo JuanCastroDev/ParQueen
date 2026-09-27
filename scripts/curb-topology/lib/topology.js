@@ -137,15 +137,17 @@ const buildTopology = input => {
       },
     };
 
-    const hardConflict = sides.length !== 1
-      || found.length !== rows.length
-      || names.length !== 1
-      || boroughs.length !== 1
-      || levels.length > 1
-      || roadbeds.length > 1
-      || sourceVersions.length !== 1;
-    if (hardConflict) {
+    const conflictReasons = [];
+    if (sides.length !== 1) conflictReasons.push('side');
+    if (found.length !== rows.length) conflictReasons.push('duplicate_side_assignment');
+    if (names.length !== 1) conflictReasons.push('roadway_name');
+    if (boroughs.length !== 1) conflictReasons.push('borough');
+    if (levels.length > 1) conflictReasons.push('level');
+    if (roadbeds.length > 1) conflictReasons.push('roadbed');
+    if (sourceVersions.length !== 1) conflictReasons.push('source_version');
+    if (conflictReasons.length > 0) {
       record.topologyState = 'conflict';
+      record.conflictReasons = conflictReasons;
       counts.conflict += 1;
       records.push(record);
       continue;
@@ -161,6 +163,7 @@ const buildTopology = input => {
     const endpoints = chainEndpoints(edges);
     if (!endpoints) {
       record.topologyState = 'conflict';
+      record.conflictReasons = ['segment_chain'];
       counts.conflict += 1;
       records.push(record);
       continue;

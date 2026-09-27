@@ -173,6 +173,16 @@ describe('BFI-centered topology construction', () => {
     expect(target(buildTopology(input)).topologyState).toBe('conflict');
   });
 
+  it('classifies a conflicting official side separately for citywide quality reporting', () => {
+    const { buildTopology } = require('./lib/topology');
+    const input = base();
+    input.centerlines.push(line({
+      id: 8, name: 'BROADWAY', b5sc: '113260', rightBfi: '0000000001', coordinates: [[1, 0], [2, 0]],
+    }));
+
+    expect(target(buildTopology(input)).conflictReasons).toContain('side');
+  });
+
   it('marks divided-road contexts ambiguous when endpoint evidence differs materially', () => {
     const { buildTopology } = require('./lib/topology');
     const input = base();

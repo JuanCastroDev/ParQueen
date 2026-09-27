@@ -52,6 +52,20 @@
       "JOINID": null
     }
   ],
+  "curatedCases": [
+    { "case": "ordinary Manhattan grid block", "officialPhysicalId": "3", "boroughCode": "1", "street": "BATTERY PL" },
+    { "case": "Bronx named residential street", "officialPhysicalId": "35231", "boroughCode": "2", "street": "E  168 ST" },
+    { "case": "Brooklyn irregular street", "officialPhysicalId": "36519", "boroughCode": "3", "street": "6 AVE" },
+    { "case": "Queens numbered/hyphenated street", "officialPhysicalId": "7212", "boroughCode": "4", "street": "GRAND CENTRAL PY ET 23 S-N EB" },
+    { "case": "Staten Island residential road", "officialPhysicalId": "15157", "boroughCode": "5", "street": "BLOOMINGDALE RD" },
+    { "case": "long sparse-vertex segment", "officialPhysicalId": "179088", "boroughCode": "4", "street": "HIGHLANDS-MIDTOWN EAST FERRY RTE" },
+    { "case": "intersection", "derivedTest": "topology.test.js complete incident-street context", "seedOfficialPhysicalId": "3" },
+    { "case": "divided roadway", "derivedTest": "topology.test.js divided-road ambiguity", "seedOfficialPhysicalId": "3" },
+    { "case": "reversed geometry", "derivedTest": "topology.test.js consistent reversal", "seedOfficialPhysicalId": "3" },
+    { "case": "ambiguous topology", "derivedTest": "topology.test.js multiple endpoint streets", "seedOfficialPhysicalId": "3" },
+    { "case": "non-conflated Pavement Edge", "officialSourceId": "0.0", "resourceId": "vs44-rznx" },
+    { "case": "conflicting BFI", "derivedTest": "topology.test.js same BFI conflicting sides", "seedOfficialPhysicalId": "3" }
+  ],
   "pavementEdges": [
     {
       "the_geom": {

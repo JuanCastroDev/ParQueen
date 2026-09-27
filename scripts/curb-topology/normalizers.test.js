@@ -59,6 +59,25 @@ describe('official source normalizers', () => {
     });
   });
 
+  it('accepts the CSCL Pub StreetName table when its file export omits OBJECTID', () => {
+    const { normalizeStreetName } = require('./lib/normalizers');
+    const row = structuredClone(fixtures.streetNames[0]);
+    delete row.OBJECTID;
+
+    expect(normalizeStreetName(row, 'name-release').objectId).toBeNull();
+  });
+
+  it('marks malformed StreetName B7SC evidence unusable without synthesizing padding', () => {
+    const { normalizeStreetName } = require('./lib/normalizers');
+    const row = structuredClone(fixtures.streetNames[0]);
+    row.B7SC = '500635';
+
+    expect(normalizeStreetName(row, 'name-release')).toMatchObject({
+      b7sc: null,
+      b7scStatus: 'invalid',
+    });
+  });
+
   it.each([[0, false], [1, true], ['0', false], ['1', true]])(
     'parses observed CONFLATED encoding %j',
     (value, expected) => {

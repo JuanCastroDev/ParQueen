@@ -46,6 +46,12 @@ const officialCode = (value, width, label) => {
   if (!new RegExp(`^[0-9]{${width}}$`).test(result)) throw new TypeError(`${label} must be ${width} digits`);
   return result;
 };
+const optionalCodeEvidence = (value, width) => {
+  const result = nullableString(value);
+  if (result === null) return { code: null, status: 'missing' };
+  if (!new RegExp(`^[0-9]{${width}}$`).test(result)) return { code: null, status: 'invalid' };
+  return { code: result, status: 'present' };
+};
 
 const normalizeCsclCenterline = (input, sourceVersion) => {
   const row = object(input);
@@ -89,8 +95,9 @@ const normalizeCsclNode = (input, sourceVersion) => {
 const normalizeStreetName = (input, sourceVersion) => {
   const row = object(input);
   if (!row || typeof row !== 'object') throw new TypeError('street name row is required');
+  const b7sc = optionalCodeEvidence(field(row, 'B7SC', 'b7sc'), 8);
   return {
-    objectId: requiredString(field(row, 'OBJECTID', 'objectid'), 'street-name object ID'),
+    objectId: nullableString(field(row, 'OBJECTID', 'objectid')),
     preModifier: nullableString(field(row, 'PRE_MODIFIER', 'pre_modifier')),
     preDirectional: nullableString(field(row, 'PRE_DIRECTIONAL', 'pre_directional')),
     preType: nullableString(field(row, 'PRE_TYPE', 'pre_type')),
@@ -99,7 +106,8 @@ const normalizeStreetName = (input, sourceVersion) => {
     postDirectional: nullableString(field(row, 'POST_DIRECTIONAL', 'post_directional')),
     postModifier: nullableString(field(row, 'POST_MODIFIER', 'post_modifier')),
     fullName: nullableString(field(row, 'FULL_NAME', 'full_name')),
-    b7sc: officialCode(field(row, 'B7SC', 'b7sc'), 8, 'B7SC'),
+    b7sc: b7sc.code,
+    b7scStatus: b7sc.status,
     joinId: nullableString(field(row, 'JOINID', 'joinid')),
     sourceVersion: requireSourceVersion(sourceVersion),
   };
