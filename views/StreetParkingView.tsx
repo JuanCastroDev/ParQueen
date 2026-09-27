@@ -21,8 +21,7 @@ import { createUserLocationGeohashPersister } from '../utils/userLocationGeohash
 import { getCurrentPosition, isGeolocationAvailable, watchPosition, type LocationWatchHandle } from '../utils/geolocation';
 import { aggregateLocationSamples, collectLocationBurst } from '../utils/locationBurst';
 import {
-    buildCanonicalCurbRequest,
-    parseCanonicalCurbResponse,
+    resolveCanonicalCurbWithLocation,
     type CanonicalCurbResponse,
 } from '../utils/canonicalCurbClient';
 import { derivePingLifecycle, getPingExpiresAtMs, getPingPhase, timestampToMillis } from '../utils/pingLifecycle';
@@ -445,13 +444,14 @@ export const MapView: React.FC<MapViewProps> = ({
             accuracyMeters: lastGpsAccuracyRef.current ?? 100,
             timestampMs: now,
         };
-        const location = captureBurst
-            ? await collectLocationBurst({ seed: liveSeed })
-            : aggregateLocationSamples([fixedCoordinateSample], now);
-        if (!location) throw new Error('location_unavailable');
         const callable = httpsCallable(getFunctions(getApp(), 'us-central1'), 'createSegmentFromSweepNYC');
-        const result = await callable(buildCanonicalCurbRequest(location, candidateToken));
-        return parseCanonicalCurbResponse(result.data);
+        return resolveCanonicalCurbWithLocation({
+            collectLocation: () => captureBurst
+                ? collectLocationBurst({ seed: liveSeed })
+                : Promise.resolve(aggregateLocationSamples([fixedCoordinateSample], now)),
+            invoke: async request => (await callable(request)).data,
+            candidateToken,
+        });
     }, []);
 
     // Pre-V2 sessions remain readable and receive at most one lazy canonical refresh.
@@ -924,9 +924,11 @@ export const MapView: React.FC<MapViewProps> = ({
         localStorage.setItem(SAVED_SPOT_KEY, JSON.stringify(updated));
     }, [savedSpot]);
 
+    const retryStreetIntelInFlightRef = useRef(false);
     const [retryingStreetIntel, setRetryingStreetIntel] = useState(false);
     const handleRetryStreetIntel = useCallback(async () => {
-        if (!savedSpot || retryingStreetIntel) return;
+        if (!savedSpot || retryStreetIntelInFlightRef.current) return;
+        retryStreetIntelInFlightRef.current = true;
         setRetryingStreetIntel(true);
         try {
             const response = await requestCanonicalCurb(savedSpot.lat, savedSpot.lng);
@@ -939,10 +941,11 @@ export const MapView: React.FC<MapViewProps> = ({
             setSavedSpot(updated);
             writeSavedSpot(updated);
         } finally {
+            retryStreetIntelInFlightRef.current = false;
             setRetryingStreetIntel(false);
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [savedSpot, retryingStreetIntel]);
+    }, [savedSpot]);
 
     const writeCleaningReminder = async (safeUntil: Date | null, enabled: boolean, streetName: string | null) => {
         if (!safeUntil || !enabled || !auth.currentUser || !streetName) return;

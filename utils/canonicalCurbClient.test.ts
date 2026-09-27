@@ -1,11 +1,24 @@
-import { describe, expect, it } from 'vitest';
-import { buildCanonicalCurbRequest, parseCanonicalCurbResponse } from './canonicalCurbClient';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  buildCanonicalCurbRequest,
+  parseCanonicalCurbResponse,
+  resolveCanonicalCurbWithLocation,
+} from './canonicalCurbClient';
+import type { AggregatedLocation } from './locationBurst';
 
 const key = `curb2_${'a'.repeat(32)}`;
 const token = (rank: number) => `candidate2_${'b'.repeat(16)}_${String(rank).repeat(32)}`;
 const stroke = (offset = 0) => ({
   type: 'MultiLineString' as const,
   coordinates: [[[-74, 40.7 + offset], [-73.999, 40.7 + offset]]],
+});
+const location = (override: Partial<AggregatedLocation> = {}): AggregatedLocation => ({
+  lat: 40.7,
+  lng: -74,
+  accuracyMeters: 10,
+  sampleCount: 3,
+  consistencyMeters: 4,
+  ...override,
 });
 
 describe('canonical curb V2 client contract', () => {
@@ -58,5 +71,56 @@ describe('canonical curb V2 client contract', () => {
     expect(buildCanonicalCurbRequest({
       lat: 40.7, lng: -74, accuracyMeters: 5, sampleCount: 4, consistencyMeters: 3,
     }, token(0))).toHaveProperty('candidateToken', token(0));
+  });
+
+  it.each([
+    ['one sample', { sampleCount: 1 }],
+    ['two samples', { sampleCount: 2 }],
+    ['poor accuracy', { accuracyMeters: 50.001 }],
+    ['inconsistent samples', { consistencyMeters: 12.001 }],
+  ])('returns local location_quality for %s without invoking the backend', async (_label, override) => {
+    const collectLocation = vi.fn().mockResolvedValue(location(override));
+    const invoke = vi.fn();
+
+    await expect(resolveCanonicalCurbWithLocation({ collectLocation, invoke })).resolves.toEqual({
+      protocolVersion: 2,
+      status: 'unsupported',
+      reason: 'location_quality',
+    });
+    expect(collectLocation).toHaveBeenCalledOnce();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('returns local location_quality when collection produces no usable sample', async () => {
+    const collectLocation = vi.fn().mockRejectedValue(new Error('No valid location samples'));
+    const invoke = vi.fn();
+
+    await expect(resolveCanonicalCurbWithLocation({ collectLocation, invoke })).resolves.toEqual({
+      protocolVersion: 2,
+      status: 'unsupported',
+      reason: 'location_quality',
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('invokes the backend exactly once after one valid collection and preserves fail-closed results', async () => {
+    const collectLocation = vi.fn().mockResolvedValue(location());
+    const invoke = vi.fn().mockResolvedValue({
+      protocolVersion: 2,
+      status: 'unsupported',
+      reason: 'candidate_incomplete',
+    });
+
+    await expect(resolveCanonicalCurbWithLocation({ collectLocation, invoke })).resolves.toEqual({
+      protocolVersion: 2,
+      status: 'unsupported',
+      reason: 'candidate_incomplete',
+    });
+    expect(collectLocation).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledWith({
+      protocolVersion: 2,
+      location: location(),
+    });
   });
 });

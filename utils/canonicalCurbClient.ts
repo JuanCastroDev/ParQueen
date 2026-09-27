@@ -1,4 +1,4 @@
-import type { AggregatedLocation } from './locationBurst';
+import { isCanonicalLocationReady, type AggregatedLocation } from './locationBurst';
 
 export type CanonicalCurbCandidate = Readonly<{
   token: string;
@@ -119,4 +119,29 @@ export function buildCanonicalCurbRequest(
     ...(candidateToken ? { candidateToken } : {}),
   };
   return request;
+}
+
+export async function resolveCanonicalCurbWithLocation(input: {
+  collectLocation: () => Promise<AggregatedLocation | null>;
+  invoke: (request: ResolveCurbRequestV2) => Promise<unknown>;
+  candidateToken?: string;
+}): Promise<CanonicalCurbResponse> {
+  let location: AggregatedLocation | null;
+  try {
+    location = await input.collectLocation();
+  } catch {
+    location = null;
+  }
+  if (!isCanonicalLocationReady(location)) {
+    return {
+      protocolVersion: 2,
+      status: 'unsupported',
+      reason: 'location_quality',
+    };
+  }
+
+  const response = await input.invoke(
+    buildCanonicalCurbRequest(location, input.candidateToken),
+  );
+  return parseCanonicalCurbResponse(response);
 }

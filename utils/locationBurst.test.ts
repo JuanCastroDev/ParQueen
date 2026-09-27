@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   aggregateLocationSamples,
   collectLocationBurst,
+  isCanonicalLocationReady,
   LOCATION_BURST_POLICY,
   type LocationSample,
 } from './locationBurst';
@@ -96,6 +97,29 @@ describe('aggregateLocationSamples', () => {
   });
 });
 
+describe('isCanonicalLocationReady', () => {
+  const readyLocation = {
+    lat: 40.7,
+    lng: -73.9,
+    accuracyMeters: 50,
+    sampleCount: 3,
+    consistencyMeters: 12,
+  };
+
+  it('accepts the existing canonical location boundary', () => {
+    expect(isCanonicalLocationReady(readyLocation)).toBe(true);
+  });
+
+  it.each([
+    ['one sample', { sampleCount: 1 }],
+    ['two samples', { sampleCount: 2 }],
+    ['poor accuracy', { accuracyMeters: 50.001 }],
+    ['inconsistent samples', { consistencyMeters: 12.001 }],
+  ])('rejects %s', (_label, override) => {
+    expect(isCanonicalLocationReady({ ...readyLocation, ...override })).toBe(false);
+  });
+});
+
 const position = (lat: number, lng: number, accuracy: number): AppPosition => ({
   coords: { latitude: lat, longitude: lng, accuracy },
 });
@@ -105,7 +129,7 @@ describe('collectLocationBurst', () => {
     vi.useRealTimers();
   });
 
-  it('stops on five valid samples and returns no raw samples', async () => {
+  it('stops as soon as three valid canonical-ready samples are collected', async () => {
     vi.useFakeTimers();
     let onSuccess: ((value: AppPosition) => void) | undefined;
     const clear = vi.fn();
@@ -115,12 +139,12 @@ describe('collectLocationBurst', () => {
     });
 
     const resultPromise = collectLocationBurst({ now: () => NOW, startWatch });
-    for (let index = 0; index < 5; index += 1) {
+    for (let index = 0; index < 3; index += 1) {
       onSuccess?.(position(40.7 + index * 0.000001, -73.9, 6));
     }
 
     const result = await resultPromise;
-    expect(result.sampleCount).toBe(5);
+    expect(result.sampleCount).toBe(3);
     expect(Object.keys(result).sort()).toEqual([
       'accuracyMeters',
       'consistencyMeters',
@@ -158,12 +182,12 @@ describe('collectLocationBurst', () => {
     const oldSeed = sample(40.8, -74, 4, 5_001);
 
     const resultPromise = collectLocationBurst({ seed: oldSeed, now: () => NOW, startWatch });
-    for (let index = 0; index < 5; index += 1) {
+    for (let index = 0; index < 3; index += 1) {
       onSuccess?.(position(40.7 + index * 0.000001, -73.9, 6));
     }
 
     const result = await resultPromise;
-    expect(result.sampleCount).toBe(5);
+    expect(result.sampleCount).toBe(3);
     expect(result.lat).toBeLessThan(40.71);
   });
 
