@@ -1,8 +1,8 @@
 # Canonical Curb Recovery Design
 
-**Status:** Proposed for architecture review; implementation is not authorized
+**Status:** Amended for architecture re-review; implementation is not authorized
 
-**Phase:** 2A.35A
+**Phase:** 2A.35A-R1
 
 **Baseline:** `origin/main` at `504c224db562735ac27fded2713bd6b335d90eb7`
 
@@ -15,7 +15,13 @@ Canonical V2 correctly fails closed, but it currently has two independent launch
 1. its `within_circle` CSCL lookup can omit a long centerline that crosses the search envelope when the line's stored vertices remain outside that envelope; and
 2. the live CSCL Socrata view does not publish the `from_street` and `to_street` fields that `createCanonicalCurbIdentity` currently requires.
 
-This design keeps the current primary query first. It adds a recovery path only after the primary CSCL read is complete and contains zero candidates. Recovery uses an accuracy-aware polygon and geometry `intersects` against both CSCL and the official NYC Planimetric Pavement Edge dataset. A Pavement Edge record can discover a candidate only when it has `CONFLATED=1` and a valid `BLOCKF_ID`. It cannot establish street identity by itself.
+This design replaces `within_circle` as candidate-set authority. Every next-generation canonical lookup uses an accuracy-aware bounded polygon and CSCL geometry `intersects` as its authoritative primary read. `within_circle` may run only as a diagnostic or shadow comparison and its rows may never define, add to, subtract from, or certify the candidate set. Pavement Edge remains a separate secondary recovery source when a complete CSCL/topology primary path cannot establish identity safely; it is not the mechanism that makes the primary CSCL read complete.
+
+Two invariants govern the design:
+
+> Canonical identity selection may occur only from a candidate set demonstrated to be complete for the validated geometry envelope under the authoritative retrieval contract.
+
+> Pavement Edge may discover a curb candidate; only reconciled official block-face/topology evidence may establish canonical curb identity.
 
 Canonical identity is established only after all of the following agree:
 
@@ -28,13 +34,13 @@ Canonical identity is established only after all of the following agree:
 
 Any conflict, missing link, perpendicular ambiguity, incomplete source read, or timeout fails closed. Recovered identities use the existing `curb2_...` exact key, cache, rule fan-out, persistence, and client contract. No proximity cache is introduced.
 
-Implementation may begin only after this design is approved and a 5,000-point benchmark plan has been implemented and reviewed. Production enablement additionally requires zero known wrong-street, wrong-side, or wrong-block-face associations in authoritative fixtures.
+Implementation may begin only after this amended design is approved and a 5,000-point benchmark plan has been implemented and reviewed. Production enablement additionally requires zero known wrong-street, wrong-side, wrong-block-face, or accepted omitted-roadway associations in authoritative fixtures.
 
 ## 2. Problem statement
 
 The current field failure is safe but not launch-quality: location quality passes, the CSCL lookup reports complete coverage, the candidate list is empty, and canonical resolution returns `canonical_candidate_missing`. Because no identity exists, the callable performs no cleaning, meter, or restriction fan-out.
 
-Public-data investigation reproduced the retrieval problem. Seven public CSCL segments containing “Melville” were examined; three were absent from a 50 m `within_circle` lookup at their own mathematical midpoint. A same-envelope polygon `intersects` query returned the omitted lines. This is consistent with sparse-vertex behavior on long multiline geometry. It is not a street-name, borough, alias, from/to ordering, or coordinate-order failure.
+Public-data investigation reproduced the retrieval problem. Seven public CSCL segments containing “Melville” were examined; three were absent from a 50 m `within_circle` lookup at their own mathematical midpoint. A same-envelope polygon `intersects` query returned the omitted lines. This is consistent with sparse-vertex behavior on long multiline geometry. It is not a street-name, borough, alias, from/to ordering, or coordinate-order failure. Critically, a non-zero `within_circle` result does not cure the defect: one roadway may have a stored vertex inside the envelope while another plausible crossing roadway is silently omitted, creating false uniqueness near an intersection.
 
 Candidate recovery alone is insufficient. The current live Centerline resource does not contain `from_street` or `to_street`, while `createCanonicalCurbIdentity` rejects an identity without both. The architecture therefore needs both geometry-complete candidate retrieval and an authoritative block-context source.
 
@@ -49,6 +55,8 @@ within_circle(the_geom, latitude, longitude, searchRadiusMeters)
 ```
 
 The query is bounded and version-checked, but public testing shows that it can exclude a line that geometrically crosses the circle. Increasing the radius until a distant stored vertex is captured would be a blind-radius workaround and would expand the set of competing roads near intersections.
+
+Because this omission can occur whether the returned set is empty or non-empty, `within_circle` cannot prove candidate-set completeness. A non-zero result must not be accepted as authoritative input to identity selection.
 
 ### 3.2 Generic Curbs is not identity evidence
 
@@ -105,7 +113,7 @@ The current CSCL search radius is produced by `searchPolicy` in `curbResolver.js
 max(50 m, accuracy × 3 + 50 m, model error × 4 + 30 m)
 ```
 
-It is capped at 500 m. The normal candidate cap is 100. CSCL completeness requires a valid metadata version before and after the ordered data read, no truncation, and successful normalization of every row. The canonical resolver additionally requires a single source version, supported roadway status, plausible geometry, a valid official face, no unresolved level/roadbed conflict, and a candidate set that is complete.
+It is capped at 500 m. The normal candidate cap is 100. Current transport completeness requires a valid metadata version before and after the ordered data read, no truncation, and successful normalization of every row; it does not prove geometric completeness when the predicate is `within_circle`. The canonical resolver additionally requires a single source version, supported roadway status, plausible geometry, a valid official face, no unresolved level/roadbed conflict, and a candidate set that is complete. In the proposed architecture, only a non-truncated, version-consistent same-envelope `intersects` read can satisfy the retrieval portion of that completeness contract.
 
 The orchestrator has an 8,000 ms overall deadline. Rule sources use the existing 2,500 ms source deadline and execute in parallel. Exact persistence writes the private identity to `curbIdentities/{publicCurbKey}`, the public segment to `streetSegments/{publicCurbKey}`, and public rules below that segment.
 
@@ -130,7 +138,7 @@ Blindly enlarging the current radius would be unsafe because it would:
 - create a distance-based preference pressure near intersections; and
 - fail to address the missing block-context contract.
 
-The correct geometric remedy is a bounded polygon-overlap predicate, followed by the same local exact projection and ambiguity checks already used by the resolver.
+The correct geometric remedy is a bounded polygon-overlap predicate, followed by the same local exact projection and ambiguity checks already used by the resolver. This remedy applies to every canonical read, not only zero-result reads: otherwise a partial non-zero result can conceal a crossing roadway and incorrectly appear unique.
 
 ## 6. Why generic Curbs data is insufficient
 
@@ -158,50 +166,55 @@ Pavement Edge is a discovery and physical-side corroboration source. CSCL topolo
 
 ## 8. Primary-path recommendation
 
-The design recommends **fallback-only `intersects`**, not immediate replacement.
+The design chooses **Option A: `intersects` as the authoritative canonical primary read**.
 
-1. Keep the existing `within_circle` CSCL read as the first candidate query so rollout can compare behavior against the current path.
-2. Apply the new official block-context reconciliation to any otherwise valid primary candidate. A successfully reconciled primary candidate produces `canonical_primary`.
-3. Run geometry-overlap recovery only when the primary CSCL read is `COMPLETE` and contains zero candidates.
-4. Do not invoke recovery for incomplete source coverage, unsupported roadway status, unresolved multilevel evidence, or an existing non-zero intersection ambiguity. Those conditions already contain evidence that widening the decision process could be unsafe.
+1. Construct the same accuracy-aware bounded search polygon for every eligible next-generation canonical lookup.
+2. Query CSCL with `intersects` and treat that result as the only authoritative candidate set.
+3. Require source-version consistency, successful normalization of every row, and a result below the cap before the set is marked complete.
+4. Apply local projection, roadway grouping, ambiguity policy, official topology construction, and Function 3C verification to that complete set. A unique reconciled identity produces `canonical_primary`.
+5. Permit `within_circle` only in diagnostic tooling and `shadow` mode. Compare it with the authoritative set for recall, discrepancy, and false-uniqueness telemetry, but never use it for identity selection.
+6. Invoke Pavement Edge recovery only after the geometry-complete CSCL/topology primary path lacks a unique curb-side association without an authoritative contradiction. Recovery may add official physical-side/BFI evidence, but it must carry every plausible CSCL roadway into reconciliation and may not override source incompleteness, candidate truncation, invalid topology, or a Function 3C disagreement. If more than one identity remains plausible after the added evidence, the outcome is ambiguous.
 
-The recovery search polygon uses the **same radius returned by the existing `searchPolicy`**, including its existing 500 m maximum. It does not enlarge that radius. The polygon is a deterministic 24-vertex geodesic approximation centered on the submitted aggregate. Twenty-four vertices keep radial error below 1% while keeping WKT well below normal URL limits. The implementation must generate longitude/latitude WKT with a closed ring and reject non-finite or out-of-NYC vertices.
+Option B would retain two production reads before every acceptance and require rules for reconciling their disagreement even though only `intersects` can serve as authority. Option A removes that redundant correctness surface, avoids one mandatory provider query in `on` mode, and still preserves a safe old-versus-new comparison in `shadow` mode.
 
-Candidate rows returned by `intersects` are still projected locally against the actual point. Polygon intersection generates a complete candidate set; it does not make every intersecting line plausible. Existing projection, width, roadway status, level, grouping, endpoint, and ambiguity policy remains in force without lowered thresholds.
+The primary search polygon uses the **same radius returned by the existing `searchPolicy`**, including its existing 500 m maximum. It does not enlarge that radius. The polygon is a deterministic 24-vertex geodesic approximation centered on the submitted aggregate. Twenty-four vertices keep radial error below 1% while keeping WKT well below normal URL limits. The implementation must generate longitude/latitude WKT with a closed ring and reject non-finite or out-of-NYC vertices.
 
-The recovery CSCL cap remains 100 and the normal CSCL source deadline remains 2,500 ms. A 101st row makes recovery incomplete and therefore missing, never “best of first 100.”
+Candidate rows returned by `intersects` are projected locally against the actual point. Polygon intersection generates a geometry-complete input set; it does not make every intersecting line plausible. Existing projection, width, roadway status, level, grouping, endpoint, and ambiguity policy remains in force without lowered thresholds. Perpendicular roads remain present until those rules either reject them through authoritative evidence or return ambiguity.
 
-## 9. Recovery architecture
+The CSCL cap remains 100 and the normal CSCL source deadline remains 2,500 ms. A 101st row makes the primary read incomplete and therefore missing, never “best of first 100.”
+
+## 9. Primary and recovery architecture
 
 ```mermaid
 flowchart TD
-    A[Location passes existing quality gate] --> B[Primary CSCL within_circle]
-    B -->|incomplete| C[canonical_missing: source incomplete]
-    B -->|non-zero| D[Primary candidate resolution]
-    D -->|one candidate reconciles| E[canonical_primary]
-    D -->|two plausible identities| F[canonical_ambiguous]
-    D -->|other unsafe condition| C
-    B -->|COMPLETE + zero| G{CURB_CANONICAL_RECOVERY}
-    G -->|off| C
-    G -->|shadow/on| H[Same-envelope CSCL intersects]
-    G -->|shadow/on| I[Same-envelope Pavement Edge intersects]
-    H --> J[Normalize and complete candidate set]
-    I --> K[Require CONFLATED + valid BLOCKF_ID]
-    J --> L[Exact BFI/CSCL side reconciliation]
-    K --> L
-    L --> M[Versioned topology lookup by BFI]
-    M --> N[Geosupport Function 3C verification]
+    A[Location passes existing quality gate] --> B{CURB_CANONICAL_V2_NEXT}
+    B -->|off| C[Current within_circle behavior]
+    B -->|shadow/on| D[Bounded polygon + CSCL intersects]
+    D -->|incomplete/capped| E[canonical_missing]
+    D --> F[Geometry-complete CSCL candidate set]
+    F --> G[Projection + grouping + topology]
+    G -->|one identity verifies with 3C| H[canonical_primary]
+    G -->|authoritative conflict| E
+    G -->|no unique curb-side association| J{Pavement Edge recovery eligible?}
+    J -->|no| E
+    J -->|yes| K[Same-envelope Pavement Edge intersects]
+    K --> L[Require CONFLATED + valid BLOCKF_ID]
+    L --> M[Exact BFI match within complete CSCL set]
+    M --> N[Topology + Geosupport 3C verification]
     N -->|exact same BFI; unique identity| O[canonical_recovered]
-    N -->|two plausible identities| F
-    N -->|missing, disagreement, timeout| C
-    O --> P[Existing exact key/cache/rule pipeline]
-    E --> P
+    N -->|multiple plausible identities| I
+    N -->|missing, disagreement, timeout| E
+    H --> P[Existing exact key/cache/rule pipeline]
+    O --> P
+    B -->|shadow diagnostic| Q[within_circle comparison only]
+    Q --> R[Recall/discrepancy/false-uniqueness telemetry]
 ```
 
-The recovery units have narrow responsibilities:
+The next-generation primary and recovery units have narrow responsibilities:
 
 - **Search polygon builder:** constructs and validates the same-envelope WKT polygon.
-- **Recovery CSCL reader:** returns a version-consistent, complete `intersects` candidate set.
+- **Authoritative CSCL reader:** returns the version-consistent, geometry-complete `intersects` candidate set for both primary resolution and recovery reconciliation.
+- **Diagnostic CSCL reader:** optionally runs `within_circle` in shadow/research contexts and cannot supply identity candidates.
 - **Pavement Edge reader:** normalizes `source_id`, geometry, `blockf_id`, `conflated`, and a stable source version.
 - **Block-face reconciler:** joins edge BFI to CSCL left/right fields and rejects conflicts.
 - **Topology index:** returns official, versioned on/from/to candidates for one BFI without a radial lookup.
@@ -229,7 +242,7 @@ The reconciler performs these steps:
 
 1. Discard every Pavement Edge row unless `conflated` parses exactly as `1`, `blockf_id` normalizes to a non-zero ten-digit BFI, geometry is valid, source version is present, and the complete result is below the 40-candidate cap.
 2. Project the location onto each edge. A candidate is locally compatible only under the existing planimetric distance policy: `distance <= max(12 m, accuracy + modelError + 3 m)`. This reuses the current conservative corroboration boundary; it does not lower a confidence threshold.
-3. Join each remaining BFI to recovery CSCL rows where that same value appears in `l_blockfaceid` or `r_blockfaceid`. If it appears on both sides of one record, on different sides within the same material group, or across distinct material roadway groups, reject it as conflicting.
+3. Join each remaining BFI to the complete authoritative CSCL rows where that same value appears in `l_blockfaceid` or `r_blockfaceid`. If it appears on both sides of one record, on different sides within the same material group, or across distinct material roadway groups, reject it as conflicting.
 4. Derive `LEFT` only from an exact left-field match and `RIGHT` only from an exact right-field match. Pavement Edge digitization direction never determines CSCL side.
 5. Compare edge and CSCL local tangents as undirected vectors. Reversing either geometry therefore does not change compatibility. Reuse the existing absolute cosine threshold of `0.9`. Missing or unstable local tangents cannot positively corroborate a candidate.
 6. Require current constructed/supported CSCL roadway status, one CSCL source version, compatible level codes, valid street width, valid borough, roadway name, and geometry.
@@ -298,7 +311,7 @@ The BFI's left/right CSCL field is authoritative for logical side. The cardinal 
 
 The existing `createPrivateBlockfaceResolver` is a strict server-only Function 3C client. Its role remains verification, not candidate discovery.
 
-For each topology-complete candidate, the recovery resolver sends exactly the five currently accepted fields: borough, on street, the two cross streets, and compass direction. It trusts a result only when the current parser accepts the response, return code is `00`, the BFI is a valid non-zero ten-digit string, all normalized names are present, and source-version fields are valid.
+For each topology-complete primary or recovery candidate, the next-generation resolver sends exactly the five currently accepted fields: borough, on street, the two cross streets, and compass direction. It trusts a result only when the current parser accepts the response, return code is `00`, the BFI is a valid non-zero ten-digit string, all normalized names are present, and source-version fields are valid.
 
 The result must equal the Pavement Edge/CSCL BFI. A different BFI is `geosupport_bfi_conflict`; a reviewed “not authoritative” response is `geosupport_rejected`; transport, authentication, saturation, timeout, invalid response, or unreviewed return code is `geosupport_unavailable`. None can be converted into success.
 
@@ -371,15 +384,18 @@ Legacy-versus-canonical comparison is observational only. Legacy output is never
 
 | Outcome | Exact transition condition |
 |---|---|
-| `canonical_primary` | Existing primary CSCL query is complete and non-zero; exactly one candidate passes current geometry/policy plus topology and Function 3C reconciliation. |
-| `canonical_recovered` | Primary CSCL query is complete and zero; recovery is enabled; exactly one candidate passes Pavement Edge, CSCL, topology, and Function 3C reconciliation. |
+| `canonical_primary` | The authoritative CSCL `intersects` read is complete; exactly one candidate passes geometry/policy plus topology and Function 3C reconciliation. |
+| `canonical_recovered` | The authoritative CSCL `intersects` read is complete but lacks a unique curb-side association without an authoritative contradiction; recovery is enabled; exactly one candidate passes Pavement Edge, the complete CSCL set, topology, and Function 3C reconciliation. Every initially plausible roadway participates, and all but one are rejected by authoritative evidence rather than absence from a partial query. |
 | `canonical_ambiguous` | Two fully reconciled identities survive, or multiple non-equivalent topology contexts/BFIs remain materially plausible. |
-| `canonical_missing` | No candidate survives, required official evidence is incomplete/unavailable, a source conflicts, candidate limits are exceeded, or a deadline prevents proof. |
+| `canonical_missing` | The authoritative candidate set is not provably complete, no candidate survives, required official evidence is incomplete/unavailable, a source conflicts, candidate limits are exceeded, or a deadline prevents proof. |
 
 Suggested internal reason codes are low-cardinality and contain no identifiers:
 
 ```text
-primary_complete_zero
+authoritative_cscl_complete_zero
+authoritative_candidate_set_incomplete
+shadow_candidate_set_discrepancy
+shadow_false_uniqueness
 recovery_source_incomplete
 pavement_edge_missing
 pavement_edge_nonconflated
@@ -401,7 +417,7 @@ The public response contract remains `high_confidence`, `ambiguous`, or `unsuppo
 
 ## 18. Cache design
 
-Recovery uses the current exact cache. `publicCurbKey` remains:
+Primary and recovered next-generation identities use the current exact cache. `publicCurbKey` remains:
 
 ```text
 curb2_SHA256(jurisdiction, officialBlockFaceId, CSCL resource ID, CSCL source version)
@@ -429,12 +445,14 @@ There is no recovery-specific rule confidence, cache, persistence collection, or
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Primary
-    Primary --> canonical_primary: complete + unique reconciled identity
-    Primary --> Recovery: complete + zero only
-    Primary --> canonical_ambiguous: two authoritative identities
-    Primary --> canonical_missing: incomplete or unsafe
-    Recovery --> canonical_recovered: one fully reconciled identity
+    [*] --> AuthoritativeRetrieval
+    AuthoritativeRetrieval --> canonical_missing: incomplete, capped, or version changed
+    AuthoritativeRetrieval --> Primary: complete intersects candidate set
+    Primary --> canonical_primary: unique reconciled identity
+    Primary --> Recovery: no safely established identity and recovery eligible
+    Primary --> canonical_ambiguous: multiple plausible identities
+    Primary --> canonical_missing: disagreement or unsafe
+    Recovery --> canonical_recovered: one fully reconciled identity from complete set
     Recovery --> canonical_ambiguous: multiple plausible BFIs/contexts
     Recovery --> canonical_missing: no edge or proof incomplete
     canonical_primary --> RulePipeline
@@ -446,6 +464,8 @@ stateDiagram-v2
 
 The following always fail closed:
 
+- no demonstrably complete same-envelope CSCL `intersects` candidate set;
+- any accepted identity whose validated envelope contains an omitted plausible authoritative roadway;
 - no complete Pavement Edge candidate set;
 - no conflated edge;
 - invalid, zero, or missing `BLOCKF_ID`;
@@ -478,22 +498,25 @@ The offline topology artifact avoids serial endpoint and street-name API calls. 
 
 | Path | Public data queries | Private resolver calls |
 |---|---:|---:|
-| Gate or source failure | 0–1 logical queries | 0 |
-| Primary success | 1 CSCL candidate query | exactly 1 Function 3C verification |
-| Recovery attempt | +1 CSCL intersects query and +1 Pavement Edge query, in parallel | exactly 1 Function 3C verification for the unique topology-complete candidate |
-| Ambiguous recovery | same public bound | 0; v1 fails before calling 3C when topology is non-unique |
+| Gate failure | 0 logical queries | 0 |
+| `off` current behavior | 1 CSCL `within_circle` query | current behavior |
+| `on` primary success | 1 authoritative CSCL `intersects` query | exactly 1 Function 3C verification |
+| `on` recovery attempt | authoritative CSCL query plus 1 Pavement Edge `intersects` query | at most 1 Function 3C verification for the unique topology-complete candidate |
+| `shadow` comparison | CSCL `within_circle` and `intersects` data reads, run in parallel and sharing the version window | next-generation verification may run for measurement but cannot affect output |
+| Ambiguous primary/recovery | same applicable public bound | 0 when topology is non-unique; fail before calling 3C |
 
-Metadata reads used for version consistency count as provider requests but not candidate queries. The maximum recovery path is three data queries, four CSCL metadata reads (primary before/after and recovery before/after), two Pavement Edge metadata reads, and one Function 3C request: ten provider HTTP requests before rule fan-out. Implementations should reuse a verified recovery-start CSCL version within the recovery transaction but must still confirm it after the last CSCL data read.
+Metadata reads used for version consistency count as provider requests but not candidate queries. Option A replaces the current primary data query rather than adding a second mandatory query: an `on` primary success is one CSCL data read, two CSCL metadata reads, and one Function 3C request, for four provider HTTP requests before rule fan-out. The maximum `on` recovery path is two data reads (CSCL and Pavement Edge), four metadata reads, and one Function 3C request: seven provider HTTP requests. The maximum `shadow` comparison adds one diagnostic `within_circle` data read inside the same CSCL before/after version window: eight requests. A version change invalidates all reads in that window.
 
-Recovery begins only when sufficient overall time remains to run the 900 ms Pavement Edge stage, one 2,500 ms Function 3C stage, and the normal rule fan-out. Otherwise it returns `recovery_deadline`. Independent CSCL and Pavement Edge calls run concurrently. Rule sources remain parallel. No client or server retry is added.
+The authoritative `intersects` read remains inside the existing 2,500 ms CSCL deadline. In `shadow`, `within_circle` and `intersects` run in parallel so the diagnostic read does not form a serial dependency; the benchmark must report each query's P50/P95 and the paired wall-clock delta. In `on`, Pavement Edge begins only after primary resolution establishes recovery eligibility, so it adds one bounded serial stage rather than prefetching unnecessary data. Recovery starts only when sufficient overall time remains for the 900 ms Pavement Edge stage, one 2,500 ms Function 3C stage, and normal rule fan-out. Otherwise it returns `recovery_deadline`. Rule sources remain parallel. No client or server retry is added.
 
-The controlled benchmark records logical queries, provider requests, cold/warm topology-shard load time, source latency, resolver latency, total resolution latency, and total callable latency. Production enablement is blocked if recovery causes the existing 8,000 ms timeout to become a common result.
+The controlled benchmark records logical queries, provider requests, separate `within_circle`/`intersects` P50/P95, parallel shadow wall time, cold/warm topology-shard load time, source latency, resolver latency, total resolution latency, and total callable latency. No latency estimate is treated as established before measurement. Production enablement is blocked if authoritative retrieval or recovery causes the existing 8,000 ms timeout to become a common result.
 
 ## 22. Privacy-safe telemetry
 
 Add these server-only structured events:
 
 ```text
+canonical_candidate_set_compared
 canonical_recovery_attempted
 canonical_recovery_supported
 canonical_recovery_ambiguous
@@ -505,6 +528,8 @@ Allowed fields are fixed allowlists:
 - protocol version;
 - accuracy bucket;
 - primary/recovery candidate-count buckets (`0`, `1`, `2`, `3_plus`);
+- candidate-set relation (`equal`, `within_subset`, `within_extra`, `different`, `comparison_incomplete`);
+- boolean false-uniqueness flag;
 - evidence-count bucket;
 - intersection category (`midblock`, `endpoint`, `multi_edge`, `complex`);
 - boolean hint flags (`reverse_name`, `legacy_name`, `heading`), even though v1 uses none for authority;
@@ -554,15 +579,22 @@ Tags may overlap; the selection algorithm fills rare quotas first, then fills mi
 
 The 5,000 figure counts base locations. Jitter variants are additional executions and are reported separately.
 
+### 23.4 Candidate-set completeness corpus
+
+For every base point and jitter variant, derive the expected official roadway set independently from the resolver by intersecting the frozen, full-fidelity CSCL snapshot with the exact validated search polygon. Preserve every intersecting supported material roadway group before point-distance ranking. Record whether each expected roadway is physically plausible under the unchanged projection, level, roadbed, and supported-status rules.
+
+Run both retrieval predicates against the same frozen source version and envelope. `intersects` is the proposed authoritative contract; `within_circle` is a diagnostic baseline. Compare normalized source identities and material roadway groups, not row ordering. The corpus must include non-zero cases, intersections, perpendicular crossings, and cases where one roadway has a stored vertex inside the envelope while another crossing roadway has none. An unexplained difference between the authoritative `intersects` result and the offline geometry set makes the fixture/run incomplete; it cannot be scored as a successful identity.
+
 ## 24. Ground-truth methodology
 
 A fixture is correctness-eligible only when all ground-truth links are present independently of the resolver under test:
 
-1. Pavement Edge says `CONFLATED=1` and supplies a valid BFI.
-2. Exactly one CSCL material roadway group contains that BFI on exactly one consistent left/right side.
-3. The point projects compatibly to that physical edge and official roadway.
-4. Official topology provides a complete on/from/to block context.
-5. The pinned topology verification corpus records a Function 3C success returning the same BFI and normalized tuple.
+1. Offline full-fidelity CSCL geometry establishes the complete set of official roadways intersecting the validated envelope.
+2. Pavement Edge says `CONFLATED=1` and supplies a valid BFI.
+3. Exactly one CSCL material roadway group contains that BFI on exactly one consistent left/right side.
+4. The point projects compatibly to that physical edge and official roadway.
+5. Official topology provides a complete on/from/to block context.
+6. The pinned topology verification corpus records a Function 3C success returning the same BFI and normalized tuple.
 
 Expected street is the topology/Geosupport normalized on-street identity; expected side is the exact CSCL left/right BFI relationship plus its published digitization direction; expected block face is the conflated BFI shared by Pavement Edge, CSCL, and Function 3C.
 
@@ -608,6 +640,17 @@ Report both base-point and jitter-variant denominators.
 - topology/Geosupport disagreement; and
 - legacy/primary/recovery coverage delta, with legacy explicitly labeled non-truth.
 
+### Candidate-set completeness
+
+- count of expected official roadway groups intersecting each validated envelope;
+- `within_circle` candidate and material-roadway recall against the offline geometry set;
+- `intersects` candidate and material-roadway recall against the offline geometry set;
+- missing, extra, and version-mismatched candidate-set discrepancies for each predicate;
+- false uniqueness: `within_circle` returns one material roadway while the authoritative geometry set contains more than one plausible roadway;
+- sparse-vertex miss rate for each predicate;
+- intersection/perpendicular roadway omission rate for each predicate; and
+- percentage of all non-zero `within_circle` queries whose normalized candidate set differs from `intersects`, reported overall and by borough/geometry/jitter class.
+
 ### Performance
 
 - logical queries and provider HTTP requests per execution;
@@ -624,14 +667,16 @@ All gates are predeclared and must pass on the frozen benchmark before `on` mode
 2. **Zero** wrong-side associations.
 3. **Zero** wrong-BFI associations.
 4. **Zero** perpendicular-road automatic selections where more than one identity remains materially plausible.
-5. **Zero** identity changes among accepted truth-preserving ±3 m and ±5 m jitter variants.
-6. **Zero** reliance on non-conflated edges, legacy rules, reverse-geocoded names, or the 80 m radial cache as identity authority.
-7. **Zero** recovery after incomplete primary coverage or an exceeded candidate cap.
-8. **Zero** forbidden privacy fields in telemetry, public responses, or public persistence.
-9. Every supported recovery has complete CSCL, Pavement Edge, topology, and Function 3C provenance.
-10. No automatic retry and no provider-request count above the declared bound.
-11. Existing confidence thresholds, resolver IAM/scale, sample rate, Mapbox configuration, and rule hierarchy remain unchanged.
-12. All deterministic Street Intelligence and rules tests pass except separately documented pre-existing baseline failures.
+5. **Zero** accepted canonical identities where a plausible authoritative roadway intersecting the validated envelope was omitted from the candidate set.
+6. **Zero** unexplained omissions from the authoritative `intersects` result relative to the frozen full-geometry ground-truth set.
+7. **Zero** identity changes among accepted truth-preserving ±3 m and ±5 m jitter variants.
+8. **Zero** reliance on non-conflated edges, legacy rules, reverse-geocoded names, `within_circle`, or the 80 m radial cache as identity authority.
+9. **Zero** recovery after incomplete authoritative CSCL coverage or an exceeded candidate cap.
+10. **Zero** forbidden privacy fields in telemetry, public responses, or public persistence.
+11. Every supported recovery has complete CSCL, Pavement Edge, topology, and Function 3C provenance.
+12. No automatic retry and no provider-request count above the declared bound.
+13. Existing confidence thresholds, resolver IAM/scale, sample rate, Mapbox configuration, and rule hierarchy remain unchanged.
+14. All deterministic Street Intelligence and rules tests pass except separately documented pre-existing baseline failures.
 
 One safety failure is a NO-GO regardless of coverage gain.
 
@@ -644,7 +689,8 @@ Coverage targets do not override hard safety gates:
 - ordinary mid-block resolution is at least 98% overall and 95% in each borough;
 - endpoint/intersection resolution is at least 85%, with unresolved cases remaining ambiguous rather than guessed;
 - long sparse-vertex resolution is at least 95% and improves by at least 20 percentage points over current primary retrieval;
-- recovery resolves at least 80% of primary `COMPLETE + zero` cases that possess full authoritative ground truth;
+- authoritative `intersects` candidate and material-roadway recall is 100% for correctness-eligible envelopes; `within_circle` recall and all non-zero discrepancies are reported as diagnostics, not acceptance targets;
+- recovery resolves at least 80% of cases where the complete CSCL/topology primary path cannot establish identity but full authoritative recovery ground truth exists;
 - remaining missing is at most 5% overall and at most 2% for ordinary mid-block fixtures;
 - truth-preserving jitter retains the same identity for at least 99.5% of ±10 m variants and 100% of accepted ±3 m/±5 m variants;
 - source-incomplete and timeout results remain below 1% in the controlled live probe; and
@@ -656,41 +702,41 @@ If a target fails with safety intact, the recommendation is “STOP — coverage
 
 The live probe validates provider semantics; it is not the 5,000-point benchmark.
 
-- Use at most 50 predeclared public benchmark points: five boroughs × five ordinary/sparse mid-block points × primary and recovery query forms.
-- Add at most ten predeclared intersection/complex points for Pavement Edge ambiguity behavior.
+- Use at most 50 predeclared public benchmark points: ten per borough, including non-zero matching cases, long sparse-vertex lines, and at least one constructed false-uniqueness-risk case where one roadway has a nearby stored vertex and another crossing roadway does not.
+- Add at most ten predeclared intersection/complex points covering perpendicular roads, multiple non-zero candidates, and Pavement Edge ambiguity behavior.
 - Pace requests sequentially, use the Socrata app token through server tooling, send no writes, and stop on throttling or schema drift.
-- For each point, compare `within_circle` and same-envelope `intersects`, schema fields, candidate cap/completeness, `CONFLATED`, BFI linkage, and offline snapshot membership.
+- For each point, compare the full normalized candidate/material-roadway sets from `within_circle` and same-envelope `intersects` against the frozen offline geometry set. Record non-zero discrepancies and false uniqueness as well as zero-result differences, plus schema fields, candidate caps, source versions, `CONFLATED`, BFI linkage, and snapshot membership.
 - Do not invoke `createSegmentFromSweepNYC`, create parking saves, write Firestore, or use owner coordinates.
 - Store only public fixture IDs and aggregate results in the report; do not commit exact owner or production coordinates.
 
-The probe passes only if `intersects` returns every truth segment expected to overlap the polygon, live schemas match adapters, and each sampled conflated BFI maps to the expected current CSCL side. Any unexplained mismatch blocks implementation enablement.
+The probe passes only if `intersects` returns every truth roadway expected to overlap the polygon, including crossing roads hidden from non-zero `within_circle` results; live schemas match adapters; and each sampled conflated BFI maps to the expected current CSCL side. Any unexplained authoritative-set mismatch blocks implementation enablement.
 
 ## 29. Feature-gate proposal
 
 Propose, but do not create in this phase:
 
 ```text
-CURB_CANONICAL_RECOVERY=off|shadow|on
+CURB_CANONICAL_V2_NEXT=off|shadow|on
 ```
 
 Semantics:
 
-- **off:** execute and return the current canonical behavior. Do not issue recovery or topology/Function 3C verification requests for the new path.
-- **shadow:** after a normal eligible request, evaluate the proposed primary-context and recovery pipeline server-side under the same deadline, but never replace the user-visible identity, cache result, persistence, rule fan-out, or response. Emit only privacy-safe comparison telemetry. A shadow result may not be used by visual selection.
-- **on:** use the proposed reconciled primary path and, only after primary `COMPLETE + zero`, allow a fully proven recovered identity to enter the normal cache and rule pipeline.
+- **off:** execute and return the current canonical behavior. The proposed authoritative `intersects` primary, topology reconciliation, and Pavement Edge recovery do not affect the request.
+- **shadow:** run current behavior as the only user-visible authority. In parallel where bounded, evaluate `within_circle` versus authoritative `intersects`, topology reconciliation, and eligible Pavement Edge recovery, but never replace the visible identity, cache result, persistence, rule fan-out, selector inputs, or response. Emit only privacy-safe aggregate comparison telemetry.
+- **on:** use same-envelope CSCL `intersects` as the only primary candidate-set authority, require topology and Function 3C reconciliation, and permit Pavement Edge recovery only after that complete primary path cannot establish identity safely. `within_circle` is optional diagnostic telemetry and never affects the decision.
 
-Invalid or missing values parse as `off`. The gate is read server-side only and is independent of `CURB_RESOLVER_MODE`, `CURB_PRODUCT_PATH`, sample rate, and private resolver scale. Implementation tests must prove that `off` creates no recovery provider requests and `shadow` creates no user-visible or persistent mutation.
+One gate covers the geometry-complete primary contract, block-context reconciliation, and Pavement Edge recovery because enabling recovery without complete primary retrieval would preserve the false-uniqueness safety gap. Separate flags would permit an invalid mixed state and are therefore rejected. Invalid or missing values parse as `off`. The gate is read server-side only and is independent of `CURB_RESOLVER_MODE`, `CURB_PRODUCT_PATH`, sample rate, and private resolver scale. Implementation tests must prove that `off` creates no next-generation provider requests, `shadow` creates no user-visible or persistent mutation, and `on` never treats `within_circle` as authority.
 
 ## 30. Rollback strategy
 
 Rollback is configuration-first:
 
-1. set `CURB_CANONICAL_RECOVERY=off`;
-2. verify recovery-attempt events stop and current primary behavior remains;
+1. set `CURB_CANONICAL_V2_NEXT=off`;
+2. verify next-generation retrieval/recovery events stop and current primary behavior remains;
 3. leave existing exact V2 documents in place because they are keyed by a fully canonical identity and contain no proximity association; and
 4. deploy a code rollback only if the common primary-context code itself is defective.
 
-Disabling recovery must not disable all Street Intelligence, alter resolver IAM/scale, change Mapbox, delete cached curbs, or rewrite public segments. No destructive migration is part of rollback. If a later audit proves a persisted recovered identity invalid, remediation requires a separately reviewed exact-key invalidation procedure; this design does not authorize deletion.
+Disabling the next-generation path must not disable all Street Intelligence, alter resolver IAM/scale, change Mapbox, delete cached curbs, or rewrite public segments. Because the primary retrieval, topology contract, and recovery share one correctness boundary, rollback returns all three to the reviewed current behavior atomically. No destructive migration is part of rollback. If a later audit proves a persisted next-generation identity invalid, remediation requires a separately reviewed exact-key invalidation procedure; this design does not authorize deletion.
 
 ## 31. Implementation-stage plan
 
@@ -708,15 +754,15 @@ Implementation remains unauthorized. After this design PR is approved, use these
 - Freeze the sample manifest and record primary baseline results before recovery implementation.
 - Stop if truth exclusions or source schemas make the benchmark non-representative.
 
-### 2A.35D — Recovery behind `off`
+### 2A.35D — Next-generation canonical path behind `off`
 
-- Implement WKT polygon construction, CSCL `intersects`, Pavement Edge adapter, reconciliation, topology lookup, Function 3C verification, outcomes, telemetry, and common orchestration integration using test-driven development.
+- Implement WKT polygon construction, authoritative CSCL `intersects` primary retrieval, diagnostic-only `within_circle` comparison, Pavement Edge adapter, reconciliation, topology lookup, Function 3C verification, outcomes, telemetry, and common orchestration integration using test-driven development.
 - Default the proposed gate to `off`; do not deploy `on`.
 - Add the full A–Z deterministic matrix, request-bound tests, privacy tests, and rule/cache fan-out tests.
 
 ### 2A.35E — Shadow evaluation and recovery benchmark
 
-- Run the frozen offline benchmark unchanged.
+- Run the frozen offline benchmark unchanged, including authoritative candidate-set completeness and false-uniqueness metrics.
 - Run only the bounded public live probe.
 - Compare primary, recovery, and legacy coverage without treating legacy as truth.
 - Architecture/security review all hard gates and coverage targets before any production change.
@@ -752,7 +798,7 @@ Each stage receives its own implementation plan, review, tests, commit history, 
 - Highways, bridges, tunnels, multi-level roads, medians, alleys, and private/non-pedestrian ways may have lower coverage because the existing supported-roadway policy remains conservative.
 - A complete public candidate set can still exceed source caps in unusually dense geometry and must fail closed.
 - The public key includes the CSCL source version, so a source release can intentionally produce a new exact cache key for the same physical face.
-- Recovery cannot compensate for unavailable or inconsistent official sources within the 8-second callable deadline.
+- The next-generation primary and recovery path cannot compensate for unavailable or inconsistent official sources within the 8-second callable deadline.
 
 ## 34. Open questions for architecture review
 
@@ -760,7 +806,8 @@ Each stage receives its own implementation plan, review, tests, commit history, 
 2. Confirm that the downloadable CSCL Pub release exposes sufficient Node/name relationships for every topology field. If it does not, geometry-derived endpoints must be benchmarked and Function 3C must remain mandatory.
 3. Confirm the exact representation of `CONFLATED` across JSON/export formats (`1`, numeric `1`, or other official encodings) before adapter implementation.
 4. Decide whether two Geosupport-normalized alias tuples returning the same BFI should remain ambiguous in v1 (recommended) or require a separately designed multi-context identity model.
-5. Validate that the proposed ten-request worst-case resolution bound and topology artifact size fit observed callable latency and deployment limits before `shadow` deployment.
+5. Validate that the proposed seven-request `on` recovery bound, eight-request `shadow` comparison bound, and topology artifact size fit observed callable latency and deployment limits before `shadow` deployment.
+6. Confirm through the frozen snapshot and bounded live probe that Socrata `intersects` returns the full normalized CSCL roadway set for every validated polygon shape used by the implementation; any unexplained omission is a NO-GO.
 
 These questions do not weaken the identity invariant. An unfavorable answer reduces coverage or changes artifact delivery; it does not permit heuristic identity.
 
@@ -770,17 +817,19 @@ These questions do not weaken the identity invariant. An unfavorable answer redu
 
 Proceed from design review to a detailed 2A.35B implementation plan only if reviewers approve:
 
-- fallback-only recovery after primary `COMPLETE + zero`;
+- authoritative same-envelope CSCL `intersects` retrieval before every next-generation identity selection;
+- `within_circle` as diagnostic/shadow evidence only, never candidate-set authority;
+- Pavement Edge recovery only after the complete CSCL/topology primary path lacks unique curb-side proof without an authoritative contradiction, while retaining every plausible roadway through reconciliation;
 - Pavement Edge as candidate evidence, never sole authority;
 - exact BFI reconciliation across Pavement Edge, CSCL, topology, and Function 3C;
 - offline official topology construction for from/to context;
 - the fail-closed intersection, alias, width, cache, privacy, and query-bound policies;
 - the frozen 5,000-point methodology, hard gates, and coverage targets; and
-- the `off|shadow|on` rollback boundary.
+- the unified `CURB_CANONICAL_V2_NEXT=off|shadow|on` rollback boundary.
 
 ### NO-GO
 
-Stop before implementation if official topology cannot provide deterministic block endpoints, Function 3C cannot confirm the reconstructed tuple without expanding private resolver authority, a runtime topology artifact cannot fit existing operational boundaries, or reviewers require name/distance heuristics to bridge missing official evidence.
+Stop before implementation if authoritative `intersects` candidate-set completeness cannot be independently demonstrated, official topology cannot provide deterministic block endpoints, Function 3C cannot confirm the reconstructed tuple without expanding private resolver authority, a runtime topology artifact cannot fit existing operational boundaries, or reviewers require name/distance heuristics to bridge missing official evidence.
 
 Passing unit tests alone is not a GO for production. Production `on` additionally requires the frozen benchmark to pass every hard safety gate, meet coverage targets, and demonstrate acceptable latency/request volume.
 
