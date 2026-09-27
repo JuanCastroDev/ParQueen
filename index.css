@@ -2846,26 +2846,6 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   }
 }
 
-/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-   TAILWIND MUST STAY LAST IN THIS FILE. DO NOT MOVE IT ABOVE THE RULES ABOVE.
-
-   The Tailwind Play CDN used to append its compiled <style> to document.head at
-   runtime, which put base + components + utilities AFTER the bundled stylesheet
-   this file becomes. Utilities therefore won every equal-specificity conflict
-   with the semantic classes above (.sp-overlay vs p-0/md:p-3, .map-status-row
-   vs md:w-full, and others). Emitting these directives here â€” at the bottom of
-   the last stylesheet in <head> â€” reproduces that exact cascade position.
-
-   Putting `@tailwind base` at the top of this file instead would flip every one
-   of those conflicts and silently change the layout. Guarded by
-   utils/tailwindCascade.test.ts.
-   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-
-
 /* Premium Ping / shared bottom sheet surface */
 .pq-bottom-sheet-root {
   pointer-events: auto;
@@ -5047,3 +5027,21 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
 :root:not(.dark) .pq-tool-chevron {
   color: var(--pq-elev-text-muted);
 }
+
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+   TAILWIND MUST STAY LAST IN THIS FILE. DO NOT MOVE IT ABOVE THE RULES ABOVE.
+
+   The Tailwind Play CDN used to append its compiled <style> to document.head at
+   runtime, which put base + components + utilities AFTER the bundled stylesheet
+   this file becomes. Utilities therefore won every equal-specificity conflict
+   with the semantic classes above (.sp-overlay vs p-0/md:p-3, .map-status-row
+   vs md:w-full, and others). Emitting these directives here â€” at the bottom of
+   the last stylesheet in <head> â€” reproduces that exact cascade position.
+
+   Putting `@tailwind base` at the top of this file instead would flip every one
+   of those conflicts and silently change the layout. Guarded by
+   utils/tailwindCascade.test.ts.
+   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
