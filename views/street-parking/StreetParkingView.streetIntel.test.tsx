@@ -28,12 +28,25 @@ describe('StreetParkingView canonical curb save contract', () => {
     const request = between('const requestCanonicalCurb = useCallback', '// Pre-V2 sessions');
     const save = between('const saveMySpot = async () =>', '// Used after handoff');
     expect(request).toContain('collectLocationBurst');
-    expect(request).toContain('buildCanonicalCurbRequest(location, candidateToken)');
-    expect(request).toContain('parseCanonicalCurbResponse(result.data)');
+    expect(request).toContain('resolveCanonicalCurbWithLocation');
     expect(save.match(/requestCanonicalCurb\(lat, lng\)/g)).toHaveLength(1);
     expect(save).not.toContain('runMatchNearestSegment');
     expect(save).not.toContain('geohashQueryBounds');
     expect(save).not.toContain('80');
+  });
+
+  it('uses the same guarded request path for Check again and disables repeated taps', () => {
+    const save = between('const saveMySpot = async () =>', '// Used after handoff');
+    const retry = between('const handleRetryStreetIntel = useCallback', 'const writeCleaningReminder');
+    expect(save.match(/requestCanonicalCurb\(lat, lng\)/g)).toHaveLength(1);
+    expect(retry.match(/requestCanonicalCurb\(savedSpot\.lat, savedSpot\.lng\)/g)).toHaveLength(1);
+    expect(retry).toContain('if (!savedSpot || retryStreetIntelInFlightRef.current) return');
+    expect(retry).toContain('retryStreetIntelInFlightRef.current = true');
+    expect(retry).toContain('setRetryingStreetIntel(true)');
+    expect(retry).toContain('retryStreetIntelInFlightRef.current = false');
+    expect(retry).toContain('setRetryingStreetIntel(false)');
+    expect(source).toContain('disabled={retryingStreetIntel}');
+    expect(source).toContain("t('street_intel.trying')");
   });
 
   it('passes the actual foreground-fix timestamp so stale map state cannot count as a fresh burst sample', () => {

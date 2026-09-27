@@ -1032,7 +1032,7 @@ const es: Record<string, string> = {
     'street_intel.unavailable_body_general': 'No encontramos datos de limpieza para este lugar.',
     'street_intel.try_again': 'Intentar de nuevo',
     'street_intel.check_again': 'Verificar de nuevo',
-    'street_intel.trying': 'Intentando…',
+    'street_intel.trying': 'Revisando tu acera…',
 
     'settings.delete_confirm_title': '¿Eliminar tu cuenta?',
     'settings.delete_confirm_body': 'Esto elimina permanentemente tu historial de estacionamiento, mensajes y perfil. Esta acción no se puede deshacer.',

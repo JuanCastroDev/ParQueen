@@ -57,13 +57,13 @@
 - Consumes: `AggregatedLocation`, `isCanonicalLocationReady`, a location collector, and one callable invocation function.
 - Produces: `resolveCanonicalCurbWithLocation(...)`, returning `location_quality` locally or a strictly parsed canonical response.
 
-- [ ] **Step 1: Write failing tests** proving one/two/poor/inconsistent aggregates make zero backend calls, a valid aggregate makes exactly one call, and `canonical_candidate_missing` remains `candidate_incomplete`.
-- [ ] **Step 2: Add the retry contract test** proving initial save and Check again use the same request boundary and the existing in-flight guard disables a repeated tap.
-- [ ] **Step 3: Run focused tests and verify RED** for the missing request boundary.
-- [ ] **Step 4: Implement the minimal request boundary and use it from `requestCanonicalCurb`** without changing request or response schemas.
-- [ ] **Step 5: Update the existing temporary retry copy** to “Rechecking your curb…” and its Spanish equivalent; retain the disabled state.
-- [ ] **Step 6: Run focused tests and verify GREEN.**
-- [ ] **Step 7: Commit the request/UI behavior.**
+- [x] **Step 1: Write failing tests** proving one/two/poor/inconsistent aggregates make zero backend calls, a valid aggregate makes exactly one call, and `canonical_candidate_missing` remains `candidate_incomplete`.
+- [x] **Step 2: Add the retry contract test** proving initial save and Check again use the same request boundary and the existing in-flight guard disables a repeated tap.
+- [x] **Step 3: Run focused tests and verify RED** for the missing request boundary.
+- [x] **Step 4: Implement the minimal request boundary and use it from `requestCanonicalCurb`** without changing request or response schemas.
+- [x] **Step 5: Update the existing temporary retry copy** to “Rechecking your curb…” and its Spanish equivalent; retain the disabled state.
+- [x] **Step 6: Run focused tests and verify GREEN.**
+- [x] **Step 7: Commit the request/UI behavior.**
 
 ### Task 3: Verification and client-only release
 

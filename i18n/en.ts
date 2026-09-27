@@ -1032,7 +1032,7 @@ const en: Record<string, string> = {
     'street_intel.unavailable_body_general': 'We could not find street cleaning data for this spot.',
     'street_intel.try_again': 'Try again',
     'street_intel.check_again': 'Check again',
-    'street_intel.trying': 'Trying…',
+    'street_intel.trying': 'Rechecking your curb…',
 
     'settings.delete_confirm_title': 'Delete your account?',
     'settings.delete_confirm_body': 'This permanently removes your parking history, messages, and profile. This cannot be undone.',
