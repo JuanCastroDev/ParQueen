@@ -56,6 +56,8 @@ public class PhoneAuthPlugin extends Plugin {
         boolean isMaestroTestNumber = BuildConfig.DEBUG && (
             "+16505553434".equals(phoneNumber)
                 || "+16505553435".equals(phoneNumber)
+                || "+16505553436".equals(phoneNumber)
+                || "+16505553437".equals(phoneNumber)
         );
         firebaseAuth.getFirebaseAuthSettings()
             .setAppVerificationDisabledForTesting(isMaestroTestNumber);
