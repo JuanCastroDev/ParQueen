@@ -188,6 +188,7 @@ export const VerifyPhoneView: React.FC<VerifyPhoneViewProps> = ({
                 >
                     {/* Hidden native input — drives keyboard and system OTP autocomplete */}
                     <input
+                        id="otp-input"
                         ref={inputRef}
                         type="text"
                         inputMode="numeric"

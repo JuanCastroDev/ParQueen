@@ -52,13 +52,18 @@ public class PhoneAuthPlugin extends Plugin {
             return;
         }
 
+        FirebaseAuth firebaseAuth = FirebaseAuth.getInstance();
+        boolean isMaestroTestNumber = BuildConfig.DEBUG && "+16505553434".equals(phoneNumber);
+        firebaseAuth.getFirebaseAuthSettings()
+            .setAppVerificationDisabledForTesting(isMaestroTestNumber);
+
         if (pendingCall != null) {
             pendingCall.reject("A verification request is already in progress.");
         }
         pendingCall = call;
 
         boolean resend = Boolean.TRUE.equals(call.getBoolean("resend", false));
-        PhoneAuthOptions.Builder builder = PhoneAuthOptions.newBuilder(FirebaseAuth.getInstance())
+        PhoneAuthOptions.Builder builder = PhoneAuthOptions.newBuilder(firebaseAuth)
             .setPhoneNumber(phoneNumber)
             .setTimeout(60L, TimeUnit.SECONDS)
             .setActivity(activity)
