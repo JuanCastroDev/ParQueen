@@ -21,16 +21,13 @@ Two invariants govern the design:
 
 > Canonical identity selection may occur only from a candidate set demonstrated to be complete for the validated geometry envelope under the authoritative retrieval contract.
 
-> Pavement Edge may discover a curb candidate; only reconciled official block-face/topology evidence may establish canonical curb identity.
+> Pavement Edge may discover/corroborate a recovery candidate; only reconciled official block-face/topology evidence may establish a recovered canonical curb identity.
 
-Canonical identity is established only after all of the following agree:
+The primary and recovered evidence contracts are distinct.
 
-- the device-location quality gate;
-- a bounded official geometry overlap;
-- a conflated Pavement Edge block-face relationship;
-- the corresponding CSCL left/right block-face field and roadway geometry;
-- a versioned official topology record that supplies the on/from/to block context; and
-- the existing private Geosupport Function 3C resolver returning the same block-face ID for that reconstructed tuple and side.
+**Primary canonical identity:** after the device-location quality gate, the authoritative same-envelope CSCL `intersects` read must be complete, version-consistent, non-truncated, and below its candidate cap. Exactly one roadway and side must survive the unchanged geometry and ambiguity policy; official topology must supply the on/from/to block context; and the existing private Geosupport Function 3C resolver must return the same BFI for that reconstructed tuple and side. That result is `canonical_primary`. Pavement Edge is not queried or required to establish a successful primary identity.
+
+**Recovered canonical identity:** recovery is eligible only when that complete primary candidate set cannot uniquely prove curb-side identity and contains no authoritative contradiction. A bounded Pavement Edge read must then supply `CONFLATED=1`, a valid `BLOCKF_ID`, and geometry compatible with the request. The BFI must reconcile exactly to the complete CSCL candidate set; official topology must supply the on/from/to context; and Function 3C must return that same BFI. That result is `canonical_recovered`.
 
 Any conflict, missing link, perpendicular ambiguity, incomplete source read, or timeout fails closed. Recovered identities use the existing `curb2_...` exact key, cache, rule fan-out, persistence, and client contract. No proximity cache is introduced.
 
@@ -192,11 +189,13 @@ flowchart TD
     B -->|shadow/on| D[Bounded polygon + CSCL intersects]
     D -->|incomplete/capped| E[canonical_missing]
     D --> F[Geometry-complete CSCL candidate set]
+    I[canonical_ambiguous]
     F --> G[Projection + grouping + topology]
     G -->|one identity verifies with 3C| H[canonical_primary]
     G -->|authoritative conflict| E
     G -->|no unique curb-side association| J{Pavement Edge recovery eligible?}
-    J -->|no| E
+    J -->|no; multiple plausible| I
+    J -->|no; no candidate| E
     J -->|yes| K[Same-envelope Pavement Edge intersects]
     K --> L[Require CONFLATED + valid BLOCKF_ID]
     L --> M[Exact BFI match within complete CSCL set]
@@ -313,7 +312,7 @@ The existing `createPrivateBlockfaceResolver` is a strict server-only Function 3
 
 For each topology-complete primary or recovery candidate, the next-generation resolver sends exactly the five currently accepted fields: borough, on street, the two cross streets, and compass direction. It trusts a result only when the current parser accepts the response, return code is `00`, the BFI is a valid non-zero ten-digit string, all normalized names are present, and source-version fields are valid.
 
-The result must equal the Pavement Edge/CSCL BFI. A different BFI is `geosupport_bfi_conflict`; a reviewed “not authoritative” response is `geosupport_rejected`; transport, authentication, saturation, timeout, invalid response, or unreviewed return code is `geosupport_unavailable`. None can be converted into success.
+For a primary candidate, the result must equal the topology/CSCL BFI; Pavement Edge is not part of the primary proof. For a recovery candidate, it must equal the BFI already reconciled across Pavement Edge, CSCL, and topology. A different BFI is `geosupport_bfi_conflict`; a reviewed “not authoritative” response is `geosupport_rejected`; transport, authentication, saturation, timeout, invalid response, or unreviewed return code is `geosupport_unavailable`. None can be converted into success.
 
 The existing resolver service URL validation, ID-token authentication, service account, IAM boundary, scale, and memoization remain unchanged. No BFI, tuple, raw Geosupport response, token, or coordinate is returned to the browser or emitted to telemetry.
 
@@ -596,7 +595,7 @@ A fixture is correctness-eligible only when all ground-truth links are present i
 5. Official topology provides a complete on/from/to block context.
 6. The pinned topology verification corpus records a Function 3C success returning the same BFI and normalized tuple.
 
-Expected street is the topology/Geosupport normalized on-street identity; expected side is the exact CSCL left/right BFI relationship plus its published digitization direction; expected block face is the conflated BFI shared by Pavement Edge, CSCL, and Function 3C.
+Expected street is the topology/Geosupport normalized on-street identity; expected side is the exact CSCL left/right BFI relationship plus its published digitization direction; expected block face is the conflated BFI shared by Pavement Edge, CSCL, and Function 3C. Pavement Edge is required here to create independent benchmark truth and to score recovery; this benchmark eligibility rule does not make Pavement Edge a runtime prerequisite for `canonical_primary`.
 
 Rows without all five links are excluded from correctness denominators. They remain in a separate coverage-only population labeled by the missing truth component. Exclusion counts and reasons are reported by borough and geometry class so high exclusion cannot conceal weak data coverage.
 
