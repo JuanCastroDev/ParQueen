@@ -161,4 +161,3 @@
 - [ ] Run all offline tests, relevant canonical-curb tests, Street Intelligence focused suite, static privacy checks, and Gitleaks; report known baseline failures without changing them.
 - [ ] Prove `functions/index.js` and current runtime dependency graph contain no offline import and review the full diff for runtime/config mutations.
 - [ ] Run a fresh whole-branch review, address Critical/Important findings with RED→GREEN tests, then commit, push, and open the unmerged review PR.
-
