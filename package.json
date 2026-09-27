@@ -6,6 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "check:knip": "knip --dependencies --files",
+    "ast:grep": "ast-grep",
     "preview": "vite preview",
     "test": "vitest run",
     "test:rules:unit": "vitest run --config vite.rules.config.ts",
@@ -44,6 +45,7 @@
     "recharts": "^2.12.2"
   },
   "devDependencies": {
+    "@ast-grep/cli": "^0.45.3",
     "@babel/core": "^7.20.0",
     "@capacitor/cli": "^8.5.2",
     "@firebase/rules-unit-testing": "^3.0.4",
