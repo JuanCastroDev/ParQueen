@@ -21,7 +21,7 @@
  *   gcloud auth application-default set-quota-project parkqueen-46475363-ccf36
  *   npx ts-node utils/migration/privatizePublicUserFields.ts
  *
- * admin.initializeApp({ projectId }) below passes no `credential`, so the
+ * initializeApp({ projectId }) below passes no `credential`, so the
  * Admin SDK falls back to ADC automatically (`gcloud auth login` populates a
  * separate credential store and does NOT satisfy this — ADC must be set up
  * with the `application-default` subcommand above). Do not set
@@ -39,14 +39,19 @@
  *   - The new Firestore rules allowlist will need to be reverted to allow client writes.
  */
 
-import * as admin from 'firebase-admin';
+import { initializeApp } from 'firebase-admin/app';
+import {
+    FieldValue,
+    getFirestore,
+    type QueryDocumentSnapshot,
+} from 'firebase-admin/firestore';
 
 const DRY_RUN = process.env.DRY_RUN !== 'false';
 const PROJECT_ID = process.env.GCLOUD_PROJECT || 'parkqueen-46475363-ccf36';
 
-admin.initializeApp({ projectId: PROJECT_ID });
-const db = admin.firestore();
-const FV = admin.firestore.FieldValue;
+initializeApp({ projectId: PROJECT_ID });
+const db = getFirestore();
+const FV = FieldValue;
 
 const PREF_FIELDS = ['fcmToken', 'notificationsEnabled', 'notificationRadius', 'sharePreciseLocation', 'lang'] as const;
 const SOCIAL_FIELDS = ['blockedUsers'] as const;
@@ -56,7 +61,7 @@ const ALL_FIELDS = [...PREF_FIELDS, ...SOCIAL_FIELDS, ...LOCATION_FIELDS];
 async function run() {
     console.log(`[privatizePublicUserFields] mode=${DRY_RUN ? 'DRY_RUN' : 'APPLY'} project=${PROJECT_ID}`);
 
-    let cursor: admin.firestore.QueryDocumentSnapshot | null = null;
+    let cursor: QueryDocumentSnapshot | null = null;
     let processed = 0, skipped = 0, errors = 0;
 
     while (true) {
@@ -106,7 +111,7 @@ async function run() {
 
                 await Promise.all(writes);
 
-                const removeFields: Record<string, admin.firestore.FieldValue> = {};
+                const removeFields: Record<string, FieldValue> = {};
                 for (const f of ALL_FIELDS) {
                     if (f in data) removeFields[f] = FV.delete();
                 }
