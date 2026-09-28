@@ -1,0 +1,36 @@
+{
+  "mcpServers": {
+    "chrome-devtools": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "chrome-devtools-mcp@1.10.1",
+        "--executablePath=${env:PARQUEEN_BRAVE_PATH}",
+        "--headless=true",
+        "--isolated=true",
+        "--workspace=${workspaceFolder}",
+        "--performanceCrux=false",
+        "--usageStatistics=false",
+        "--redactNetworkHeaders=true",
+        "--categoryExtensions=false",
+        "--categoryMemory=false",
+        "--memoryDebugging=false",
+        "--categoryExperimentalThirdParty=false",
+        "--categoryExperimentalWebmcp=false",
+        "--categoryPwa=false",
+        "--javascriptEvaluation=false",
+        "--screenshotFormat=webp",
+        "--screenshotMaxWidth=1440",
+        "--screenshotMaxHeight=1200"
+      ],
+      "env": {
+        "CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS": "1",
+        "CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS": "1"
+      }
+    },
+    "sentry": {
+      "url": "https://mcp.sentry.dev/mcp/parqueen/javascript-react"
+    }
+  }
+}

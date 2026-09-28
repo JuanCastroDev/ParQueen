@@ -1,0 +1,52 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": [
+        "index.tsx",
+        "postcss.config.js",
+        "scripts/**/*.{js,cjs,mjs,ts}",
+        "utils/migration/*.ts",
+        ".github/scripts/**/*.{js,cjs,mjs,ts}",
+        "vite.functions.config.ts"
+      ],
+      "project": [
+        "**/*.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
+        "!functions/**",
+        "!.agents/**",
+        "!.augment/**",
+        "!.claude/**",
+        "!.codebuddy/**",
+        "!.codex/**",
+        "!.continue/**",
+        "!.netlify/**",
+        "!.cursor/**",
+        "!.factory/**",
+        "!.gemini/**",
+        "!.kilocode/**",
+        "!.opencode/**",
+        "!.roo/**",
+        "!.warp/**",
+        "!.trae/**",
+        "!.qoder/**",
+        "!.kiro/**",
+        "!.windsurf/**",
+        "!.github/prompts/**",
+        "!dist/**",
+        "!node_modules/**"
+      ],
+      "ignoreDependencies": [
+        "autoprefixer"
+      ]
+    },
+    "functions": {
+      "entry": [
+        "index.js",
+        "**/*.test.js"
+      ],
+      "project": [
+        "**/*.js"
+      ]
+    }
+  }
+}
