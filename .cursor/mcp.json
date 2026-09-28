@@ -28,6 +28,9 @@
         "CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS": "1",
         "CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS": "1"
       }
+    },
+    "sentry": {
+      "url": "https://mcp.sentry.dev/mcp/parqueen/javascript-react"
     }
   }
 }
