@@ -8,7 +8,7 @@
  *   gcloud auth application-default set-quota-project parkqueen-46475363-ccf36
  *   npx ts-node utils/migration/privatizeContactFields.ts
  *
- * admin.initializeApp({ projectId }) below passes no `credential`, so the
+ * initializeApp({ projectId }) below passes no `credential`, so the
  * Admin SDK falls back to ADC automatically (`gcloud auth login` populates a
  * separate credential store and does NOT satisfy this — ADC must be set up
  * with the `application-default` subcommand above). Do not set
@@ -27,13 +27,14 @@
  *     Firebase Auth (user.phoneNumber) and does not need to be rolled back.
  */
 
-import * as admin from 'firebase-admin';
+import { initializeApp } from 'firebase-admin/app';
+import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 
 const DRY_RUN = process.env.DRY_RUN !== 'false';
 const PROJECT_ID = process.env.GCLOUD_PROJECT || 'parkqueen-46475363-ccf36';
 
-admin.initializeApp({ projectId: PROJECT_ID });
-const db = admin.firestore();
+initializeApp({ projectId: PROJECT_ID });
+const db = getFirestore();
 
 function maskValue(value: string): string {
   if (!value) return '(empty)';
@@ -72,9 +73,9 @@ async function run() {
       if (hasEmail) {
         await privateRef.set({ email: data.email }, { merge: true });
       }
-      const removeFields: Record<string, admin.firestore.FieldValue> = {};
-      if (hasPhone) removeFields.phone = admin.firestore.FieldValue.delete();
-      if (hasEmail) removeFields.email = admin.firestore.FieldValue.delete();
+      const removeFields: Record<string, FieldValue> = {};
+      if (hasPhone) removeFields.phone = FieldValue.delete();
+      if (hasEmail) removeFields.email = FieldValue.delete();
       await userDoc.ref.update(removeFields);
       console.log(`[APPLY] migrated ${logParts.join(' ')}`);
       processed++;
