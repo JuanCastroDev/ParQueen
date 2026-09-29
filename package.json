@@ -26,7 +26,8 @@
     "cap:sync": "npm run build && npx cap sync",
     "cap:copy": "npm run build && npx cap copy",
     "cap:open:android": "npx cap open android",
-    "cap:open:ios": "npx cap open ios"
+    "cap:open:ios": "npx cap open ios",
+    "release:preflight:windows": "node scripts/release-preflight/run-all.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",
