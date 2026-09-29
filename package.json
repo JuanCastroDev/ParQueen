@@ -12,7 +12,7 @@
     "test:rules:unit": "vitest run --config vite.rules.config.ts",
     "test:rules": "firebase emulators:exec --only firestore --project demo-parkqueen-rules-test \"npm run test:rules:unit\"",
     "test:storage:rules:unit": "vitest run --config vite.storage-rules.config.ts",
-    "test:storage:rules": "firebase emulators:exec --only storage \"npm run test:storage:rules:unit\"",
+    "test:storage:rules": "firebase emulators:exec --only storage --project demo-parkqueen-storage-test \"npm run test:storage:rules:unit\"",
     "install:functions": "npm install --prefix functions",
     "test:functions": "firebase emulators:exec --only functions,firestore,auth,storage \"sh -c 'echo FUNCTIONS_VITEST_START; vitest run --config vite.functions.config.ts'\"",
     "test:watch": "vitest",
