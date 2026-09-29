@@ -5,16 +5,20 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:preflight:windows": "node scripts/release-preflight/run-production-build.mjs",
     "check:knip": "knip --dependencies --files",
+    "check:knip:preflight:windows": "node scripts/release-preflight/run-knip.mjs",
     "ast:grep": "ast-grep",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:preflight:windows": "node scripts/release-preflight/run-root-tests.mjs",
     "test:rules:unit": "vitest run --config vite.rules.config.ts",
     "test:rules": "firebase emulators:exec --only firestore --project demo-parkqueen-rules-test \"npm run test:rules:unit\"",
     "test:storage:rules:unit": "vitest run --config vite.storage-rules.config.ts",
-    "test:storage:rules": "firebase emulators:exec --only storage \"npm run test:storage:rules:unit\"",
+    "test:storage:rules": "firebase emulators:exec --only storage --project demo-parkqueen-storage-test \"npm run test:storage:rules:unit\"",
     "install:functions": "npm install --prefix functions",
     "test:functions": "firebase emulators:exec --only functions,firestore,auth,storage \"sh -c 'echo FUNCTIONS_VITEST_START; vitest run --config vite.functions.config.ts'\"",
+    "test:functions:windows": "node scripts/release-preflight/run-functions-integration.mjs",
     "test:watch": "vitest",
     "test:street-intel": "vitest run utils/locationBurst.test.ts utils/geolocation.test.ts utils/canonicalCurbClient.test.ts utils/assistantTools.test.ts utils/streetIntelDays.test.ts utils/streetIntelMeter.test.ts utils/streetIntelRefresh.test.ts utils/streetIntelligence.test.ts utils/streetIntelligencePresentation.test.ts utils/streetIntelligenceDiagnosticPrivacy.test.ts functions/streetIntelDays.test.js functions/streetIntelDailyToken.test.js functions/streetIntelRefresh.test.js functions/streetIntelStructuredLog.test.js functions/nycOpenDataRestriction.test.js functions/curbIntelligence/curbResolutionPolicy.test.js functions/curbIntelligence/canonicalCurbIdentity.test.js functions/curbIntelligence/planimetricCurbAdapter.test.js functions/curbIntelligence/canonicalCurbResolver.test.js functions/curbIntelligence/nycResolverFixtures.test.js functions/curbIntelligence/runtimeCurbResolution.test.js functions/curbIntelligence/visualCurbSelection.test.js functions/curbIntelligence/canonicalDotLookup.test.js functions/curbIntelligence/canonicalSweepLookup.test.js functions/curbIntelligence/canonicalRuleSources.test.js functions/curbIntelligence/ruleConflictPolicy.test.js functions/curbIntelligence/productMeterLookup.test.js functions/curbIntelligence/productRestrictionLookup.test.js functions/curbIntelligence/persistPublicRestrictionRules.test.js functions/curbIntelligence/canonicalCurbPersistence.test.js functions/curbIntelligence/canonicalCurbOrchestrator.test.js functions/curbIntelligence/curbTelemetry.test.js functions/curbIntelligence/canonicalV2ModuleLoader.test.js functions/curbIntelligence/privateResolverCallableComposition.test.js views/street-parking/VisualCurbSelector.test.tsx views/street-parking/StreetParkingView.streetIntel.test.tsx views/street-parking/StreetIntelligenceCard.test.tsx i18n/streetIntelligenceSafetyCopy.test.ts i18n/streetIntelCopyParity.test.ts i18n/streetIntelligenceConsumerCopy.test.ts utils/streetIntelRelease.test.ts",
     "test:curb-topology": "vitest run scripts/curb-topology && python scripts/curb-topology/extract_cscl_test.py",
@@ -22,7 +26,8 @@
     "cap:sync": "npm run build && npx cap sync",
     "cap:copy": "npm run build && npx cap copy",
     "cap:open:android": "npx cap open android",
-    "cap:open:ios": "npx cap open ios"
+    "cap:open:ios": "npx cap open ios",
+    "release:preflight:windows": "node scripts/release-preflight/run-all.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",
