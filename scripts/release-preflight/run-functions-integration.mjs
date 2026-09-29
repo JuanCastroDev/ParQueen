@@ -55,6 +55,7 @@ const env = {
   GCLOUD_PROJECT: PROJECT_ID,
   WAITLIST_CONFIRM_BASE_URL,
   WAITLIST_ALLOWED_HOSTNAMES,
+  FUNCTIONS_DISCOVERY_TIMEOUT: '30',
 };
 const result = spawnSync(firebaseNode, [
   firebaseJs,
