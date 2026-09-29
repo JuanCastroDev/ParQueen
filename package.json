@@ -10,6 +10,7 @@
     "ast:grep": "ast-grep",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:preflight:windows": "node scripts/release-preflight/run-root-tests.mjs",
     "test:rules:unit": "vitest run --config vite.rules.config.ts",
     "test:rules": "firebase emulators:exec --only firestore --project demo-parkqueen-rules-test \"npm run test:rules:unit\"",
     "test:storage:rules:unit": "vitest run --config vite.storage-rules.config.ts",
