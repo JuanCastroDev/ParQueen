@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:preflight:windows": "node scripts/release-preflight/run-production-build.mjs",
     "check:knip": "knip --dependencies --files",
     "ast:grep": "ast-grep",
     "preview": "vite preview",
