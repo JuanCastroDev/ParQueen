@@ -7,6 +7,7 @@
     "build": "vite build",
     "build:preflight:windows": "node scripts/release-preflight/run-production-build.mjs",
     "check:knip": "knip --dependencies --files",
+    "check:knip:preflight:windows": "node scripts/release-preflight/run-knip.mjs",
     "ast:grep": "ast-grep",
     "preview": "vite preview",
     "test": "vitest run",
