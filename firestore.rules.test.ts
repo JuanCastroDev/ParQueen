@@ -1186,6 +1186,136 @@ describe('chats and messages — participant isolation', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// CHATS — mutual block (either direction refuses a new direct conversation)
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('chats — mutual user block on conversation create', () => {
+    function shell(id: string, participants: [string, string]) {
+        return { id, participants, relatedSpotTitle: 'Street Spot' };
+    }
+
+    async function writeBlock(blockerUid: string, blockedUid: string) {
+        const writer = blockerUid === OWNER_UID ? ownerDb()
+            : blockerUid === OTHER_UID ? otherDb()
+            : thirdDb();
+        await assertSucceeds(setDoc(
+            doc(writer, 'users', blockerUid, 'private', 'social'),
+            { blockedUsers: [blockedUid] },
+        ));
+    }
+
+    it('HB-01: with no block relationship, either participant can create the direct chat', async () => {
+        const createdByA = `hb01-a-${OWNER_UID}`;
+        const createdByB = `hb01-b-${OTHER_UID}`;
+        await assertSucceeds(setDoc(doc(ownerDb(), 'chats', createdByA), shell(createdByA, [OWNER_UID, OTHER_UID])));
+        await assertSucceeds(setDoc(doc(otherDb(), 'chats', createdByB), shell(createdByB, [OTHER_UID, OWNER_UID])));
+    });
+
+    it('HB-02: when A blocks B, A cannot create a new chat with B in either participant order', async () => {
+        await writeBlock(OWNER_UID, OTHER_UID);
+        const id1 = `hb02-a-${OWNER_UID}`;
+        const id2 = `hb02-b-${OWNER_UID}`;
+        await assertFails(setDoc(doc(ownerDb(), 'chats', id1), shell(id1, [OWNER_UID, OTHER_UID])));
+        await assertFails(setDoc(doc(ownerDb(), 'chats', id2), shell(id2, [OTHER_UID, OWNER_UID])));
+    });
+
+    it('HB-03: when A blocks B, B cannot create a new chat with A in either participant order', async () => {
+        await writeBlock(OWNER_UID, OTHER_UID);
+        const id1 = `hb03-a-${OTHER_UID}`;
+        const id2 = `hb03-b-${OTHER_UID}`;
+        await assertFails(setDoc(doc(otherDb(), 'chats', id1), shell(id1, [OTHER_UID, OWNER_UID])));
+        await assertFails(setDoc(doc(otherDb(), 'chats', id2), shell(id2, [OWNER_UID, OTHER_UID])));
+        await assertFails(getDoc(doc(otherDb(), 'users', OWNER_UID, 'private', 'social')));
+    });
+
+    it('HB-04: when B blocks A, neither A nor B can create a new chat with the other', async () => {
+        await writeBlock(OTHER_UID, OWNER_UID);
+        const byA = `hb04-a-${OWNER_UID}`;
+        const byB = `hb04-b-${OTHER_UID}`;
+        await assertFails(setDoc(doc(ownerDb(), 'chats', byA), shell(byA, [OWNER_UID, OTHER_UID])));
+        await assertFails(setDoc(doc(otherDb(), 'chats', byB), shell(byB, [OTHER_UID, OWNER_UID])));
+    });
+
+    it('HB-05: a block between A and B does not stop either of them from starting a chat with C', async () => {
+        await writeBlock(OWNER_UID, OTHER_UID);
+        const aWithC = `hb05-ac-${OWNER_UID}`;
+        const bWithC = `hb05-bc-${OTHER_UID}`;
+        const cWithA = `hb05-ca-${THIRD_UID}`;
+        await assertSucceeds(setDoc(doc(ownerDb(), 'chats', aWithC), shell(aWithC, [OWNER_UID, THIRD_UID])));
+        await assertSucceeds(setDoc(doc(otherDb(), 'chats', bWithC), shell(bWithC, [OTHER_UID, THIRD_UID])));
+        await assertSucceeds(setDoc(doc(thirdDb(), 'chats', cWithA), shell(cWithA, [THIRD_UID, OWNER_UID])));
+    });
+
+    it('HB-06: clearing blockedUsers restores create with no other backend cleanup', async () => {
+        await writeBlock(OWNER_UID, OTHER_UID);
+        const id = `hb06-${OWNER_UID}`;
+        await assertFails(setDoc(doc(ownerDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
+        await assertFails(setDoc(doc(otherDb(), 'chats', id), shell(id, [OTHER_UID, OWNER_UID])));
+        await assertSucceeds(setDoc(
+            doc(ownerDb(), 'users', OWNER_UID, 'private', 'social'),
+            { blockedUsers: [] },
+        ));
+        await assertSucceeds(setDoc(doc(ownerDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
+        const otherId = `hb06b-${OTHER_UID}`;
+        await assertSucceeds(setDoc(doc(otherDb(), 'chats', otherId), shell(otherId, [OTHER_UID, OWNER_UID])));
+    });
+
+    it('HB-07: an existing chat and its historical message stay readable and are not deleted when a block is added', async () => {
+        const id = `hb07-${OWNER_UID}`;
+        await testEnv.withSecurityRulesDisabled(async ctx => {
+            const admin = ctx.firestore();
+            await setDoc(doc(admin, 'chats', id), {
+                ...shell(id, [OWNER_UID, OTHER_UID]),
+                lastMessage: 'historical hello',
+                lastSenderId: OWNER_UID,
+            });
+            await setDoc(doc(admin, 'chats', id, 'messages', 'message-1'), {
+                senderId: OWNER_UID,
+                text: 'historical hello',
+                timestamp: Timestamp.now(),
+            });
+        });
+        await writeBlock(OWNER_UID, OTHER_UID);
+
+        const ownerChat = await assertSucceeds(getDoc(doc(ownerDb(), 'chats', id)));
+        const otherChat = await assertSucceeds(getDoc(doc(otherDb(), 'chats', id)));
+        const ownerMsg = await assertSucceeds(getDoc(doc(ownerDb(), 'chats', id, 'messages', 'message-1')));
+        const otherMsg = await assertSucceeds(getDoc(doc(otherDb(), 'chats', id, 'messages', 'message-1')));
+        expect(ownerChat.exists()).toBe(true);
+        expect(otherChat.exists()).toBe(true);
+        expect(ownerMsg.data()?.text).toBe('historical hello');
+        expect(otherMsg.data()?.text).toBe('historical hello');
+
+        await assertFails(setDoc(doc(ownerDb(), 'chats', `hb07-new-${OWNER_UID}`), shell(`hb07-new-${OWNER_UID}`, [OWNER_UID, OTHER_UID])));
+        await assertFails(addDoc(collection(ownerDb(), 'chats', id, 'messages'), {
+            senderId: OWNER_UID,
+            text: 'bypass',
+            timestamp: Timestamp.now(),
+        }));
+        await assertFails(addDoc(collection(otherDb(), 'chats', id, 'messages'), {
+            senderId: OTHER_UID,
+            text: 'bypass',
+            timestamp: Timestamp.now(),
+        }));
+        const { updateDoc: upd } = await import('firebase/firestore');
+        await assertFails(upd(doc(ownerDb(), 'chats', id), { lastMessage: 'bypass preview' }));
+
+        const stillThere = await assertSucceeds(getDoc(doc(ownerDb(), 'chats', id, 'messages', 'message-1')));
+        expect(stillThere.data()?.text).toBe('historical hello');
+    });
+
+    it('HB-08: the blocked user cannot clear the blocker list, and a direct message write stays denied', async () => {
+        await writeBlock(OWNER_UID, OTHER_UID);
+        await assertFails(getDoc(doc(otherDb(), 'users', OWNER_UID, 'private', 'social')));
+        await assertFails(setDoc(
+            doc(otherDb(), 'users', OWNER_UID, 'private', 'social'),
+            { blockedUsers: [] },
+        ));
+        const id = `hb08-${OTHER_UID}`;
+        await assertFails(setDoc(doc(otherDb(), 'chats', id), shell(id, [OTHER_UID, OWNER_UID])));
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SPOTS — claimant cancellation (Arm 3 / Arm 3b)
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('spots — claimer cancellation', () => {

@@ -73,6 +73,9 @@ interface ChatSetDocCall {
 }
 let chatSetDocCalls: ChatSetDocCall[] = [];
 let chatSetDocAuto: 'succeed' | 'permission-denied' | 'pending' = 'succeed';
+// 'missing' matches Rules for a parent that was not created (including a
+// mutual-block denial). 'exists' is an already-created shell.
+let chatGetDocAuto: 'missing' | 'exists' = 'missing';
 
 vi.mock('firebase/firestore', () => ({
     collection: (_db: any, ...path: string[]) => ({ __col: path }),
@@ -97,9 +100,14 @@ vi.mock('firebase/firestore', () => ({
     getDoc: (ref: any) => new Promise((resolve, reject) => {
         const path: string[] = ref.__doc;
         if (path[0] === 'chats') {
-            // Simulates current Rules: get of a missing chats/{id} is
-            // permission-denied. initChat must not take this path.
+            // A missing parent (or any non-participant read) is
+            // permission-denied. initChat probes only after a create
+            // collision, to tell "already exists" from a real denial.
             chatGetDocCalls.push(path);
+            if (chatGetDocAuto === 'exists') {
+                resolve({ exists: () => true, data: () => ({}) });
+                return;
+            }
             reject(Object.assign(new Error('Missing or insufficient permissions'), { code: 'permission-denied' }));
             return;
         }
@@ -1289,11 +1297,13 @@ describe('MessagesView — Ping chat-shell init (no read-before-create)', () => 
         olderPageAutoDocs = [];
         chatSetDocCalls = [];
         chatSetDocAuto = 'succeed';
+        chatGetDocAuto = 'missing';
         reportCriticalActionFailure.mockClear();
         resetScrollMock();
     });
     afterEach(() => {
         chatSetDocAuto = 'succeed';
+        chatGetDocAuto = 'missing';
         vi.useRealTimers();
     });
 
@@ -1332,10 +1342,11 @@ describe('MessagesView — Ping chat-shell init (no read-before-create)', () => 
 
     it('re-opening an existing chat from a Ping treats the create-once update denial as already-exists', async () => {
         chatSetDocAuto = 'permission-denied';
+        chatGetDocAuto = 'exists';
         const renderer = await renderMessages({ activeChatContext: pingContext });
         await act(async () => { await flush(); });
 
-        expect(chatGetDocCalls).toEqual([]);
+        expect(chatGetDocCalls).toEqual([['chats', pingChatId]]);
         expect(chatSetDocCalls).toHaveLength(1);
         expect(reportCriticalActionFailure).not.toHaveBeenCalled();
 
@@ -1386,11 +1397,34 @@ describe('MessagesView — Ping chat-shell init (no read-before-create)', () => 
         act(() => renderer.unmount());
     });
 
-    it('source contract: Ping init never getDocs the chat document and does not seed activeConversationId from context', () => {
+    it('a create denial for a shell that is not readable does not open a thread', async () => {
+        chatSetDocAuto = 'permission-denied';
+        chatGetDocAuto = 'missing';
+        const renderer = await renderMessages({ activeChatContext: pingContext });
+        await act(async () => { await flush(); });
+
+        expect(chatSetDocCalls).toHaveLength(1);
+        expect(chatGetDocCalls).toEqual([['chats', pingChatId]]);
+        expect(messagesSnapshotCalls).toHaveLength(0);
+        expect(isInConversationDetail(renderer)).toBe(false);
+        expect(reportCriticalActionFailure).toHaveBeenCalledTimes(1);
+        expect(reportCriticalActionFailure.mock.calls[0][0]).toBe('chat_init');
+        expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === t('messages.toast_open_failed')).length).toBe(1);
+        act(() => renderer.unmount());
+    });
+
+    it('source contract: Ping init does not read the chat before create, and probes only after a collision', () => {
         const fs = require('fs');
         const source = fs.readFileSync(new URL('./MessagesView.tsx', import.meta.url), 'utf8');
-        expect(source).not.toMatch(/getDoc\(chatRef\)/);
-        expect(source).toMatch(/ensureChatShell/);
+        const initStart = source.indexOf('const initChat = async () => {');
+        const initEnd = source.indexOf('initChat();', initStart);
+        const init = source.slice(initStart, initEnd);
+        expect(init).not.toMatch(/getDocs\(/);
+        expect(init).toMatch(/ensureChatShell/);
+        const setAt = init.indexOf('setDoc(');
+        const getAt = init.indexOf('getDoc(');
+        expect(setAt).toBeGreaterThan(-1);
+        expect(getAt).toBeGreaterThan(setAt);
         expect(source).not.toMatch(/activeChatContext && user \? \[user\.id, activeChatContext\.userId\]\.sort\(\)\.join/);
         const listener = source.slice(source.indexOf('Listen to the newest MESSAGE_PAGE_SIZE'));
         expect(listener).toMatch(/if \(!activeConversationId \|\| !user \|\| !db\)/);

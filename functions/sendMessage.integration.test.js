@@ -386,6 +386,126 @@ describe('sendMessage — authoritative chat message write path', () => {
         expect(doc.exists).toBe(false);
     });
 
+    async function setBlocked(blockerUid, blockedUid) {
+        await db.collection('users').doc(blockerUid).collection('private').doc('social').set({
+            blockedUsers: [blockedUid],
+        });
+    }
+
+    async function messageCount(id) {
+        const snap = await db.collection('chats').doc(id).collection('messages').get();
+        return snap.size;
+    }
+
+    it('SM-22: when A blocks B, A cannot send B a new message and nothing is written', async () => {
+        await setBlocked(uidA, uidB);
+        const clientRequestId = testId('m');
+        const { error } = await callDirect(uidA, { chatId, clientRequestId, text: 'from A after block' });
+        expect(error.code).toBe('permission-denied');
+        expect(error.message).toBe("You can't message this user.");
+        expect(error.message).not.toContain(uidA);
+        expect(error.message).not.toContain(uidB);
+        expect(await messageCount(chatId)).toBe(0);
+        const chat = await db.collection('chats').doc(chatId).get();
+        expect(chat.data().lastMessage).toBe('');
+    });
+
+    it('SM-23: when A blocks B, B cannot send A a new message either', async () => {
+        await setBlocked(uidA, uidB);
+        const clientRequestId = testId('m');
+        const { error } = await callDirect(uidB, { chatId, clientRequestId, text: 'from B after block' });
+        expect(error.code).toBe('permission-denied');
+        expect(error.message).toBe("You can't message this user.");
+        expect(await messageCount(chatId)).toBe(0);
+    });
+
+    it('SM-24: when B blocks A, neither A nor B can send a new message', async () => {
+        await setBlocked(uidB, uidA);
+        const fromA = await callDirect(uidA, { chatId, clientRequestId: testId('a'), text: 'A to B' });
+        const fromB = await callDirect(uidB, { chatId, clientRequestId: testId('b'), text: 'B to A' });
+        expect(fromA.error.code).toBe('permission-denied');
+        expect(fromB.error.code).toBe('permission-denied');
+        expect(await messageCount(chatId)).toBe(0);
+    });
+
+    it('SM-25: an unrelated pair can still message while A and B are blocked', async () => {
+        await setBlocked(uidA, uidB);
+        const uidC = testUid('c');
+        const otherChatId = testId('chat-ac');
+        await createChat(otherChatId, [uidA, uidC]);
+        const clientRequestId = testId('m');
+        const { result, error } = await callDirect(uidA, { chatId: otherChatId, clientRequestId, text: 'hello C' });
+        expect(error).toBeUndefined();
+        expect(result.success).toBe(true);
+        const doc = await db.collection('chats').doc(otherChatId).collection('messages').doc(clientRequestId).get();
+        expect(doc.data().text).toBe('hello C');
+        expect(await messageCount(chatId)).toBe(0);
+        await cleanupChat(otherChatId);
+        await deleteRateLimitCounter(uidC);
+        await db.collection('users').doc(uidA).collection('private').doc('social').delete().catch(() => {});
+    });
+
+    it('SM-26: removing the block restores permitted messaging with no other cleanup', async () => {
+        await setBlocked(uidA, uidB);
+        const denied = await callDirect(uidB, { chatId, clientRequestId: testId('denied'), text: 'still blocked' });
+        expect(denied.error.code).toBe('permission-denied');
+        await db.collection('users').doc(uidA).collection('private').doc('social').set({ blockedUsers: [] });
+        const clientRequestId = testId('restored');
+        const { result, error } = await callDirect(uidB, { chatId, clientRequestId, text: 'after unblock' });
+        expect(error).toBeUndefined();
+        expect(result.success).toBe(true);
+        const doc = await db.collection('chats').doc(chatId).collection('messages').doc(clientRequestId).get();
+        expect(doc.data().text).toBe('after unblock');
+        expect(doc.data().senderId).toBe(uidB);
+    });
+
+    it('SM-27: a block does not destroy history, and a retry of an already-sent id does not create another message', async () => {
+        const historicalId = testId('historical');
+        const sent = await callDirect(uidA, { chatId, clientRequestId: historicalId, text: 'before the block' });
+        expect(sent.error).toBeUndefined();
+        await setBlocked(uidB, uidA);
+
+        const freshId = testId('fresh');
+        const denied = await callDirect(uidA, { chatId, clientRequestId: freshId, text: 'should not land' });
+        expect(denied.error.code).toBe('permission-denied');
+
+        const historical = await db.collection('chats').doc(chatId).collection('messages').doc(historicalId).get();
+        expect(historical.exists).toBe(true);
+        expect(historical.data().text).toBe('before the block');
+        expect((await db.collection('chats').doc(chatId).collection('messages').doc(freshId).get()).exists).toBe(false);
+
+        const retry = await callDirect(uidB, { chatId, clientRequestId: historicalId, text: 'retry must not overwrite' });
+        expect(retry.error).toBeUndefined();
+        expect(retry.result.id).toBe(historicalId);
+        const afterRetry = await db.collection('chats').doc(chatId).collection('messages').doc(historicalId).get();
+        expect(afterRetry.data().text).toBe('before the block');
+        expect(afterRetry.data().senderId).toBe(uidA);
+        expect(await messageCount(chatId)).toBe(1);
+        const chat = await db.collection('chats').doc(chatId).get();
+        expect(chat.data().lastMessage).toBe('before the block');
+    });
+
+    it('SM-28: a non-list blockedUsers value does not fail closed or get echoed', async () => {
+        await db.collection('users').doc(uidA).collection('private').doc('social').set({
+            blockedUsers: 'not-a-list',
+        });
+        const clientRequestId = testId('m');
+        const { error, result } = await callDirect(uidB, { chatId, clientRequestId, text: 'still allowed' });
+        expect(error).toBeUndefined();
+        expect(result.success).toBe(true);
+    });
+
+    it("SM-29: a participant id that is not a safe document id is denied and writes nothing", async () => {
+        const weirdChatId = testId('weird');
+        await createChat(weirdChatId, [uidA, 'bad/id']);
+        const clientRequestId = testId('m');
+        const { error } = await callDirect(uidA, { chatId: weirdChatId, clientRequestId, text: 'nope' });
+        expect(error.code).toBe('permission-denied');
+        expect(error.message).not.toContain('bad/id');
+        expect(await messageCount(weirdChatId)).toBe(0);
+        await cleanupChat(weirdChatId);
+    });
+
     it('SM-20b: App Check canary HTTP boundary — a valid auth token but no App Check token is rejected before the handler runs', async () => {
         const idToken = await signInUser(uidA);
         // Raw HTTP call (not callDirect): the onCall wrapper's

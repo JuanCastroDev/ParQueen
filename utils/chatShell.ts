@@ -46,8 +46,10 @@ function errorCode(error: unknown): string | undefined {
 
 /**
  * setDoc against an existing create-once chat is an update, which Rules
- * deny. Treat only that (and a genuine already-exists) as a benign race —
- * never a malformed create, network failure, or unauthenticated write.
+ * deny. The same permission-denied code is also returned when create itself
+ * is denied (for example a mutual block). Callers that pass shellExists
+ * confirm the parent is actually readable before treating the error as
+ * "already exists".
  */
 export function isExistingChatCreateCollision(error: unknown): boolean {
   const code = errorCode(error);
@@ -59,12 +61,22 @@ export function isExistingChatCreateCollision(error: unknown): boolean {
 export async function ensureChatShell(
   create: (payload: ChatShellCreatePayload) => Promise<void>,
   payload: ChatShellCreatePayload,
+  shellExists?: () => Promise<boolean>,
 ): Promise<ChatShellOutcome> {
   try {
     await create(payload);
     return 'created';
   } catch (error) {
-    if (isExistingChatCreateCollision(error)) return 'already-exists';
-    throw error;
+    if (!isExistingChatCreateCollision(error)) throw error;
+    if (!shellExists) return 'already-exists';
+    let readable = false;
+    try {
+      readable = await shellExists();
+    } catch (probeError) {
+      if (isExistingChatCreateCollision(probeError)) throw error;
+      throw probeError;
+    }
+    if (!readable) throw error;
+    return 'already-exists';
   }
 }

@@ -110,6 +110,21 @@ service cloud.firestore {
         && request.auth.uid in chatData.participants;
     }
 
+    // Owner-only read on users/{uid}/private/social does not apply to
+    // rules get()/exists(). A missing doc, or a non-list blockedUsers
+    // value, is an empty block list. A block in either direction is mutual.
+    function blockedUsersOf(uid) {
+      let socialPath = /databases/$(database)/documents/users/$(uid)/private/social;
+      let raw = exists(socialPath) ? get(socialPath).data.get('blockedUsers', []) : [];
+      return raw is list ? raw : [];
+    }
+
+    function directChatIsBlocked(participants) {
+      let a = participants[0];
+      let b = participants[1];
+      return a in blockedUsersOf(b) || b in blockedUsersOf(a);
+    }
+
     match /users/{userId} {
       // isAdmin() removed from this OR-chain: it was redundant, not
       // protective — signedIn() alone already grants read access to every
@@ -691,6 +706,11 @@ service cloud.firestore {
       // client-updatable at all anymore. initChat() (MessagesView.tsx) only
       // writes on first creation; re-navigating to an existing conversation
       // performs no write.
+      //
+      // Create also refuses a pair when either participant's
+      // private/social.blockedUsers contains the other. That is the
+      // trusted boundary for new direct conversations; message sends are
+      // refused separately in sendMessage.
       allow create: if signedIn()
         && request.resource.data.keys().hasAll(['id', 'participants'])
         && request.resource.data.keys().hasOnly(
@@ -698,7 +718,10 @@ service cloud.firestore {
         && request.resource.data.id == chatId
         && request.resource.data.participants is list
         && request.resource.data.participants.size() == 2
-        && request.auth.uid in request.resource.data.participants;
+        && request.resource.data.participants[0] is string
+        && request.resource.data.participants[1] is string
+        && request.auth.uid in request.resource.data.participants
+        && !directChatIsBlocked(request.resource.data.participants);
       allow update: if false;
       // Direct client deletion disabled — deleteChat (functions/index.js) is
       // now the sole authoritative delete path: it re-verifies participant

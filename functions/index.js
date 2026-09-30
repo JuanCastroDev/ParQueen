@@ -1571,6 +1571,28 @@ exports.deleteChat = onCall(
   deleteChatHandler
 );
 
+// A block on either participant's users/{uid}/private/social.blockedUsers
+// list stops both directions. The lists are read inside the send
+// transaction, so a block that commits first is visible and a block that
+// races the send forces Firestore to retry the transaction. A missing doc
+// or a non-list blockedUsers value is no block. The denial does not say
+// which side stored the block.
+function blockedUsersList(snap) {
+  if (!snap.exists) return [];
+  const list = snap.get('blockedUsers');
+  return Array.isArray(list) ? list : [];
+}
+
+function participantIdIsUsable(uid) {
+  return typeof uid === 'string' && uid.length > 0 && uid.length <= 128 && !uid.includes('/');
+}
+
+async function usersAreBlocked(tx, uidA, uidB) {
+  const socialRef = (uid) => db.collection('users').doc(uid).collection('private').doc('social');
+  const [snapA, snapB] = await Promise.all([tx.get(socialRef(uidA)), tx.get(socialRef(uidB))]);
+  return blockedUsersList(snapA).includes(uidB) || blockedUsersList(snapB).includes(uidA);
+}
+
 async function sendMessageHandler(request) {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
 
@@ -1624,8 +1646,25 @@ async function sendMessageHandler(request) {
     if (existingMsgSnap.exists) {
       // Idempotent retry (double-click / network retry with the same
       // clientRequestId) — return the already-created message; do not
-      // duplicate the write or re-touch chat metadata.
+      // duplicate the write or re-touch chat metadata. A later block does
+      // not erase that historical message.
       return { id: messageRef.id };
+    }
+    if (!participantIdIsUsable(uid)) {
+      throw new HttpsError('permission-denied', 'Not a participant in this chat.');
+    }
+    const otherParticipants = [];
+    for (const participant of chatData.participants) {
+      if (participant === uid) continue;
+      if (!participantIdIsUsable(participant)) {
+        throw new HttpsError('permission-denied', 'Not a participant in this chat.');
+      }
+      otherParticipants.push(participant);
+    }
+    for (const otherUid of otherParticipants) {
+      if (await usersAreBlocked(tx, uid, otherUid)) {
+        throw new HttpsError('permission-denied', "You can't message this user.");
+      }
     }
     tx.set(messageRef, { senderId: uid, text: trimmedText, timestamp: FieldValue.serverTimestamp() });
     tx.set(chatRef, {

@@ -81,4 +81,36 @@ describe('ensureChatShell', () => {
     await expect(ensureChatShell(create, payload)).resolves.toBe('already-exists');
     expect(create).toHaveBeenCalledTimes(2);
   });
+
+  it('does not probe when create succeeds', async () => {
+    const create = vi.fn(async () => {});
+    const shellExists = vi.fn(async () => true);
+    await expect(ensureChatShell(create, payload, shellExists)).resolves.toBe('created');
+    expect(shellExists).not.toHaveBeenCalled();
+  });
+
+  it('treats a collision as already-exists only when the shell is readable', async () => {
+    const create = vi.fn(async () => {
+      throw Object.assign(new Error('Missing or insufficient permissions'), { code: 'permission-denied' });
+    });
+    const shellExists = vi.fn(async () => true);
+    await expect(ensureChatShell(create, payload, shellExists)).resolves.toBe('already-exists');
+    expect(shellExists).toHaveBeenCalledTimes(1);
+  });
+
+  it('rethrows a create denial when the shell is not readable (mutual block or other create refusal)', async () => {
+    const err = Object.assign(new Error('Missing or insufficient permissions'), { code: 'permission-denied' });
+    const create = vi.fn(async () => { throw err; });
+    const shellExists = vi.fn(async () => false);
+    await expect(ensureChatShell(create, payload, shellExists)).rejects.toBe(err);
+  });
+
+  it('rethrows a create denial when the readability probe is itself permission-denied', async () => {
+    const err = Object.assign(new Error('Missing or insufficient permissions'), { code: 'firestore/permission-denied' });
+    const create = vi.fn(async () => { throw err; });
+    const shellExists = vi.fn(async () => {
+      throw Object.assign(new Error('Missing or insufficient permissions'), { code: 'permission-denied' });
+    });
+    await expect(ensureChatShell(create, payload, shellExists)).rejects.toBe(err);
+  });
 });
