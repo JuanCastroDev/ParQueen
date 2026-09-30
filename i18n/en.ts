@@ -1059,6 +1059,8 @@ const en: Record<string, string> = {
     'notifications.setup_ios_title': 'Add ParQueen to your Home Screen',
     'notifications.setup_ios_body': 'On iPhone and iPad, parking alerts require opening ParQueen as a Home Screen web app.',
     'notifications.setup_ios_steps': 'In Safari, tap Share, choose Add to Home Screen, then open ParQueen and tap Enable again.',
+    'notifications.setup_ios_native_title': 'Parking alerts aren’t available yet on iPhone',
+    'notifications.setup_ios_native_body': 'Native parking alerts are not enabled in this TestFlight yet. You can still use ParQueen’s parking, map, and handoff features normally.',
     'notifications.setup_unsupported': 'Parking alerts are unavailable in this browser',
     'notifications.setup_unsupported_body': 'You can still use Nearby Activity for in-app parking updates.',
     'notifications.setup_denied': 'Parking alerts are blocked',

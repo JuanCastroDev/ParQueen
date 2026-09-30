@@ -243,6 +243,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
     );
     const notifNeedsAction = notifPresentation.action !== 'none'
         || notifPresentation.kind === 'ios_install_required'
+        || notifPresentation.kind === 'ios_native_unavailable'
         || notifPresentation.kind === 'unsupported';
     const notifCompact = !notifNeedsAction && notifPresentation.kind !== 'checking';
     // "LIVE" means a bounded subscription is actually attached and reporting.

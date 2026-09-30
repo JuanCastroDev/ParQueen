@@ -10,7 +10,7 @@ describe('resolveNotificationPath', () => {
     expect(resolveNotificationPath({ isNative: true, platform: 'android' })).toBe('native');
   });
 
-  it('keeps the browser path on Capacitor iOS so this phase does not change iOS push', () => {
+  it('keeps Capacitor iOS off the native push path', () => {
     expect(resolveNotificationPath({ isNative: true, platform: 'ios' })).toBe('browser');
   });
 });

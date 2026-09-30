@@ -35,6 +35,14 @@ describe('getNotificationsSummaryState', () => {
     expect(s.showRadius).toBe(true);
   });
 
+  it('reports the iOS native shell as unavailable rather than On or Off', () => {
+    const s = getNotificationsSummaryState(true, 1, {
+      capability: 'ios_native_unavailable', permission: 'unavailable', registration: 'not_registered',
+    });
+    expect(s.statusKey).toBe('settings.notif_unavailable');
+    expect(s.showRadius).toBe(false);
+  });
+
   it('reports unavailable separately from Off', () => {
     const s = getNotificationsSummaryState(true, 1, {
       capability: 'unsupported', permission: 'unavailable', registration: 'not_registered',

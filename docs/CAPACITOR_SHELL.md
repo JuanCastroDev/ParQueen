@@ -2,11 +2,12 @@
 
 Phase 1 adds a Capacitor iOS/Android shell around the existing Vite/React web app. The web/Firebase Hosting path is unchanged.
 
-## Provisional application ID
+## Application ID
 
-- **Proposed:** `app.parqueen` (reverse-DNS from `parqueen.app`)
-- Firebase Console currently has **only** the web app registered; no iOS/Android app IDs were reserved at Phase 1 creation.
-- Confirm with Juan before treating this ID as permanent (Apple/Google/Firebase registration).
+- **Locked:** `app.parqueen`
+- The Apple Developer explicit App ID `app.parqueen` is registered. Do not change this identifier.
+- The Android package `app.parqueen` is already registered in Firebase. See `docs/ANDROID_PHASE_2A.md`.
+- An iOS Firebase app registration is still a separate console step. It is not implied by the locked Apple bundle identifier.
 
 ## Prerequisites
 

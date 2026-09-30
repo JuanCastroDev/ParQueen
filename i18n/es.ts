@@ -1059,6 +1059,8 @@ const es: Record<string, string> = {
     'notifications.setup_ios_title': 'Añade ParQueen a tu pantalla de inicio',
     'notifications.setup_ios_body': 'En iPhone y iPad, las alertas requieren abrir ParQueen como una app web desde la pantalla de inicio.',
     'notifications.setup_ios_steps': 'En Safari, toca Compartir, elige Añadir a pantalla de inicio, abre ParQueen y vuelve a tocar Activar.',
+    'notifications.setup_ios_native_title': 'Las alertas de estacionamiento aún no están disponibles en el iPhone',
+    'notifications.setup_ios_native_body': 'Las alertas nativas aún no están activadas en este TestFlight. Puedes seguir usando el estacionamiento, el mapa y las entregas de ParQueen con normalidad.',
     'notifications.setup_unsupported': 'Las alertas de estacionamiento no están disponibles en este navegador',
     'notifications.setup_unsupported_body': 'Aún puedes usar Actividad cercana para ver actualizaciones dentro de la app.',
     'notifications.setup_denied': 'Las alertas de estacionamiento están bloqueadas',

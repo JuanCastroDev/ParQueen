@@ -195,6 +195,26 @@ describe('NotificationsView — contextual parking alerts', () => {
         expect(onEnableNotifications).toHaveBeenCalledTimes(1);
         act(() => renderer.unmount());
     });
+
+    it('shows native iOS TestFlight copy instead of Safari install steps', async () => {
+        const onEnableNotifications = vi.fn();
+        const renderer = await renderNotifications({
+            notificationRuntime: {
+                capability: 'ios_native_unavailable',
+                permission: 'unavailable',
+                registration: 'not_registered',
+            },
+            onEnableNotifications,
+            onRecheckNotifications: vi.fn(),
+        });
+        const rendered = JSON.stringify(renderer.toJSON());
+        expect(rendered).toContain('Parking alerts aren’t available yet on iPhone');
+        expect(rendered).not.toContain('Add to Home Screen');
+        expect(rendered).not.toContain('Safari');
+        expect(renderer.root.findAllByProps({ 'data-notification-action': 'enable' })).toHaveLength(0);
+        expect(onEnableNotifications).not.toHaveBeenCalled();
+        act(() => renderer.unmount());
+    });
 });
 
 const T0 = Date.parse('2026-08-26T12:00:00.000Z');

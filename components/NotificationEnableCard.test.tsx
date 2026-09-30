@@ -50,6 +50,23 @@ describe('NotificationEnableCard', () => {
     expect(onEnable).toHaveBeenCalledTimes(1);
   });
 
+  it('tells the installed iOS app that native alerts are not available yet', () => {
+    const renderer = TestRenderer.create(
+      <NotificationEnableCard
+        runtime={state({ capability: 'ios_native_unavailable', permission: 'unavailable' })}
+        productPreferenceEnabled
+        onEnable={vi.fn()}
+        onRecheck={vi.fn()}
+      />,
+    );
+    const rendered = text(renderer);
+    expect(rendered).toContain('Parking alerts aren’t available yet on iPhone');
+    expect(rendered).toContain('not enabled in this TestFlight yet');
+    expect(rendered).not.toContain('Add to Home Screen');
+    expect(rendered).not.toContain('Safari');
+    expect(renderer.root.findAllByProps({ 'data-notification-action': 'enable' })).toHaveLength(0);
+  });
+
   it('shows iPhone Home Screen education without exposing an enable action', () => {
     const renderer = TestRenderer.create(
       <NotificationEnableCard

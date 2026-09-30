@@ -14,6 +14,8 @@ const notificationLaunchKeys = [
   'notifications.setup_ios_title',
   'notifications.setup_ios_body',
   'notifications.setup_ios_steps',
+  'notifications.setup_ios_native_title',
+  'notifications.setup_ios_native_body',
   'notifications.setup_unsupported',
   'notifications.setup_unsupported_body',
   'notifications.setup_denied',

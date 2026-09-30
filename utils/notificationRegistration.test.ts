@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { resolveNotificationPath } from './notificationPlatform';
 import {
   createNotificationRegistrationService,
+  createParQueenNotificationRegistration,
   detectNotificationPlatform,
+  inspectBrowserNotificationPlatform,
   type NotificationRegistrationDependencies,
 } from './notificationRegistration';
+import type { NativePushPlugin } from './notificationNative';
 
 function dependencies(overrides: Partial<NotificationRegistrationDependencies> = {}) {
   const calls: string[] = [];
@@ -42,6 +46,18 @@ describe('notification platform detection', () => {
       platform: 'iPhone',
       maxTouchPoints: 5,
     })).toBe('ios_install_required');
+  });
+
+  it('treats a desktop browser with push APIs as supported', () => {
+    expect(detectNotificationPlatform({
+      notificationAvailable: true,
+      serviceWorkerAvailable: true,
+      pushManagerAvailable: true,
+      standalone: false,
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+      platform: 'Win32',
+      maxTouchPoints: 0,
+    })).toBe('supported');
   });
 
   it('treats the same iPhone launched standalone as capability eligible', () => {
@@ -96,7 +112,7 @@ describe('notification registration service', () => {
     expect(calls).not.toContain('getToken');
   });
 
-  it.each(['unsupported', 'ios_install_required'] as const)(
+  it.each(['unsupported', 'ios_install_required', 'ios_native_unavailable'] as const)(
     'does not request permission for %s',
     async (platform) => {
       const { deps, calls } = dependencies({ getPlatform: () => platform });
@@ -188,6 +204,64 @@ describe('notification registration service', () => {
     expect(calls.filter(call => call === 'onMessage')).toHaveLength(1);
     unsubscribe();
     expect(calls.filter(call => call === 'unsubscribe')).toHaveLength(1);
+  });
+
+  it('classifies the Capacitor iOS shell as unavailable before the Safari heuristic', () => {
+    expect(inspectBrowserNotificationPlatform({ isNative: true, platform: 'ios' })).toBe('ios_native_unavailable');
+    expect(inspectBrowserNotificationPlatform({ isNative: true, platform: 'ios' })).not.toBe('ios_install_required');
+  });
+
+  it('does not register native push from the Capacitor iOS shell', async () => {
+    const plugin = {
+      checkPermissions: vi.fn(async () => ({ receive: 'prompt' })),
+      requestPermissions: vi.fn(async () => ({ receive: 'granted' })),
+      register: vi.fn(async () => undefined),
+      unregister: vi.fn(async () => undefined),
+      createChannel: vi.fn(async () => undefined),
+      addListener: vi.fn(async () => ({ remove: vi.fn(async () => undefined) })),
+    } satisfies NativePushPlugin;
+    const env = { isNative: true, platform: 'ios' as const };
+    const path = resolveNotificationPath(env);
+    expect(path).toBe('browser');
+    const service = createParQueenNotificationRegistration(path, plugin, env);
+
+    await expect(service.inspect()).resolves.toEqual({
+      capability: 'ios_native_unavailable',
+      permission: 'unavailable',
+      registration: 'not_registered',
+    });
+    await expect(service.enable('user-a')).resolves.toMatchObject({
+      capability: 'ios_native_unavailable',
+      registration: 'not_registered',
+    });
+    await service.refreshGranted('user-a', true);
+
+    expect(plugin.register).not.toHaveBeenCalled();
+    expect(plugin.requestPermissions).not.toHaveBeenCalled();
+    expect(plugin.checkPermissions).not.toHaveBeenCalled();
+  });
+
+  it('keeps Android on the native plugin path without registering during inspect', async () => {
+    const plugin = {
+      checkPermissions: vi.fn(async () => ({ receive: 'prompt' })),
+      requestPermissions: vi.fn(async () => ({ receive: 'granted' })),
+      register: vi.fn(async () => undefined),
+      unregister: vi.fn(async () => undefined),
+      createChannel: vi.fn(async () => undefined),
+      addListener: vi.fn(async () => ({ remove: vi.fn(async () => undefined) })),
+    } satisfies NativePushPlugin;
+    const env = { isNative: true, platform: 'android' as const };
+    expect(resolveNotificationPath(env)).toBe('native');
+    const service = createParQueenNotificationRegistration('native', plugin, env);
+
+    await expect(service.inspect()).resolves.toMatchObject({
+      capability: 'supported',
+      permission: 'default',
+      registration: 'not_registered',
+    });
+    expect(plugin.checkPermissions).toHaveBeenCalledTimes(1);
+    expect(plugin.register).not.toHaveBeenCalled();
+    expect(plugin.requestPermissions).not.toHaveBeenCalled();
   });
 
   it('keeps Web/PWA subscribeOpen as a no-op so the service-worker listener stays authoritative', async () => {

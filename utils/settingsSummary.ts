@@ -32,7 +32,8 @@ export function getNotificationsSummaryState(
     const presentation = deriveNotificationPresentation(enabled, runtime);
     const ready = presentation.kind === 'enabled';
     const unavailable = presentation.kind === 'unsupported'
-      || presentation.kind === 'ios_install_required';
+      || presentation.kind === 'ios_install_required'
+      || presentation.kind === 'ios_native_unavailable';
     return {
       statusKey: ready
         ? 'settings.notif_on'
