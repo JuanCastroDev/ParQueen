@@ -3,7 +3,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 /**
  * Phase 1 Capacitor shell config.
- * Provisional appId `app.parqueen` (derived from parqueen.app) — confirm before treating as permanent.
+ * Locked appId `app.parqueen`. The Apple Developer explicit App ID is registered. Do not change it.
  * Loads the Vite `dist/` bundle only. Do not set `server.url` (no live-reload / no remote Hosting shell).
  *
  * PushNotifications.presentationOptions is empty so Android foreground
