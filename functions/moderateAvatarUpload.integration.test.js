@@ -17,6 +17,8 @@ const { getStorage } = require('firebase-admin/storage');
 const { requireEmulatorProjectId } = require('./emulatorProjectId');
 const PROJECT_ID = requireEmulatorProjectId();
 const BUCKET     = `${PROJECT_ID}.appspot.com`;
+// Not the default bucket, so onObjectFinalized does not run for manual fn.run cases.
+const MANUAL_RUN_BUCKET = `${PROJECT_ID}-manual-run.appspot.com`;
 const APP_NAME   = '__moderation_intg__';
 
 const testApp =
@@ -25,6 +27,7 @@ const testApp =
 
 const db      = getFirestore(testApp);
 const bucket  = getStorage(testApp).bucket(BUCKET);
+const manualRunBucket = getStorage(testApp).bucket(MANUAL_RUN_BUCKET);
 
 // Load the function module — this also initialises the default Firebase app
 // which points at the emulators (env vars set by firebase emulators:exec).
@@ -75,14 +78,21 @@ async function uploadOriginal(uid, uploadId, bytes, contentType = 'image/jpeg') 
     return file;
 }
 
+// Same object path as uploadOriginal, but outside the bucket the Storage trigger watches.
+async function uploadOriginalForManualRun(uid, uploadId, bytes, contentType = 'image/jpeg') {
+    const file = manualRunBucket.file(`avatarUploads/${uid}/${uploadId}/original`);
+    await file.save(bytes, { metadata: { contentType }, resumable: false });
+    return file;
+}
+
 async function buildEvent(uid, uploadId, contentType = 'image/jpeg') {
     const path = `avatarUploads/${uid}/${uploadId}/original`;
-    const [meta] = await bucket.file(path).getMetadata().catch(() => [{ generation: '1' }]);
+    const [meta] = await manualRunBucket.file(path).getMetadata().catch(() => [{ generation: '1' }]);
     return {
         id: `evt-${uid}-${uploadId}`,
         data: {
             name: path,
-            bucket: BUCKET,
+            bucket: MANUAL_RUN_BUCKET,
             generation: meta.generation || '1',
             contentType,
             size: '1024',
@@ -140,9 +150,9 @@ function pendingVisionHook() {
  * strongly consistent. Polling keeps the assertion exactly as strong — the object
  * must still be gone — while tolerating the emulator's observation lag.
  */
-async function expectObjectGone(path, label) {
+async function expectObjectGone(path, label, storage = bucket) {
     const gone = await waitFor(async () => {
-        const [exists] = await bucket.file(path).exists();
+        const [exists] = await storage.file(path).exists();
         return exists === false;
     }, { timeoutMs: 20000, intervalMs: 250 }).catch(() => false);
     expect(gone, `${label || path} should have been deleted`).toBe(true);
@@ -164,6 +174,9 @@ async function nuke(uid) {
     await bucket.deleteFiles({ prefix: `avatarUploads/${uid}/` }).catch(() => {});
     await bucket.deleteFiles({ prefix: `avatarCandidates/${uid}/` }).catch(() => {});
     await bucket.deleteFiles({ prefix: `avatars/${uid}` }).catch(() => {});
+    await manualRunBucket.deleteFiles({ prefix: `avatarUploads/${uid}/` }).catch(() => {});
+    await manualRunBucket.deleteFiles({ prefix: `avatarCandidates/${uid}/` }).catch(() => {});
+    await manualRunBucket.deleteFiles({ prefix: `avatars/${uid}` }).catch(() => {});
 }
 
 async function setPending(uid, uploadId) {
@@ -198,7 +211,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const uid = freshUid(); const upId = freshUploadId();
         await nuke(uid);
         await db.doc(`users/${uid}`).set({ id: uid });
-        await uploadOriginal(uid, upId, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId, JPEG_1x1, 'image/jpeg');
         hooks.visionSafeSearch = safeMock();
         const event = await buildEvent(uid, upId, 'image/jpeg');
         await runFn(event);
@@ -209,8 +222,8 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         expect(userSnap.data()?.avatarUrl).toBeTruthy();
 
         // Source and candidate must be deleted after approval
-        await expectObjectGone(`avatarUploads/${uid}/${upId}/original`, 'MOD-01 source');
-        await expectObjectGone(`avatarCandidates/${uid}/${upId}.webp`, 'MOD-01 candidate');
+        await expectObjectGone(`avatarUploads/${uid}/${upId}/original`, 'MOD-01 source', manualRunBucket);
+        await expectObjectGone(`avatarCandidates/${uid}/${upId}.webp`, 'MOD-01 candidate', manualRunBucket);
 
         await nuke(uid);
     });
@@ -220,7 +233,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const uid = freshUid(); const upId = freshUploadId();
         await nuke(uid);
         await db.doc(`users/${uid}`).set({ id: uid });
-        await uploadOriginal(uid, upId, PNG_1x1, 'image/png');
+        await uploadOriginalForManualRun(uid, upId, PNG_1x1, 'image/png');
         hooks.visionSafeSearch = safeMock();
         await runFn(await buildEvent(uid, upId, 'image/png'));
         const mod = await getMod(uid);
@@ -233,7 +246,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const uid = freshUid(); const upId = freshUploadId();
         await nuke(uid);
         await db.doc(`users/${uid}`).set({ id: uid });
-        await uploadOriginal(uid, upId, WEBP_1x1, 'image/webp');
+        await uploadOriginalForManualRun(uid, upId, WEBP_1x1, 'image/webp');
         hooks.visionSafeSearch = safeMock();
         await runFn(await buildEvent(uid, upId, 'image/webp'));
         const mod = await getMod(uid);
@@ -245,7 +258,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
     it('MOD-04: SVG bytes are rejected (invalid_format) before processing', async () => {
         const uid = freshUid(); const upId = freshUploadId();
         await nuke(uid);
-        await uploadOriginal(uid, upId, SVG_BYTES, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId, SVG_BYTES, 'image/jpeg');
         hooks.visionSafeSearch = null; // must not be called
         await runFn(await buildEvent(uid, upId));
         const mod = await getMod(uid);
@@ -258,7 +271,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
     it('MOD-05: HTML/XML spoofed as JPEG is rejected (invalid_format)', async () => {
         const uid = freshUid(); const upId = freshUploadId();
         await nuke(uid);
-        await uploadOriginal(uid, upId, HTML_SPOOF, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId, HTML_SPOOF, 'image/jpeg');
         await runFn(await buildEvent(uid, upId));
         expect((await getMod(uid))?.failureReason).toBe('invalid_format');
         await nuke(uid);
@@ -268,7 +281,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
     it('MOD-06: corrupt JPEG triggers retry_pending (processing_error)', async () => {
         const uid = freshUid(); const upId = freshUploadId();
         await nuke(uid);
-        await uploadOriginal(uid, upId, CORRUPT_JPEG, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId, CORRUPT_JPEG, 'image/jpeg');
         hooks.visionSafeSearch = null;
         let threw = false;
         try { await runFn(await buildEvent(uid, upId)); } catch (_) { threw = true; }
@@ -305,13 +318,13 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const srcMeta = await sharp(EXIF_JPEG).metadata();
         expect(srcMeta.exif).toBeDefined(); // confirm the fixture actually has EXIF
 
-        await uploadOriginal(uid, upId, EXIF_JPEG, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId, EXIF_JPEG, 'image/jpeg');
         hooks.visionSafeSearch = safeMock();
         await runFn(await buildEvent(uid, upId));
         const mod = await getMod(uid);
         expect(mod?.status).toBe('approved');
 
-        const [pubBytes] = await bucket.file(`avatars/${uid}`).download();
+        const [pubBytes] = await manualRunBucket.file(`avatars/${uid}`).download();
         const pubMeta = await sharp(pubBytes).metadata();
         expect(pubMeta.format).toBe('webp');
         expect(pubMeta.width).toBeLessThanOrEqual(512);
@@ -331,13 +344,13 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const uid = freshUid(); const upId = freshUploadId();
         await nuke(uid);
         await db.doc(`users/${uid}`).set({ id: uid });
-        await uploadOriginal(uid, upId, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId, JPEG_1x1, 'image/jpeg');
         hooks.visionSafeSearch = safeMock('VERY_LIKELY', 'VERY_UNLIKELY');
         await runFn(await buildEvent(uid, upId));
         const mod = await getMod(uid);
         expect(mod?.status).toBe('rejected');
         expect(mod?.failureReason).toBe('content_policy');
-        await expectObjectGone(`avatarCandidates/${uid}/${upId}.webp`, 'MOD-10 candidate');
+        await expectObjectGone(`avatarCandidates/${uid}/${upId}.webp`, 'MOD-10 candidate', manualRunBucket);
         await nuke(uid);
     });
 
@@ -346,7 +359,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const uid = freshUid(); const upId = freshUploadId();
         await nuke(uid);
         await db.doc(`users/${uid}`).set({ id: uid });
-        await uploadOriginal(uid, upId, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId, JPEG_1x1, 'image/jpeg');
         hooks.visionSafeSearch = safeMock('VERY_UNLIKELY', 'LIKELY');
         await runFn(await buildEvent(uid, upId));
         expect((await getMod(uid))?.status).toBe('rejected');
@@ -357,7 +370,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
     it('MOD-12: null Vision annotation fails closed (retry_pending, throws)', async () => {
         const uid = freshUid(); const upId = freshUploadId();
         await nuke(uid);
-        await uploadOriginal(uid, upId, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId, JPEG_1x1, 'image/jpeg');
         hooks.visionSafeSearch = async () => null;
         let threw = false;
         try { await runFn(await buildEvent(uid, upId)); } catch (_) { threw = true; }
@@ -372,7 +385,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
     it('MOD-13: Vision API error sets retry_pending, increments retryCount, and rethrows', async () => {
         const uid = freshUid(); const upId = freshUploadId();
         await nuke(uid);
-        await uploadOriginal(uid, upId, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId, JPEG_1x1, 'image/jpeg');
         hooks.visionSafeSearch = async () => { throw Object.assign(new Error('quota'), { code: 'resource-exhausted' }); };
         let threw = false;
         try { await runFn(await buildEvent(uid, upId)); } catch (_) { threw = true; }
@@ -395,7 +408,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
             processedPath: null, failureReason: 'vision_error',
             createdAt: Timestamp.now(), updatedAt: Timestamp.now(),
         });
-        await uploadOriginal(uid, upId, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId, JPEG_1x1, 'image/jpeg');
         hooks.visionSafeSearch = async () => { throw new Error('quota'); };
         let threw = false;
         try { await runFn(await buildEvent(uid, upId)); } catch (_) { threw = true; }
@@ -411,7 +424,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const uid = freshUid(); const upId = freshUploadId();
         await nuke(uid);
         await db.doc(`users/${uid}`).set({ id: uid });
-        await uploadOriginal(uid, upId, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId, JPEG_1x1, 'image/jpeg');
         const event = await buildEvent(uid, upId);
 
         // First attempt: Vision throws
@@ -432,7 +445,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const uid = freshUid(); const upId = freshUploadId();
         await nuke(uid);
         await db.doc(`users/${uid}`).set({ id: uid });
-        await uploadOriginal(uid, upId, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId, JPEG_1x1, 'image/jpeg');
         hooks.visionSafeSearch = safeMock();
         const event = await buildEvent(uid, upId);
 
@@ -455,8 +468,8 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         await nuke(uid);
         await db.doc(`users/${uid}`).set({ id: uid });
 
-        await uploadOriginal(uid, upId1, JPEG_1x1, 'image/jpeg');
-        await uploadOriginal(uid, upId2, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId1, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId2, JPEG_1x1, 'image/jpeg');
 
         // Upload-2 event runs first and claims the moderation slot
         hooks.visionSafeSearch = safeMock();
@@ -482,8 +495,8 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
 
         // Upload-1: process through Vision (approved path) but before the final
         // approval transaction, simulate upload-2 claiming the slot.
-        await uploadOriginal(uid, upId1, JPEG_1x1, 'image/jpeg');
-        await uploadOriginal(uid, upId2, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId1, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId2, JPEG_1x1, 'image/jpeg');
 
         // Simulate: upload-2 claims the doc between our Vision pass and approval txn.
         hooks.visionSafeSearch = async () => {
@@ -544,7 +557,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const uid = freshUid(); const upId = freshUploadId();
         await nuke(uid);
         await db.doc(`users/${uid}`).set({ id: uid });
-        await uploadOriginal(uid, upId, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId, JPEG_1x1, 'image/jpeg');
 
         // Vision hangs until we release it, so we can observe the mid-flight state.
         const vision = pendingVisionHook();
@@ -576,7 +589,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const uid = freshUid(); const upId = freshUploadId();
         await nuke(uid);
         await db.doc(`users/${uid}`).set({ id: uid });
-        await uploadOriginal(uid, upId, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId, JPEG_1x1, 'image/jpeg');
         hooks.visionSafeSearch = safeMock();
         await runFn(await buildEvent(uid, upId));
         const snap = await db.doc(`users/${uid}`).get();
@@ -603,7 +616,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const uid = freshUid(); const upId = freshUploadId();
         await nuke(uid);
         await db.doc(`users/${uid}`).set({ id: uid });
-        await uploadOriginal(uid, upId, SVG_BYTES, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId, SVG_BYTES, 'image/jpeg');
         await runFn(await buildEvent(uid, upId));
         expect((await getMod(uid))?.status).toBe('rejected');
 
@@ -621,7 +634,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const uid = freshUid(); const upId = freshUploadId();
         await nuke(uid);
         await db.doc(`users/${uid}`).set({ id: uid });
-        await uploadOriginal(uid, upId, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId, JPEG_1x1, 'image/jpeg');
         hooks.visionSafeSearch = safeMock();
         await runFn(await buildEvent(uid, upId));
         const mod = await getMod(uid);
@@ -630,10 +643,8 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
             uploadId: upId,
             status: 'approved',
         });
-        // retryCount must be a non-negative integer; on Linux CI the Storage emulator
-        // may auto-trigger moderateAvatarUpload before fn.run() starts (the emulator
-        // sub-process has its own _hooks and calls the real Vision API which fails),
-        // incrementing retryCount to 1 before fn.run() succeeds. Schema: ≥0.
+        // retryCount is a non-negative integer. Manual-run uploads use a bucket the
+        // Storage trigger does not watch, so this fn.run is the only invocation.
         expect(mod?.retryCount).toBeGreaterThanOrEqual(0);
         expect(mod?.sourcePath).toContain('avatarUploads');
         expect(mod?.createdAt).toBeTruthy();
@@ -657,7 +668,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const uid = freshUid(); const upIdA = freshUploadId(); const upIdB = freshUploadId();
         await nuke(uid);
         await db.doc(`users/${uid}`).set({ id: uid });
-        await uploadOriginal(uid, upIdA, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upIdA, JPEG_1x1, 'image/jpeg');
         // Client registered B as the latest intended upload before A's event arrived.
         await setPending(uid, upIdB);
         let visionCalled = false;
@@ -676,8 +687,8 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const uid = freshUid(); const upIdA = freshUploadId(); const upIdB = freshUploadId();
         await nuke(uid);
         await db.doc(`users/${uid}`).set({ id: uid });
-        await uploadOriginal(uid, upIdA, JPEG_1x1, 'image/jpeg');
-        await uploadOriginal(uid, upIdB, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upIdA, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upIdB, JPEG_1x1, 'image/jpeg');
         await setPending(uid, upIdB);
         hooks.visionSafeSearch = safeMock();
         // A's event arrives first and is skipped.
@@ -701,8 +712,8 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const uid = freshUid(); const upIdA = freshUploadId(); const upIdB = freshUploadId();
         await nuke(uid);
         await db.doc(`users/${uid}`).set({ id: uid });
-        await uploadOriginal(uid, upIdA, JPEG_1x1, 'image/jpeg');
-        await uploadOriginal(uid, upIdB, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upIdA, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upIdB, JPEG_1x1, 'image/jpeg');
         // B approved first.
         await setPending(uid, upIdB);
         hooks.visionSafeSearch = safeMock();
@@ -727,7 +738,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         // First attempt: pendingUploadId written but file never uploaded (simulates network abort).
         await setPending(uid, upIdAborted);
         // Client retries: overwrites pendingUploadId and uploads a real file.
-        await uploadOriginal(uid, upIdResume, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upIdResume, JPEG_1x1, 'image/jpeg');
         await setPending(uid, upIdResume);
         hooks.visionSafeSearch = safeMock();
         await runFn(await buildEvent(uid, upIdResume));
@@ -752,14 +763,14 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
             processedPath: null, failureReason: 'vision_error',
             createdAt: Timestamp.now(), updatedAt: Timestamp.now(),
         });
-        await uploadOriginal(uid, upId, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId, JPEG_1x1, 'image/jpeg');
         let threw = false;
         try { await runFn(await buildEvent(uid, upId)); } catch (_) { threw = true; }
         expect(threw).toBe(false); // acknowledged — no throw
         const mod = await getMod(uid);
         expect(mod?.status).toBe('failed');
         expect(mod?.failureReason).toBe('max_retries_exhausted');
-        await expectObjectGone(`avatarUploads/${uid}/${upId}/original`, 'MOD-31 source');
+        await expectObjectGone(`avatarUploads/${uid}/${upId}/original`, 'MOD-31 source', manualRunBucket);
         await nuke(uid);
     });
 
@@ -768,13 +779,13 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const uid = freshUid(); const upIdA = freshUploadId(); const upIdB = freshUploadId();
         await nuke(uid);
         await db.doc(`users/${uid}`).set({ id: uid });
-        await uploadOriginal(uid, upIdA, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upIdA, JPEG_1x1, 'image/jpeg');
         // Register B as the current intended upload before A's event fires.
         await setPending(uid, upIdB);
         hooks.visionSafeSearch = safeMock();
         await runFn(await buildEvent(uid, upIdA));
         expect(await getMod(uid)).toBeNull(); // A was skipped entirely
-        await expectObjectGone(`avatarUploads/${uid}/${upIdA}/original`, 'MOD-32 source A');
+        await expectObjectGone(`avatarUploads/${uid}/${upIdA}/original`, 'MOD-32 source A', manualRunBucket);
         await nuke(uid);
     });
 
@@ -783,8 +794,8 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const uid = freshUid(); const upId1 = freshUploadId(); const upId2 = freshUploadId();
         await nuke(uid);
         await db.doc(`users/${uid}`).set({ id: uid });
-        await uploadOriginal(uid, upId1, JPEG_1x1, 'image/jpeg');
-        await uploadOriginal(uid, upId2, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId1, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId2, JPEG_1x1, 'image/jpeg');
         hooks.visionSafeSearch = async () => {
             // Inject a newer upload mid-flight by overwriting the moderation slot.
             await db.doc(`avatarModeration/${uid}`).set({
@@ -797,8 +808,8 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         };
         await runFn(await buildEvent(uid, upId1));
         // Upload-1's approval was aborted; both its objects must be deleted.
-        await expectObjectGone(`avatarUploads/${uid}/${upId1}/original`, 'MOD-33 source');
-        await expectObjectGone(`avatarCandidates/${uid}/${upId1}.webp`, 'MOD-33 candidate');
+        await expectObjectGone(`avatarUploads/${uid}/${upId1}/original`, 'MOD-33 source', manualRunBucket);
+        await expectObjectGone(`avatarCandidates/${uid}/${upId1}.webp`, 'MOD-33 candidate', manualRunBucket);
         await nuke(uid);
     });
 
@@ -852,7 +863,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         await db.doc(`users/${uid}`).set({ id: uid });
 
         // First upload: approved.
-        await uploadOriginal(uid, upId1, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId1, JPEG_1x1, 'image/jpeg');
         hooks.visionSafeSearch = safeMock();
         await runFn(await buildEvent(uid, upId1));
         const urlBefore = (await db.doc(`users/${uid}`).get()).data()?.avatarUrl;
@@ -860,7 +871,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
 
         // Second upload: reset moderation slot then reject via content_policy.
         await db.doc(`avatarModeration/${uid}`).delete();
-        await uploadOriginal(uid, upId2, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId2, JPEG_1x1, 'image/jpeg');
         hooks.visionSafeSearch = safeMock('VERY_LIKELY', 'VERY_UNLIKELY');
         await runFn(await buildEvent(uid, upId2));
         expect((await getMod(uid))?.status).toBe('rejected');
@@ -877,7 +888,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         await db.doc(`users/${uid}`).set({ id: uid });
 
         // First approval.
-        await uploadOriginal(uid, upId1, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId1, JPEG_1x1, 'image/jpeg');
         hooks.visionSafeSearch = safeMock();
         await runFn(await buildEvent(uid, upId1));
         const url1 = (await db.doc(`users/${uid}`).get()).data()?.avatarUrl;
@@ -885,7 +896,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
 
         // Second approval — reset slot, upload again.
         await db.doc(`avatarModeration/${uid}`).delete();
-        await uploadOriginal(uid, upId2, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId2, JPEG_1x1, 'image/jpeg');
         hooks.visionSafeSearch = safeMock();
         await runFn(await buildEvent(uid, upId2));
         const url2 = (await db.doc(`users/${uid}`).get()).data()?.avatarUrl;
@@ -901,7 +912,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const uid = freshUid(); const upId = freshUploadId();
         await nuke(uid);
         await db.doc(`users/${uid}`).set({ id: uid });
-        await uploadOriginal(uid, upId, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, upId, JPEG_1x1, 'image/jpeg');
         hooks.visionSafeSearch = safeMock();
         await runFn(await buildEvent(uid, upId));
         const url = (await db.doc(`users/${uid}`).get()).data()?.avatarUrl;
