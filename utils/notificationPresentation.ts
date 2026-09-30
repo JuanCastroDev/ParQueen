@@ -6,6 +6,7 @@ export type NotificationPresentationKind =
   | 'enabled'
   | 'off'
   | 'ios_install_required'
+  | 'ios_native_unavailable'
   | 'unsupported'
   | 'denied'
   | 'registration_failed';
@@ -20,6 +21,9 @@ export function deriveNotificationPresentation(
   runtime: NotificationRuntimeState | null,
 ): NotificationPresentation {
   if (!runtime) return { kind: 'checking', action: 'none' };
+  if (runtime.capability === 'ios_native_unavailable') {
+    return { kind: 'ios_native_unavailable', action: 'none' };
+  }
   if (runtime.capability === 'ios_install_required') {
     return { kind: 'ios_install_required', action: 'none' };
   }

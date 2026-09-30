@@ -4,9 +4,18 @@ import { deleteToken, getToken, onMessage, type MessagePayload, type Messaging }
 import { db, getFCM } from '../firebaseConfig';
 import { createNativeNotificationRegistrationService, type NativePushPlugin } from './notificationNative';
 import { FCM_OWNER_UID_KEY, FCM_OWNER_VERSION, FCM_OWNER_VERSION_KEY } from './notificationOwnership';
-import { resolveNotificationPath, type NotificationPath } from './notificationPlatform';
+import {
+  readNotificationPlatformEnv,
+  resolveNotificationPath,
+  type NotificationPath,
+  type NotificationPlatformEnv,
+} from './notificationPlatform';
 
-export type NotificationCapability = 'supported' | 'ios_install_required' | 'unsupported';
+export type NotificationCapability =
+  | 'supported'
+  | 'ios_install_required'
+  | 'ios_native_unavailable'
+  | 'unsupported';
 export type NotificationPermissionState = NotificationPermission | 'unavailable';
 export type NotificationRegistrationState = 'not_registered' | 'registered' | 'failed';
 
@@ -58,7 +67,12 @@ export function detectNotificationPlatform(input: NotificationPlatformInput): No
   return 'supported';
 }
 
-export function inspectBrowserNotificationPlatform(): NotificationCapability {
+export function inspectBrowserNotificationPlatform(
+  env: NotificationPlatformEnv = readNotificationPlatformEnv(),
+): NotificationCapability {
+  // The installed Capacitor shell has an iPhone user agent and is not a
+  // standalone PWA. Classify it before the Safari Home Screen heuristic.
+  if (env.isNative && env.platform === 'ios') return 'ios_native_unavailable';
   if (typeof window === 'undefined' || typeof navigator === 'undefined') return 'unsupported';
   const standalone = window.matchMedia?.('(display-mode: standalone)').matches
     || (navigator as Navigator & { standalone?: boolean }).standalone === true;
@@ -202,6 +216,7 @@ const browserLocalStorage = {
 export function createParQueenNotificationRegistration(
   path: NotificationPath = resolveNotificationPath(),
   nativePlugin: NativePushPlugin = PushNotifications,
+  platformEnv?: NotificationPlatformEnv,
 ): NotificationRegistrationService {
   if (path === 'native') {
     return createNativeNotificationRegistrationService({
@@ -212,7 +227,7 @@ export function createParQueenNotificationRegistration(
   }
 
   return createNotificationRegistrationService({
-    getPlatform: inspectBrowserNotificationPlatform,
+    getPlatform: () => inspectBrowserNotificationPlatform(platformEnv ?? readNotificationPlatformEnv()),
     getPermission: () => typeof Notification === 'undefined' ? 'unavailable' : Notification.permission,
     requestPermission: () => Notification.requestPermission(),
     getMessaging: getFCM,

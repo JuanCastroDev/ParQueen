@@ -30,6 +30,8 @@ export const NotificationEnableCard: React.FC<NotificationEnableCardProps> = ({
         return { title: t('notifications.setup_enabled'), body: t('notifications.setup_enabled_body') };
       case 'ios_install_required':
         return { title: t('notifications.setup_ios_title'), body: t('notifications.setup_ios_body') };
+      case 'ios_native_unavailable':
+        return { title: t('notifications.setup_ios_native_title'), body: t('notifications.setup_ios_native_body') };
       case 'unsupported':
         return { title: t('notifications.setup_unsupported'), body: t('notifications.setup_unsupported_body') };
       case 'denied':

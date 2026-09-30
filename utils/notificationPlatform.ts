@@ -15,7 +15,8 @@ export const readNotificationPlatformEnv = (): NotificationPlatformEnv => ({
 /**
  * Web/PWA keep Firebase Web Messaging. Capacitor Android uses the official
  * `@capacitor/push-notifications` plugin. Capacitor iOS stays on the browser
- * path in this phase so we do not broaden into iOS native push / APNs.
+ * path and does not register for APNs. Native-shell availability is classified
+ * separately so the installed app does not inherit Safari Home Screen guidance.
  */
 export const resolveNotificationPath = (
   env: NotificationPlatformEnv = readNotificationPlatformEnv(),

@@ -20,6 +20,9 @@ describe('notification runtime presentation', () => {
 
   it('keeps platform, permission, and registration failures distinct', () => {
     expect(deriveNotificationPresentation(true, {
+      capability: 'ios_native_unavailable', permission: 'unavailable', registration: 'not_registered',
+    })).toEqual({ kind: 'ios_native_unavailable', action: 'none' });
+    expect(deriveNotificationPresentation(true, {
       capability: 'ios_install_required', permission: 'unavailable', registration: 'not_registered',
     })).toEqual({ kind: 'ios_install_required', action: 'none' });
     expect(deriveNotificationPresentation(true, {
