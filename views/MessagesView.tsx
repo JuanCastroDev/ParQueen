@@ -429,6 +429,14 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
           await ensureChatShell(
             (shell) => setDoc(doc(db, 'chats', shell.id), shell),
             payload,
+            async () => {
+              // Only after a create collision. A missing parent is
+              // permission-denied, which must surface as open-failed
+              // rather than a phantom thread (mutual block, or any
+              // other create denial).
+              const snap = await getDoc(doc(db, 'chats', chatId));
+              return snap.exists();
+            },
           );
         } catch (e: any) {
           if (cancelled) return;
