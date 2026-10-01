@@ -1,0 +1,225 @@
+name: iOS Signing Readiness
+
+# Stage B preparation only.
+# Confirms the Xcode 26 headless signing surface and the current Release
+# project settings. Does not sign, archive, export, upload, or contact Apple.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  readiness:
+    name: signing readiness
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: macOS and Xcode toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== sw_vers ==="
+          sw_vers
+          echo "=== uname -m ==="
+          uname -m
+          echo "=== xcode-select -p ==="
+          xcode-select -p
+          echo "=== xcodebuild -version ==="
+          xcodebuild -version
+
+          XCODE_VERSION="$(xcodebuild -version | awk '/^Xcode / { print $2 }')"
+          XCODE_MAJOR="${XCODE_VERSION%%.*}"
+          echo "Selected Xcode version: ${XCODE_VERSION}"
+          echo "Selected Xcode major: ${XCODE_MAJOR}"
+          if ! [[ "${XCODE_MAJOR}" =~ ^[0-9]+$ ]] || [ "${XCODE_MAJOR}" -lt 26 ]; then
+            echo "::error::Xcode major version '${XCODE_MAJOR}' is below 26 (selected ${XCODE_VERSION})."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Install npm 10
+        run: npm install -g npm@10
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Assert Release signing configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          PBX="ios/App/App.xcodeproj/project.pbxproj"
+          test -f "${PBX}"
+          test -f ios/App/App/Info.plist
+          test -f ios/App/CapApp-SPM/Package.swift
+
+          BUNDLES="$(grep "PRODUCT_BUNDLE_IDENTIFIER = " "${PBX}" | sed -E 's/.*PRODUCT_BUNDLE_IDENTIFIER = //; s/;//g; s/[[:space:]]//g' | sort -u)"
+          if [ "${BUNDLES}" != "app.parqueen" ]; then
+            echo "::error::PRODUCT_BUNDLE_IDENTIFIER is not exactly app.parqueen."
+            printf '%s\n' "${BUNDLES}"
+            exit 1
+          fi
+
+          for setting in "MARKETING_VERSION = 1.0;" "CURRENT_PROJECT_VERSION = 1;" "IPHONEOS_DEPLOYMENT_TARGET = 15.0;" "CODE_SIGN_STYLE = Automatic;"; do
+            if ! grep -F -q "${setting}" "${PBX}"; then
+              echo "::error::Missing expected project setting: ${setting}"
+              exit 1
+            fi
+          done
+
+          if grep -R -n "DEVELOPMENT_TEAM" ios --include='*.pbxproj' --include='*.xcconfig' --include='*.plist'; then
+            echo "::error::DEVELOPMENT_TEAM must stay unset in source. Stage C passes it from APPLE_TEAM_ID."
+            exit 1
+          fi
+
+          if grep -R -n "PROVISIONING_PROFILE" ios --include='*.pbxproj' --include='*.xcconfig' --include='*.plist'; then
+            echo "::error::A provisioning profile setting is present."
+            exit 1
+          fi
+
+          if grep -R -n "CODE_SIGN_ENTITLEMENTS" ios --include='*.pbxproj' --include='*.xcconfig' --include='*.plist'; then
+            echo "::error::CODE_SIGN_ENTITLEMENTS is present."
+            exit 1
+          fi
+
+          ENTITLEMENTS="$(find ios -name '*.entitlements' -print || true)"
+          if [ -n "${ENTITLEMENTS}" ]; then
+            echo "::error::An entitlements file is present."
+            printf '%s\n' "${ENTITLEMENTS}"
+            exit 1
+          fi
+
+          if grep -R -n "aps-environment" ios --include='*.plist' --include='*.entitlements' --include='*.pbxproj' --include='*.xcconfig'; then
+            echo "::error::aps-environment is present. First TestFlight does not enable Push Notifications."
+            exit 1
+          fi
+
+          CREDENTIAL_FILES="$(find . -path './node_modules' -prune -o -path './.git' -prune -o -type f \( -name '*.p8' -o -name '*.p12' -o -name '*.mobileprovision' -o -name '*.cer' \) -print)"
+          if [ -n "${CREDENTIAL_FILES}" ]; then
+            echo "::error::Signing material is present in the checkout."
+            printf '%s\n' "${CREDENTIAL_FILES}"
+            exit 1
+          fi
+
+          echo "Release signing configuration matches the unsigned Stage A baseline."
+
+      - name: Confirm scheme App
+        shell: bash
+        run: |
+          set -euo pipefail
+          LIST="${RUNNER_TEMP}/xcodebuild-list.txt"
+          xcodebuild -list -project ios/App/App.xcodeproj > "${LIST}"
+          cat "${LIST}"
+          SCHEMES="$(awk '/^[[:space:]]*Schemes:/{flag=1;next} flag && /^[[:space:]]*$/{exit} flag' "${LIST}")"
+          echo "=== schemes ==="
+          printf '%s\n' "${SCHEMES}"
+          if ! printf '%s\n' "${SCHEMES}" | grep -E -q '^[[:space:]]+App$'; then
+            echo "::error::Scheme App was not listed. Stage C archive requires -scheme App."
+            exit 1
+          fi
+
+      - name: Inspect xcodebuild export and authentication help
+        shell: bash
+        run: |
+          set -euo pipefail
+          HELP="${RUNNER_TEMP}/xcodebuild-help.txt"
+          xcodebuild -help > "${HELP}" 2>&1
+
+          require_help() {
+            local needle="$1"
+            if ! grep -F -q -- "${needle}" "${HELP}"; then
+              echo "::error::xcodebuild -help does not document: ${needle}"
+              echo "===== help lines mentioning export, method, or authentication ====="
+              grep -n -E -i "exportOptions|allowProvisioning|authenticationKey|app-store|signingStyle|teamID|destination" "${HELP}" | head -n 120 || true
+              exit 1
+            fi
+            echo "documented: ${needle}"
+          }
+
+          require_help "-allowProvisioningUpdates"
+          require_help "-authenticationKeyPath"
+          require_help "-authenticationKeyID"
+          require_help "-authenticationKeyIssuerID"
+          require_help "-exportArchive"
+          require_help "-exportOptionsPlist"
+          require_help "app-store-connect"
+          require_help "signingStyle"
+          require_help "teamID"
+
+          echo "=== distribution method lines ==="
+          grep -n -F "app-store" "${HELP}" || true
+
+      - name: Validate future archive and export shape
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for name in APPLE_TEAM_ID ASC_KEY_ID ASC_ISSUER_ID ASC_API_KEY_P8_BASE64; do
+            if [ -n "$(printenv "${name}" 2>/dev/null || true)" ]; then
+              echo "::error::${name} is present in the job environment. Stage B must not receive Apple credentials."
+              exit 1
+            fi
+          done
+
+          ARCHIVE_SHAPE="xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Release -destination generic/platform=iOS -archivePath ParQueen.xcarchive -allowProvisioningUpdates -authenticationKeyPath AUTH_KEY_PATH -authenticationKeyID ASC_KEY_ID -authenticationKeyIssuerID ASC_ISSUER_ID DEVELOPMENT_TEAM=APPLE_TEAM_ID archive"
+          echo "Future archive shape (not executed):"
+          printf '%s\n' "${ARCHIVE_SHAPE}"
+
+          for token in \
+            "-project ios/App/App.xcodeproj" \
+            "-scheme App" \
+            "-configuration Release" \
+            "-destination generic/platform=iOS" \
+            "-archivePath" \
+            "-allowProvisioningUpdates" \
+            "-authenticationKeyPath" \
+            "-authenticationKeyID" \
+            "-authenticationKeyIssuerID" \
+            "DEVELOPMENT_TEAM=APPLE_TEAM_ID" \
+            " archive"
+          do
+            if ! printf '%s' "${ARCHIVE_SHAPE}" | grep -F -q -- "${token}"; then
+              echo "::error::Archive shape is missing ${token}"
+              exit 1
+            fi
+          done
+
+          if printf '%s\n' "${ARCHIVE_SHAPE}" | grep -E -q 'DEVELOPMENT_TEAM=[A-Z0-9]{10}([^A-Z0-9]|$)'; then
+            echo "::error::Archive shape contains a literal Team ID."
+            exit 1
+          fi
+
+          EXPORT_PLIST="${RUNNER_TEMP}/ExportOptions.plist"
+          cat > "${EXPORT_PLIST}" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>destination</key>
+            <string>export</string>
+            <key>signingStyle</key>
+            <string>automatic</string>
+            <key>teamID</key>
+            <string>APPLE_TEAM_ID</string>
+            <key>manageAppVersionAndBuildNumber</key>
+            <false/>
+          </dict>
+          </plist>
+          PLIST
+          plutil -lint "${EXPORT_PLIST}"
+          echo "ExportOptions.plist lint passed in RUNNER_TEMP. destination=export. No upload."
+          rm -f "${EXPORT_PLIST}"
+          echo "Archive and exportArchive were not executed."
