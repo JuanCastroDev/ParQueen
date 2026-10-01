@@ -16,6 +16,7 @@ const NotificationsView = lazy(() => import('./views/NotificationsView').then(m 
 const NotificationsSettingsView = lazy(() => import('./views/NotificationsSettingsView').then(m => ({ default: m.NotificationsSettingsView })));
 const LocationSettingsView = lazy(() => import('./views/LocationSettingsView').then(m => ({ default: m.LocationSettingsView })));
 const LanguageSettingsView = lazy(() => import('./views/LanguageSettingsView').then(m => ({ default: m.LanguageSettingsView })));
+const BlockedUsersView = lazy(() => import('./views/BlockedUsersView').then(m => ({ default: m.BlockedUsersView })));
 const CreateAccountView = lazy(() => import('./views/CreateAccountView').then(m => ({ default: m.CreateAccountView })));
 const SetupProfileView = lazy(() => import('./views/SetupProfileView').then(m => ({ default: m.SetupProfileView })));
 const VerifyPhoneView = lazy(() => import('./views/VerifyPhoneView').then(m => ({ default: m.VerifyPhoneView })));
@@ -981,6 +982,8 @@ export default function App() {
         return <LocationSettingsView user={user} onBack={() => setCurrentView(AppView.SETTINGS)} permissionState={nearbyPermissionState(locationAccess, { locationServicesEnabled })} callbacks={locationCallbacks} />;
       case AppView.LANGUAGE_SETTINGS:
         return <LanguageSettingsView user={user} onBack={() => setCurrentView(AppView.SETTINGS)} />;
+      case AppView.BLOCKED_USERS:
+        return <BlockedUsersView user={user} onBack={() => setCurrentView(AppView.SETTINGS)} />;
       case AppView.NOTIFICATIONS:
         return <NotificationsView user={user} onBack={() => setCurrentView(AppView.MAP)} onSelectSpot={(id) => { setPendingSpotId(id); setCurrentView(AppView.MAP); }} permissionState={nearbyPermissionState(locationAccess, { locationServicesEnabled })} callbacks={locationCallbacks} notificationRuntime={notificationRuntime} notificationBusy={notificationBusy} onEnableNotifications={handleEnableNotifications} onRecheckNotifications={handleRecheckNotifications} setView={navigatePrimary} unreadMessagesCount={unreadMessagesCount} pendingUpdatesCount={pendingUpdatesCount} />;
       case AppView.ADMIN_LOGIN:

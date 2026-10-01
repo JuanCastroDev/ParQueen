@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useFocusOnMount } from '../hooks/useFocusOnMount';
-import { ChevronLeft, ChevronRight, Edit, Mail, Bell, Moon, LogOut, Trash2, Check, AlertCircle, Navigation, Play, Globe, Shield, FileText, MessageCircle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Edit, Mail, Bell, Moon, LogOut, Trash2, Check, AlertCircle, Navigation, Play, Globe, Shield, FileText, MessageCircle, UserRoundX } from 'lucide-react';
 import { t, useLang, getLang } from '../i18n';
 import { doc, updateDoc } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
@@ -8,6 +8,7 @@ import { getApp } from 'firebase/app';
 import { db } from '../firebase';
 import { AppView } from '../types';
 import { getNotificationsSummaryState, getLocationSummaryState } from '../utils/settingsSummary';
+import { blockedUsersSummary } from '../utils/blockedUsersSummary';
 import type { LocationPermissionState } from '../utils/nearbyActivity';
 import type { NotificationRuntimeState } from '../utils/notificationRegistration';
 import { LEGAL_PATHS } from '../utils/legalRoutes';
@@ -116,6 +117,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user, setView, onBac
         ? getLocationSummaryState(permissionState, user?.sharePreciseLocation ?? true)
         : null;
     const isDark = theme === 'dark';
+    const blockedSummary = blockedUsersSummary(user?.blockedUsers?.length ?? 0);
 
     // Inset ring: grouped surfaces clip overflow, so an outer ring would lose its sides.
     const rowClass = `pq-settings-row w-full flex items-center gap-3.5 px-4 py-3 text-left ${focusRing} focus-visible:ring-inset`;
@@ -145,6 +147,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user, setView, onBac
                     <div className="pq-group">
                         <button onClick={() => setView(AppView.EDIT_PROFILE)} className={rowClass}>
                             <RowBody icon={<Edit size={17} />} title={t('settings.edit_profile')} detail={t('settings.edit_profile_subtitle')} trailing={<Chevron />} />
+                        </button>
+                        <button onClick={() => setView(AppView.BLOCKED_USERS)} className={rowClass}>
+                            <RowBody
+                                icon={<UserRoundX size={17} />}
+                                title={t('settings.blocked_users')}
+                                detail={t(blockedSummary.key, blockedSummary.params)}
+                                trailing={<Chevron />}
+                            />
                         </button>
 
                         {/* Email: view → input → one-time code, exactly as before. */}

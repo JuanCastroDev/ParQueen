@@ -10,6 +10,7 @@ import { db } from '../firebase';
 import { moderateMessage } from '../utils/moderation';
 import { reportCriticalActionFailure } from '../utils/errorReporting';
 import { chatShellCreatePayload, ensureChatShell } from '../utils/chatShell';
+import { filterVisibleConversations } from '../utils/filterVisibleConversations';
 import { t, useLang } from '../i18n';
 import { AppView } from '../types';
 import { NavigationBar } from './street-parking/NavigationBar';
@@ -397,9 +398,7 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
       // Sort desc by last message timestamp
       list.sort((a, b) => b.lastMessageTimestamp.getTime() - a.lastMessageTimestamp.getTime());
 
-      const blockedList = user?.blockedUsers || [];
-      const filteredList = list.filter(conv => !blockedList.includes(conv.otherUser.id));
-      setConversations(filteredList);
+      setConversations(filterVisibleConversations(list, user?.blockedUsers));
     });
     return () => unsubscribe();
   }, [user?.id, JSON.stringify(user?.blockedUsers)]);

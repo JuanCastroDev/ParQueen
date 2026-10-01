@@ -42,6 +42,26 @@ function render(props: Partial<React.ComponentProps<typeof SettingsView>> = {}) 
 
 afterEach(() => setLang('en'));
 
+describe('SettingsView — blocked users', () => {
+    it('BU-01: always displays the Blocked users row', () => {
+        const { rowNamed } = render();
+        expect(rowNamed('Blocked users')).toBeTruthy();
+        expect(rowNamed('Blocked users').props.onClick).toEqual(expect.any(Function));
+    });
+
+    it('BU-02: shows none, one, and many summaries', () => {
+        expect(textOf(render().rowNamed('Blocked users'))).toContain('None');
+        expect(textOf(render({ user: { blockedUsers: ['a'] } }).rowNamed('Blocked users'))).toContain('1 blocked');
+        expect(textOf(render({ user: { blockedUsers: ['a', 'b', 'c'] } }).rowNamed('Blocked users'))).toContain('3 blocked');
+    });
+
+    it('BU-03: tapping the row navigates to Blocked Users', () => {
+        const { rowNamed, spies } = render();
+        act(() => rowNamed('Blocked users').props.onClick());
+        expect(spies.setView).toHaveBeenCalledWith(AppView.BLOCKED_USERS);
+    });
+});
+
 describe('SettingsView — structure and navigation', () => {
     it('has exactly one h1, named Settings', () => {
         const { r } = render();

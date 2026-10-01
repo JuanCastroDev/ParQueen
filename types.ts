@@ -47,6 +47,7 @@ export enum AppView {
   NOTIFICATIONS_SETTINGS = 'notifications-settings',
   LOCATION_SETTINGS = 'location-settings',
   LANGUAGE_SETTINGS = 'language-settings',
+  BLOCKED_USERS = 'blocked-users',
 }
 
 export interface StreetSpot {
