@@ -87,6 +87,16 @@ jobs:
           fi
           echo "Release signing configuration matches the unsigned baseline."
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Install npm 10
+        run: npm install -g npm@10
+
+      - name: Install root dependencies
+        run: npm ci
+
       - name: Confirm scheme App
         shell: bash
         run: |
