@@ -55,6 +55,16 @@ describe('filterVisibleSpots', () => {
         expect(filterVisibleSpots(docs, 'me', ['blocked-user'], now)).toHaveLength(0);
     });
 
+    it('BU-16: a blocked user Ping stays hidden while blocked', () => {
+        const docs = [withExpiresAt(spot({ status: 'available', expiresAtMs: FUTURE, finderId: 'blocked-user' }))];
+        expect(filterVisibleSpots(docs, 'me', ['blocked-user'], now)).toHaveLength(0);
+    });
+
+    it('BU-17: removing the UID lets an otherwise-eligible Ping become visible again', () => {
+        const docs = [withExpiresAt(spot({ status: 'available', expiresAtMs: FUTURE, finderId: 'blocked-user' }))];
+        expect(filterVisibleSpots(docs, 'me', [], now)).toHaveLength(1);
+    });
+
     it('preserves all fields on the returned spot (id, status, etc.)', () => {
         const docs = [withExpiresAt(spot({ status: 'available', expiresAtMs: FUTURE }))];
         const [result] = filterVisibleSpots(docs, 'me', [], now);

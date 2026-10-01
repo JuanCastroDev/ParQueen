@@ -69,6 +69,7 @@ describe('resolveAndroidBack', () => {
       AppView.NOTIFICATIONS_SETTINGS,
       AppView.LOCATION_SETTINGS,
       AppView.LANGUAGE_SETTINGS,
+      AppView.BLOCKED_USERS,
     ]) {
       expect(resolveAndroidBack({ ...base, currentView: view })).toEqual({
         type: 'navigate',
@@ -147,6 +148,7 @@ describe('resolveAndroidBack', () => {
       [AppView.NOTIFICATIONS_SETTINGS]: 'navigate',
       [AppView.LOCATION_SETTINGS]: 'navigate',
       [AppView.LANGUAGE_SETTINGS]: 'navigate',
+      [AppView.BLOCKED_USERS]: 'navigate',
       [AppView.NOTIFICATIONS]: 'navigate',
       [AppView.PARKING_SPACE]: 'navigate',
       [AppView.CONTACT_US]: 'navigate',

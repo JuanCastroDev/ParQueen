@@ -72,6 +72,7 @@ export function resolveAndroidBack(ctx: AndroidBackContext): AndroidBackAction {
     case AppView.NOTIFICATIONS_SETTINGS:
     case AppView.LOCATION_SETTINGS:
     case AppView.LANGUAGE_SETTINGS:
+    case AppView.BLOCKED_USERS:
       return { type: 'navigate', view: AppView.SETTINGS };
 
     case AppView.NOTIFICATIONS:
