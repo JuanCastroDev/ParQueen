@@ -154,6 +154,57 @@ jobs:
             fi
           done
 
+      - name: Prepare generated Capacitor iOS resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Creating a minimal CI-only webDir for native shell compilation."
+          echo "This is not a production Vite build and uses no production environment values."
+          mkdir -p dist
+          cat > dist/index.html <<'HTML'
+          <!doctype html>
+          <html>
+          <head><meta charset="utf-8"><title>ParQueen Stage A</title></head>
+          <body>Stage A native shell proof</body>
+          </html>
+          HTML
+
+          echo "=== npx cap copy ios ==="
+          npx cap copy ios
+
+          echo "=== generated Xcode inputs ==="
+          missing=0
+          report_path() {
+            local kind="$1"
+            local path="$2"
+            if [ "${kind}" = "dir" ] && [ -d "${path}" ]; then
+              echo "PRESENT ${path}"
+            elif [ "${kind}" = "file" ] && [ -f "${path}" ]; then
+              echo "PRESENT ${path}"
+            else
+              echo "ABSENT ${path}"
+              missing=1
+            fi
+          }
+          report_path dir ios/App/App/public
+          report_path file ios/App/App/public/index.html
+          report_path file ios/App/App/capacitor.config.json
+          report_path file ios/App/App/config.xml
+          if [ "${missing}" -ne 0 ]; then
+            echo "::error::npx cap copy ios did not produce every Xcode resource input. Stopping without cap sync or hand-written native config."
+            exit 1
+          fi
+
+          echo "=== tracked source after cap copy ==="
+          STATUS_SHORT="$(git status --short)"
+          if [ -n "${STATUS_SHORT}" ]; then
+            echo "::error::npx cap copy ios changed tracked repository files."
+            printf '%s\n' "${STATUS_SHORT}"
+            git diff --stat
+            exit 1
+          fi
+          echo "No tracked mutations."
+
       - name: Resolve Swift package dependencies
         shell: bash
         run: |
