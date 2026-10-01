@@ -1,0 +1,253 @@
+name: iOS Cloud Mac Proof
+
+# Stage A toolchain proof only.
+# Unsigned iOS Simulator compilation on a GitHub-hosted macOS runner.
+# No Apple certificates, provisioning profiles, Team ID, App Store Connect,
+# Firebase deployment, or production configuration.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    name: unsigned simulator build
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: macOS and Xcode toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== sw_vers ==="
+          sw_vers
+          echo "=== uname -m ==="
+          uname -m
+          echo "=== xcode-select -p ==="
+          xcode-select -p
+          echo "=== xcodebuild -version ==="
+          xcodebuild -version
+          echo "=== xcodebuild -showsdks (iOS) ==="
+          xcodebuild -showsdks | grep -E -i 'iphone|simulator' || true
+          echo "=== xcrun simctl list runtimes ==="
+          xcrun simctl list runtimes
+
+          XCODE_VERSION="$(xcodebuild -version | awk '/^Xcode / { print $2; exit }')"
+          XCODE_MAJOR="${XCODE_VERSION%%.*}"
+          echo "Selected Xcode version: ${XCODE_VERSION}"
+          echo "Selected Xcode major: ${XCODE_MAJOR}"
+          if ! [[ "${XCODE_MAJOR}" =~ ^[0-9]+$ ]] || [ "${XCODE_MAJOR}" -lt 26 ]; then
+            echo "::error::Xcode major version '${XCODE_MAJOR}' is below 26 (selected ${XCODE_VERSION})."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Install npm 10
+        run: npm install -g npm@10
+
+      - name: Node toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== node --version ==="
+          node --version
+          echo "=== npm --version ==="
+          npm --version
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Capacitor CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== npx cap --version ==="
+          npx cap --version
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Assert native iOS configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          PBX="ios/App/App.xcodeproj/project.pbxproj"
+          test -f "${PBX}"
+
+          echo "project: ios/App/App.xcodeproj"
+          echo "workspace: none (local Swift package ios/App/CapApp-SPM; no CocoaPods workspace)"
+          if [ -f ios/App/Podfile ] || [ -f Podfile ]; then
+            echo "Podfile: YES"
+            echo "::error::Unexpected Podfile. Stage A baseline is SPM with no Podfile."
+            exit 1
+          fi
+          echo "Podfile: NO"
+
+          echo "=== PRODUCT_BUNDLE_IDENTIFIER ==="
+          grep -n "PRODUCT_BUNDLE_IDENTIFIER" "${PBX}"
+          BUNDLES="$(grep "PRODUCT_BUNDLE_IDENTIFIER = " "${PBX}" | sed -E 's/.*PRODUCT_BUNDLE_IDENTIFIER = //; s/;//g; s/[[:space:]]//g' | sort -u)"
+          echo "unique bundle ids:"
+          printf '%s\n' "${BUNDLES}"
+          if [ "${BUNDLES}" != "app.parqueen" ]; then
+            echo "::error::PRODUCT_BUNDLE_IDENTIFIER is not exactly app.parqueen."
+            exit 1
+          fi
+
+          echo "=== marketing version, build, deployment target, Swift, platforms ==="
+          grep -n -E "MARKETING_VERSION|CURRENT_PROJECT_VERSION|IPHONEOS_DEPLOYMENT_TARGET|SWIFT_VERSION|TARGETED_DEVICE_FAMILY|SDKROOT" "${PBX}"
+
+          echo "=== signing-related settings ==="
+          grep -n -E "DEVELOPMENT_TEAM|CODE_SIGN_IDENTITY|CODE_SIGN_STYLE|PROVISIONING_PROFILE|CODE_SIGN_ENTITLEMENTS" "${PBX}" || true
+
+          if grep -q "DEVELOPMENT_TEAM" "${PBX}" ios/debug.xcconfig ios/App/App/Info.plist; then
+            echo "::error::Unexpected hard-coded DEVELOPMENT_TEAM. Stopping before build."
+            grep -n "DEVELOPMENT_TEAM" "${PBX}" ios/debug.xcconfig ios/App/App/Info.plist || true
+            exit 1
+          fi
+          echo "DEVELOPMENT_TEAM: not set"
+
+          UNEXPECTED_IDENTITY="$(grep -n "CODE_SIGN_IDENTITY" "${PBX}" | grep -v 'CODE_SIGN_IDENTITY = "iPhone Developer";' || true)"
+          if [ -n "${UNEXPECTED_IDENTITY}" ]; then
+            echo "::error::Unexpected signing identity. Stopping before build."
+            printf '%s\n' "${UNEXPECTED_IDENTITY}"
+            exit 1
+          fi
+          echo "CODE_SIGN_IDENTITY: generic Xcode default \"iPhone Developer\" at project level only"
+
+          if grep -R -n "PROVISIONING_PROFILE" ios --include='*.pbxproj' --include='*.xcconfig' --include='*.plist'; then
+            echo "::error::Unexpected provisioning profile setting. Stopping before build."
+            exit 1
+          fi
+          echo "PROVISIONING_PROFILE: not set"
+
+          echo "=== entitlements ==="
+          ENTITLEMENTS="$(find ios -name '*.entitlements' -print || true)"
+          if [ -z "${ENTITLEMENTS}" ]; then
+            echo "entitlements files: none"
+          else
+            printf '%s\n' "${ENTITLEMENTS}"
+          fi
+          if grep -R -n "aps-environment" ios --include='*.plist' --include='*.entitlements' --include='*.pbxproj' --include='*.xcconfig'; then
+            echo "::error::Unexpected aps-environment entitlement. Stopping before build."
+            exit 1
+          fi
+          echo "aps-environment: not set"
+
+          echo "=== xcodebuild -list ==="
+          xcodebuild -list -project ios/App/App.xcodeproj
+
+          echo "=== Capacitor resource inputs referenced by the project ==="
+          for path in ios/App/App/capacitor.config.json ios/App/App/config.xml ios/App/App/public; do
+            if [ -e "${path}" ]; then
+              echo "present: ${path}"
+            else
+              echo "absent: ${path}"
+            fi
+          done
+
+      - name: Resolve Swift package dependencies
+        shell: bash
+        run: |
+          set -uo pipefail
+          LOG="${RUNNER_TEMP}/spm-resolve.log"
+          set +e
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            2>&1 | tee "${LOG}"
+          STATUS="${PIPESTATUS[0]}"
+          set -e
+          if [ "${STATUS}" -ne 0 ]; then
+            echo "::error::Swift package resolution failed (exit ${STATUS})."
+            echo "===== FIRST MEANINGFUL SPM FAILURE ====="
+            LINE="$(grep -n -E -m 1 'error:|fatal error:|xcodebuild: error:|does not contain a scheme|Unable to resolve|Could not resolve' "${LOG}" || true)"
+            if [ -z "${LINE}" ]; then
+              echo "No classified error line. Last 80 log lines:"
+              tail -n 80 "${LOG}"
+            else
+              N="${LINE%%:*}"
+              START=$(( N > 20 ? N - 20 : 1 ))
+              END=$(( N + 40 ))
+              echo "First match at log line ${N}: ${LINE#*:}"
+              sed -n "${START},${END}p" "${LOG}"
+            fi
+            exit "${STATUS}"
+          fi
+          echo "=== Package.resolved ==="
+          FOUND=0
+          while IFS= read -r resolved; do
+            FOUND=1
+            echo "----- ${resolved} -----"
+            cat "${resolved}"
+          done < <(find ios -name 'Package.resolved' -print | sort)
+          if [ "${FOUND}" -eq 0 ]; then
+            echo "Package.resolved was not written under ios/"
+          fi
+
+      - name: Unsigned iOS Simulator build
+        shell: bash
+        run: |
+          set -uo pipefail
+          LOG="${RUNNER_TEMP}/unsigned-simulator-build.log"
+          set +e
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            build \
+            2>&1 | tee "${LOG}"
+          STATUS="${PIPESTATUS[0]}"
+          set -e
+          if [ "${STATUS}" -ne 0 ]; then
+            echo "::error::Unsigned iOS Simulator build failed (exit ${STATUS})."
+            echo "===== FIRST MEANINGFUL BUILD FAILURE ====="
+            LINE="$(grep -n -E -m 1 'error:|fatal error:|xcodebuild: error:|The following build commands failed|does not contain a scheme' "${LOG}" || true)"
+            if [ -z "${LINE}" ]; then
+              echo "No classified error line. Last 80 log lines:"
+              tail -n 80 "${LOG}"
+            else
+              N="${LINE%%:*}"
+              START=$(( N > 20 ? N - 20 : 1 ))
+              END=$(( N + 40 ))
+              echo "First match at log line ${N}: ${LINE#*:}"
+              sed -n "${START},${END}p" "${LOG}"
+            fi
+            exit "${STATUS}"
+          fi
+          echo "BUILD RESULT: SUCCESS"
+          grep -n "BUILD SUCCEEDED" "${LOG}" || true
+
+      - name: Build evidence
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "=== runner ==="
+          echo "runs-on: macos-26"
+          echo "=== sw_vers ==="
+          sw_vers || true
+          echo "=== uname -m ==="
+          uname -m || true
+          echo "=== xcodebuild -version ==="
+          xcodebuild -version || true
+          echo "=== node / npm / cap ==="
+          node --version || true
+          npm --version || true
+          npx cap --version || true
+          echo "=== simulator runtimes ==="
+          xcrun simctl list runtimes || true
+          echo "=== Package.resolved ==="
+          find ios -name 'Package.resolved' -print | sort || true
