@@ -198,10 +198,11 @@ jobs:
           fi
 
           echo "=== tracked source after cap copy ==="
-          STATUS_SHORT="$(git status --short)"
-          if [ -n "${STATUS_SHORT}" ]; then
+          git status --short
+          TRACKED_STATUS="$(git status --short --untracked-files=no)"
+          if [ -n "${TRACKED_STATUS}" ]; then
             echo "::error::npx cap copy ios changed tracked repository files."
-            printf '%s\n' "${STATUS_SHORT}"
+            printf '%s\n' "${TRACKED_STATUS}"
             git diff --stat
             exit 1
           fi
