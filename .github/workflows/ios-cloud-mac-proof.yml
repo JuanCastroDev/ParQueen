@@ -38,7 +38,9 @@ jobs:
           echo "=== xcrun simctl list runtimes ==="
           xcrun simctl list runtimes
 
-          XCODE_VERSION="$(xcodebuild -version | awk '/^Xcode / { print $2; exit }')"
+          # Do not exit awk early. xcodebuild aborts with a broken pipe if the reader
+          # closes before it finishes writing "Build version".
+          XCODE_VERSION="$(xcodebuild -version | awk '/^Xcode / { print $2 }')"
           XCODE_MAJOR="${XCODE_VERSION%%.*}"
           echo "Selected Xcode version: ${XCODE_VERSION}"
           echo "Selected Xcode major: ${XCODE_MAJOR}"
