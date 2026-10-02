@@ -654,7 +654,7 @@ Prefer:
 - **Trigger:** Callable (onCall), owner only
 
 ### cleanupExpiredHolds
-- **Purpose:** Release residual accepted legacy holds (`status == claimed`, `holdRequestStatus == accepted`, expired `holdTimerExpiresAt`). Clients can no longer start or mutate holds (Rules Arms 7–11 quarantined, A6 / HO-008). This sweeper stays so already-accepted holds can still be released.
+- **Purpose:** Release residual accepted legacy holds (`status == claimed`, `holdRequestStatus == accepted`, expired `holdTimerExpiresAt`). Also clears expired or stale pending hold-request fields (`holdRequestedBy`, `holdRequestedByName`, `holdRequestExpiresAt`, `holdRequestStatus`) on still-live available Pings so `holdRequestedBy` cannot block claims. That pending pass does not change Ping status (expired Pings are not reopened) and does not touch active claims or `activeIncomingClaims` locks. Clients still cannot start or mutate holds (Rules Arms 7–11 quarantined, A6 / HO-008).
 - **Trigger:** Scheduled
 
 ---
@@ -782,7 +782,7 @@ The deployed app is at: https://parkqueen-46475363-ccf36.web.app
 ## 10. Known Issues
 
 ### High Priority
-- **Legacy hold is quarantined at Rules (A6 / HO-008)** — Arms 7–11 deny new hold initiation and accept/decline/complete mutations. Existing held documents stay readable; `cleanupExpiredHolds` still releases accepted holds. **`useHoldFlow.ts` is not deleted** — it has no live importers and remains for a later cleanup package.
+- **Legacy hold is quarantined at Rules (A6 / HO-008)** — Arms 7–11 deny new hold initiation and accept/decline/complete mutations. Existing held documents stay readable; `cleanupExpiredHolds` still releases accepted holds and clears expired/stale pending hold-request fields so those Pings can be claimed again. **`useHoldFlow.ts` is not deleted** — it has no live importers and remains for a later cleanup package.
 - **`LoginView.tsx` and `SplashView.tsx` still exist on disk** — not imported or referenced. Should be deleted (see Section 8).
 
 ### Medium Priority

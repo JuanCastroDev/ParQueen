@@ -110,8 +110,9 @@ service cloud.firestore {
 
     // A6 / HO-008 (APPROVED Decision 4): legacy hold is quarantined.
     // Clients cannot start a hold or mutate hold state. Existing documents
-    // stay readable. Residual accepted holds are released by
-    // cleanupExpiredHolds (Admin SDK, bypasses these rules). Do not flip
+    // stay readable. cleanupExpiredHolds (Admin SDK, bypasses these rules)
+    // still releases accepted holds, and clears expired/stale pending
+    // hold-request fields so holdRequestedBy cannot block claims. Do not flip
     // this on — reopening hold is a later product decision, not a Rules tweak.
     function legacyHoldClientWriteAllowed() {
       return false;

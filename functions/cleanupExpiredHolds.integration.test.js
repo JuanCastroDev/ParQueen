@@ -2,12 +2,11 @@
 
 /**
  * cleanupExpiredHolds exercises the real scheduled handler via .run() against
- * the Firestore emulator (no mocks). Unlike cleanupExpiredInterests (per-doc
- * transactions with a fresh-state re-check), this Function commits a single
- * db.batch() over the initial query snapshot — idempotency here comes from
- * the QUERY itself excluding already-reverted docs on any subsequent run
- * (every written value is a fixed literal, not a counter), not from a
- * per-doc transactional re-verification.
+ * the Firestore emulator (no mocks). The accepted-hold pass commits a single
+ * db.batch() over the initial query snapshot — idempotency there comes from
+ * the QUERY itself excluding already-reverted docs. The pending-hold pass
+ * re-reads each candidate in a transaction and clears hold-request fields
+ * only; a second run does not select those docs again.
  */
 
 const { initializeApp, getApps } = require('firebase-admin/app');
@@ -143,4 +142,248 @@ describe('cleanupExpiredHolds Function contract', () => {
         const fn = src.slice(start, start + 400);
         expect(fn).toMatch(/serviceAccount:\s*'parqueen-cleanup@parkqueen-46475363-ccf36\.iam\.gserviceaccount\.com'/);
     });
+
+    it('CEH-9: pending-pass source clears hold-request fields only (no status write, no activeIncomingClaims)', () => {
+        const src = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
+        const start = src.indexOf('async function releaseExpiredPendingHoldRequests');
+        expect(start).toBeGreaterThan(-1);
+        const fn = src.slice(start, src.indexOf('function localizeNotification', start));
+        const updateStart = fn.indexOf('tx.update');
+        const update = fn.slice(updateStart, fn.indexOf('return true', updateStart));
+        expect(update).toMatch(/holdRequestedBy:\s*null/);
+        expect(update).toMatch(/holdRequestedByName:\s*null/);
+        expect(update).toMatch(/holdRequestExpiresAt:\s*null/);
+        expect(update).toMatch(/holdRequestStatus:\s*null/);
+        expect(update).not.toMatch(/activeIncomingClaims/);
+        expect(update).not.toMatch(/status:/);
+        expect(fn).not.toMatch(/activeIncomingClaims/);
+        expect(fn).not.toMatch(/status:\s*['"]available['"]/);
+        expect(fn).toMatch(/\.limit\(500\)/);
+    });
+
+    it('CEH-10: an unexpired pending hold on a live Ping is left in place', async () => {
+        const id = nextId('pending-fresh');
+        await db.doc(`spots/${id}`).set(livePendingSpot({ holdRequestExpiresAt: FUTURE }));
+        await indexModule.cleanupExpiredHolds.run();
+
+        const spot = await getSpot(id);
+        expect(spot.status).toBe('available');
+        expect(spot.holdRequestStatus).toBe('pending');
+        expect(spot.holdRequestedBy).toBe('requester_pending');
+        expect(spot.expiresAt.toMillis()).toBe(FUTURE.toMillis());
+    });
+
+    it('CEH-11: a stale pending hold with no holdRequestExpiresAt is cleared without reopening or deleting the Ping', async () => {
+        const id = nextId('pending-stale');
+        const seed = livePendingSpot();
+        delete seed.holdRequestExpiresAt;
+        await db.doc(`spots/${id}`).set(seed);
+        await indexModule.cleanupExpiredHolds.run();
+
+        const spotSnap = await db.doc(`spots/${id}`).get();
+        expect(spotSnap.exists).toBe(true);
+        const spot = spotSnap.data();
+        expect(spot.status).toBe('available');
+        expect(spot.expiresAt.toMillis()).toBe(FUTURE.toMillis());
+        expect(spot.holdRequestedBy).toBeNull();
+        expect(spot.holdRequestedByName).toBeNull();
+        expect(spot.holdRequestExpiresAt).toBeNull();
+        expect(spot.holdRequestStatus).toBeNull();
+        expect(spot.finderId).toBe('finder_pending');
+    });
+
+    it('CEH-12: an expired Ping is not reopened — pending hold fields stay, status is not rewritten', async () => {
+        const id = nextId('pending-ping-expired');
+        await db.doc(`spots/${id}`).set(livePendingSpot({ expiresAt: PAST }));
+        await indexModule.cleanupExpiredHolds.run();
+
+        const spotSnap = await db.doc(`spots/${id}`).get();
+        expect(spotSnap.exists).toBe(true);
+        const spot = spotSnap.data();
+        expect(spot.status).toBe('available');
+        expect(spot.expiresAt.toMillis()).toBe(PAST.toMillis());
+        expect(spot.holdRequestStatus).toBe('pending');
+        expect(spot.holdRequestedBy).toBe('requester_pending');
+    });
+
+    it('CEH-13: an active claim and its activeIncomingClaims lock are not touched', async () => {
+        const id = nextId('pending-active-claim');
+        const claimer = `active_${id}`;
+        const lock = {
+            spotId: id,
+            claimStartedAt: PAST,
+            claimState: 'heading',
+            updatedAt: PAST,
+        };
+        await db.doc(`spots/${id}`).set(livePendingSpot({
+            status: 'interested',
+            interestedUserId: claimer,
+            claimState: 'heading',
+            claimStartedAt: PAST,
+        }));
+        await db.doc(`users/${claimer}/activeIncomingClaims/current`).set(lock);
+        await indexModule.cleanupExpiredHolds.run();
+
+        const spot = await getSpot(id);
+        expect(spot.status).toBe('interested');
+        expect(spot.interestedUserId).toBe(claimer);
+        expect(spot.claimState).toBe('heading');
+        expect(spot.holdRequestStatus).toBe('pending');
+        expect(spot.holdRequestedBy).toBe('requester_pending');
+        const lockAfter = (await db.doc(`users/${claimer}/activeIncomingClaims/current`).get()).data();
+        expect(lockAfter.spotId).toBe(id);
+        expect(lockAfter.claimState).toBe('heading');
+        expect(lockAfter.claimStartedAt.toMillis()).toBe(PAST.toMillis());
+    });
+
+    it('CEH-14: a live available Ping that already has a claimer id is not stripped, and its lock stays', async () => {
+        const id = nextId('pending-partial-claim');
+        const claimer = `partial_${id}`;
+        await db.doc(`spots/${id}`).set(livePendingSpot({
+            interestedUserId: claimer,
+            claimState: 'heading',
+            claimStartedAt: PAST,
+        }));
+        await db.doc(`users/${claimer}/activeIncomingClaims/current`).set({
+            spotId: id,
+            claimStartedAt: PAST,
+            claimState: 'heading',
+            updatedAt: PAST,
+        });
+        await indexModule.cleanupExpiredHolds.run();
+
+        const spot = await getSpot(id);
+        expect(spot.status).toBe('available');
+        expect(spot.interestedUserId).toBe(claimer);
+        expect(spot.holdRequestedBy).toBe('requester_pending');
+        expect(spot.holdRequestStatus).toBe('pending');
+        const lockAfter = (await db.doc(`users/${claimer}/activeIncomingClaims/current`).get()).data();
+        expect(lockAfter.spotId).toBe(id);
+        expect(lockAfter.claimState).toBe('heading');
+    });
+
+    it('CEH-15: an expired pending hold becomes claimable, and a later cleanup does not disturb that claim', async () => {
+        const id = nextId('pending-claim');
+        const claimer = `claimer_${id}`;
+        const expiresAt = FUTURE;
+        await db.doc(`spots/${id}`).set(livePendingSpot({ expiresAt }));
+        await db.doc(`users/${claimer}`).set({
+            id: claimer,
+            username: 'claimerpending',
+            crowns: 5,
+            vehicleColor: 'red',
+            vehicleType: 'suv',
+            vehicleBrand: 'Toyota',
+        });
+        await db.doc('activeIncomingClaimRollout/status').set({
+            enforced: true,
+            locklessCount: 0,
+            duplicateUserCount: 0,
+            duplicatePingCount: 0,
+        });
+
+        const lockRef = db.doc(`users/${claimer}/activeIncomingClaims/current`);
+        expect((await lockRef.get()).exists).toBe(false);
+        await expect(claimSpotAs(claimer, id)).rejects.toBeTruthy();
+
+        await indexModule.cleanupExpiredHolds.run();
+
+        const cleared = await getSpot(id);
+        expect(cleared.status).toBe('available');
+        expect(cleared.expiresAt.toMillis()).toBe(expiresAt.toMillis());
+        expect(cleared.holdRequestedBy).toBeNull();
+        expect(cleared.holdRequestedByName).toBeNull();
+        expect(cleared.holdRequestExpiresAt).toBeNull();
+        expect(cleared.holdRequestStatus).toBeNull();
+        expect(cleared.interestedUserId == null).toBe(true);
+        expect((await lockRef.get()).exists).toBe(false);
+
+        await claimSpotAs(claimer, id);
+
+        const claimed = await getSpot(id);
+        expect(claimed.status).toBe('interested');
+        expect(claimed.interestedUserId).toBe(claimer);
+        expect(claimed.claimState).toBe('heading');
+        expect((await lockRef.get()).data().spotId).toBe(id);
+
+        const claimedSnapshot = await getSpot(id);
+        const lockSnapshot = (await lockRef.get()).data();
+        await indexModule.cleanupExpiredHolds.run();
+        expect(await getSpot(id)).toEqual(claimedSnapshot);
+        expect((await lockRef.get()).data()).toEqual(lockSnapshot);
+    });
+
+    it('CEH-16: clearing an expired pending hold is idempotent', async () => {
+        const id = nextId('pending-retry');
+        await db.doc(`spots/${id}`).set(livePendingSpot());
+        await indexModule.cleanupExpiredHolds.run();
+        const afterFirst = await getSpot(id);
+
+        await indexModule.cleanupExpiredHolds.run();
+        const afterSecond = await getSpot(id);
+
+        expect(afterFirst.holdRequestedBy).toBeNull();
+        expect(afterFirst.status).toBe('available');
+        expect(afterSecond).toEqual(afterFirst);
+    });
 });
+
+function livePendingSpot(overrides = {}) {
+    return {
+        finderId: 'finder_pending',
+        finderName: 'Finder',
+        address: '2 Pending St',
+        lat: 40.71,
+        lng: -74.01,
+        type: 'free',
+        status: 'available',
+        pingMode: 'now',
+        reportedAt: PAST,
+        expiresAt: FUTURE,
+        holdRequestStatus: 'pending',
+        holdRequestedBy: 'requester_pending',
+        holdRequestedByName: 'Requester',
+        holdRequestExpiresAt: PAST,
+        ...overrides,
+    };
+}
+
+async function claimSpotAs(uid, spotId) {
+    const { initializeTestEnvironment } = require('@firebase/rules-unit-testing');
+    const { doc, runTransaction, Timestamp: ClientTimestamp } = require('firebase/firestore');
+    const raw = process.env.FIRESTORE_EMULATOR_HOST || '127.0.0.1:8080';
+    const [host, portRaw] = raw.split(':');
+    const testEnv = await initializeTestEnvironment({
+        projectId: PROJECT_ID,
+        firestore: {
+            host,
+            port: Number(portRaw),
+            rules: fs.readFileSync(path.join(__dirname, '..', 'firestore.rules'), 'utf8'),
+        },
+    });
+    try {
+        const clientDb = testEnv.authenticatedContext(uid).firestore();
+        const claimedAt = ClientTimestamp.now();
+        await runTransaction(clientDb, async (tx) => {
+            tx.update(doc(clientDb, 'spots', spotId), {
+                status: 'interested',
+                claimState: 'heading',
+                interestedUserId: uid,
+                interestedUserName: 'claimerpending',
+                interestedUserTitle: 'Newcomer',
+                interestedUserVehicleColor: 'red',
+                interestedUserVehicleType: 'suv',
+                interestedUserVehicleBrand: 'Toyota',
+                claimStartedAt: claimedAt,
+            });
+            tx.set(doc(clientDb, 'users', uid, 'activeIncomingClaims', 'current'), {
+                spotId,
+                claimStartedAt: claimedAt,
+                claimState: 'heading',
+                updatedAt: claimedAt,
+            });
+        });
+    } finally {
+        await testEnv.cleanup();
+    }
+}
