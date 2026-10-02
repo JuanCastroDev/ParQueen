@@ -209,6 +209,151 @@ service cloud.firestore {
       return a in blockedUsersOf(b) || b in blockedUsersOf(a);
     }
 
+    // A5 / SEC-002 create-rate and origin-chain. Rules cannot count a query,
+    // so the Ping and its quota record are written in one transaction.
+    // users/{uid}/pingCreateRate/current keeps the spot ids created in the
+    // rolling hour (max 5). originRePings/{originSpotId} is create-once, so a
+    // completed handoff can be re-pinged once. functions/rateLimiter.js is a
+    // fixed window and would allow a boundary burst of 10; it is not the
+    // authority for this cap.
+    function freshCreateStamp(t) {
+      return t is timestamp
+        && t >= request.time - duration.value(2, 'm')
+        && t <= request.time + duration.value(1, 'm');
+    }
+
+    function pingRatePath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid)/pingCreateRate/current;
+    }
+
+    function inPingCreateWindow(t) {
+      return t is timestamp
+        && t >= request.time - duration.value(1, 'h')
+        && t <= request.time + duration.value(1, 'm');
+    }
+
+    function pingRateSlotOk(ids, ats, i) {
+      return ids[i] is string
+        && ids[i].size() > 0
+        && ids[i].size() <= 200
+        && ats[i] is timestamp;
+    }
+
+    function pingRateSlotsWellFormed(ids, ats) {
+      return ids is list
+        && ats is list
+        && ids.size() == ats.size()
+        && ids.size() >= 1
+        && ids.size() <= 5
+        && (ids.size() < 1 || pingRateSlotOk(ids, ats, 0))
+        && (ids.size() < 2 || pingRateSlotOk(ids, ats, 1))
+        && (ids.size() < 3 || pingRateSlotOk(ids, ats, 2))
+        && (ids.size() < 4 || pingRateSlotOk(ids, ats, 3))
+        && (ids.size() < 5 || pingRateSlotOk(ids, ats, 4));
+    }
+
+    function pingRateStartIndex(ats) {
+      return ats.size() == 0 ? 0
+        : (inPingCreateWindow(ats[0]) ? 0
+          : (ats.size() == 1 ? 1
+            : (inPingCreateWindow(ats[1]) ? 1
+              : (ats.size() == 2 ? 2
+                : (inPingCreateWindow(ats[2]) ? 2
+                  : (ats.size() == 3 ? 3
+                    : (inPingCreateWindow(ats[3]) ? 3
+                      : (ats.size() == 4 ? 4
+                        : (inPingCreateWindow(ats[4]) ? 4 : 5)))))))));
+    }
+
+    function pingRateCarrySlot(oldIds, oldAts, newIds, newAts, start, index) {
+      return newIds[index] == oldIds[start + index]
+        && newAts[index] == oldAts[start + index];
+    }
+
+    function pingRateCarryOk(oldIds, oldAts, newIds, newAts) {
+      let start = pingRateStartIndex(oldAts);
+      let kept = oldIds.size() - start;
+      return newIds.size() == kept + 1
+        && (kept < 1 || pingRateCarrySlot(oldIds, oldAts, newIds, newAts, start, 0))
+        && (kept < 2 || pingRateCarrySlot(oldIds, oldAts, newIds, newAts, start, 1))
+        && (kept < 3 || pingRateCarrySlot(oldIds, oldAts, newIds, newAts, start, 2))
+        && (kept < 4 || pingRateCarrySlot(oldIds, oldAts, newIds, newAts, start, 3))
+        && (kept < 5 || pingRateCarrySlot(oldIds, oldAts, newIds, newAts, start, 4));
+    }
+
+    function pingSpotCreatedInCommit(spotId) {
+      let path = /databases/$(database)/documents/spots/$(spotId);
+      return spotId is string
+        && !exists(path)
+        && existsAfter(path)
+        && getAfter(path).data.finderId == request.auth.uid;
+    }
+
+    function pingRateShape(data) {
+      return data.keys().hasOnly(['spotIds', 'createdAts'])
+        && pingRateSlotsWellFormed(data.spotIds, data.createdAts)
+        && freshCreateStamp(data.createdAts[data.spotIds.size() - 1])
+        && pingSpotCreatedInCommit(data.spotIds[data.spotIds.size() - 1]);
+    }
+
+    // Size may shrink when the expired prefix is dropped, so this is the same
+    // carry check as the quota update — not a blind +1.
+    function priorPingRateAllows(afterIds, afterAts) {
+      let prior = get(pingRatePath()).data;
+      return prior.spotIds is list
+        && prior.createdAts is list
+        && pingRateCarryOk(prior.spotIds, prior.createdAts, afterIds, afterAts);
+    }
+
+    function pingCreateRateRecorded(spotId) {
+      let path = pingRatePath();
+      let after = getAfter(path).data;
+      let n = after.spotIds.size();
+      return existsAfter(path)
+        && after.keys().hasOnly(['spotIds', 'createdAts'])
+        && pingRateSlotsWellFormed(after.spotIds, after.createdAts)
+        && after.spotIds[n - 1] == spotId
+        && freshCreateStamp(after.createdAts[n - 1])
+        && (!exists(path) || priorPingRateAllows(after.spotIds, after.createdAts));
+    }
+
+    function originMarkerCreatedFor(originId, spotId) {
+      let path = /databases/$(database)/documents/originRePings/$(originId);
+      let marker = getAfter(path).data;
+      return originId is string
+        && !exists(path)
+        && existsAfter(path)
+        && marker.rePingSpotId == spotId
+        && marker.finderId == request.auth.uid;
+    }
+
+    function originLinkRecorded(spotId) {
+      let originId = request.resource.data.get('originSpotId', null);
+      return originId == null
+        || (originId is string
+            && originId.size() > 0
+            && originId.size() <= 200
+            && originId != spotId
+            && originMarkerCreatedFor(originId, spotId));
+    }
+
+    function originHandoffEligible(originSpotId) {
+      let path = /databases/$(database)/documents/spots/$(originSpotId);
+      let spot = get(path).data;
+      return exists(path)
+        && spot.status == 'occupied'
+        && spot.get('interestedUserId', null) == request.auth.uid;
+    }
+
+    function rePingPointsAtOrigin(rePingSpotId, originSpotId) {
+      let path = /databases/$(database)/documents/spots/$(rePingSpotId);
+      let spot = getAfter(path).data;
+      return existsAfter(path)
+        && spot.get('originSpotId', null) == originSpotId
+        && spot.finderId == request.auth.uid
+        && spot.status == 'available';
+    }
+
     match /users/{userId} {
       // isAdmin() removed from this OR-chain: it was redundant, not
       // protective — signedIn() alone already grants read access to every
@@ -355,6 +500,33 @@ service cloud.firestore {
           && resource.data.spotId is string
           && !claimStillActiveAfter(resource.data.spotId);
       }
+
+      // Rolling Ping-create quota. Clients cannot delete it to reset the hour,
+      // and only the doc id "current" counts — extra docs are not a bypass.
+      match /pingCreateRate/{rateId} {
+        allow get: if signedIn() && request.auth.uid == userId && rateId == 'current';
+        allow list: if false;
+        allow delete: if false;
+        allow create: if signedIn()
+          && request.auth.uid == userId
+          && rateId == 'current'
+          && pingRateShape(request.resource.data)
+          && request.resource.data.spotIds.size() == 1;
+        allow update: if signedIn()
+          && request.auth.uid == userId
+          && rateId == 'current'
+          && resource.data.keys().hasOnly(['spotIds', 'createdAts'])
+          && resource.data.spotIds is list
+          && resource.data.createdAts is list
+          && resource.data.spotIds.size() == resource.data.createdAts.size()
+          && resource.data.spotIds.size() <= 5
+          && pingRateShape(request.resource.data)
+          && pingRateCarryOk(
+               resource.data.spotIds,
+               resource.data.createdAts,
+               request.resource.data.spotIds,
+               request.resource.data.createdAts);
+      }
     }
 
     match /userLocations/{userId} {
@@ -426,7 +598,9 @@ service cloud.firestore {
         // handleMyCarPing's own orphan-cleanup filter, so this can't be used
         // to spoof the admin exemption.
         && (!('source' in request.resource.data) || request.resource.data.source == 'my_car')
-        && matchesFinderIdentity(request.resource.data);
+        && matchesFinderIdentity(request.resource.data)
+        && pingCreateRateRecorded(spotId)
+        && originLinkRecorded(spotId);
       allow delete: if signedIn() && resource.data.finderId == request.auth.uid;
       allow update: if signedIn() && (
 
@@ -729,6 +903,29 @@ service cloud.firestore {
 
     match /rateLimits/{docId} {
       allow read, write: if false;
+    }
+
+    // One departure re-ping per completed handoff. Create-once; the spot id
+    // of the occupied handoff is the document id, so a second link cannot
+    // invent another doc for the same origin.
+    match /originRePings/{originSpotId} {
+      allow get: if signedIn() && (
+        resource == null || resource.data.finderId == request.auth.uid
+      );
+      allow list: if false;
+      allow update, delete: if false;
+      allow create: if signedIn()
+        && originSpotId.size() > 0
+        && originSpotId.size() <= 200
+        && request.resource.data.keys().hasOnly(['rePingSpotId', 'finderId', 'createdAt'])
+        && request.resource.data.finderId == request.auth.uid
+        && request.resource.data.rePingSpotId is string
+        && request.resource.data.rePingSpotId.size() > 0
+        && request.resource.data.rePingSpotId.size() <= 200
+        && request.resource.data.rePingSpotId != originSpotId
+        && freshCreateStamp(request.resource.data.createdAt)
+        && originHandoffEligible(originSpotId)
+        && rePingPointsAtOrigin(request.resource.data.rePingSpotId, originSpotId);
     }
 
     // Marketing waitlist: written only by joinWaitlist/confirmWaitlist via the

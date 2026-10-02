@@ -5,7 +5,7 @@ import { MapItem } from './types';
 import { getDistance, drawRoute, clearRoute, NYC_CENTER } from './utils';
 import { getTitleForCrowns } from '../../utils/crowns';
 import { getPingExpiresAtMs, timestampToMillis } from '../../utils/pingLifecycle';
-import { PING_SCHEDULE_HORIZON_MS } from './pingCreateBounds';
+import { commitPingCreate, PING_SCHEDULE_HORIZON_MS } from './pingCreateBounds';
 import { cancelClaimTransaction } from './cancelClaimTransaction';
 import { acquireActiveIncomingClaim, ALREADY_CLAIMED_MESSAGE, markClaimArrived } from './activeIncomingClaim';
 import { commitClaimToHeading } from './commitToHeading';
@@ -450,20 +450,29 @@ export function useInterestFlow({
         const reportedAt = Timestamp.fromMillis(now + durationMinutes * 60000);
         const expiresAt = Timestamp.fromMillis(getPingExpiresAtMs(reportedAt));
 
-        await addDoc(collection(db, 'spots'), {
-            lat: spotSnap.lat,
-            lng: spotSnap.lng,
-            type: 'free',
-            status: 'available',
-            finderId: user.id,
-            finderName: user.username || user.fullName || 'Anonymous',
-            pingMode: 'later',
-            reportedAt,
-            expiresAt,
-            geohash: spotSnap.geohash || '',
-            address: spotSnap.address || '',
-            originSpotId: spotSnap.id,
-        });
+        try {
+            await commitPingCreate(db, {
+                uid: user.id,
+                spotRef: doc(collection(db, 'spots')),
+                originSpotId: spotSnap.id,
+                data: {
+                    lat: spotSnap.lat,
+                    lng: spotSnap.lng,
+                    type: 'free',
+                    status: 'available',
+                    finderId: user.id,
+                    finderName: user.username || user.fullName || 'Anonymous',
+                    pingMode: 'later',
+                    reportedAt,
+                    expiresAt,
+                    geohash: spotSnap.geohash || '',
+                    address: spotSnap.address || '',
+                    originSpotId: spotSnap.id,
+                },
+            });
+        } catch {
+            return;
+        }
 
         setHandoffStep(null);
         setHandoffFinderName(null);

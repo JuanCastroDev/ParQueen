@@ -3,6 +3,8 @@ import { PING_LIVE_TTL_MS } from '../../utils/pingLifecycle';
 import {
     PING_CREATE_LIMIT,
     PING_SCHEDULE_HORIZON_MS,
+    PingCreateRejected,
+    advancePingRate,
     isPingLifetimeWithinBounds,
     isReportedAtWithinHorizon,
 } from './pingCreateBounds';
@@ -37,5 +39,44 @@ describe('ping create lifetime bounds', () => {
 
     it('keeps the server create cap at the existing client number', () => {
         expect(PING_CREATE_LIMIT).toBe(5);
+    });
+});
+
+describe('advancePingRate', () => {
+    const NOW = 1_700_000_000_000;
+
+    it('appends the first five creates in the rolling hour', () => {
+        let state = advancePingRate(null, 's1', NOW);
+        for (let i = 2; i <= 5; i += 1) {
+            state = advancePingRate(state, `s${i}`, NOW + i * 1000);
+        }
+        expect(state.spotIds).toEqual(['s1', 's2', 's3', 's4', 's5']);
+    });
+
+    it('denies the 6th create inside the hour', () => {
+        let state = advancePingRate(null, 's1', NOW);
+        for (let i = 2; i <= 5; i += 1) state = advancePingRate(state, `s${i}`, NOW + i * 1000);
+        expect(() => advancePingRate(state, 's6', NOW + 10_000)).toThrow(PingCreateRejected);
+        try {
+            advancePingRate(state, 's6', NOW + 10_000);
+        } catch (error) {
+            expect(error).toBeInstanceOf(PingCreateRejected);
+            expect((error as PingCreateRejected).reason).toBe('rate');
+        }
+    });
+
+    it('drops an expired prefix so a later create is allowed', () => {
+        const state = advancePingRate({
+            spotIds: ['old', 'recent'],
+            createdAtsMs: [NOW - 2 * 60 * 60 * 1000, NOW - 1000],
+        }, 'new', NOW);
+        expect(state.spotIds).toEqual(['recent', 'new']);
+    });
+
+    it('does not treat a second origin-style id as free quota', () => {
+        let state = advancePingRate(null, 'origin-rep', NOW);
+        for (let i = 0; i < 4; i += 1) state = advancePingRate(state, `p${i}`, NOW + i);
+        expect(state.spotIds).toHaveLength(5);
+        expect(() => advancePingRate(state, 'another-origin', NOW + 50)).toThrow(PingCreateRejected);
     });
 });

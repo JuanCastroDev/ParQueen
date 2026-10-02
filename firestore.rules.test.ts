@@ -39,6 +39,7 @@ import {
 } from './views/street-parking/activeIncomingClaim';
 import { getTitleForCrowns } from './utils/crowns';
 import { timestampToMillis } from './utils/pingLifecycle';
+import { advancePingRate, PingCreateRejected } from './views/street-parking/pingCreateBounds';
 import {
     completeFinderConfirmedHandoff,
     completeTerminalHandoff,
@@ -62,6 +63,53 @@ function thirdDb()  { return testEnv.authenticatedContext(THIRD_UID).firestore()
 function anonDb()   { return testEnv.unauthenticatedContext().firestore(); }
 
 // ── Seed helpers (bypass rules) ────────────────────────────────────────────────
+async function commitBoundedPing(
+    db: ReturnType<typeof ownerDb>,
+    uid: string,
+    spotId: string,
+    data: object,
+    originSpotId?: string,
+) {
+    const spotRef = doc(db, 'spots', spotId);
+    const rateRef = doc(db, 'users', uid, 'pingCreateRate', 'current');
+    const originRef = originSpotId ? doc(db, 'originRePings', originSpotId) : null;
+    await runTransaction(db, async (tx) => {
+        const rateSnap = await tx.get(rateRef);
+        if (originRef) await tx.get(originRef);
+        const now = Timestamp.now();
+        const prev = rateSnap.exists()
+            ? {
+                spotIds: (rateSnap.data().spotIds ?? []) as string[],
+                createdAtsMs: ((rateSnap.data().createdAts ?? []) as Timestamp[]).map((stamp) => stamp.toMillis()),
+            }
+            : null;
+        // A client that skips its own cap still has to present a quota write.
+        // When the rolling hour is full, send the illegal 6th entry so Rules deny it.
+        let next;
+        try {
+            next = advancePingRate(prev, spotId, now.toMillis());
+        } catch (error) {
+            if (!(error instanceof PingCreateRejected) || error.reason !== 'rate') throw error;
+            next = {
+                spotIds: [...(prev?.spotIds ?? []), spotId],
+                createdAtsMs: [...(prev?.createdAtsMs ?? []), now.toMillis()],
+            };
+        }
+        tx.set(spotRef, data);
+        tx.set(rateRef, {
+            spotIds: next.spotIds,
+            createdAts: next.createdAtsMs.map((ms) => Timestamp.fromMillis(ms)),
+        });
+        if (originRef) {
+            tx.set(originRef, {
+                rePingSpotId: spotId,
+                finderId: uid,
+                createdAt: now,
+            });
+        }
+    });
+}
+
 async function seed(col: string, id: string, data: object) {
     await testEnv.withSecurityRulesDisabled(async ctx => {
         await setDoc(doc(ctx.firestore(), col, id), data);
@@ -2372,7 +2420,7 @@ describe('spots — create schema (TM-10)', () => {
     });
 
     it('TM10-A: valid spot create succeeds', async () => {
-        await assertSucceeds(addDoc(collection(ownerDb(), 'spots'), validSpot));
+        await assertSucceeds(commitBoundedPing(ownerDb(), OWNER_UID, 'tm10-a', validSpot));
     });
 
     it('TM10-B: create with forged finderId denied', async () => {
@@ -2427,7 +2475,7 @@ describe('spots — create schema (TM-10)', () => {
     });
 
     it('TM10-J: re-ping payload with geohash restored succeeds (proves the fix)', async () => {
-        await assertSucceeds(addDoc(collection(ownerDb(), 'spots'), validSpot));
+        await assertSucceeds(commitBoundedPing(ownerDb(), OWNER_UID, 'tm10-j', validSpot));
     });
 });
 
@@ -2471,7 +2519,7 @@ describe('spots — identity-display authority (SP)', () => {
     });
 
     it('SP-05: legitimate spot creation (finderName/Title/Vehicle* all matching the caller\'s live profile) succeeds', async () => {
-        await assertSucceeds(setDoc(doc(ownerDb(), 'spots', SPOT_ID), baseSpot));
+        await assertSucceeds(commitBoundedPing(ownerDb(), OWNER_UID, SPOT_ID, baseSpot));
     });
 
     it('SP-07: create with a forged finderTitle (crown-tier) is denied even when finderName matches', async () => {
@@ -2488,7 +2536,7 @@ describe('spots — identity-display authority (SP)', () => {
 
     it('SP-11: omitting optional identity fields entirely (no vehicle set) still succeeds', async () => {
         const { finderVehicleColor: _c, finderVehicleType: _t, finderVehicleBrand: _b, finderTitle: _ti, ...minimal } = baseSpot;
-        await assertSucceeds(setDoc(doc(ownerDb(), 'spots', SPOT_ID + '-minimal'), minimal));
+        await assertSucceeds(commitBoundedPing(ownerDb(), OWNER_UID, SPOT_ID + '-minimal', minimal));
     });
 
     // My Car write-contract: handleMyCarPing (StreetParkingView.tsx) writes
@@ -2511,7 +2559,7 @@ describe('spots — identity-display authority (SP)', () => {
         };
 
         it('MC-1: the corrected My Car payload (source:\'my_car\', no originSessionId) SUCCEEDS', async () => {
-            await assertSucceeds(setDoc(doc(ownerDb(), 'spots', SPOT_ID + '-mycar-a'), myCarPayload));
+            await assertSucceeds(commitBoundedPing(ownerDb(), OWNER_UID, SPOT_ID + '-mycar-a', myCarPayload));
         });
 
         it('MC-2: originSessionId is still rejected — it is not, and must not become, part of the allowed schema', async () => {
@@ -2527,7 +2575,7 @@ describe('spots — identity-display authority (SP)', () => {
         });
 
         it('MC-5: omitting source entirely still succeeds (ordinary, non-My-Car pings never set it)', async () => {
-            await assertSucceeds(setDoc(doc(ownerDb(), 'spots', SPOT_ID + '-mycar-e'), baseSpot));
+            await assertSucceeds(commitBoundedPing(ownerDb(), OWNER_UID, SPOT_ID + '-mycar-e', baseSpot));
         });
 
         it('MC-6: an otherwise-unrecognized extra field is still rejected — hasOnly remains strict beyond this one addition', async () => {
@@ -3655,21 +3703,19 @@ describe('§9 — Two-user workflow: finder ↔ claimer lifecycle', () => {
     it('WF-05: OWNER can create a valid available Ping', async () => {
         // finderName must match the beforeEach-seeded profile's username
         // ('alice') — spot identity-display authority (matchesFinderIdentity).
-        await assertSucceeds(
-            setDoc(doc(ownerDb(), 'spots', 'wf-spot-new'), {
-                finderId:   OWNER_UID,
-                finderName: 'alice',
-                address:    '2 Workflow St',
-                lat:        40.72,
-                lng:        -74.02,
-                type:       'free',
-                status:     'available',
-                geohash:    'dr5rv',
-                pingMode:   'now',
-                reportedAt: Timestamp.now(),
-                expiresAt:  Timestamp.fromMillis(Date.now() + 25 * 60 * 1000),
-            }),
-        );
+        await assertSucceeds(commitBoundedPing(ownerDb(), OWNER_UID, 'wf-spot-new', {
+            finderId:   OWNER_UID,
+            finderName: 'alice',
+            address:    '2 Workflow St',
+            lat:        40.72,
+            lng:        -74.02,
+            type:       'free',
+            status:     'available',
+            geohash:    'dr5rv',
+            pingMode:   'now',
+            reportedAt: Timestamp.now(),
+            expiresAt:  Timestamp.fromMillis(Date.now() + 25 * 60 * 1000),
+        }));
     });
 
     it('WF-06: OTHER (authenticated) can read the available Ping', async () => {
@@ -4476,12 +4522,12 @@ describe('A5 — Ping lifetime bounds', () => {
     });
 
     it('A5-TTL-POS: an honest 30-minute live Ping create succeeds', async () => {
-        await assertSucceeds(addDoc(collection(ownerDb(), 'spots'), livePing()));
+        await assertSucceeds(commitBoundedPing(ownerDb(), OWNER_UID, 'a5-live', livePing()));
     });
 
     it('A5-TTL-NEG: expiresAt more than 30 minutes after reportedAt is denied', async () => {
         const reportedAt = Timestamp.now();
-        await assertFails(addDoc(collection(ownerDb(), 'spots'), livePing({
+        await assertFails(commitBoundedPing(ownerDb(), OWNER_UID, 'a5-ttl-over', livePing({
             reportedAt,
             expiresAt: Timestamp.fromMillis(reportedAt.toMillis() + THIRTY_MIN + 60_000),
         })));
@@ -4489,7 +4535,7 @@ describe('A5 — Ping lifetime bounds', () => {
 
     it('A5-TTL-POS: a reportedAt in the recent past still succeeds when expiresAt stays within 30 minutes of it', async () => {
         const reportedAt = Timestamp.fromMillis(Date.now() - 5 * 60 * 1000);
-        await assertSucceeds(addDoc(collection(ownerDb(), 'spots'), livePing({
+        await assertSucceeds(commitBoundedPing(ownerDb(), OWNER_UID, 'a5-short-live', livePing({
             reportedAt,
             expiresAt: Timestamp.fromMillis(reportedAt.toMillis() + THIRTY_MIN),
         })));
@@ -4497,7 +4543,7 @@ describe('A5 — Ping lifetime bounds', () => {
 
     it('A5-HORIZON-POS: My Car now and later within the 12-hour cap succeed', async () => {
         const nowReported = Timestamp.now();
-        await assertSucceeds(setDoc(doc(ownerDb(), 'spots', 'a5-mycar-now'), livePing({
+        await assertSucceeds(commitBoundedPing(ownerDb(), OWNER_UID, 'a5-mycar-now', livePing({
             pingMode: 'now',
             source: 'my_car',
             reportedAt: nowReported,
@@ -4505,7 +4551,7 @@ describe('A5 — Ping lifetime bounds', () => {
         })));
 
         const laterReported = Timestamp.fromMillis(Date.now() + TWELVE_H - 60_000);
-        await assertSucceeds(setDoc(doc(ownerDb(), 'spots', 'a5-mycar-later'), livePing({
+        await assertSucceeds(commitBoundedPing(ownerDb(), OWNER_UID, 'a5-mycar-later', livePing({
             pingMode: 'later',
             source: 'my_car',
             reportedAt: laterReported,
@@ -4515,7 +4561,7 @@ describe('A5 — Ping lifetime bounds', () => {
 
     it('A5-HORIZON-NEG: reportedAt more than 12 hours ahead is denied', async () => {
         const reportedAt = Timestamp.fromMillis(Date.now() + TWELVE_H + 5 * 60 * 1000);
-        await assertFails(addDoc(collection(ownerDb(), 'spots'), livePing({
+        await assertFails(commitBoundedPing(ownerDb(), OWNER_UID, 'a5-horizon', livePing({
             pingMode: 'later',
             reportedAt,
             expiresAt: Timestamp.fromMillis(reportedAt.toMillis() + THIRTY_MIN),
@@ -4525,6 +4571,117 @@ describe('A5 — Ping lifetime bounds', () => {
     it('A5-GEOHASH: create still requires geohash (nearby delivery fields unchanged)', async () => {
         const payload = livePing();
         delete (payload as { geohash?: string }).geohash;
-        await assertFails(addDoc(collection(ownerDb(), 'spots'), payload));
+        await assertFails(commitBoundedPing(ownerDb(), OWNER_UID, 'a5-nogeo', payload));
+    });
+
+    it('A5-RATE-NEG: a direct create with no quota record is denied', async () => {
+        await assertFails(addDoc(collection(ownerDb(), 'spots'), livePing()));
+    });
+
+    it('A5-RATE-NEG: the 6th create in the rolling hour is denied', async () => {
+        const db = ownerDb();
+        for (let i = 0; i < 5; i += 1) {
+            await commitBoundedPing(db, OWNER_UID, `a5-rate-${i}`, livePing({ address: `Rate ${i}` }));
+        }
+        await assertFails(commitBoundedPing(db, OWNER_UID, 'a5-rate-6', livePing({ address: 'Rate 6' })));
+        let sixthExists = true;
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            sixthExists = (await getDoc(doc(ctx.firestore(), 'spots', 'a5-rate-6'))).exists();
+        });
+        expect(sixthExists).toBe(false);
+    });
+
+    it('A5-RATE-NEG: replacing the quota list to drop in-window creates is denied', async () => {
+        const db = ownerDb();
+        for (let i = 0; i < 5; i += 1) {
+            await commitBoundedPing(db, OWNER_UID, `a5-keep-${i}`, livePing({ address: `Keep ${i}` }));
+        }
+        const now = Timestamp.now();
+        await assertFails(runTransaction(db, async (tx) => {
+            tx.set(doc(db, 'spots', 'a5-reset'), livePing({ address: 'Reset' }));
+            tx.set(doc(db, 'users', OWNER_UID, 'pingCreateRate', 'current'), {
+                spotIds: ['a5-reset'],
+                createdAts: [now],
+            });
+        }));
+    });
+
+    it('A5-RATE-NEG: the quota doc cannot be deleted to reset the hour', async () => {
+        await commitBoundedPing(ownerDb(), OWNER_UID, 'a5-nodelete', livePing());
+        await assertFails(deleteDoc(doc(ownerDb(), 'users', OWNER_UID, 'pingCreateRate', 'current')));
+    });
+
+    it('A5-RATE-POS: creates older than one hour do not consume the rolling quota', async () => {
+        const stale = Timestamp.fromMillis(Date.now() - 2 * 60 * 60 * 1000);
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            await setDoc(doc(ctx.firestore(), 'users', OWNER_UID, 'pingCreateRate', 'current'), {
+                spotIds: ['old-1', 'old-2', 'old-3', 'old-4', 'old-5'],
+                createdAts: [stale, stale, stale, stale, stale],
+            });
+        });
+        await assertSucceeds(commitBoundedPing(ownerDb(), OWNER_UID, 'a5-after-hour', livePing()));
+    });
+
+    it('A5-ORIGIN-POS: one departure re-ping of an occupied handoff succeeds', async () => {
+        await seed('users', OTHER_UID, { id: OTHER_UID, username: 'Bob', crowns: 0 });
+        await seed('spots', 'a5-origin', {
+            ...livePing(),
+            status: 'occupied',
+            finderName: 'Alice',
+            interestedUserId: OTHER_UID,
+        });
+        const reportedAt = Timestamp.fromMillis(Date.now() + 30 * 60 * 1000);
+        await assertSucceeds(commitBoundedPing(otherDb(), OTHER_UID, 'a5-reping', {
+            ...livePing({
+                finderId: OTHER_UID,
+                finderName: 'Bob',
+                pingMode: 'later',
+                reportedAt,
+                expiresAt: Timestamp.fromMillis(reportedAt.toMillis() + THIRTY_MIN),
+                originSpotId: 'a5-origin',
+            }),
+        }, 'a5-origin'));
+    });
+
+    it('A5-ORIGIN-NEG: a second origin-linked re-ping of the same handoff is denied', async () => {
+        await seed('users', OTHER_UID, { id: OTHER_UID, username: 'Bob', crowns: 0 });
+        await seed('spots', 'a5-origin-2', {
+            ...livePing(),
+            status: 'occupied',
+            interestedUserId: OTHER_UID,
+        });
+        const reportedAt = Timestamp.fromMillis(Date.now() + 20 * 60 * 1000);
+        const payload = {
+            finderId: OTHER_UID,
+            finderName: 'Bob',
+            pingMode: 'later',
+            reportedAt,
+            expiresAt: Timestamp.fromMillis(reportedAt.toMillis() + THIRTY_MIN),
+            originSpotId: 'a5-origin-2',
+            lat: 40.7128,
+            lng: -74.006,
+            type: 'free',
+            status: 'available',
+            geohash: 'dr5ru',
+            address: 'Departure',
+        };
+        await commitBoundedPing(otherDb(), OTHER_UID, 'a5-reping-1', payload, 'a5-origin-2');
+        await assertFails(commitBoundedPing(otherDb(), OTHER_UID, 'a5-reping-2', {
+            ...payload,
+            address: 'Departure again',
+        }, 'a5-origin-2'));
+    });
+
+    it('A5-ORIGIN-NEG: originSpotId without the create-once marker is denied', async () => {
+        await assertFails(commitBoundedPing(ownerDb(), OWNER_UID, 'a5-origin-bare', livePing({
+            originSpotId: 'missing-origin',
+        })));
+    });
+
+    it('A5-ORIGIN-NEG: a re-ping of a spot that is not an occupied handoff is denied', async () => {
+        await seed('spots', 'a5-still-available', livePing());
+        await assertFails(commitBoundedPing(ownerDb(), OWNER_UID, 'a5-not-occupied', livePing({
+            originSpotId: 'a5-still-available',
+        }), 'a5-still-available'));
     });
 });
