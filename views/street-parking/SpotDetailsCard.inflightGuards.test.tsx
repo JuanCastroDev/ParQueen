@@ -101,9 +101,19 @@ function mount(item: typeof liveAvailable, overrides: Record<string, unknown> = 
   return renderer;
 }
 
+function buttonLabel(node: TestRenderer.ReactTestInstance): string {
+  const parts: string[] = [];
+  const visit = (value: unknown) => {
+    if (typeof value === 'string' || typeof value === 'number') parts.push(String(value));
+    else if (Array.isArray(value)) value.forEach(visit);
+  };
+  visit(node.props.children);
+  return parts.join('');
+}
+
 function buttonWithText(renderer: TestRenderer.ReactTestRenderer, label: string) {
   return renderer.root.findAll(
-    (node) => node.type === 'button' && JSON.stringify(node.props.children ?? '').includes(label),
+    (node) => node.type === 'button' && buttonLabel(node).includes(label),
   )[0];
 }
 
