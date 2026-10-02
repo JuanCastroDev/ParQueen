@@ -32,7 +32,7 @@ const {
   addDoc, getDoc, getDocs, onSnapshot, runTransaction, setDoc, updateDoc,
 } = vi.hoisted(() => ({
   addDoc: vi.fn(async () => ({ id: 'notification' })),
-  getDoc: vi.fn(async (): Promise<any> => ({ exists: () => false, data: () => undefined })),
+  getDoc: vi.fn(async (_ref: any): Promise<any> => ({ exists: () => false, data: () => undefined })),
   getDocs: vi.fn(async () => ({ empty: true, docs: [] })),
   onSnapshot: vi.fn(() => () => {}),
   runTransaction: vi.fn(async (_db: any, callback: any): Promise<any> => callback({
