@@ -403,6 +403,8 @@ jobs:
               "debug App Check token wiring: ABSENT",
               "privacy purpose NSCameraUsageDescription: PASS",
               "privacy purpose NSCameraUsageDescription: FAIL",
+              "export compliance ITSAppUsesNonExemptEncryption: FALSE",
+              "export compliance ITSAppUsesNonExemptEncryption: FAIL",
               "obsolete camera plugin artifacts: ABSENT",
               "FIREBASE_APPCHECK_DEBUG_TOKEN\\s*=(?!=)",
               "appcheck-debug-",
@@ -813,7 +815,7 @@ jobs:
           expected = {
               "CFBundleIdentifier": "app.parqueen",
               "CFBundleShortVersionString": "1.0",
-              "CFBundleVersion": "2",
+              "CFBundleVersion": "3",
               "CFBundleDisplayName": "ParQueen",
           }
           failed = False
@@ -829,6 +831,11 @@ jobs:
               print("privacy purpose NSCameraUsageDescription: PASS")
           else:
               print("privacy purpose NSCameraUsageDescription: FAIL")
+              failed = True
+          if info.get("ITSAppUsesNonExemptEncryption") is False:
+              print("export compliance ITSAppUsesNonExemptEncryption: FALSE")
+          else:
+              print("export compliance ITSAppUsesNonExemptEncryption: FAIL")
               failed = True
           for photo_key in ("NSPhotoLibraryUsageDescription", "NSPhotoLibraryAddUsageDescription"):
               if photo_key in info:

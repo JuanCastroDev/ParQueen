@@ -1,7 +1,9 @@
 
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
-import { getAuth, signInAnonymously, setPersistence, browserLocalPersistence } from "firebase/auth";
+import { browserLocalPersistence, setPersistence } from "firebase/auth";
+import { auth as parqueenAuth } from "./firebaseConfig";
+import { usesCapacitorIosAuthPersistence } from "./utils/authInitialization";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCKSqWVd6JqpcrNUG6hei8Ug1njaIkAI7Y",
@@ -24,8 +26,12 @@ const app = (() => {
 
 export const db = app ? getFirestore(app) : null;
 
-export const auth = app ? getAuth(app) : null;
-if (auth) {
+// Auth is created once in firebaseConfig. This module only retrieves that
+// instance. Web/PWA/Android still apply the existing local persistence call.
+// Capacitor iOS already selected browserLocalPersistence at initialization
+// and must not open another persistence implementation here.
+export const auth = app ? parqueenAuth : null;
+if (auth && !usesCapacitorIosAuthPersistence()) {
   setPersistence(auth, browserLocalPersistence)
     .then(() => {
       // Existing and future Auth states are persisted in the browser's local storage.

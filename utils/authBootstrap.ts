@@ -9,6 +9,12 @@ import { isTimeoutError, withTimeout } from './withTimeout';
  */
 export const AUTH_BOOTSTRAP_TIMEOUT_MS = 6_000;
 
+/**
+ * Outer cap for the first onAuthStateChanged event.
+ * Starts when the listener is registered, not inside that callback.
+ */
+export const AUTH_INITIAL_STATE_TIMEOUT_MS = 8_000;
+
 /** Soft sub-cap for location reconciliation; still clipped to remaining overall deadline. */
 export const AUTH_BOOTSTRAP_LOCATION_TIMEOUT_MS = 2_500;
 

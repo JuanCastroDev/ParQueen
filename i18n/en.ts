@@ -1090,6 +1090,9 @@ const en: Record<string, string> = {
     'notifications.ping_unavailable': 'This Ping is no longer available.',
     'notifications.open_action': 'Open',
     'notifications.dismiss_action': 'Dismiss notification',
+    'startup.auth_timeout_title': 'ParQueen couldn’t finish starting.',
+    'startup.auth_timeout_body': 'Check your connection and try again.',
+    'startup.auth_timeout_retry': 'Try Again',
 };
 
 export default en;

@@ -115,7 +115,7 @@ describe('§6 — App Check prod bundle assertions', () => {
         const src = fs.readFileSync(SRC_CONFIG, 'utf-8');
         const appCheckSrc = fs.readFileSync(APP_CHECK_SRC, 'utf-8');
         expect(src).toMatch(/initializeParQueenAppCheck\(app\)/);
-        expect(src).toMatch(/getAuth\(app\)/);
+        expect(src).toMatch(/initializeParQueenAuth\(app\)/);
         expect(src).toMatch(/getFirestore\(app\)/);
         expect(appCheckSrc).toMatch(/init\(app,/);
     });

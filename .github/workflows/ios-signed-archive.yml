@@ -67,7 +67,7 @@ jobs:
             echo "::error::PRODUCT_BUNDLE_IDENTIFIER is not exactly app.parqueen."
             exit 1
           fi
-          for setting in "MARKETING_VERSION = 1.0;" "CURRENT_PROJECT_VERSION = 2;" "IPHONEOS_DEPLOYMENT_TARGET = 15.0;" "CODE_SIGN_STYLE = Automatic;"; do
+          for setting in "MARKETING_VERSION = 1.0;" "CURRENT_PROJECT_VERSION = 3;" "IPHONEOS_DEPLOYMENT_TARGET = 15.0;" "CODE_SIGN_STYLE = Automatic;"; do
             if ! grep -F -q "${setting}" "${PBX}"; then
               echo "::error::Missing expected project setting: ${setting}"
               exit 1
@@ -298,6 +298,8 @@ jobs:
               "debug App Check token wiring: ABSENT",
               "privacy purpose NSCameraUsageDescription: PASS",
               "privacy purpose NSCameraUsageDescription: FAIL",
+              "export compliance ITSAppUsesNonExemptEncryption: FALSE",
+              "export compliance ITSAppUsesNonExemptEncryption: FAIL",
               "obsolete camera plugin artifacts: ABSENT",
               "FIREBASE_APPCHECK_DEBUG_TOKEN\\s*=(?!=)",
               "appcheck-debug-",
@@ -523,7 +525,7 @@ jobs:
           echo "build: ${BUILD}"
           test "${IDENT}" = "app.parqueen"
           test "${VERSION}" = "1.0"
-          test "${BUILD}" = "2"
+          test "${BUILD}" = "3"
           echo "ad-hoc archive probe: PASS"
 
   dispatch-guard:
@@ -865,7 +867,7 @@ jobs:
           expected = {
               "CFBundleIdentifier": "app.parqueen",
               "CFBundleShortVersionString": "1.0",
-              "CFBundleVersion": "2",
+              "CFBundleVersion": "3",
               "CFBundleDisplayName": "ParQueen",
           }
           failed = False
@@ -881,6 +883,11 @@ jobs:
               print("privacy purpose NSCameraUsageDescription: PASS")
           else:
               print("privacy purpose NSCameraUsageDescription: FAIL")
+              failed = True
+          if info.get("ITSAppUsesNonExemptEncryption") is False:
+              print("export compliance ITSAppUsesNonExemptEncryption: FALSE")
+          else:
+              print("export compliance ITSAppUsesNonExemptEncryption: FAIL")
               failed = True
           for photo_key in ("NSPhotoLibraryUsageDescription", "NSPhotoLibraryAddUsageDescription"):
               if photo_key in info:
