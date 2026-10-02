@@ -271,7 +271,83 @@ jobs:
           if secret_ref in guard[1]:
               print("dispatch guard references secrets")
               sys.exit(1)
+          ipa_parts = signed.split("- name: Verify signed IPA", 1)
+          if len(ipa_parts) != 2:
+              print("ipa verifier was not found")
+              sys.exit(1)
+          ipa_body = ipa_parts[1].split("- name: Delete signing material", 1)[0]
+          for needle in (
+              'entitlements.get("get-task-allow")',
+              "get-task-allow: ABSENT",
+              "get-task-allow: FALSE — DISTRIBUTION SAFE",
+              "get-task-allow: TRUE — FAIL",
+              "embedded.mobileprovision",
+              '"security", "cms", "-D"',
+              "application-identifier",
+              "com.apple.developer.team-identifier",
+              "keychain-access-groups",
+              "beta-reports-active",
+              "team identifier: MATCH",
+              "production web bundle: ABSENT",
+              "Mapbox configuration embedded:",
+              "App Check production configuration embedded:",
+              "Sentry runtime DSN embedded:",
+              "debug App Check token embedded:",
+          ):
+              if needle not in ipa_body:
+                  print("ipa verifier is missing a required check")
+                  sys.exit(1)
+          classify_name = "- name: Test " + "get-task-allow classification"
+          classify_parts = before.split(classify_name, 1)
+          if len(classify_parts) != 2:
+              print("get-task-allow classification test was not found")
+              sys.exit(1)
+          classify_body = classify_parts[1].split("- name: Prepare CI-only web assets", 1)[0]
+          for needle in (
+              '({}, "pass")',
+              '({"get-task-allow": False}, "pass")',
+              '({"get-task-allow": True}, "fail")',
+              '({"get-task-allow": "false"}, "fail")',
+          ):
+              if needle not in classify_body:
+                  print("get-task-allow classification test is incomplete")
+                  sys.exit(1)
+          if secret_ref in classify_body:
+              print("get-task-allow classification test references secrets")
+              sys.exit(1)
           print("workflow security contract: PASS")
+          PY
+
+      - name: Test get-task-allow classification
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import sys
+
+          def classify_get_task_allow(entitlements):
+              if "get-task-allow" not in entitlements:
+                  return "pass", "get-task-allow: ABSENT"
+              value = entitlements.get("get-task-allow")
+              if value is False:
+                  return "pass", "get-task-allow: FALSE — DISTRIBUTION SAFE"
+              if value is True:
+                  return "fail", "get-task-allow: TRUE — FAIL"
+              return "fail", "get-task-allow: INVALID — FAIL"
+
+          cases = [
+              ({}, "pass"),
+              ({"get-task-allow": False}, "pass"),
+              ({"get-task-allow": True}, "fail"),
+              ({"get-task-allow": "false"}, "fail"),
+          ]
+          for entitlements, want in cases:
+              got, message = classify_get_task_allow(entitlements)
+              print(message)
+              if got != want:
+                  print("get-task-allow classification: FAIL")
+                  sys.exit(1)
+          print("get-task-allow classification: PASS")
           PY
 
       - name: Prepare CI-only web assets
@@ -688,6 +764,7 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           import hashlib, os, pathlib, plistlib, re, subprocess, sys
+          from datetime import datetime, timezone
           export = pathlib.Path(os.environ["RUNNER_TEMP"]) / "ipa-export"
           ipas = sorted(export.rglob("*.ipa"))
           if len(ipas) != 1:
@@ -742,12 +819,25 @@ jobs:
               "com.apple.developer.team-identifier",
               "keychain-access-groups",
               "beta-reports-active",
+              "get-task-allow",
           }
           unexpected = sorted(key for key in entitlements if key not in allowed)
           if unexpected:
               for key in unexpected:
                   print(f"unexpected entitlement: {key}")
               sys.exit(1)
+          if "get-task-allow" not in entitlements:
+              print("get-task-allow: ABSENT")
+          else:
+              get_task_allow = entitlements.get("get-task-allow")
+              if get_task_allow is False:
+                  print("get-task-allow: FALSE — DISTRIBUTION SAFE")
+              elif get_task_allow is True:
+                  print("get-task-allow: TRUE — FAIL")
+                  failed = True
+              else:
+                  print("get-task-allow: INVALID — FAIL")
+                  failed = True
           for key in sorted(entitlements):
               print(f"entitlement: {key}")
           team = os.environ["APPLE_TEAM_ID"]
@@ -758,6 +848,82 @@ jobs:
           else:
               print("team identifier: MISMATCH")
               failed = True
+          provision = app / "embedded.mobileprovision"
+          decoded = pathlib.Path(os.environ["RUNNER_TEMP"]) / "embedded-profile.plist"
+          try:
+              if not provision.is_file():
+                  print("embedded.mobileprovision: ABSENT")
+                  failed = True
+              else:
+                  print("embedded.mobileprovision: PRESENT")
+                  decode = subprocess.run(
+                      ["security", "cms", "-D", "-i", str(provision), "-o", str(decoded)],
+                      capture_output=True,
+                  )
+                  if decode.returncode != 0 or not decoded.is_file():
+                      print("embedded profile decode: FAIL")
+                      failed = True
+                  else:
+                      profile = plistlib.loads(decoded.read_bytes())
+                      profile_ent = profile.get("Entitlements")
+                      if not isinstance(profile_ent, dict):
+                          print("embedded profile entitlements: FAIL")
+                          failed = True
+                          profile_ent = {}
+                      app_id = profile_ent.get("application-identifier")
+                      if app_id == f"{team}.app.parqueen":
+                          print("profile application identifier: MATCH")
+                      else:
+                          print("profile application identifier: MISMATCH")
+                          failed = True
+                      teams = profile.get("TeamIdentifier")
+                      if isinstance(teams, list) and team in teams:
+                          print("profile team identifier: MATCH")
+                      else:
+                          print("profile team identifier: MISMATCH")
+                          failed = True
+                      if "get-task-allow" not in profile_ent:
+                          print("profile get-task-allow: ABSENT")
+                          failed = True
+                      else:
+                          profile_task_allow = profile_ent.get("get-task-allow")
+                          if profile_task_allow is False:
+                              print("profile get-task-allow: FALSE — DISTRIBUTION SAFE")
+                          elif profile_task_allow is True:
+                              print("profile get-task-allow: TRUE — FAIL")
+                              failed = True
+                          else:
+                              print("profile get-task-allow: INVALID — FAIL")
+                              failed = True
+                      if "beta-reports-active" not in profile_ent:
+                          print("profile beta-reports-active: ABSENT")
+                      elif profile_ent.get("beta-reports-active") is True:
+                          print("profile beta-reports-active: TRUE")
+                      elif profile_ent.get("beta-reports-active") is False:
+                          print("profile beta-reports-active: FALSE")
+                      else:
+                          print("profile beta-reports-active: INVALID")
+                          failed = True
+                      if "ProvisionedDevices" in profile:
+                          print("profile type: development")
+                          failed = True
+                      else:
+                          print("profile type: distribution")
+                      expiration = profile.get("ExpirationDate")
+                      if not isinstance(expiration, datetime):
+                          print("profile expiration: ABSENT")
+                          failed = True
+                      else:
+                          expiry = expiration if expiration.tzinfo else expiration.replace(tzinfo=timezone.utc)
+                          print(f"profile expiration: {expiry.date().isoformat()}")
+                          if expiry <= datetime.now(timezone.utc):
+                              print("profile valid: NO")
+                              failed = True
+                          else:
+                              print("profile valid: YES")
+          finally:
+              if decoded.exists():
+                  decoded.unlink()
           public = app / "public"
           if not public.is_dir() or not (public / "index.html").is_file():
               print("production web bundle: ABSENT")
@@ -792,7 +958,8 @@ jobs:
             "${RUNNER_TEMP}/ExportOptions.plist" \
             "${RUNNER_TEMP}/archive.log" \
             "${RUNNER_TEMP}/export.log" \
-            "${RUNNER_TEMP}/pkey.err"
+            "${RUNNER_TEMP}/pkey.err" \
+            "${RUNNER_TEMP}/embedded-profile.plist"
           rm -rf \
             "${RUNNER_TEMP}/ParQueen.xcarchive" \
             "${RUNNER_TEMP}/ipa-export" \

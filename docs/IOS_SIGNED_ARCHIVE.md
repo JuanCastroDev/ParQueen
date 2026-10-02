@@ -45,7 +45,9 @@ Pull requests create the same ad-hoc archive with the Stage A CI-only web bundle
 
 Export remains the distribution step. It uses Xcode 26 `app-store-connect`, destination `export`, automatic signing, and `manageAppVersionAndBuildNumber` false, with provisioning updates and the Team API key. The IPA stays on the ephemeral runner. The workflow does not send it to App Store Connect and does not publish it as a GitHub artifact.
 
-The verifier records the IPA filename, byte size, and SHA-256. It checks bundle ID `app.parqueen`, version `1.0`, build `1`, display name `ParQueen`, code signature, and entitlements. `aps-environment` must be absent. An entitlement outside the automatic App Store set (`application-identifier`, `com.apple.developer.team-identifier`, `keychain-access-groups`, `beta-reports-active`) stops the job.
+Manual run 7 archived and exported a signed IPA. The workflow then failed because the verifier treated any `get-task-allow` key as unexpected. Distribution signing can set that key to false. Development signing sets it to true. The verifier now accepts an absent key and boolean false, and it rejects boolean true or any other value. It also checks the embedded provisioning profile for the app identifier, the team, and `get-task-allow` false. It does not print the profile.
+
+The verifier records the IPA filename, byte size, and SHA-256. It checks bundle ID `app.parqueen`, version `1.0`, build `1`, display name `ParQueen`, code signature, team match, and the production web bundle. `aps-environment` must be absent. An entitlement outside the automatic App Store set (`application-identifier`, `com.apple.developer.team-identifier`, `keychain-access-groups`, `beta-reports-active`, `get-task-allow`) stops the job.
 
 ## What this does not do
 
