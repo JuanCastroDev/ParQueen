@@ -2603,9 +2603,9 @@ describe('spots — identity-display authority (SP)', () => {
             }));
         });
 
-        it('SP-05b: a legitimate hold request with holdRequestedByName matching the requester\'s live profile succeeds', async () => {
+        it('SP-05b: a profile-matching hold request is denied (A6 quarantine; Arm 9 no longer succeeds)', async () => {
             const { updateDoc: upd } = await import('firebase/firestore');
-            await assertSucceeds(upd(doc(otherDb(), 'spots', SPOT_ID), {
+            await assertFails(upd(doc(otherDb(), 'spots', SPOT_ID), {
                 holdRequestedBy: OTHER_UID,
                 holdRequestStatus: 'pending',
                 holdRequestedByName: 'claimerother',
@@ -2662,6 +2662,151 @@ describe('spots — identity-display authority (SP)', () => {
                 tx.delete(lockRef);
             }));
         });
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// A6 / HO-008 — legacy hold quarantine
+// Clients cannot start or mutate hold state. Claim Arm 1 and reads of
+// existing held documents stay allowed. cleanupExpiredHolds (Admin SDK)
+// is covered by functions/cleanupExpiredHolds.integration.test.js.
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('legacy hold quarantine (A6 / HO-008)', () => {
+    const SPOT_ID = 'a6-hold-spot';
+    const finderProfile = { id: OWNER_UID, username: 'finderowner', crowns: 60, vehicleColor: 'blue', vehicleType: 'sedan', vehicleBrand: 'Honda' };
+    const claimerProfile = { id: OTHER_UID, username: 'claimerother', crowns: 5, vehicleColor: 'red', vehicleType: 'suv', vehicleBrand: 'Toyota' };
+
+    const availableForHold = {
+        finderId: OWNER_UID,
+        finderName: 'finderowner',
+        address: '9 Hold Quarantine St',
+        lat: 40.72,
+        lng: -74.0,
+        type: 'free',
+        status: 'available',
+        geohash: 'dr5rv',
+        pingMode: 'now',
+        reportedAt: Timestamp.now(),
+        expiresAt: FUTURE,
+    };
+
+    const pendingHold = {
+        ...availableForHold,
+        holdRequestedBy: OTHER_UID,
+        holdRequestedByName: 'claimerother',
+        holdRequestStatus: 'pending',
+        holdRequestExpiresAt: FUTURE,
+    };
+
+    const acceptedHold = {
+        ...availableForHold,
+        status: 'claimed',
+        claimedBy: OTHER_UID,
+        holdRequestedBy: OTHER_UID,
+        holdRequestedByName: 'claimerother',
+        holdRequestStatus: 'accepted',
+        holdTimerExpiresAt: PAST,
+    };
+
+    beforeEach(async () => {
+        await seed('users', OWNER_UID, finderProfile);
+        await seed('users', OTHER_UID, claimerProfile);
+    });
+
+    it('A6-ARM9: client send-hold (holdRequestStatus pending) is denied', async () => {
+        const { updateDoc: upd } = await import('firebase/firestore');
+        await seed('spots', SPOT_ID, availableForHold);
+        await assertFails(upd(doc(otherDb(), 'spots', SPOT_ID), {
+            holdRequestedBy: OTHER_UID,
+            holdRequestedByName: 'claimerother',
+            holdRequestStatus: 'pending',
+            holdRequestExpiresAt: FUTURE,
+        }));
+        await assertFails(upd(doc(adminDb(), 'spots', SPOT_ID), {
+            holdRequestedBy: ADMIN_UID,
+            holdRequestedByName: 'Admin',
+            holdRequestStatus: 'pending',
+            holdRequestExpiresAt: FUTURE,
+        }));
+    });
+
+    it('A6-ARM7: finder accept-hold is denied', async () => {
+        const { updateDoc: upd } = await import('firebase/firestore');
+        await seed('spots', SPOT_ID, pendingHold);
+        await assertFails(upd(doc(ownerDb(), 'spots', SPOT_ID), {
+            holdRequestStatus: 'accepted',
+            status: 'claimed',
+            claimedBy: OTHER_UID,
+            holdTimerExpiresAt: FUTURE,
+        }));
+    });
+
+    it('A6-ARM8: finder decline-hold is denied', async () => {
+        const { updateDoc: upd } = await import('firebase/firestore');
+        await seed('spots', SPOT_ID, pendingHold);
+        await assertFails(upd(doc(ownerDb(), 'spots', SPOT_ID), {
+            holdRequestStatus: 'declined',
+            status: 'available',
+            claimedBy: null,
+        }));
+    });
+
+    it('A6-ARM10: hold claimer complete is denied', async () => {
+        const { updateDoc: upd } = await import('firebase/firestore');
+        await seed('spots', SPOT_ID, acceptedHold);
+        await assertFails(upd(doc(otherDb(), 'spots', SPOT_ID), {
+            holdRequestStatus: 'completed',
+            status: 'occupied',
+        }));
+    });
+
+    it('A6-ARM11: client hold-timer expiry (finder or claimer) is denied', async () => {
+        const { updateDoc: upd } = await import('firebase/firestore');
+        await seed('spots', SPOT_ID, acceptedHold);
+        const release = {
+            holdRequestStatus: 'declined',
+            status: 'available',
+            claimedBy: null,
+        };
+        await assertFails(upd(doc(ownerDb(), 'spots', SPOT_ID), release));
+        await assertFails(upd(doc(otherDb(), 'spots', SPOT_ID), release));
+    });
+
+    it('A6-READ: an existing held document stays readable with its hold fields', async () => {
+        await seed('spots', SPOT_ID, acceptedHold);
+        const byClaimer = await assertSucceeds(getDoc(doc(otherDb(), 'spots', SPOT_ID)));
+        expect(byClaimer.data()?.holdRequestStatus).toBe('accepted');
+        expect(byClaimer.data()?.claimedBy).toBe(OTHER_UID);
+        const byFinder = await assertSucceeds(getDoc(doc(ownerDb(), 'spots', SPOT_ID)));
+        expect(byFinder.data()?.status).toBe('claimed');
+        await seed('spots', SPOT_ID + '-pending', pendingHold);
+        const pending = await assertSucceeds(getDoc(doc(thirdDb(), 'spots', SPOT_ID + '-pending')));
+        expect(pending.data()?.holdRequestStatus).toBe('pending');
+    });
+
+    it('A6-ARM1: claim Arm 1 still succeeds on an available Ping with no hold', async () => {
+        await seed('spots', SPOT_ID, availableForHold);
+        const db = otherDb();
+        const claimedAt = Timestamp.now();
+        await assertSucceeds(runTransaction(db, async (tx) => {
+            tx.update(doc(db, 'spots', SPOT_ID), {
+                status: 'interested',
+                claimState: 'heading',
+                interestedUserId: OTHER_UID,
+                interestedUserName: 'claimerother',
+                interestedUserTitle: 'Newcomer',
+                interestedUserVehicleColor: 'red',
+                interestedUserVehicleType: 'suv',
+                interestedUserVehicleBrand: 'Toyota',
+                claimStartedAt: claimedAt,
+            });
+            tx.set(doc(db, 'users', OTHER_UID, 'activeIncomingClaims', 'current'), {
+                spotId: SPOT_ID,
+                claimStartedAt: claimedAt,
+                claimState: 'heading',
+                updatedAt: claimedAt,
+            });
+        }));
     });
 });
 

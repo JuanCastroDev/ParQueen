@@ -108,8 +108,18 @@ service cloud.firestore {
         && status.duplicatePingCount == 0;
     }
 
+    // A6 / HO-008 (APPROVED Decision 4): legacy hold is quarantined.
+    // Clients cannot start a hold or mutate hold state. Existing documents
+    // stay readable. Residual accepted holds are released by
+    // cleanupExpiredHolds (Admin SDK, bypasses these rules). Do not flip
+    // this on — reopening hold is a later product decision, not a Rules tweak.
+    function legacyHoldClientWriteAllowed() {
+      return false;
+    }
+
     function isAvailableForHold() {
-      return resource.data.status == 'available'
+      return legacyHoldClientWriteAllowed()
+        && resource.data.status == 'available'
         && resource.data.get('interestedUserId', null) == null
         && resource.data.get('holdRequestedBy', null) == null;
     }
@@ -485,8 +495,14 @@ service cloud.firestore {
         // Arm 6b: Finder signals they are leaving now (scheduled handoff)
         || (isFinder() && onlyChanges(['ownerLeavingNow', 'ownerLeavingNowAt', 'claimAutoReleaseAt']))
 
+        // Arms 7–11 QUARANTINED (A6 / HO-008). Predicates kept so a later
+        // cleanup package can delete them with useHoldFlow.ts. The leading
+        // legacyHoldClientWriteAllowed() gate is false for every client,
+        // including admin-token clients. Admin SDK cleanupExpiredHolds is
+        // unaffected.
         // Arm 7: Finder accepts hold — old state must be pending, claimedBy must match requester
-        || (isFinder()
+        || (legacyHoldClientWriteAllowed()
+          && isFinder()
           && resource.data.holdRequestStatus == 'pending'
           && resource.data.status == 'available'
           && resource.data.get('holdRequestedBy', null) != null
@@ -496,7 +512,8 @@ service cloud.firestore {
           && onlyChanges(['holdRequestStatus', 'status', 'claimedBy', 'holdTimerExpiresAt']))
 
         // Arm 8: Finder declines hold — old state must be pending
-        || (isFinder()
+        || (legacyHoldClientWriteAllowed()
+          && isFinder()
           && resource.data.holdRequestStatus == 'pending'
           && resource.data.status == 'available'
           && request.resource.data.holdRequestStatus == 'declined'
@@ -505,7 +522,8 @@ service cloud.firestore {
           && onlyChanges(['holdRequestStatus', 'status', 'claimedBy']))
 
         // Arm 9: Send hold request — available spot, no active claim or hold
-        || (isAvailableForHold()
+        || (legacyHoldClientWriteAllowed()
+          && isAvailableForHold()
           && request.resource.data.holdRequestedBy == request.auth.uid
           && request.resource.data.holdRequestStatus == 'pending'
           && matchesHoldRequesterIdentity(request.resource.data)
@@ -513,13 +531,15 @@ service cloud.firestore {
                           'holdRequestStatus', 'holdRequestExpiresAt']))
 
         // Arm 10: Hold claimer arrival release
-        || (isHoldClaimer()
+        || (legacyHoldClientWriteAllowed()
+          && isHoldClaimer()
           && request.resource.data.holdRequestStatus == 'completed'
           && request.resource.data.status == 'occupied'
           && onlyChanges(['holdRequestStatus', 'status']))
 
         // Arm 11: Hold timer expiry — old state must be accepted; finder or claimer may execute
-        || ((isFinder() || isHoldClaimer())
+        || (legacyHoldClientWriteAllowed()
+          && (isFinder() || isHoldClaimer())
           && resource.data.holdRequestStatus == 'accepted'
           && resource.data.status == 'claimed'
           && request.resource.data.holdRequestStatus == 'declined'
