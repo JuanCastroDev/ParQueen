@@ -28,54 +28,55 @@ vi.hoisted(() => {
 
 import { setLang, t } from '../../i18n';
 import { SpotDetailsCard } from './SpotDetailsCard';
+import { MapItem } from './types';
 
 const now = Date.parse('2026-08-03T16:00:00.000Z');
 
-const liveAvailable = {
+const liveAvailable: MapItem = {
   id: 'live',
   lat: 40.82,
   lng: -73.91,
-  type: 'free' as const,
-  status: 'available' as const,
+  type: 'free',
+  status: 'available',
   title: 'Nearby street',
   finderId: 'finder',
   finderName: 'Alex',
-  pingMode: 'now' as const,
+  pingMode: 'now',
   reportedAt: { toMillis: () => now - 60_000 },
   expiresAt: { toMillis: () => now + 20 * 60_000 },
 };
 
-const scheduledAvailable = {
+const scheduledAvailable: MapItem = {
   ...liveAvailable,
   id: 'scheduled',
-  pingMode: 'later' as const,
+  pingMode: 'later',
   reportedAt: { toMillis: () => now + 60 * 60_000 },
   expiresAt: { toMillis: () => now + 90 * 60_000 },
 };
 
-const myClaim = {
+const myClaim: MapItem = {
   ...liveAvailable,
   id: 'mine',
-  status: 'interested' as const,
+  status: 'interested',
   interestedUserId: 'viewer',
-  claimState: 'heading' as const,
+  claimState: 'heading',
 };
 
-const myScheduledClaim = {
+const myScheduledClaim: MapItem = {
   ...scheduledAvailable,
   id: 'sched-claim',
-  status: 'interested' as const,
+  status: 'interested',
   interestedUserId: 'viewer',
-  claimState: 'committed' as const,
+  claimState: 'committed',
 };
 
-function mount(item: typeof liveAvailable, overrides: Record<string, unknown> = {}) {
+function mount(item: MapItem, overrides: Record<string, unknown> = {}) {
   let renderer!: TestRenderer.ReactTestRenderer;
   act(() => {
     renderer = TestRenderer.create(
       <SpotDetailsCard
         selectedItem={item}
-        freeSpots={[item] as any}
+        freeSpots={[item]}
         user={{ id: 'viewer' }}
         userLocation={[-73.92, 40.81]}
         spotAddress=""

@@ -123,7 +123,7 @@ describe('useInterestFlow in-flight claim and arrive guards', () => {
   });
 
   it('ignores a second claim tap while an immediate claim write is in flight', async () => {
-    const pending = deferred<void>();
+    const pending = deferred<'claimed'>();
     acquireActiveIncomingClaim.mockReturnValue(pending.promise);
     const getFlow = mount();
 
@@ -134,13 +134,13 @@ describe('useInterestFlow in-flight claim and arrive guards', () => {
     await act(async () => { await getFlow().handleExpressInterest(5); });
     expect(acquireActiveIncomingClaim).toHaveBeenCalledTimes(1);
 
-    pending.resolve();
+    pending.resolve('claimed');
     await act(async () => { await first; });
     expect(getFlow().claiming).toBe(false);
   });
 
   it('ignores a second scheduled-claim tap while that write is in flight', async () => {
-    const pending = deferred<void>();
+    const pending = deferred<'claimed'>();
     acquireActiveIncomingClaim.mockReturnValue(pending.promise);
     const getFlow = mount();
 
@@ -150,7 +150,7 @@ describe('useInterestFlow in-flight claim and arrive guards', () => {
     expect(acquireActiveIncomingClaim).toHaveBeenCalledTimes(1);
     expect(getFlow().claiming).toBe(true);
 
-    pending.resolve();
+    pending.resolve('claimed');
     await act(async () => { await first; });
     expect(getFlow().claiming).toBe(false);
   });
@@ -254,7 +254,7 @@ describe('useInterestFlow in-flight claim and arrive guards', () => {
   });
 
   it('does not start an arrival while a claim write is still open', async () => {
-    const pending = deferred<void>();
+    const pending = deferred<'claimed'>();
     acquireActiveIncomingClaim.mockReturnValue(pending.promise);
     const getFlow = mount();
 
@@ -264,7 +264,7 @@ describe('useInterestFlow in-flight claim and arrive guards', () => {
     expect(markClaimArrived).not.toHaveBeenCalled();
     expect(getFlow().arriving).toBe(false);
 
-    pending.resolve();
+    pending.resolve('claimed');
     await act(async () => { await claim; });
   });
 
