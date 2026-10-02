@@ -292,7 +292,12 @@ jobs:
               "Mapbox configuration embedded:",
               "App Check production configuration embedded:",
               "Sentry runtime DSN embedded:",
-              "debug App Check token embedded:",
+              "VITE App Check debug identifier:",
+              "Firebase App Check debug assignment:",
+              "known App Check debug bypass marker:",
+              "debug App Check token wiring: ABSENT",
+              "FIREBASE_APPCHECK_DEBUG_TOKEN\\s*=(?!=)",
+              "appcheck-debug-",
           ):
               if needle not in ipa_body:
                   print("ipa verifier is missing a required check")
@@ -314,6 +319,37 @@ jobs:
                   sys.exit(1)
           if secret_ref in classify_body:
               print("get-task-allow classification test references secrets")
+              sys.exit(1)
+          bare_firebase = '("FIREBASE_APPCHECK_DEBUG_TOKEN" in text)'
+          if bare_firebase in ipa_body:
+              print("ipa verifier still treats a passive Firebase debug identifier as a leak")
+              sys.exit(1)
+          if "npx vitest run utils/appCheckBundleAssertion.test.ts" not in signed:
+              print("production App Check bundle assertion is missing")
+              sys.exit(1)
+          debug_name = "- name: Test App Check " + "debug-token classification"
+          debug_parts = before.split(debug_name, 1)
+          if len(debug_parts) != 2:
+              print("debug-token classification test was not found")
+              sys.exit(1)
+          debug_body = debug_parts[1].split("- name: Prepare CI-only web assets", 1)[0]
+          for needle in (
+              '("", "pass")',
+              "n.resolve(t.FIREBASE_APPCHECK_DEBUG_TOKEN)",
+              'typeof t.FIREBASE_APPCHECK_DEBUG_TOKEN == "string"',
+              "t.FIREBASE_APPCHECK_DEBUG_TOKEN !== true",
+              '"VITE_APPCHECK_DEBUG_TOKEN", "fail"',
+              "FIREBASE_APPCHECK_DEBUG_TOKEN=true",
+              'self.FIREBASE_APPCHECK_DEBUG_TOKEN="abc"',
+              "x.FIREBASE_APPCHECK_DEBUG_TOKEN=n",
+              "appcheck-debug-token",
+              "FIREBASE_APPCHECK_DEBUG_TOKEN\\s*=(?!=)",
+          ):
+              if needle not in debug_body:
+                  print("debug-token classification test is incomplete")
+                  sys.exit(1)
+          if secret_ref in debug_body:
+              print("debug-token classification test references secrets")
               sys.exit(1)
           print("workflow security contract: PASS")
           PY
@@ -348,6 +384,39 @@ jobs:
                   print("get-task-allow classification: FAIL")
                   sys.exit(1)
           print("get-task-allow classification: PASS")
+          PY
+
+      - name: Test App Check debug-token classification
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re, sys
+
+          def classify_debug_wiring(text):
+              vite = "VITE_APPCHECK_DEBUG_TOKEN" in text
+              assigned = re.search(r"FIREBASE_APPCHECK_DEBUG_TOKEN\s*=(?!=)", text) is not None
+              prop = re.search(r"\.FIREBASE_APPCHECK_DEBUG_TOKEN\s*=(?!=)", text) is not None
+              bypass = re.search(r"appcheck-debug-", text, re.IGNORECASE) is not None
+              return "fail" if (vite or assigned or prop or bypass) else "pass"
+
+          cases = [
+              ("", "pass"),
+              ("n.resolve(t.FIREBASE_APPCHECK_DEBUG_TOKEN)", "pass"),
+              ('typeof t.FIREBASE_APPCHECK_DEBUG_TOKEN == "string"', "pass"),
+              ("t.FIREBASE_APPCHECK_DEBUG_TOKEN !== true", "pass"),
+              ("VITE_APPCHECK_DEBUG_TOKEN", "fail"),
+              ("FIREBASE_APPCHECK_DEBUG_TOKEN=true", "fail"),
+              ('self.FIREBASE_APPCHECK_DEBUG_TOKEN="abc"', "fail"),
+              ("x.FIREBASE_APPCHECK_DEBUG_TOKEN=n", "fail"),
+              ("appcheck-debug-token", "fail"),
+          ]
+          for sample, want in cases:
+              got = classify_debug_wiring(sample)
+              if got != want:
+                  print("debug-token classification: FAIL")
+                  sys.exit(1)
+          print("debug-token classification: PASS")
           PY
 
       - name: Prepare CI-only web assets
@@ -563,6 +632,12 @@ jobs:
           npm run build
           test -f dist/index.html
           echo "dist/index.html: PRESENT"
+
+      - name: Assert production App Check bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx vitest run utils/appCheckBundleAssertion.test.ts
 
       - name: Copy web assets into the iOS shell
         shell: bash
@@ -936,12 +1011,26 @@ jobs:
           mapbox = re.search(r"pk\.[A-Za-z0-9_-]{20,}", text) is not None
           app_check = re.search(r"6L[A-Za-z0-9_-]{20,}", text) is not None
           sentry = re.search(r"https://[A-Za-z0-9]+@[A-Za-z0-9.-]+\.sentry\.io/[0-9]+", text) is not None
-          debug = ("VITE_APPCHECK_DEBUG_TOKEN" in text) or ("FIREBASE_APPCHECK_DEBUG_TOKEN" in text)
+          vite_debug = "VITE_APPCHECK_DEBUG_TOKEN" in text
+          firebase_assignment = re.search(
+              r"FIREBASE_APPCHECK_DEBUG_TOKEN\s*=(?!=)",
+              text,
+          ) is not None or re.search(
+              r"\.FIREBASE_APPCHECK_DEBUG_TOKEN\s*=(?!=)",
+              text,
+          ) is not None
+          bypass = re.search(r"appcheck-debug-", text, re.IGNORECASE) is not None
           print(f"Mapbox configuration embedded: {'YES' if mapbox else 'NO'}")
           print(f"App Check production configuration embedded: {'YES' if app_check else 'NO'}")
           print(f"Sentry runtime DSN embedded: {'YES' if sentry else 'NO'}")
-          print(f"debug App Check token embedded: {'YES' if debug else 'NO'}")
-          if not mapbox or not app_check or not sentry or debug:
+          print("VITE App Check debug identifier: " + ("PRESENT" if vite_debug else "ABSENT"))
+          print("Firebase App Check debug assignment: " + ("PRESENT" if firebase_assignment else "ABSENT"))
+          print("known App Check debug bypass marker: " + ("PRESENT" if bypass else "ABSENT"))
+          if vite_debug or firebase_assignment or bypass:
+              failed = True
+          else:
+              print("debug App Check token wiring: ABSENT")
+          if not mapbox or not app_check or not sentry:
               failed = True
           if failed:
               sys.exit(1)

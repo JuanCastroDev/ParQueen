@@ -49,6 +49,8 @@ Manual run 7 archived and exported a signed IPA. The workflow then failed becaus
 
 The verifier records the IPA filename, byte size, and SHA-256. It checks bundle ID `app.parqueen`, version `1.0`, build `1`, display name `ParQueen`, code signature, team match, and the production web bundle. `aps-environment` must be absent. An entitlement outside the automatic App Store set (`application-identifier`, `com.apple.developer.team-identifier`, `keychain-access-groups`, `beta-reports-active`, `get-task-allow`) stops the job.
 
+Manual run 9 archived, exported, codesigned, and validated the distribution profile and the production configuration. The only failure was the debug-token check. The Firebase SDK can contain a passive read of `FIREBASE_APPCHECK_DEBUG_TOKEN`. That presence is not a debug-token leak. The IPA still fails if `VITE_APPCHECK_DEBUG_TOKEN` survives in the bundle, if `FIREBASE_APPCHECK_DEBUG_TOKEN` is assigned, or if an `appcheck-debug-` bypass marker is present.
+
 ## What this does not do
 
 It does not deploy Firebase, change Street Intelligence, or change application source. A green pull request means the contract check and the ad-hoc archive probe passed. It does not mean an App Store IPA was exported.
