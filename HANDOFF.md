@@ -195,7 +195,7 @@ All deployed to `us-central1`, Node.js 20, Firebase Functions v5 (v2 API):
 
 ### State Management
 - React useState/useEffect throughout (no Redux, no context providers)
-- Custom hooks: `useSpotData`, `useInterestFlow`, `useSearch`, `useUnreadMessages`, `useHoldFlow` (deprecated)
+- Custom hooks: `useSpotData`, `useInterestFlow`, `useSearch`, `useUnreadMessages`. `useHoldFlow` stays on disk but is quarantined: no live import, and Rules deny new hold writes (A6 / HO-008). Delete the hook in a later cleanup package.
 - `selectedItem` in StreetParkingView is the currently selected/viewed spot
 - `user` state in App.tsx maintained via `onSnapshot` on the user's Firestore document
 
@@ -654,7 +654,7 @@ Prefer:
 - **Trigger:** Callable (onCall), owner only
 
 ### cleanupExpiredHolds
-- **Purpose:** Release any expired claim holds not caught by `cleanupExpiredInterests`
+- **Purpose:** Release residual accepted legacy holds (`status == claimed`, `holdRequestStatus == accepted`, expired `holdTimerExpiresAt`). Also clears expired or stale pending hold-request fields (`holdRequestedBy`, `holdRequestedByName`, `holdRequestExpiresAt`, `holdRequestStatus`) on still-live available Pings so `holdRequestedBy` cannot block claims. That pending pass does not change Ping status (expired Pings are not reopened) and does not touch active claims or `activeIncomingClaims` locks. Clients still cannot start or mutate holds (Rules Arms 7–11 quarantined, A6 / HO-008).
 - **Trigger:** Scheduled
 
 ---
@@ -782,7 +782,7 @@ The deployed app is at: https://parkqueen-46475363-ccf36.web.app
 ## 10. Known Issues
 
 ### High Priority
-- **`useHoldFlow.ts` still exists on disk** — deprecated, no longer imported anywhere. Should be deleted.
+- **Legacy hold is quarantined at Rules (A6 / HO-008)** — Arms 7–11 deny new hold initiation and accept/decline/complete mutations. Existing held documents stay readable; `cleanupExpiredHolds` still releases accepted holds and clears expired/stale pending hold-request fields so those Pings can be claimed again. **`useHoldFlow.ts` is not deleted** — it has no live importers and remains for a later cleanup package.
 - **`LoginView.tsx` and `SplashView.tsx` still exist on disk** — not imported or referenced. Should be deleted (see Section 8).
 
 ### Medium Priority
@@ -906,7 +906,7 @@ The deployed app is at: https://parkqueen-46475363-ccf36.web.app
 4. **Admin parse failure review** — build a simple admin UI card for the `parseFailures` collection so unrecognized signs can be triaged.
 
 ### General
-5. **Delete dead files** — `useHoldFlow.ts`, `LoginView.tsx`, `SplashView.tsx` are unused. Clean them up.
+5. **Delete dead files later** — `useHoldFlow.ts` is unused and hold writes are now denied in Rules, but do not delete the hook until a later cleanup package. `LoginView.tsx` and `SplashView.tsx` are also unused.
 6. **Test two-user flow end-to-end** — deployed app with two browser sessions (one incognito) to test the full claim/cancel/arrive cycle.
 7. **Notification debouncing** — implement the 60-second skip to prevent rapid notification spam.
 8. **Dynamic map theme switching** — call `map.setStyle()` when theme changes so the map matches without requiring a full reload.

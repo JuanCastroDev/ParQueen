@@ -375,7 +375,10 @@ exports.cleanupExpiredInterests = onSchedule(
   }
 );
 
-// 1c) Revert expired hold timers every minute
+// 1c) Revert expired hold timers every minute.
+// Accepted holds (status claimed) keep the original release. Expired or
+// stale pending holds are a separate Admin-only pass: clients can no longer
+// decline them (A6), and holdRequestedBy blocks isAvailableForClaim.
 exports.cleanupExpiredHolds = onSchedule(
   {
     schedule: "every 1 minutes",
@@ -394,25 +397,89 @@ exports.cleanupExpiredHolds = onSchedule(
       .limit(500)
       .get();
 
-    if (snap.empty) return;
-
-    const batch = db.batch();
-    snap.docs.forEach((d) => {
-      batch.update(d.ref, {
-        status: "available",
-        holdRequestStatus: "declined",
-        claimedBy: null,
-        holdTimerExpiresAt: null,
-        holdRequestedBy: null,
-        holdRequestedByName: null,
-        holdRequestExpiresAt: null,
-        updatedAt: now,
+    if (!snap.empty) {
+      const batch = db.batch();
+      snap.docs.forEach((d) => {
+        batch.update(d.ref, {
+          status: "available",
+          holdRequestStatus: "declined",
+          claimedBy: null,
+          holdTimerExpiresAt: null,
+          holdRequestedBy: null,
+          holdRequestedByName: null,
+          holdRequestExpiresAt: null,
+          updatedAt: now,
+        });
       });
-    });
-    await batch.commit();
-    console.log(`✅ cleanupExpiredHolds: reverted ${snap.size} held spots`);
+      await batch.commit();
+      console.log(`✅ cleanupExpiredHolds: reverted ${snap.size} held spots`);
+    }
+
+    await releaseExpiredPendingHoldRequests(now);
   }
 );
+
+// Clear hold-request fields on a live available Ping whose pending hold has
+// expired (holdRequestExpiresAt <= now) or is stale (no usable expiry).
+// Status is never written — an expired Ping is not reopened, and a deleted
+// doc is not recreated. Claim fields and activeIncomingClaims locks are not
+// read or written. Idempotent: once holdRequestStatus is no longer pending
+// the query does not select the doc again.
+async function releaseExpiredPendingHoldRequests(now) {
+  const snap = await db
+    .collection("spots")
+    .where("holdRequestStatus", "==", "pending")
+    .where("status", "==", "available")
+    .limit(500)
+    .get();
+
+  if (snap.empty) return;
+
+  let cleared = 0;
+  let skipped = 0;
+  let errors = 0;
+  const nowMs = now.toMillis();
+  for (const d of snap.docs) {
+    try {
+      const didClear = await db.runTransaction(async (tx) => {
+        const fresh = await tx.get(d.ref);
+        if (!fresh.exists) return false;
+        const spot = fresh.data() || {};
+        if (spot.status !== "available") return false;
+        if (spot.holdRequestStatus !== "pending") return false;
+        // A real claimer id means an active (or partial) claim. Leave the
+        // Ping and that user's claim lock document alone.
+        if (spot.interestedUserId) return false;
+        if (
+          spot.expiresAt &&
+          typeof spot.expiresAt.toMillis === "function" &&
+          spot.expiresAt.toMillis() <= nowMs
+        ) return false;
+
+        const requestExpires = spot.holdRequestExpiresAt;
+        const stale = !requestExpires || typeof requestExpires.toMillis !== "function";
+        const expired = !stale && requestExpires.toMillis() <= nowMs;
+        if (!stale && !expired) return false;
+
+        tx.update(d.ref, {
+          holdRequestedBy: null,
+          holdRequestedByName: null,
+          holdRequestExpiresAt: null,
+          holdRequestStatus: null,
+          updatedAt: now,
+        });
+        return true;
+      });
+      if (didClear) cleared++; else skipped++;
+    } catch (e) {
+      errors++;
+      console.error("cleanupExpiredHolds: failed to clear pending hold", d.id.slice(0, 8) + "***", sanitizeError(e));
+    }
+  }
+  console.log(
+    `✅ cleanupExpiredHolds: cleared ${cleared} expired pending holds, skipped ${skipped}, errors ${errors}`
+  );
+}
 
 // Bilingual copy for scheduled claim notifications.
 // lang defaults to 'en' for any missing/unrecognised value.
