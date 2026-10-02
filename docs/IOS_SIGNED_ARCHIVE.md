@@ -2,7 +2,7 @@
 
 `.github/workflows/ios-signed-archive.yml` builds a real production web bundle, copies it into the Capacitor iOS shell, and can archive and export `app.parqueen` on a GitHub-hosted `macos-26` runner.
 
-Pull requests run a secret-free contract check. The signed job does not run on a pull request.
+Pull requests run a secret-free contract check and an ad-hoc Release archive. They do not receive Apple credentials and they do not export an IPA. The signed job does not run on a pull request.
 
 ## Manual run
 
@@ -35,14 +35,18 @@ The `.p8` is decoded into `$RUNNER_TEMP`, mode `600`, checked with `openssl pkey
 
 ## Archive and export
 
-Signing stays automatic. `DEVELOPMENT_TEAM` comes from `APPLE_TEAM_ID` on the `xcodebuild` command. The project does not store a Team ID or a provisioning profile.
+The archive step and the export step are separate. The project does not store a Team ID or a provisioning profile.
 
-The Xcode project still inherits the Capacitor default identity `iPhone Developer`. The first signed run reached Apple provisioning and then looked for an iOS App Development profile, which requires a registered device. The archive command now sets `CODE_SIGN_STYLE=Automatic` and `CODE_SIGN_IDENTITY="Apple Distribution"` so the Release archive requests App Store distribution signing. No device is registered for this, and the project file is unchanged.
+The Xcode project still inherits the Capacitor default identity `iPhone Developer`. Manual run 3 reached Apple provisioning during archive and requested an iOS App Development profile, which requires a registered device. Manual run 5 forced `Apple Distribution` on the archive command. That identity conflicted with automatic development signing on the App target and on Swift package targets, including IONCameraLib.
 
-Export uses Xcode 26 `app-store-connect`, destination `export`, automatic signing, and `manageAppVersionAndBuildNumber` false. The IPA stays on the ephemeral runner. The workflow does not send it to App Store Connect and does not publish it as a GitHub artifact.
+The archive command now uses CI ad-hoc signing: `CODE_SIGN_IDENTITY=-`, `AD_HOC_CODE_SIGNING_ALLOWED=YES`, and `CODE_SIGN_STYLE=Automatic`. On the manual job, `DEVELOPMENT_TEAM` still comes from `APPLE_TEAM_ID`. The archive command does not update provisioning and does not pass the App Store Connect API key. No device is registered for this, and the project file is unchanged.
+
+Pull requests create the same ad-hoc archive with the Stage A CI-only web bundle and without a team. The probe checks that the archive and `App.app` exist, with bundle ID `app.parqueen`, version `1.0`, and build `1`. It does not require a distribution signature and it does not upload the archive.
+
+Export remains the distribution step. It uses Xcode 26 `app-store-connect`, destination `export`, automatic signing, and `manageAppVersionAndBuildNumber` false, with provisioning updates and the Team API key. The IPA stays on the ephemeral runner. The workflow does not send it to App Store Connect and does not publish it as a GitHub artifact.
 
 The verifier records the IPA filename, byte size, and SHA-256. It checks bundle ID `app.parqueen`, version `1.0`, build `1`, display name `ParQueen`, code signature, and entitlements. `aps-environment` must be absent. An entitlement outside the automatic App Store set (`application-identifier`, `com.apple.developer.team-identifier`, `keychain-access-groups`, `beta-reports-active`) stops the job.
 
 ## What this does not do
 
-It does not deploy Firebase, change Street Intelligence, or change application source. A green pull request only means the contract check passed.
+It does not deploy Firebase, change Street Intelligence, or change application source. A green pull request means the contract check and the ad-hoc archive probe passed. It does not mean an App Store IPA was exported.
