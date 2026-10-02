@@ -95,18 +95,23 @@ describe('active incoming claim lock logic', () => {
     expect(rules).not.toContain("duration.value(15, 'm')");
   });
 
-  it('keeps the collection-group updatedAt index and the interested-scan index deployable', () => {
+  it('keeps the collection-group updatedAt index and omits the rejected spots status+__name__ composite', () => {
     const indexes = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'firestore.indexes.json'), 'utf8'));
     const updatedAt = indexes.fieldOverrides.find((entry) =>
       entry.collectionGroup === 'activeIncomingClaims' && entry.fieldPath === 'updatedAt');
     expect(updatedAt.indexes).toEqual(expect.arrayContaining([
-      expect.objectContaining({ queryScope: 'COLLECTION_GROUP' }),
+      expect.objectContaining({ order: 'ASCENDING', queryScope: 'COLLECTION_GROUP' }),
     ]));
-    const scan = indexes.indexes.find((entry) =>
+    // Firebase returns 400 for a composite of one field plus __name__: the
+    // automatic single-field index on spots.status already serves
+    // where(status ==).orderBy(documentId()).
+    const rejected = indexes.indexes.find((entry) =>
       entry.collectionGroup === 'spots'
-      && entry.fields.some((field) => field.fieldPath === 'status')
-      && entry.fields.some((field) => field.fieldPath === '__name__'));
-    expect(scan).toBeTruthy();
+      && Array.isArray(entry.fields)
+      && entry.fields.length === 2
+      && entry.fields[0].fieldPath === 'status'
+      && entry.fields[1].fieldPath === '__name__');
+    expect(rejected).toBeUndefined();
   });
 
   it('keeps the earliest claim and orders the rest for release', () => {
