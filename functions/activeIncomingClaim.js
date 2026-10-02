@@ -74,7 +74,9 @@ function claimStartedAtForLock(spot, now) {
  * interested Pings before the rollout gate is allowed to open.
  * The collection-group query needs the activeIncomingClaims.updatedAt index;
  * if that query fails, GC is skipped and reconciliation still runs.
- * Reconciliation pages spots by status + document id (composite index).
+ * Reconciliation pages spots by status + document id. That equality plus
+ * orderBy(documentId()) is served by the automatic single-field index on
+ * status; a composite of status + __name__ is rejected by Firebase (400).
  */
 async function repairActiveIncomingClaims(db, now) {
   const gc = await garbageCollectStaleLocks(db, now);
