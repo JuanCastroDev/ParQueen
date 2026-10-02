@@ -26,6 +26,8 @@ interface SpotDetailsCardProps {
     onCancelByFinder: (reason: string) => void;
     onCancelByClaimer: (reason: string) => void;
     cancelingClaim?: boolean;
+    claiming?: boolean;
+    arriving?: boolean;
     onDriverArrived: () => void;
     onMessageUser: (userId: string, context: string, returnSpotId?: string) => void;
     interestError: string | null;
@@ -42,7 +44,7 @@ export const SpotDetailsCard: React.FC<SpotDetailsCardProps> = ({
     selectedItem, freeSpots, user, userLocation, spotAddress,
     onHeadingThere, onScheduledClaim, onCommitToHeading, onOwnerLeaveNow,
     onEditSpot, onDeletePing, onArrival,
-    onCancelByFinder, onCancelByClaimer, cancelingClaim = false, onDriverArrived, onMessageUser,
+    onCancelByFinder, onCancelByClaimer, cancelingClaim = false, claiming = false, arriving = false, onDriverArrived, onMessageUser,
     interestError, estDriveMinutes, isWithinArrivalRange, maxEtaMinutes, manageMode = false, nowMs = Date.now(),
     backLabel, onBack,
 }) => {
@@ -59,7 +61,7 @@ export const SpotDetailsCard: React.FC<SpotDetailsCardProps> = ({
                     <span>{backLabel ?? 'Back'}</span>
                 </button>
             )}
-            <SpotDetailsCardInner {...{ selectedItem, freeSpots, user, userLocation, spotAddress, onHeadingThere, onScheduledClaim, onCommitToHeading, onOwnerLeaveNow, onEditSpot, onDeletePing, onArrival, onCancelByFinder, onCancelByClaimer, cancelingClaim, onDriverArrived, onMessageUser, interestError, estDriveMinutes, isWithinArrivalRange, maxEtaMinutes, manageMode, nowMs }} />
+            <SpotDetailsCardInner {...{ selectedItem, freeSpots, user, userLocation, spotAddress, onHeadingThere, onScheduledClaim, onCommitToHeading, onOwnerLeaveNow, onEditSpot, onDeletePing, onArrival, onCancelByFinder, onCancelByClaimer, cancelingClaim, claiming, arriving, onDriverArrived, onMessageUser, interestError, estDriveMinutes, isWithinArrivalRange, maxEtaMinutes, manageMode, nowMs }} />
         </>
     );
 };
@@ -68,7 +70,7 @@ const SpotDetailsCardInner: React.FC<Omit<SpotDetailsCardProps, 'backLabel' | 'o
     selectedItem, freeSpots, user, userLocation, spotAddress,
     onHeadingThere, onScheduledClaim, onCommitToHeading, onOwnerLeaveNow,
     onEditSpot, onDeletePing, onArrival,
-    onCancelByFinder, onCancelByClaimer, cancelingClaim = false, onDriverArrived, onMessageUser,
+    onCancelByFinder, onCancelByClaimer, cancelingClaim = false, claiming = false, arriving = false, onDriverArrived, onMessageUser,
     interestError, estDriveMinutes, isWithinArrivalRange, maxEtaMinutes, manageMode = false, nowMs = Date.now(),
 }) => {
     useLang();
@@ -220,8 +222,9 @@ const SpotDetailsCardInner: React.FC<Omit<SpotDetailsCardProps, 'backLabel' | 'o
                                 {t('claim_flow.message')}
                             </button>
                         </div>
-                        <button onClick={onArrival} disabled={!isWithinArrivalRange}
-                            className="w-full font-bold py-4 rounded-2xl transition-all text-sm active:scale-95 text-white disabled:opacity-40 flex items-center justify-center gap-2"
+                        <button onClick={onArrival} disabled={!isWithinArrivalRange || arriving}
+                            aria-busy={arriving}
+                            className="w-full font-bold py-4 rounded-2xl transition-all text-sm active:scale-95 text-white disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 flex items-center justify-center gap-2"
                             style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>
                             {isWithinArrivalRange ? t('claim_flow.ive_arrived') : (distanceText ? t('claim_flow.dist_away', { dist: distanceText }) : t('claim_flow.get_closer'))}
                         </button>
@@ -304,8 +307,9 @@ const SpotDetailsCardInner: React.FC<Omit<SpotDetailsCardProps, 'backLabel' | 'o
                         {t('claim_flow.message')}
                     </button>
                 </div>
-                <button onClick={onCommitToHeading}
-                    className="w-full font-bold py-4 rounded-2xl transition-all text-sm active:scale-95 text-white flex items-center justify-center gap-2"
+                <button onClick={onCommitToHeading} disabled={claiming}
+                    aria-busy={claiming}
+                    className="w-full font-bold py-4 rounded-2xl transition-all text-sm active:scale-95 text-white flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
                     style={{ background: ownerLeaving ? 'linear-gradient(90deg, #f59e0b, #d97706)' : 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>
                     <Navigation size={14} />
                     {t('scheduled_claim.im_heading_there')}
@@ -548,8 +552,9 @@ const SpotDetailsCardInner: React.FC<Omit<SpotDetailsCardProps, 'backLabel' | 'o
                         <MessageSquare size={16} />
                     </button>
                     {isScheduled ? (
-                        <button onClick={onScheduledClaim}
-                            className="flex-1 font-bold py-3.5 rounded-2xl transition-all text-sm active:scale-95 text-white flex items-center justify-center gap-1.5"
+                        <button onClick={onScheduledClaim} disabled={claiming}
+                            aria-busy={claiming}
+                            className="flex-1 font-bold py-3.5 rounded-2xl transition-all text-sm active:scale-95 text-white flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
                             style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>
                             {departureText ? t('claim_flow.claim_for_time', { time: departureText }) : t('claim_flow.claim_this_spot')}
                         </button>
@@ -558,8 +563,9 @@ const SpotDetailsCardInner: React.FC<Omit<SpotDetailsCardProps, 'backLabel' | 'o
                             {t('claim_flow.too_far_drive', { min: estDriveMinutes })}
                         </span>
                     ) : (
-                        <button onClick={onHeadingThere}
-                            className="flex-1 font-bold py-3.5 rounded-2xl transition-all text-sm active:scale-95 text-white flex items-center justify-center gap-1.5"
+                        <button onClick={onHeadingThere} disabled={claiming}
+                            aria-busy={claiming}
+                            className="flex-1 font-bold py-3.5 rounded-2xl transition-all text-sm active:scale-95 text-white flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
                             style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>
                             <Navigation size={14} />
                             {t('claim_flow.im_heading_there')}
