@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useFocusOnMount } from '../hooks/useFocusOnMount';
 import {
   Camera, AlertCircle, CheckCircle2, Clock, Bell, ChevronLeft, ChevronRight,
-  ShieldCheck, ImageIcon, X, ScanLine,
+  ShieldCheck, X, ScanLine,
 } from 'lucide-react';
 import { HydrantDistanceTool } from './assistant/HydrantDistanceTool';
 import { ParkingCheckTool } from './assistant/ParkingCheckTool';
@@ -12,13 +12,7 @@ import { resolveAssistantAndroidBack } from '../utils/androidBackNavigation';
 import { useParkingTimer } from './street-parking/useParkingTimer';
 import { t, useLang } from '../i18n';
 import { loadRecentScans, recordScan, RecentScan } from '../utils/recentScans';
-import {
-  captureFromCamera,
-  pickFromGallery,
-  subscribeRestoredSignCapture,
-  usesNativeSignCapture,
-  type SignCaptureOutcome,
-} from '../utils/signScanner';
+import { fileToSignImage } from '../utils/signScanner';
 
 type ScanState = 'idle' | 'preview' | 'analyzing' | 'done';
 
@@ -67,7 +61,6 @@ export const AssistantView = ({ onBack, onOpenMyCar, androidBackRef }: Assistant
   const [analysis, setAnalysis] = useState<SignAnalysisResult | null>(null);
   const [recent, setRecent] = useState<RecentScan[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const galleryInputRef = useRef<HTMLInputElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   // Guards against a second submit while a request is already in flight, which
   // a fast double-tap on the CTA would otherwise produce.
@@ -78,48 +71,33 @@ export const AssistantView = ({ onBack, onOpenMyCar, androidBackRef }: Assistant
 
   useEffect(() => { setRecent(loadRecentScans()); }, []);
 
-  const applyCapture = useCallback((outcome: SignCaptureOutcome) => {
-    if (outcome.status !== 'captured') return;
-    setImage(outcome.image.previewUrl);
-    setImageData(outcome.image.imageData);
-    setAnalysis(null);
-    setScanState('preview');
-    setMode('scan');
+  useEffect(() => {
+    const release = () => { captureInFlightRef.current = false; };
+    window.addEventListener('focus', release);
+    return () => window.removeEventListener('focus', release);
   }, []);
 
-  useEffect(() => subscribeRestoredSignCapture(applyCapture), [applyCapture]);
-
-  const openNativeOrInput = async (
-    nativeCapture: () => Promise<SignCaptureOutcome>,
-    input: React.RefObject<HTMLInputElement>,
-  ) => {
-    if (!usesNativeSignCapture()) {
-      input.current?.click();
-      return;
-    }
+  const openCamera = () => {
     if (captureInFlightRef.current) return;
+    const node = fileInputRef.current;
+    if (!node || typeof node.click !== 'function') return;
     captureInFlightRef.current = true;
-    try {
-      applyCapture(await nativeCapture());
-    } finally {
-      captureInFlightRef.current = false;
-    }
+    node.click();
   };
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const base64String = reader.result as string;
-      setImage(base64String);
-      setImageData(base64String.split(',')[1]);
-      setAnalysis(null);
-      setScanState('preview');
-    };
-    reader.readAsDataURL(file);
+    captureInFlightRef.current = false;
     // Allow re-picking the same file twice in a row.
     event.target.value = '';
+    if (!file) return;
+    void fileToSignImage(file).then((captured) => {
+      if (!captured) return;
+      setImage(captured.previewUrl);
+      setImageData(captured.imageData);
+      setAnalysis(null);
+      setScanState('preview');
+    });
   };
 
   const analyze = useCallback(async (base64Data: string) => {
@@ -331,10 +309,6 @@ export const AssistantView = ({ onBack, onOpenMyCar, androidBackRef }: Assistant
             type="file" ref={fileInputRef} onChange={handleFileChange}
             accept="image/*" capture="environment" className="hidden"
           />
-          <input
-            type="file" ref={galleryInputRef} onChange={handleFileChange}
-            accept="image/*" className="hidden"
-          />
 
           {/* A. idle */}
           {scanState === 'idle' && (
@@ -347,17 +321,10 @@ export const AssistantView = ({ onBack, onOpenMyCar, androidBackRef }: Assistant
               </p>
               <button
                 type="button"
-                onClick={() => { void openNativeOrInput(captureFromCamera, fileInputRef); }}
+                onClick={openCamera}
                 className="pq-cta w-full py-3.5 rounded-2xl font-bold text-white text-sm mb-3 focus-visible:ring-2 focus-visible:ring-[#38bdf8] focus-visible:outline-none"
               >
                 {t('assistant.open_camera')}
-              </button>
-              <button
-                type="button"
-                onClick={() => { void openNativeOrInput(pickFromGallery, galleryInputRef); }}
-                className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 text-sm font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text)] rounded-2xl border border-[var(--color-border)] focus-visible:ring-2 focus-visible:ring-[#38bdf8] focus-visible:outline-none transition-colors"
-              >
-                <ImageIcon size={16} aria-hidden="true" /> {t('assistant.choose_photos')}
               </button>
               <p className="text-[11px] text-[var(--color-text-secondary)] text-center mt-6 leading-relaxed px-4">
                 {t('assistant.privacy_note')}

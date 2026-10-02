@@ -13,21 +13,24 @@ describe('Android Phase 2D camera contracts', () => {
     expect(manifest).not.toMatch(/uses-permission[^>]*ACCESS_BACKGROUND_LOCATION/);
   });
 
-  it('keeps FileProvider on app-private cache and Pictures paths only', () => {
+  it('keeps FileProvider for the WebView camera capture file only', () => {
+    const manifest = read('./app/src/main/AndroidManifest.xml');
     const paths = read('./app/src/main/res/xml/file_paths.xml');
+    expect(manifest).toMatch(/androidx.core.content.FileProvider/);
+    expect(manifest).toMatch(/@xml\/file_paths/);
     expect(paths).not.toMatch(/<external-path\b/);
-    expect(paths).toMatch(/<cache-path\b/);
+    expect(paths).not.toMatch(/<cache-path\b/);
     expect(paths).toMatch(/<external-files-path\b/);
     expect(paths).toMatch(/path="Pictures\/"/);
   });
 
-  it('wires the official Capacitor camera and app modules into the Android project', () => {
+  it('does not wire the Capacitor camera plugin into the Android project', () => {
     const capBuild = read('./app/capacitor.build.gradle');
     const settings = read('./capacitor.settings.gradle');
-    expect(capBuild).toContain("implementation project(':capacitor-camera')");
+    expect(capBuild).not.toContain("implementation project(':capacitor-camera')");
+    expect(settings).not.toContain("include ':capacitor-camera'");
+    expect(settings).not.toContain('@capacitor/camera/android');
     expect(capBuild).toContain("implementation project(':capacitor-app')");
-    expect(settings).toContain("include ':capacitor-camera'");
-    expect(settings).toContain('@capacitor/camera/android');
     expect(settings).toContain("include ':capacitor-app'");
     expect(settings).toContain('@capacitor/app/android');
   });

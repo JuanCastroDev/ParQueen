@@ -903,7 +903,6 @@ const es: Record<string, string> = {
     'assistant.hydrant_desc': 'Mira si estás lo suficientemente lejos de un hidrante.',
     'assistant.photo_hint': 'Toma una foto clara de la señal completa de parqueo.',
     'assistant.open_camera': 'Abrir cámara',
-    'assistant.choose_photos': 'Elegir de fotos',
     'assistant.privacy_note': 'El acceso a la cámara solo se usa para escanear la señal que elijas.',
     'assistant.reading_sign': 'Analizando señal...',
     'assistant.result_yes': 'Parece que puedes parquear aquí.',
