@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { AppView } from '../types';
 import { MapPin, Check, Locate, X, Bell, Clock, ChevronRight, ChevronLeft, Users, Car, Navigation, CheckCircle2 } from 'lucide-react';
 import { db } from '../firebase';
-import { collection, addDoc, Timestamp, doc, deleteDoc, writeBatch, updateDoc, getDocs, getDoc, setDoc, where, query, orderBy, startAt, endAt, serverTimestamp, limit } from 'firebase/firestore';
+import { collection, Timestamp, doc, deleteDoc, updateDoc, getDocs, getDoc, setDoc, where, query, orderBy, startAt, endAt, serverTimestamp, limit } from 'firebase/firestore';
 import { auth } from '../firebaseConfig';
 import { detectParkingSide } from '../utils/streetIntelligence';
 import { detectCardinalSide } from '../utils/sweepnyc';
@@ -44,6 +44,7 @@ import { useSearch } from './street-parking/useSearch';
 import { useSpotData } from './street-parking/useSpotData';
 import { useInterestFlow } from './street-parking/useInterestFlow';
 import { checkPingRateLimit } from './street-parking/pingRateLimit';
+import { commitPingCreate, isReportedAtWithinHorizon, PingCreateRejected } from './street-parking/pingCreateBounds';
 import { reportPingCreationFailure } from './street-parking/pingFailureReporting';
 import { SpotDetailsCard } from './street-parking/SpotDetailsCard';
 import { BottomSheet } from './street-parking/BottomSheet';
@@ -1491,6 +1492,11 @@ export const MapView: React.FC<MapViewProps> = ({
             return;
         }
 
+        if (departureTime && !isReportedAtWithinHorizon(departureTime.getTime())) {
+            setMyCarDepartureError(t('ping_errors.horizon'));
+            return;
+        }
+
         setMyCarDepartureLoading(true);
         setMyCarDepartureError(null);
 
@@ -1546,8 +1552,8 @@ export const MapView: React.FC<MapViewProps> = ({
             }
         } catch { /* non-fatal, proceed to create */ }
 
-        // Set the ref SYNCHRONOUSLY before setDoc — the Firestore onSnapshot listener
-        // fires during setDoc (before the Promise resolves), so the ref must be set
+        // Set the ref SYNCHRONOUSLY before the create transaction — the Firestore
+        // onSnapshot listener fires when that commit lands, so the ref must be set
         // before that moment. setSavedSpot is async (enqueues a render); the ref is not.
         linkedPingIdRef.current = spotId;
         const withLinkedId = { ...savedSpot, linkedPingId: spotId };
@@ -1556,23 +1562,27 @@ export const MapView: React.FC<MapViewProps> = ({
 
         // Create the ping with the deterministic ID
         try {
-            await setDoc(spotRef, {
-                lat: savedSpot.lat,
-                lng: savedSpot.lng,
-                type: 'free',
-                status: 'available',
-                finderId: user.id,
-                finderName: user.username || user.fullName || 'Anonymous',
-                finderTitle: getTitleForCrowns(user.crowns || 0),
-                finderVehicleColor: user.vehicleColor || null,
-                finderVehicleType: user.vehicleType || null,
-                finderVehicleBrand: user.vehicleBrand || null,
-                pingMode: departureTime ? 'later' : 'now',
-                source: 'my_car',
-                reportedAt,
-                expiresAt,
-                geohash: geofire.geohashForLocation([savedSpot.lat, savedSpot.lng]),
-                address: savedSpot.address,
+            await commitPingCreate(db, {
+                uid: user.id,
+                spotRef,
+                data: {
+                    lat: savedSpot.lat,
+                    lng: savedSpot.lng,
+                    type: 'free',
+                    status: 'available',
+                    finderId: user.id,
+                    finderName: user.username || user.fullName || 'Anonymous',
+                    finderTitle: getTitleForCrowns(user.crowns || 0),
+                    finderVehicleColor: user.vehicleColor || null,
+                    finderVehicleType: user.vehicleType || null,
+                    finderVehicleBrand: user.vehicleBrand || null,
+                    pingMode: departureTime ? 'later' : 'now',
+                    source: 'my_car',
+                    reportedAt,
+                    expiresAt,
+                    geohash: geofire.geohashForLocation([savedSpot.lat, savedSpot.lng]),
+                    address: savedSpot.address,
+                },
             });
 
             const mode = departureTime ? 'leaving_later' : 'leaving_now';
@@ -1588,13 +1598,24 @@ export const MapView: React.FC<MapViewProps> = ({
             localStorage.setItem(SAVED_SPOT_KEY, JSON.stringify(savedSpot));
             setSavedSpot(savedSpot);
             console.error('My Car ping failed:', (e as any)?.code ?? 'unknown');
-            setMyCarDepartureError(t('my_car.share_error'));
+            if (e instanceof PingCreateRejected && e.reason === 'rate') {
+                setMyCarDepartureError(t('my_car.ping_limit_reached', { minutes: e.minutesLeft ?? 1 }));
+            } else if (e instanceof PingCreateRejected && e.reason === 'horizon') {
+                setMyCarDepartureError(t('ping_errors.horizon'));
+            } else {
+                setMyCarDepartureError(t('my_car.share_error'));
+            }
             setMyCarDepartureLoading(false);
         }
     };
 
     const handleSaveSpot = async (departureTime: Date | null) => {
         if (isPinging || !user) return;
+
+        if (departureTime && !isReportedAtWithinHorizon(departureTime.getTime())) {
+            setPingError(t('ping_errors.horizon'));
+            return;
+        }
 
         if (!selectedItem) {
             const activeQ = query(collection(db, 'spots'), where('finderId', '==', user.id), where('status', 'in', ['available', 'interested']));
@@ -1626,15 +1647,19 @@ export const MapView: React.FC<MapViewProps> = ({
         const onSaveError = (error: any) => {
             console.error("Error saving spot:", (error as any)?.code ?? 'unknown');
             reportPingCreationFailure(error, departureTime);
-            setPingError(t('ping_errors.save_failed'));
+            if (error instanceof PingCreateRejected && error.reason === 'rate') {
+                setPingError(t('ping_errors.rate_limit', { min: error.minutesLeft ?? 1 }));
+            } else if (error instanceof PingCreateRejected && error.reason === 'horizon') {
+                setPingError(t('ping_errors.horizon'));
+            } else {
+                setPingError(t('ping_errors.save_failed'));
+            }
             setIsPinging(false);
         };
 
         if (selectedItem) {
             try {
-                const batch = writeBatch(db);
                 const oldSpotRef = doc(db, "spots", selectedItem.id);
-                batch.delete(oldSpotRef);
                 const newSpotRef = doc(collection(db, "spots"));
                 const newSpotData = {
                     lat: selectedItem.lat,
@@ -1653,8 +1678,12 @@ export const MapView: React.FC<MapViewProps> = ({
                     geohash: geofire.geohashForLocation([selectedItem.lat, selectedItem.lng]),
                     address: await reverseGeocode(selectedItem.lng, selectedItem.lat),
                 };
-                batch.set(newSpotRef, newSpotData);
-                await batch.commit();
+                await commitPingCreate(db, {
+                    uid: user.id,
+                    spotRef: newSpotRef,
+                    data: newSpotData,
+                    deleteRefs: [oldSpotRef],
+                });
                 onSaveSuccess();
             } catch (error) {
                 onSaveError(error);
@@ -1700,7 +1729,11 @@ export const MapView: React.FC<MapViewProps> = ({
                     address: await reverseGeocode(userLocation[0], userLocation[1]),
                 };
                 try {
-                    await addDoc(collection(db, "spots"), newSpotData);
+                    await commitPingCreate(db, {
+                        uid: user.id,
+                        spotRef: doc(collection(db, "spots")),
+                        data: newSpotData,
+                    });
                     setShowPingConfirmation(true);
                     setTimeout(() => setShowPingConfirmation(false), 4000);
                     onSaveSuccess();
@@ -1730,7 +1763,11 @@ export const MapView: React.FC<MapViewProps> = ({
                             address: await reverseGeocode(location[0], location[1]),
                         };
                         try {
-                            await addDoc(collection(db, "spots"), newSpotData);
+                            await commitPingCreate(db, {
+                                uid: user.id,
+                                spotRef: doc(collection(db, "spots")),
+                                data: newSpotData,
+                            });
                             setShowPingConfirmation(true);
                             setTimeout(() => setShowPingConfirmation(false), 4000);
                             onSaveSuccess();
@@ -2766,7 +2803,7 @@ export const MapView: React.FC<MapViewProps> = ({
             )}
 
             {interestFlow.driverNotification && (
-                <div className="absolute top-20 left-0 right-0 flex justify-center z-20 px-4 pointer-events-none">
+                <div className="absolute top-20 left-0 right-0 flex justify-center z-40 px-4 pointer-events-none">
                     <button
                         onClick={interestFlow.clearDriverNotification}
                         className={`notif-slide-down pointer-events-auto flex items-start gap-3 px-4 py-3.5 rounded-2xl backdrop-blur-xl shadow-2xl border max-w-sm w-full text-left active:scale-[0.98] transition-transform ${

@@ -170,6 +170,9 @@ const en: Record<string, string> = {
     'ping_errors.save_failed': "Couldn't save your ping — please try again.",
     'ping_errors.rate_limit': 'Ping limit reached — try again in {min} min.',
     'ping_errors.location': 'Location unavailable — please enable location services.',
+    'ping_errors.horizon': 'You can schedule a Ping up to 12 hours ahead.',
+    'ping_errors.denied_title': "Ping wasn't created",
+    'ping_errors.origin': 'This spot was already re-pinged — only one departure Ping is allowed.',
 
     // En-route owner card
     'en_route.heading': 'On their way to your spot',

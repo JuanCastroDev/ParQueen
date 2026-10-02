@@ -170,6 +170,9 @@ const es: Record<string, string> = {
     'ping_errors.save_failed': 'No se pudo guardar tu ping — intenta de nuevo.',
     'ping_errors.rate_limit': 'Límite de pings alcanzado — intenta en {min} min.',
     'ping_errors.location': 'Ubicación no disponible — activa los servicios de ubicación.',
+    'ping_errors.horizon': 'Puedes programar un Ping con hasta 12 horas de anticipación.',
+    'ping_errors.denied_title': 'No se creó el Ping',
+    'ping_errors.origin': 'Este lugar ya se volvió a publicar — solo se permite un Ping de salida.',
 
     // En-route owner card
     'en_route.heading': 'En camino a tu lugar',

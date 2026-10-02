@@ -5,6 +5,7 @@ import { TimePicker } from './TimePicker';
 import { GlassDatePicker } from './GlassDatePicker';
 import { BottomSheet } from './BottomSheet';
 import { localDateStr, combineDateAndTime } from './dateUtils';
+import { isReportedAtWithinHorizon } from './pingCreateBounds';
 import { t, useLang } from '../../i18n';
 
 interface SpotModalProps {
@@ -41,14 +42,23 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
     const handleSetTime = () => {
         if (pingType === 'later') {
             const combined = combineDateAndTime(selectedDateStr, departureTime);
-            if (combined.getTime() <= Date.now()) {
-                setTimeError('Please choose a future time.');
-                return;
-            }
+            if (!acceptDeparture(combined)) return;
             onSave(combined);
             return;
         }
         onSave(null);
+    };
+
+    const acceptDeparture = (combined: Date) => {
+        if (combined.getTime() <= Date.now()) {
+            setTimeError('past');
+            return false;
+        }
+        if (!isReportedAtWithinHorizon(combined.getTime())) {
+            setTimeError('horizon');
+            return false;
+        }
+        return true;
     };
 
     const isEditing = !!spot;
@@ -129,7 +139,9 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
                     </div>
 
                     {timeError && (
-                        <p className="mt-4 text-sm text-[var(--color-danger)] font-semibold text-center">{t('ping_modal.future_time_error')}</p>
+                        <p className="mt-4 text-sm text-[var(--color-danger)] font-semibold text-center">
+                            {timeError === 'horizon' ? t('ping_errors.horizon') : t('ping_modal.future_time_error')}
+                        </p>
                     )}
                     <button
                         onClick={handleSetTime}
@@ -178,15 +190,14 @@ export const SpotModal: React.FC<SpotModalProps> = ({ isOpen, onClose, onSave, s
                     <p className="text-[11px] text-[var(--color-text-secondary)] text-center mb-3 px-2 leading-relaxed">{t('ping_modal.schedule_helper')}</p>
 
                     {timeError && (
-                        <p className="mb-3 text-sm text-[var(--color-danger)] font-semibold text-center">{t('ping_modal.future_time_error')}</p>
+                        <p className="mb-3 text-sm text-[var(--color-danger)] font-semibold text-center">
+                            {timeError === 'horizon' ? t('ping_errors.horizon') : t('ping_modal.future_time_error')}
+                        </p>
                     )}
                     <button
                         onClick={() => {
                             const combined = combineDateAndTime(selectedDateStr, departureTime);
-                            if (combined.getTime() <= Date.now()) {
-                                setTimeError('Please choose a future time.');
-                                return;
-                            }
+                            if (!acceptDeparture(combined)) return;
                             onSave(combined);
                         }}
                         className="pq-ping-sheet-cta w-full font-bold py-3.5 rounded-full flex items-center justify-center gap-2 text-white active:scale-[0.98] transition-transform"
