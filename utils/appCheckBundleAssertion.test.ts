@@ -37,6 +37,10 @@ const APP_CHECK_SRC = path.resolve(__dirname, './appCheck.ts');
 const DEBUG_TOKEN_ASSIGNMENT = /FIREBASE_APPCHECK_DEBUG_TOKEN\s*=(?!=)/;
 const DEBUG_TOKEN_PROPERTY_ASSIGNMENT = /\.FIREBASE_APPCHECK_DEBUG_TOKEN\s*=(?!=)/;
 
+/** True when the bundle still reads the site key through Vite's env object. */
+const UNRESOLVED_APP_CHECK_SITE_KEY_ENV =
+    /import\.meta\.env(?:\.VITE_FIREBASE_APPCHECK_SITE_KEY\b|\[\s*["']VITE_FIREBASE_APPCHECK_SITE_KEY["']\s*\])/;
+
 /** Scan all .js and .html files under dir; return lines matching pattern. */
 function scanDist(pattern: RegExp): string[] {
     const hits: string[] = [];
@@ -66,14 +70,12 @@ describe('§6 — App Check prod bundle assertions', () => {
         expect(scanDist(/VITE_APPCHECK_DEBUG_TOKEN/)).toHaveLength(0);
     });
 
-    it.skipIf(!distExists)('AC-3: dist/ does not contain App Check site key or token values', () => {
-        // Static imports of initializeAppCheck/ReCaptchaEnterpriseProvider may survive
-        // Vite bundling even when the runtime branch is dead (Firebase packages are not
-        // fully tree-shakeable due to side effects). The security-relevant check is that
-        // no SITE KEY VALUES or DEBUG TOKEN VALUES are present in the bundle — not the
-        // function name. AC-1, AC-2, AC-4, and AC-12 cover the sensitive-value checks.
-        // This test asserts the site key variable reference is replaced at build time.
-        expect(scanDist(/VITE_FIREBASE_APPCHECK_SITE_KEY/)).toHaveLength(0);
+    it.skipIf(!distExists)('AC-3: dist/ does not leave the App Check site key as an unresolved Vite env expression', () => {
+        // Vite may keep the variable name as a resolved env-object key, or a
+        // DEV diagnostic may mention the name in a string. Those are not an
+        // unresolved `import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY` read.
+        // AC-1, AC-2, AC-4, and AC-12 still cover debug-token wiring.
+        expect(scanDist(UNRESOLVED_APP_CHECK_SITE_KEY_ENV)).toHaveLength(0);
     });
 
     it.skipIf(!distExists)('AC-4: dist/ does not contain known debug-bypass string', () => {
@@ -207,6 +209,25 @@ describe('§6 — App Check prod bundle assertions', () => {
             const line = 'FIREBASE_APPCHECK_DEBUG_TOKEN=x';
             expect(DEBUG_TOKEN_ASSIGNMENT.test(line)).toBe(true);
             expect(DEBUG_TOKEN_PROPERTY_ASSIGNMENT.test(line)).toBe(false);
+        });
+    });
+
+    describe('AC-3 unresolved site-key matcher', () => {
+        it('allows a harmless variable-name warning', () => {
+            expect(UNRESOLVED_APP_CHECK_SITE_KEY_ENV.test('VITE_FIREBASE_APPCHECK_SITE_KEY not set')).toBe(false);
+            expect(UNRESOLVED_APP_CHECK_SITE_KEY_ENV.test('[AppCheck] VITE_FIREBASE_APPCHECK_SITE_KEY not set.')).toBe(false);
+        });
+
+        it('allows a resolved Vite env-object key', () => {
+            expect(UNRESOLVED_APP_CHECK_SITE_KEY_ENV.test('VITE_FIREBASE_APPCHECK_SITE_KEY:`resolved`')).toBe(false);
+        });
+
+        it('rejects an unresolved direct env access', () => {
+            expect(UNRESOLVED_APP_CHECK_SITE_KEY_ENV.test('import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY')).toBe(true);
+        });
+
+        it('rejects an unresolved assigned env access', () => {
+            expect(UNRESOLVED_APP_CHECK_SITE_KEY_ENV.test('const x = import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY')).toBe(true);
         });
     });
 });

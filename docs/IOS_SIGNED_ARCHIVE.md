@@ -51,6 +51,8 @@ The verifier records the IPA filename, byte size, and SHA-256. It checks bundle 
 
 Manual run 9 archived, exported, codesigned, and validated the distribution profile and the production configuration. The only failure was the debug-token check. The Firebase SDK can contain a passive read of `FIREBASE_APPCHECK_DEBUG_TOKEN`. That presence is not a debug-token leak. The IPA still fails if `VITE_APPCHECK_DEBUG_TOKEN` survives in the bundle, if `FIREBASE_APPCHECK_DEBUG_TOKEN` is assigned, or if an `appcheck-debug-` bypass marker is present.
 
+Manual run 11 stopped before signing. The production App Check bundle assertion AC-3 treated any literal `VITE_FIREBASE_APPCHECK_SITE_KEY` occurrence as unresolved configuration. A production build can keep that name as text, or as a resolved Vite env-object key next to the substituted value. Corrected AC-3 allows those and rejects an unresolved `import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY` access. The signed IPA check still reports whether the production App Check configuration is embedded, without printing the value.
+
 ## What this does not do
 
 It does not deploy Firebase, change Street Intelligence, or change application source. A green pull request means the contract check and the ad-hoc archive probe passed. It does not mean an App Store IPA was exported.
