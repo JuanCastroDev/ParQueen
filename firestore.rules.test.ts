@@ -31,6 +31,7 @@ import {
     runTransaction,
 } from 'firebase/firestore';
 import { cancelClaimTransaction } from './views/street-parking/cancelClaimTransaction';
+import { commitClaimToHeading } from './views/street-parking/commitToHeading';
 import {
     acquireActiveIncomingClaim,
     activeIncomingClaimRef,
@@ -4165,5 +4166,134 @@ describe('A1 — one active incoming claim', () => {
             keptSpotId: 'forged',
             releasedSpotIds: [],
         }));
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// A3 — committed → heading vs a released claim (HO-009)
+// Arm 2b is unchanged. The client transaction writes only that field set.
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('A3 — commit to heading', () => {
+    async function readSpot(id: string) {
+        let data: any;
+        await testEnv.withSecurityRulesDisabled(async ctx => {
+            data = (await getDoc(doc(ctx.firestore(), 'spots', id))).data();
+        });
+        return data;
+    }
+
+    async function seedLock(spotId: string) {
+        await testEnv.withSecurityRulesDisabled(async ctx => {
+            await setDoc(doc(ctx.firestore(), 'users', OTHER_UID, 'activeIncomingClaims', 'current'), {
+                spotId,
+                claimStartedAt: CLAIM_STARTED_AT,
+                claimState: 'committed',
+                updatedAt: CLAIM_STARTED_AT,
+            });
+        });
+    }
+
+    it('A3-1: the claimer transaction moves committed to heading without touching the fingerprint or lock', async () => {
+        await seed('spots', 'a3-commit', committedScheduledSpot);
+        await seedLock('a3-commit');
+        const nowMs = Date.now();
+        const outcome = await commitClaimToHeading(otherDb(), {
+            spotId: 'a3-commit',
+            uid: OTHER_UID,
+            etaMinutes: 5,
+            claimMinutes: 10,
+            nowMs,
+        });
+        expect(outcome).toBe('committed');
+        const spot = await readSpot('a3-commit');
+        expect(spot.claimState).toBe('heading');
+        expect(spot.status).toBe('interested');
+        expect(spot.interestedUserId).toBe(OTHER_UID);
+        expect(spot.claimStartedAt.isEqual(CLAIM_STARTED_AT)).toBe(true);
+        expect(spot.claimAutoReleaseAt).toBeNull();
+        expect(spot.etaMinutes).toBe(5);
+        expect(spot.interestExpiresAt.toMillis()).toBe(nowMs + 10 * 60_000);
+        let lock: any;
+        await testEnv.withSecurityRulesDisabled(async ctx => {
+            lock = (await getDoc(doc(ctx.firestore(), 'users', OTHER_UID, 'activeIncomingClaims', 'current'))).data();
+        });
+        expect(lock.spotId).toBe('a3-commit');
+        expect(lock.claimState).toBe('committed');
+    });
+
+    it('A3-2: a second commit is already heading and does not rewrite ETA', async () => {
+        await seed('spots', 'a3-dual', { ...committedScheduledSpot, etaMinutes: 4 });
+        const [first, second] = await Promise.all([
+            commitClaimToHeading(otherDb(), {
+                spotId: 'a3-dual', uid: OTHER_UID, etaMinutes: 5, claimMinutes: 10, nowMs: Date.now(),
+            }),
+            commitClaimToHeading(otherDb(), {
+                spotId: 'a3-dual', uid: OTHER_UID, etaMinutes: 9, claimMinutes: 14, nowMs: Date.now(),
+            }),
+        ]);
+        expect([first, second].sort()).toEqual(['already_heading', 'committed']);
+        const spot = await readSpot('a3-dual');
+        const eta = spot.etaMinutes;
+        expect([5, 9]).toContain(eta);
+        const again = await commitClaimToHeading(otherDb(), {
+            spotId: 'a3-dual', uid: OTHER_UID, etaMinutes: 3, claimMinutes: 8, nowMs: Date.now(),
+        });
+        expect(again).toBe('already_heading');
+        expect((await readSpot('a3-dual')).etaMinutes).toBe(eta);
+        expect((await readSpot('a3-dual')).claimStartedAt.isEqual(CLAIM_STARTED_AT)).toBe(true);
+    });
+
+    it('A3-3: commit after the claim was released does not resurrect heading', async () => {
+        await seed('spots', 'a3-released', {
+            ...committedScheduledSpot,
+            status: 'available',
+            claimState: null,
+            interestedUserId: null,
+            claimStartedAt: null,
+            claimAutoReleaseAt: null,
+            etaMinutes: null,
+        });
+        const outcome = await commitClaimToHeading(otherDb(), {
+            spotId: 'a3-released', uid: OTHER_UID, etaMinutes: 5, claimMinutes: 10, nowMs: Date.now(),
+        });
+        expect(outcome).toBe('rejected');
+        const spot = await readSpot('a3-released');
+        expect(spot.status).toBe('available');
+        expect(spot.claimState).toBeNull();
+        expect(spot.interestedUserId).toBeNull();
+        expect(spot.claimStartedAt).toBeNull();
+
+        const { updateDoc } = await import('firebase/firestore');
+        await assertFails(updateDoc(doc(otherDb(), 'spots', 'a3-released'), {
+            claimState: 'heading',
+            ownerLeavingNow: null,
+            ownerLeavingNowAt: null,
+            etaMinutes: 5,
+            interestExpiresAt: Timestamp.fromMillis(Date.now() + 10 * 60_000),
+            claimReminderAt: null,
+            claimReminderSentAt: null,
+            claimAutoReleaseAt: null,
+        }));
+        expect((await readSpot('a3-released')).claimState).toBeNull();
+    });
+
+    it('A3-4: owner leave-now can extend claimAutoReleaseAt, then commit still clears it', async () => {
+        await seed('spots', 'a3-leave', committedScheduledSpot);
+        const { updateDoc } = await import('firebase/firestore');
+        const extended = Timestamp.fromMillis(Date.now() + 10 * 60_000);
+        await assertSucceeds(updateDoc(doc(ownerDb(), 'spots', 'a3-leave'), {
+            ownerLeavingNow: true,
+            ownerLeavingNowAt: Timestamp.now(),
+            claimAutoReleaseAt: extended,
+        }));
+        const outcome = await commitClaimToHeading(otherDb(), {
+            spotId: 'a3-leave', uid: OTHER_UID, etaMinutes: 5, claimMinutes: 10, nowMs: Date.now(),
+        });
+        expect(outcome).toBe('committed');
+        const spot = await readSpot('a3-leave');
+        expect(spot.claimState).toBe('heading');
+        expect(spot.interestedUserId).toBe(OTHER_UID);
+        expect(spot.claimAutoReleaseAt).toBeNull();
+        expect(spot.claimStartedAt.isEqual(CLAIM_STARTED_AT)).toBe(true);
     });
 });

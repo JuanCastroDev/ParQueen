@@ -13,6 +13,7 @@ export default defineConfig({
       'functions/awardCrowns.integration.test.js',
       'functions/cleanupExpiredInterests.integration.test.js',
       'functions/activeIncomingClaim.integration.test.js',
+      'functions/scheduledClaimHeadingRace.integration.test.js',
       'functions/cleanupExpiredHolds.integration.test.js',
       'functions/cleanupExpiredSpotsHourly.integration.test.js',
       'functions/rateLimiter.integration.test.js',

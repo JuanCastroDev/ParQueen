@@ -28,6 +28,7 @@ const {
   clearMatchingActiveIncomingClaim,
   repairActiveIncomingClaims,
 } = require('./activeIncomingClaim');
+const { releasedInterestPatch } = require('./activeIncomingClaimLogic');
 const { requireCurrentAdmin, requireCurrentAuthenticatedUser } = require('./adminAuth');
 const { isSweepNYCData, computeSegmentUpdate, computeRuleUpdate } = require('./backfillLogic');
 const {
@@ -555,38 +556,25 @@ exports.processScheduledClaims = onSchedule(
             spot.claimAutoReleaseAt.toMillis() > now.toMillis()
           ) return;
 
-          // Read before writes. claimStartedAt is intentionally left on the Ping;
-          // clearing it is A3. The active-claim lock is cleared here.
+          // Read the lock before any write. Clear the same claim fields as
+          // cleanupExpiredInterests, including claimStartedAt, and drop a
+          // matching active-incoming lock in this commit. claimAutoReleasedAt
+          // records when this scheduler released the claim. A heading claim
+          // fails the claimState == 'committed' re-check above and is left intact.
           const lockSnap = await readActiveIncomingClaim(tx, db, spot.interestedUserId);
 
           const spotExpired = spot.expiresAt && spot.expiresAt.toMillis() <= now.toMillis();
-
+          const expiresAtMs = spot.expiresAt && typeof spot.expiresAt.toMillis === 'function'
+            ? spot.expiresAt.toMillis()
+            : Number.NaN;
           const clearFields = {
-            interestedUserId: null,
-            interestedUserName: null,
-            interestedUserVehicleColor: null,
-            interestedUserVehicleType: null,
-            interestedUserVehicleBrand: null,
-            interestedUserTitle: null,
-            etaMinutes: null,
-            interestExpiresAt: null,
-            claimState: null,
-            ownerLeavingNow: null,
-            ownerLeavingNowAt: null,
-            claimReminderAt: null,
-            claimReminderSentAt: null,
-            claimAutoReleaseAt: null,
+            ...releasedInterestPatch(expiresAtMs, now.toMillis()),
             claimAutoReleasedAt: now,
           };
 
           const claimId = `claim_${stableId(d.id, snapshotGeneration(fresh), spot.interestedUserId)}`;
 
-          if (spotExpired) {
-            // Ping already expired — clear stale claim fields, don't revive to available
-            tx.update(d.ref, clearFields);
-          } else {
-            tx.update(d.ref, { ...clearFields, status: "available" });
-          }
+          tx.update(d.ref, clearFields);
           deleteMatchingActiveIncomingClaim(tx, lockSnap, d.id);
 
           if (spot.interestedUserId !== spot.finderId) {

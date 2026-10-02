@@ -7,6 +7,7 @@ import { getTitleForCrowns } from '../../utils/crowns';
 import { getPingExpiresAtMs, timestampToMillis } from '../../utils/pingLifecycle';
 import { cancelClaimTransaction } from './cancelClaimTransaction';
 import { acquireActiveIncomingClaim, ALREADY_CLAIMED_MESSAGE, markClaimArrived } from './activeIncomingClaim';
+import { commitClaimToHeading } from './commitToHeading';
 import { reportClaimFailure, reportClaimCancelFailure } from './claimFailureReporting';
 import { t } from '../../i18n';
 import { completeFinderConfirmedHandoff, completeTerminalHandoff } from './completeTerminalHandoff';
@@ -501,16 +502,20 @@ export function useInterestFlow({
         const etaMinutes = getEstDriveMinutes(spot) ?? 5;
         const claimMinutes = Math.min(etaMinutes + 5, MAX_CLAIM_MINUTES);
 
-        await updateDoc(doc(db, 'spots', spot.id), {
-            claimState: 'heading',
-            ownerLeavingNow: null,
-            ownerLeavingNowAt: null,
-            etaMinutes,
-            interestExpiresAt: Timestamp.fromMillis(Date.now() + claimMinutes * 60000),
-            claimReminderAt: null,
-            claimReminderSentAt: null,
-            claimAutoReleaseAt: null,
-        });
+        let outcome: 'committed' | 'already_heading' | 'rejected';
+        try {
+            outcome = await commitClaimToHeading(db, {
+                spotId: spot.id,
+                uid: user.id,
+                etaMinutes,
+                claimMinutes,
+            });
+        } catch {
+            // Permission denial or contention after auto-release: do not start
+            // navigation against a Ping this commit did not win.
+            return;
+        }
+        if (outcome === 'rejected') return;
 
         const dest: [number, number] = [spot.lng, spot.lat];
         activeRouteDestinationRef.current = dest;

@@ -214,7 +214,7 @@ describe('active incoming claim — release paths and 15-minute repair', () => {
     expect((await db.doc('activeIncomingClaimRollout/status').get()).data().enforced).toBe(true);
   });
 
-  it('auto-release clears the matching lock and leaves claimStartedAt on the Ping', async () => {
+  it('auto-release clears the matching lock and claimStartedAt', async () => {
     const uid = nextId('release_user');
     const spotId = nextId('release_spot');
     const started = Timestamp.fromMillis(Date.now() - 5 * 60_000);
@@ -239,7 +239,9 @@ describe('active incoming claim — release paths and 15-minute repair', () => {
     const spot = (await db.doc(`spots/${spotId}`).get()).data();
     expect(spot.status).toBe('available');
     expect(spot.interestedUserId).toBeNull();
-    expect(spot.claimStartedAt.toMillis()).toBe(started.toMillis());
+    expect(spot.claimStartedAt).toBeNull();
+    expect(spot.claimState).toBeNull();
+    expect(typeof spot.claimAutoReleasedAt.toMillis).toBe('function');
     expect((await lockRef(uid).get()).exists).toBe(false);
   });
 

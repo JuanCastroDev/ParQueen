@@ -159,5 +159,17 @@ describe('active incoming claim lock logic', () => {
     expect(releasedInterestPatch(now - 1, now).interestedUserId).toBeNull();
     expect(releasedInterestPatch(now + 1, now).status).toBe('available');
     expect(releasedInterestPatch(Number.NaN, now).status).toBe('available');
+    expect(releasedInterestPatch(now + 1, now).claimStartedAt).toBeNull();
+  });
+
+  it('scheduled auto-release uses the interest-expiry clear set, including claimStartedAt', () => {
+    const index = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
+    const releaseStart = index.indexOf('Pass 2: Auto-release');
+    const releaseEnd = index.indexOf('Increment total spots pinged', releaseStart);
+    const release = index.slice(releaseStart, releaseEnd);
+    expect(releaseStart).toBeGreaterThan(-1);
+    expect(release).toContain('releasedInterestPatch');
+    expect(release).toContain('deleteMatchingActiveIncomingClaim');
+    expect(release).not.toContain('claimStartedAt is intentionally left');
   });
 });
