@@ -34,6 +34,7 @@ export interface MapItem {
     holdTimerExpiresAt?: any;
     pingMode?: 'now' | 'later' | null;
     claimState?: 'committed' | 'heading' | null;
+    claimStartedAt?: any;
     ownerLeavingNow?: boolean | null;
     ownerLeavingNowAt?: any;
     claimReminderAt?: any;
