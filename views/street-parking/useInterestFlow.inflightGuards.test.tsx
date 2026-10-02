@@ -253,6 +253,34 @@ describe('useInterestFlow in-flight claim and arrive guards', () => {
     expect(getFlow().cancelingClaim).toBe(false);
   });
 
+  it('does not start a cancel while a claim or arrival write is in flight', async () => {
+    const claimPending = deferred<'claimed'>();
+    acquireActiveIncomingClaim.mockReturnValue(claimPending.promise);
+    const claiming = mount();
+
+    let claim!: Promise<void>;
+    act(() => { claim = claiming().handleExpressInterest(5); });
+    await act(async () => { await claiming().handleCancelByClaimer('Changed my mind'); });
+    expect(cancelClaimTransaction).not.toHaveBeenCalled();
+    expect(claiming().cancelingClaim).toBe(false);
+
+    claimPending.resolve('claimed');
+    await act(async () => { await claim; });
+
+    const arrivePending = deferred<void>();
+    markClaimArrived.mockReturnValue(arrivePending.promise);
+    const arriving = mount();
+
+    let arrival!: Promise<void>;
+    act(() => { arrival = arriving().handleArrival(); });
+    await act(async () => { await arriving().handleCancelByClaimer('Changed my mind'); });
+    expect(cancelClaimTransaction).not.toHaveBeenCalled();
+    expect(arriving().cancelingClaim).toBe(false);
+
+    arrivePending.resolve();
+    await act(async () => { await arrival; });
+  });
+
   it('does not start an arrival while a claim write is still open', async () => {
     const pending = deferred<'claimed'>();
     acquireActiveIncomingClaim.mockReturnValue(pending.promise);

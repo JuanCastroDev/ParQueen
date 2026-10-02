@@ -99,6 +99,8 @@ const SpotDetailsCardInner: React.FC<Omit<SpotDetailsCardProps, 'backLabel' | 'o
 
     const isFinder = user?.id === selectedItem.finderId;
     const isInterestedUser = user?.id === selectedItem.interestedUserId;
+    // Visual only. The hook refs still decide whether a second write starts.
+    const handoffWriteInFlight = claiming || arriving || cancelingClaim;
     const spotStatus = selectedItem.status;
 
     type CardState = 'available' | 'my_claim' | 'my_scheduled_claim' | 'my_ping_available' | 'my_ping_claimed' | 'my_ping_scheduled_claimed' | 'third_party';
@@ -197,7 +199,7 @@ const SpotDetailsCardInner: React.FC<Omit<SpotDetailsCardProps, 'backLabel' | 'o
                         <p className="text-[11px] font-bold text-[var(--color-text-secondary)] uppercase tracking-widest text-center mb-3">{t('claim_flow.why_canceling')}</p>
                         <div className="space-y-2 mb-2">
                             {claimerCancelReasons.map(({ key, label, value }) => (
-                                <button key={key} onClick={() => onCancelByClaimer(value)} disabled={cancelingClaim}
+                                <button key={key} onClick={() => onCancelByClaimer(value)} disabled={handoffWriteInFlight}
                                     aria-busy={cancelingClaim}
                                     className="w-full py-3 px-4 rounded-2xl text-sm font-semibold border border-[var(--color-border)] bg-white/5 hover:bg-white/10 transition-all active:scale-95 text-[var(--color-text)] text-left disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100">
                                     {cancelingClaim ? t('claim_flow.canceling') : label}
@@ -212,8 +214,8 @@ const SpotDetailsCardInner: React.FC<Omit<SpotDetailsCardProps, 'backLabel' | 'o
                 ) : (
                     <>
                         <div className="grid grid-cols-2 gap-2 mb-2">
-                            <button onClick={() => setShowClaimerReasons(true)}
-                                className="flex items-center justify-center gap-2 py-3.5 rounded-2xl border border-red-500/30 hover:bg-red-500/10 text-[var(--color-danger)] font-semibold text-sm transition-all active:scale-95">
+                            <button onClick={() => setShowClaimerReasons(true)} disabled={handoffWriteInFlight}
+                                className="flex items-center justify-center gap-2 py-3.5 rounded-2xl border border-red-500/30 hover:bg-red-500/10 text-[var(--color-danger)] font-semibold text-sm transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100">
                                 {t('claim_flow.cancel')}
                             </button>
                             <button onClick={() => onMessageUser(selectedItem.finderId, `Spot pinged by ${finderName}`, selectedItem.id)}
@@ -222,7 +224,7 @@ const SpotDetailsCardInner: React.FC<Omit<SpotDetailsCardProps, 'backLabel' | 'o
                                 {t('claim_flow.message')}
                             </button>
                         </div>
-                        <button onClick={onArrival} disabled={!isWithinArrivalRange || arriving}
+                        <button onClick={onArrival} disabled={!isWithinArrivalRange || handoffWriteInFlight}
                             aria-busy={arriving}
                             className="w-full font-bold py-4 rounded-2xl transition-all text-sm active:scale-95 text-white disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 flex items-center justify-center gap-2"
                             style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>
@@ -296,7 +298,7 @@ const SpotDetailsCardInner: React.FC<Omit<SpotDetailsCardProps, 'backLabel' | 'o
                 {interestError && <p className="text-[var(--color-danger)] text-xs mb-2 text-center">{interestError}</p>}
 
                 <div className="grid grid-cols-2 gap-2 mb-2">
-                    <button onClick={() => onCancelByClaimer('Changed my mind')} disabled={cancelingClaim}
+                    <button onClick={() => onCancelByClaimer('Changed my mind')} disabled={handoffWriteInFlight}
                         aria-busy={cancelingClaim}
                         className="flex items-center justify-center gap-2 py-3.5 rounded-2xl border border-red-500/30 hover:bg-red-500/10 text-[var(--color-danger)] font-semibold text-sm transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100">
                         {cancelingClaim ? t('claim_flow.canceling') : t('scheduled_claim.cancel')}
@@ -307,7 +309,7 @@ const SpotDetailsCardInner: React.FC<Omit<SpotDetailsCardProps, 'backLabel' | 'o
                         {t('claim_flow.message')}
                     </button>
                 </div>
-                <button onClick={onCommitToHeading} disabled={claiming}
+                <button onClick={onCommitToHeading} disabled={handoffWriteInFlight}
                     aria-busy={claiming}
                     className="w-full font-bold py-4 rounded-2xl transition-all text-sm active:scale-95 text-white flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
                     style={{ background: ownerLeaving ? 'linear-gradient(90deg, #f59e0b, #d97706)' : 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>
@@ -552,7 +554,7 @@ const SpotDetailsCardInner: React.FC<Omit<SpotDetailsCardProps, 'backLabel' | 'o
                         <MessageSquare size={16} />
                     </button>
                     {isScheduled ? (
-                        <button onClick={onScheduledClaim} disabled={claiming}
+                        <button onClick={onScheduledClaim} disabled={handoffWriteInFlight}
                             aria-busy={claiming}
                             className="flex-1 font-bold py-3.5 rounded-2xl transition-all text-sm active:scale-95 text-white flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
                             style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>
@@ -563,7 +565,7 @@ const SpotDetailsCardInner: React.FC<Omit<SpotDetailsCardProps, 'backLabel' | 'o
                             {t('claim_flow.too_far_drive', { min: estDriveMinutes })}
                         </span>
                     ) : (
-                        <button onClick={onHeadingThere} disabled={claiming}
+                        <button onClick={onHeadingThere} disabled={handoffWriteInFlight}
                             aria-busy={claiming}
                             className="flex-1 font-bold py-3.5 rounded-2xl transition-all text-sm active:scale-95 text-white flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
                             style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>

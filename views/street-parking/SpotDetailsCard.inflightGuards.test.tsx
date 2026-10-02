@@ -180,6 +180,31 @@ describe('SpotDetailsCard in-flight claim and arrive controls', () => {
     const cancel = buttonWithText(busy, t('claim_flow.canceling'));
     expect(cancel.props.disabled).toBe(true);
     expect(cancel.props['aria-busy']).toBe(true);
+    const commit = buttonWithText(busy, t('scheduled_claim.im_heading_there'));
+    expect(commit.props.disabled).toBe(true);
+    expect(commit.props['aria-busy']).toBe(false);
+    act(() => busy.unmount());
+  });
+
+  it('disables cancel while a claim or arrival is in flight without swapping in the canceling label', () => {
+    const claiming = mount(myScheduledClaim, { claiming: true });
+    const claimCancel = buttonWithText(claiming, t('scheduled_claim.cancel'));
+    expect(claimCancel.props.disabled).toBe(true);
+    expect(claimCancel.props['aria-busy']).toBe(false);
+    act(() => claiming.unmount());
+
+    const arriving = mount(myClaim, { arriving: true, isWithinArrivalRange: true });
+    const arriveCancel = buttonWithText(arriving, t('claim_flow.cancel'));
+    expect(arriveCancel.props.disabled).toBe(true);
+    expect(arriveCancel.props['aria-busy']).toBeFalsy();
+    act(() => arriving.unmount());
+  });
+
+  it('disables arrival while a cancel is in flight, and still keeps the arrived label', () => {
+    const busy = mount(myClaim, { cancelingClaim: true, isWithinArrivalRange: true });
+    const arrive = buttonWithText(busy, t('claim_flow.ive_arrived'));
+    expect(arrive.props.disabled).toBe(true);
+    expect(arrive.props['aria-busy']).toBe(false);
     act(() => busy.unmount());
   });
 });
