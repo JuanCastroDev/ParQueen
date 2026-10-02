@@ -24,12 +24,6 @@ vi.mock('./street-parking/useParkingTimer', () => ({
 
 import { AssistantView } from './AssistantView';
 
-class FakeFileReader {
-  result = 'data:image/png;base64,aW1hZ2U=';
-  onloadend: null | (() => void) = null;
-  readAsDataURL() { this.onloadend?.(); }
-}
-
 /**
  * Collects every string child in a subtree. An earlier version only looked at
  * nodes whose FIRST child was a string, which silently skipped icon-then-label
@@ -65,8 +59,10 @@ function buttonWith(renderer: TestRenderer.ReactTestRenderer, label: string) {
 async function runScan(renderer: TestRenderer.ReactTestRenderer) {
   await act(async () => { buttonWith(renderer, 'Scan a Parking Sign').props.onClick(); });
   const input = renderer.root.findAllByType('input')[0];
+  const file = new Blob([Uint8Array.from([137, 80, 78, 71])], { type: 'image/png' });
   await act(async () => {
-    input.props.onChange({ target: { files: [{}], value: '' } });
+    input.props.onChange({ target: { files: [file], value: 'sign.png' } });
+    await Promise.resolve();
     await Promise.resolve();
   });
   await act(async () => {
@@ -80,7 +76,6 @@ describe('AssistantView sign-result safety copy', () => {
   beforeEach(() => {
     analyzeParkingSign.mockReset();
     analyzeParkingSign.mockResolvedValue({ status: 'YES', explanation: 'The interpreted schedule allows parking.' });
-    (globalThis as any).FileReader = FakeFileReader;
     (globalThis as any).localStorage.removeItem('parqueen_recent_scans');
   });
 
