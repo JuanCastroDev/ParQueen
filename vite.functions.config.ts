@@ -12,6 +12,7 @@ export default defineConfig({
       'functions/pingNotificationPrivacy.integration.test.js',
       'functions/awardCrowns.integration.test.js',
       'functions/cleanupExpiredInterests.integration.test.js',
+      'functions/activeIncomingClaim.integration.test.js',
       'functions/cleanupExpiredHolds.integration.test.js',
       'functions/cleanupExpiredSpotsHourly.integration.test.js',
       'functions/rateLimiter.integration.test.js',

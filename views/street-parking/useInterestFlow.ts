@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { db } from '../../firebase';
-import { doc, updateDoc, deleteDoc, runTransaction, Timestamp, collection, query, where, getDocs, addDoc, setDoc, onSnapshot, orderBy, limit } from 'firebase/firestore';
+import { doc, updateDoc, deleteDoc, Timestamp, collection, query, where, getDocs, addDoc, setDoc, onSnapshot, orderBy, limit } from 'firebase/firestore';
 import { MapItem } from './types';
 import { getDistance, drawRoute, clearRoute, NYC_CENTER } from './utils';
 import { getTitleForCrowns } from '../../utils/crowns';
 import { getPingExpiresAtMs, timestampToMillis } from '../../utils/pingLifecycle';
 import { cancelClaimTransaction } from './cancelClaimTransaction';
+import { acquireActiveIncomingClaim, ALREADY_CLAIMED_MESSAGE, markClaimArrived } from './activeIncomingClaim';
 import { reportClaimFailure, reportClaimCancelFailure } from './claimFailureReporting';
 import { t } from '../../i18n';
 import { completeFinderConfirmedHandoff, completeTerminalHandoff } from './completeTerminalHandoff';
@@ -169,6 +170,34 @@ export function useInterestFlow({
         return !snap.empty;
     };
 
+    // checkAlreadyInterested is a UX hint only. The transaction + Rules are
+    // the authority. A rules denial while another interested Ping exists is
+    // the multi-claim rejection; other denials keep the generic fallback.
+    const claimErrorMessage = async (error: any, fallback: string): Promise<string> => {
+        if (error?.message === ALREADY_CLAIMED_MESSAGE) return ALREADY_CLAIMED_MESSAGE;
+        if (error?.code === 'permission-denied') {
+            try {
+                if (await checkAlreadyInterested()) return ALREADY_CLAIMED_MESSAGE;
+            } catch {
+                // Fall through to the generic message.
+            }
+        }
+        return error?.message || fallback;
+    };
+
+    const claimerFields = (claimStartedAt: Timestamp, claimState: 'heading' | 'committed') => ({
+        status: 'interested' as const,
+        claimState,
+        ownerLeavingNow: null,
+        interestedUserId: user.id,
+        interestedUserName: user.username || user.fullName || 'Someone',
+        interestedUserVehicleColor: user.vehicleColor || null,
+        interestedUserVehicleType: user.vehicleType || null,
+        interestedUserVehicleBrand: user.vehicleBrand || null,
+        interestedUserTitle: getTitleForCrowns(user.crowns || 0),
+        claimStartedAt,
+    });
+
     const handleExpressInterest = async (etaMinutes: number) => {
         const spot = selectedItem;
         if (!spot || !user || !db) return;
@@ -182,39 +211,22 @@ export function useInterestFlow({
 
         const alreadyActive = await checkAlreadyInterested();
         if (alreadyActive) {
-            setInterestError("You already have a claimed spot");
+            setInterestError(ALREADY_CLAIMED_MESSAGE);
             return;
         }
 
         try {
-            const spotRef = doc(db, 'spots', spot.id);
-            await runTransaction(db, async (tx) => {
-                const fresh = await tx.get(spotRef);
-                if (!fresh.exists()) throw new Error("Spot no longer exists");
-                const data = fresh.data();
-                if (data.status !== 'available') throw new Error("Someone already got this spot");
-
-                const claimMinutes = Math.min(etaMinutes + 5, MAX_CLAIM_MINUTES);
-
-                tx.update(spotRef, {
-                    status: 'interested',
-                    claimState: 'heading',
-                    ownerLeavingNow: null,
-                    interestedUserId: user.id,
-                    interestedUserName: user.username || user.fullName || 'Someone',
-                    interestedUserVehicleColor: user.vehicleColor || null,
-                    interestedUserVehicleType: user.vehicleType || null,
-                    interestedUserVehicleBrand: user.vehicleBrand || null,
-                    interestedUserTitle: getTitleForCrowns(user.crowns || 0),
+            const claimMinutes = Math.min(etaMinutes + 5, MAX_CLAIM_MINUTES);
+            await acquireActiveIncomingClaim(db, {
+                spotId: spot.id,
+                uid: user.id,
+                unavailableMessage: 'Someone already got this spot',
+                missingMessage: 'Spot no longer exists',
+                buildClaimFields: (_spot, claimStartedAt) => ({
+                    ...claimerFields(claimStartedAt, 'heading'),
                     etaMinutes,
                     interestExpiresAt: Timestamp.fromMillis(Date.now() + claimMinutes * 60000),
-                    // Set once per claim generation; never touched by any other
-                    // handler (delay/commit/etc. only mutate interestExpiresAt).
-                    // This is what makes a claim's identity immutable for as long
-                    // as it's active, unlike interestExpiresAt which legitimately
-                    // shifts under the same claim via handleDelayByFinder.
-                    claimStartedAt: Timestamp.now(),
-                });
+                }),
             });
 
             const dest: [number, number] = [spot.lng, spot.lat];
@@ -223,7 +235,7 @@ export function useInterestFlow({
             if (mapRef.current) drawRoute(mapRef.current, userLocation || NYC_CENTER, dest);
         } catch (e: any) {
             reportClaimFailure(e, 'immediate');
-            setInterestError(e.message || "Failed to reserve spot");
+            setInterestError(await claimErrorMessage(e, 'Failed to reserve spot'));
         }
     };
 
@@ -353,7 +365,7 @@ export function useInterestFlow({
         };
         setHandoffFinderName(selectedItem.finderName || null);
         setHandoffAddress(selectedItem.title || selectedItem.address || '');
-        await updateDoc(doc(db, 'spots', selectedItem.id), { status: 'occupied' });
+        await markClaimArrived(db, selectedItem.id, user.id);
         setTrackedItemId(null);
         activeRouteDestinationRef.current = null;
         if (mapRef.current) clearRoute(mapRef.current);
@@ -441,54 +453,44 @@ export function useInterestFlow({
 
         const alreadyActive = await checkAlreadyInterested();
         if (alreadyActive) {
-            setInterestError("You already have a claimed spot");
+            setInterestError(ALREADY_CLAIMED_MESSAGE);
             return;
         }
 
         try {
-            const spotRef = doc(db, 'spots', spot.id);
-            await runTransaction(db, async (tx) => {
-                const fresh = await tx.get(spotRef);
-                if (!fresh.exists()) throw new Error("Spot no longer exists");
-                const data = fresh.data();
-                if (data.status !== 'available') throw new Error("Someone already claimed this spot");
-
-                // Remind 20 min before departure; skip if already past
-                const departureMs = data.reportedAt?.toMillis?.() ?? 0;
-                const reminderMs = departureMs - 20 * 60 * 1000;
-                const claimReminderAt = reminderMs > Date.now()
-                    ? Timestamp.fromMillis(reminderMs)
-                    : null;
-
-                tx.update(spotRef, {
-                    status: 'interested',
-                    claimState: 'committed',
-                    ownerLeavingNow: null,
-                    ownerLeavingNowAt: null,
-                    interestedUserId: user.id,
-                    interestedUserName: user.username || user.fullName || 'Someone',
-                    interestedUserVehicleColor: user.vehicleColor || null,
-                    interestedUserVehicleType: user.vehicleType || null,
-                    interestedUserVehicleBrand: user.vehicleBrand || null,
-                    interestedUserTitle: getTitleForCrowns(user.crowns || 0),
-                    etaMinutes: null,
-                    // Claim lives as long as the spot itself — inherit spot's own expiry
-                    interestExpiresAt: data.expiresAt,
-                    claimReminderAt,
-                    claimReminderSentAt: null,
-                    claimAutoReleaseAt: departureMs
-                        ? Timestamp.fromMillis(departureMs + 10 * 60 * 1000)
-                        : null,
-                    claimAutoReleasedAt: null,
-                    claimStartedAt: Timestamp.now(),
-                });
+            await acquireActiveIncomingClaim(db, {
+                spotId: spot.id,
+                uid: user.id,
+                unavailableMessage: 'Someone already claimed this spot',
+                missingMessage: 'Spot no longer exists',
+                buildClaimFields: (data, claimStartedAt) => {
+                    // Remind 20 min before departure; skip if already past
+                    const departureMs = data.reportedAt?.toMillis?.() ?? 0;
+                    const reminderMs = departureMs - 20 * 60 * 1000;
+                    const claimReminderAt = reminderMs > Date.now()
+                        ? Timestamp.fromMillis(reminderMs)
+                        : null;
+                    return {
+                        ...claimerFields(claimStartedAt, 'committed'),
+                        ownerLeavingNowAt: null,
+                        etaMinutes: null,
+                        // Claim lives as long as the spot itself — inherit spot's own expiry
+                        interestExpiresAt: data.expiresAt,
+                        claimReminderAt,
+                        claimReminderSentAt: null,
+                        claimAutoReleaseAt: departureMs
+                            ? Timestamp.fromMillis(departureMs + 10 * 60 * 1000)
+                            : null,
+                        claimAutoReleasedAt: null,
+                    };
+                },
             });
 
             // Track for snapshot disappearance detection — no route drawn yet
             setTrackedItemId(spot.id);
         } catch (e: any) {
             reportClaimFailure(e, 'scheduled');
-            setInterestError(e.message || "Failed to claim spot");
+            setInterestError(await claimErrorMessage(e, 'Failed to claim spot'));
         }
     };
 

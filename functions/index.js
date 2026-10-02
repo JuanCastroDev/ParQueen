@@ -22,6 +22,12 @@ const socrataAppToken = defineSecret("SOCRATA_APP_TOKEN");
 const { osmNameToDOT, streetNameToLikePattern, dotSideToCardinal, BOROUGH_CODE_TO_NAME, nycOdSegmentDocId, selectBlockFace, findBlockContext, parseNYCOpenDataSign } = require('./nycOpenDataNormalizer');
 const { redactForLog, sanitizeError } = require('./redactForLog');
 const { checkRateLimit } = require('./rateLimiter');
+const {
+  readActiveIncomingClaim,
+  deleteMatchingActiveIncomingClaim,
+  clearMatchingActiveIncomingClaim,
+  repairActiveIncomingClaims,
+} = require('./activeIncomingClaim');
 const { requireCurrentAdmin, requireCurrentAuthenticatedUser } = require('./adminAuth');
 const { isSweepNYCData, computeSegmentUpdate, computeRuleUpdate } = require('./backfillLogic');
 const {
@@ -294,11 +300,10 @@ exports.cleanupExpiredInterests = onSchedule(
       .limit(100)
       .get();
 
-    if (snap.empty) return;
-
     let released = 0;
     let skipped = 0;
     let errors = 0;
+    if (!snap.empty) {
     for (const d of snap.docs) {
       try {
         const didRelease = await db.runTransaction(async (tx) => {
@@ -315,6 +320,8 @@ exports.cleanupExpiredInterests = onSchedule(
             !spot.interestExpiresAt ||
             spot.interestExpiresAt.toMillis() > now.toMillis()
           ) return false;
+
+          const lockSnap = await readActiveIncomingClaim(tx, db, spot.interestedUserId);
 
           const clearFields = {
             interestedUserId: null,
@@ -343,6 +350,7 @@ exports.cleanupExpiredInterests = onSchedule(
           // hour by cleanupExpiredSpotsHourly regardless of status).
           const pingExpired = spot.expiresAt && spot.expiresAt.toMillis() <= now.toMillis();
           tx.update(d.ref, pingExpired ? clearFields : { ...clearFields, status: "available" });
+          deleteMatchingActiveIncomingClaim(tx, lockSnap, d.id);
           return true;
         });
         if (didRelease) released++; else skipped++;
@@ -354,6 +362,15 @@ exports.cleanupExpiredInterests = onSchedule(
     console.log(
       `✅ cleanupExpiredInterests: examined ${snap.size}, released ${released}, skipped ${skipped} (already stale/renewed), errors ${errors}`
     );
+    }
+    try {
+      const repair = await repairActiveIncomingClaims(db, now);
+      console.log(
+        `activeIncomingClaims repair: gcExamined=${repair.gcExamined} gcDeleted=${repair.gcDeleted} backfillExamined=${repair.backfillExamined} backfilled=${repair.backfilled}`
+      );
+    } catch (e) {
+      console.error("cleanupExpiredInterests: active-claim repair failed", sanitizeError(e));
+    }
   }
 );
 
@@ -538,6 +555,10 @@ exports.processScheduledClaims = onSchedule(
             spot.claimAutoReleaseAt.toMillis() > now.toMillis()
           ) return;
 
+          // Read before writes. claimStartedAt is intentionally left on the Ping;
+          // clearing it is A3. The active-claim lock is cleared here.
+          const lockSnap = await readActiveIncomingClaim(tx, db, spot.interestedUserId);
+
           const spotExpired = spot.expiresAt && spot.expiresAt.toMillis() <= now.toMillis();
 
           const clearFields = {
@@ -566,6 +587,7 @@ exports.processScheduledClaims = onSchedule(
           } else {
             tx.update(d.ref, { ...clearFields, status: "available" });
           }
+          deleteMatchingActiveIncomingClaim(tx, lockSnap, d.id);
 
           if (spot.interestedUserId !== spot.finderId) {
             tx.set(db.doc(`spotNotifications/released_claimer_${claimId}`), {
@@ -3325,7 +3347,16 @@ exports.updateTrustOnSpotDelete = onDocumentDeleted(
   { document: 'spots/{spotId}', region: 'us-central1', retry: true, serviceAccount: 'parqueen-system-events@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
   async (event) => {
     const data = event.data?.data();
-    if (!data || data.status !== 'interested' || !data.finderId) return;
+    if (!data) return;
+
+    // Clear a lock that still names this Ping even when the trust penalty is
+    // skipped (admin delete, natural expiry, non-interested status). A lock
+    // that already points at a newer claim is left alone.
+    if (typeof data.interestedUserId === 'string' && data.interestedUserId) {
+      await clearMatchingActiveIncomingClaim(db, data.interestedUserId, event.params.spotId);
+    }
+
+    if (data.status !== 'interested' || !data.finderId) return;
 
     // Admin-triggered deletions must not penalize the finder.
     // Requires the deletion path to set source: 'admin' on the spot before deleting.

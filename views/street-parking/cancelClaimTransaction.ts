@@ -1,5 +1,6 @@
 import { doc, getDoc, runTransaction, Timestamp } from 'firebase/firestore';
 import { timestampToMillis } from '../../utils/pingLifecycle';
+import { activeIncomingClaimRef, deleteLockIfNamesSpot } from './activeIncomingClaim';
 
 // Loosely typed on purpose: @firebase/rules-unit-testing's RulesTestContext
 // .firestore() is declared against the older compat SDK's Firestore type,
@@ -34,8 +35,10 @@ function claimStatus(spot: Record<string, any>, claimantId: string, fingerprint:
  * Firestore transactions require every tx.get() to run before the first
  * tx.update()/tx.set()/tx.delete() — violating that order throws "Firestore
  * transactions require all reads to be executed before all writes." at
- * commit time. This function performs exactly one transactional read (the
- * spot) before any write, which trivially satisfies that ordering.
+ * commit time. This function reads the spot, then the claimant's active
+ * incoming lock, and only then writes. The lock is deleted in the same
+ * commit when it names this Ping. A missing lock (legacy claim) does not
+ * block cancel.
  *
  * Deliberately does NOT also read the deterministic cancellation-notification
  * doc to check whether it already exists: spotNotifications reads are
@@ -73,10 +76,10 @@ export async function cancelClaimTransaction(
 
     try {
         return await runTransaction(db, async (tx) => {
-            // Stage B — the only transactional read, before any write.
+            // All reads before any write. The lock read is skipped when the
+            // spot is already gone or the claim does not match — those paths
+            // return without writing, so they must not queue a later read.
             const freshSpotSnap = await tx.get(spotRef);
-
-            // Stage C — validate, then write. No tx.get() below this line.
             if (!freshSpotSnap.exists()) return 'already_resolved';
             const spot = freshSpotSnap.data() as Record<string, any>;
 
@@ -87,6 +90,9 @@ export async function cancelClaimTransaction(
                 // there is nothing to release and nothing to notify.
                 return releasedByOther ? 'already_resolved' : 'stale_claim';
             }
+
+            const lockRef = activeIncomingClaimRef(db, claimantId);
+            const lockSnap = await tx.get(lockRef);
 
             const clearFields = {
                 claimState: null,
@@ -108,6 +114,7 @@ export async function cancelClaimTransaction(
             };
             const expired = spot.expiresAt && spot.expiresAt.toMillis() <= Date.now();
             tx.update(spotRef, expired ? clearFields : { ...clearFields, status: 'available' });
+            deleteLockIfNamesSpot(tx, lockSnap, lockRef, spotId);
 
             if (needsNotification) {
                 const notifRef = doc(db, 'spotNotifications', `claimer_cancelled_${spotId}_${fingerprint ?? 'x'}`);

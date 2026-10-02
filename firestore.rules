@@ -35,6 +35,66 @@ service cloud.firestore {
         && resource.data.get('holdRequestedBy', null) == null;
     }
 
+    // One active incoming claim per user. The lock lives at
+    // users/{uid}/activeIncomingClaims/current and must be written in the
+    // same commit as the Ping claim. get()/exists() see pre-commit state;
+    // getAfter()/existsAfter() see this transaction. The 15-minute stale
+    // repair TTL is enforced by the cleanup sweeper, not here — a lock whose
+    // Ping is already released can be overwritten on the next claim.
+    function activeIncomingClaimPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid)/activeIncomingClaims/current;
+    }
+
+    function claimStillActive(spotId) {
+      let path = /databases/$(database)/documents/spots/$(spotId);
+      return spotId is string
+        && exists(path)
+        && get(path).data.status == 'interested'
+        && get(path).data.interestedUserId == request.auth.uid;
+    }
+
+    function claimStillActiveAfter(spotId) {
+      let path = /databases/$(database)/documents/spots/$(spotId);
+      return spotId is string
+        && existsAfter(path)
+        && getAfter(path).data.status == 'interested'
+        && getAfter(path).data.interestedUserId == request.auth.uid;
+    }
+
+    function activeIncomingClaimLockAcquired(spotId) {
+      let path = activeIncomingClaimPath();
+      let lock = getAfter(path).data;
+      return existsAfter(path)
+        && lock.spotId == spotId
+        && lock.claimStartedAt == request.resource.data.claimStartedAt
+        && lock.claimState == request.resource.data.claimState
+        && lock.claimState in ['committed', 'heading']
+        && request.resource.data.claimStartedAt is timestamp
+        && lock.updatedAt is timestamp
+        && lock.updatedAt >= request.time - duration.value(2, 'm')
+        && lock.updatedAt <= request.time + duration.value(1, 'm');
+    }
+
+    // Single getAfter of the Ping so a claim commit stays under the 10-lookup cap.
+    function lockAgreesWithSpotAfter(data) {
+      let path = /databases/$(database)/documents/spots/$(data.spotId);
+      let spot = getAfter(path).data;
+      return existsAfter(path)
+        && spot.status == 'interested'
+        && spot.interestedUserId == request.auth.uid
+        && spot.claimStartedAt == data.claimStartedAt
+        && spot.claimState == data.claimState;
+    }
+
+    // Cancel / arrival must drop a lock that names this Ping. A missing lock
+    // (legacy claim) or a lock naming a different Ping does not block release.
+    function matchingActiveClaimLockReleased(spotId) {
+      let path = activeIncomingClaimPath();
+      return !exists(path)
+        || get(path).data.get('spotId', '') != spotId
+        || !existsAfter(path);
+    }
+
     function isAvailableForHold() {
       return resource.data.status == 'available'
         && resource.data.get('interestedUserId', null) == null
@@ -235,6 +295,42 @@ service cloud.firestore {
         // demographic data must not remain directly readable by a stale
         // admin token merely because nothing currently exercises it.
       }
+
+      // One active incoming claim. Not under private/*, so a collection-group
+      // sweep of this collection id cannot touch avatar, account, preferences,
+      // social, or profile. deleteAccount recursiveDelete(users/{uid}) removes it.
+      // Only the doc id "current" is writable — extra docs cannot bypass the lock.
+      match /activeIncomingClaims/{claimId} {
+        allow get: if signedIn() && request.auth.uid == userId && claimId == 'current';
+        allow list: if false;
+
+        allow create, update: if signedIn()
+          && request.auth.uid == userId
+          && claimId == 'current'
+          && request.resource.data.keys().hasOnly(['spotId', 'claimStartedAt', 'claimState', 'updatedAt'])
+          && request.resource.data.spotId is string
+          && request.resource.data.spotId.size() > 0
+          && request.resource.data.spotId.size() <= 200
+          && request.resource.data.claimState in ['committed', 'heading']
+          && request.resource.data.claimStartedAt is timestamp
+          && request.resource.data.updatedAt is timestamp
+          && request.resource.data.updatedAt >= request.time - duration.value(2, 'm')
+          && request.resource.data.updatedAt <= request.time + duration.value(1, 'm')
+          && lockAgreesWithSpotAfter(request.resource.data)
+          && (
+            !exists(/databases/$(database)/documents/users/$(userId)/activeIncomingClaims/current)
+            || resource.data.spotId == request.resource.data.spotId
+            || !claimStillActive(resource.data.spotId)
+          );
+
+        // Owner may delete only once this Ping is no longer an active claim
+        // after the same commit (cancel, arrival, or an already-released Ping).
+        allow delete: if signedIn()
+          && request.auth.uid == userId
+          && claimId == 'current'
+          && resource.data.spotId is string
+          && !claimStillActiveAfter(resource.data.spotId);
+      }
     }
 
     match /userLocations/{userId} {
@@ -298,11 +394,13 @@ service cloud.firestore {
       allow delete: if signedIn() && resource.data.finderId == request.auth.uid;
       allow update: if signedIn() && (
 
-        // Arm 1: Claim an available spot (immediate or scheduled)
+        // Arm 1: Claim an available spot (immediate or scheduled).
+        // The same commit must point this user's lock at this Ping.
         (isAvailableForClaim()
           && request.resource.data.interestedUserId == request.auth.uid
           && request.resource.data.status == 'interested'
           && matchesInterestedUserIdentity(request.resource.data)
+          && activeIncomingClaimLockAcquired(spotId)
           && onlyChanges(['status', 'claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
                           'interestedUserId', 'interestedUserName',
                           'interestedUserVehicleColor', 'interestedUserVehicleType',
@@ -328,6 +426,7 @@ service cloud.firestore {
           && request.resource.data.status == 'available'
           && (resource.data.get('expiresAt', null) == null
               || resource.data.expiresAt > request.time)
+          && matchingActiveClaimLockReleased(spotId)
           && onlyChanges(['status', 'claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
                           'interestedUserId', 'interestedUserName',
                           'interestedUserVehicleColor', 'interestedUserVehicleType',
@@ -341,6 +440,7 @@ service cloud.firestore {
         || (isClaimer()
           && resource.data.get('expiresAt', null) != null
           && resource.data.expiresAt <= request.time
+          && matchingActiveClaimLockReleased(spotId)
           && onlyChanges(['claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
                           'interestedUserId', 'interestedUserName',
                           'interestedUserVehicleColor', 'interestedUserVehicleType',
@@ -349,9 +449,11 @@ service cloud.firestore {
                           'claimReminderAt', 'claimReminderSentAt',
                           'claimAutoReleaseAt', 'claimAutoReleasedAt']))
 
-        // Arm 4: Claimer marks arrived
+        // Arm 4: Claimer marks arrived. A lock naming this Ping must be deleted
+        // in the same commit; a missing lock still allows arrival.
         || (isClaimer()
           && request.resource.data.status == 'occupied'
+          && matchingActiveClaimLockReleased(spotId)
           && onlyChanges(['status']))
 
         // Arm 5: Finder confirms arrival

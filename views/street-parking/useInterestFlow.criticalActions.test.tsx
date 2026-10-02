@@ -111,7 +111,11 @@ describe('useInterestFlow — critical-action failure reporting', () => {
   });
 
   it('handleExpressInterest: a successful claim reports zero failures', async () => {
-    runTransaction.mockImplementation(async (_db, cb) => cb({ get: async () => ({ exists: () => true, data: () => ({ status: 'available' }) }), update: vi.fn() }));
+    runTransaction.mockImplementation(async (_db, cb) => cb({
+      get: async () => ({ exists: () => true, data: () => ({ status: 'available' }) }),
+      update: vi.fn(),
+      set: vi.fn(),
+    }));
     const getFlow = mount();
 
     await act(async () => { await getFlow().handleExpressInterest(5); });
@@ -135,6 +139,7 @@ describe('useInterestFlow — critical-action failure reporting', () => {
     runTransaction.mockImplementation(async (_db, cb) => cb({
       get: async () => ({ exists: () => true, data: () => ({ status: 'available', reportedAt: { toMillis: () => Date.now() + 3600_000 }, expiresAt: { toMillis: () => Date.now() + 7200_000 } }) }),
       update: vi.fn(),
+      set: vi.fn(),
     }));
     const getFlow = mount();
 
@@ -184,6 +189,11 @@ describe('useInterestFlow — critical-action failure reporting', () => {
   });
 
   it('handleHandoffOutcome remains uncaught on failure (no local catch) — Sentry\'s global handler covers it, so no explicit report is added here', async () => {
+    runTransaction.mockImplementationOnce(async (_db, cb) => cb({
+      get: async () => ({ exists: () => true, data: () => ({ status: 'interested', interestedUserId: 'u1' }) }),
+      update: vi.fn(),
+      delete: vi.fn(),
+    }));
     runTransaction.mockRejectedValueOnce(txError);
     const getFlow = mount();
 
