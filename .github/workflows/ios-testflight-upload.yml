@@ -1,0 +1,1319 @@
+name: iOS TestFlight Upload
+
+# Stage D0. Manual delivery of one verified IPA to App Store Connect.
+# Run it from main only, with the confirmation phrase.
+# Acceptance means Apple took the binary. It does not submit the app for review.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Confirmation required to upload on main
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# A second manual run waits. Cancelling the active run could cut off an upload already in flight.
+concurrency:
+  group: parqueen-ios-testflight-upload
+  cancel-in-progress: false
+
+jobs:
+  dispatch-guard:
+    name: dispatch guard
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require main and confirmation
+        env:
+          REF_NAME: ${{ github.ref }}
+          CONFIRM_TEXT: ${{ github.event.inputs.confirm }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${REF_NAME}" = "refs/heads/main" ] && [ "${CONFIRM_TEXT}" = "UPLOAD_PARQUEEN_TESTFLIGHT" ]; then
+            echo "dispatch guard: accepted"
+            exit 0
+          fi
+          echo "dispatch guard: rejected"
+          exit 1
+
+  contract:
+    name: upload contract
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Test get-task-allow classification
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import sys
+
+          def classify_get_task_allow(entitlements):
+              if "get-task-allow" not in entitlements:
+                  return "pass", "get-task-allow: ABSENT"
+              value = entitlements.get("get-task-allow")
+              if value is False:
+                  return "pass", "get-task-allow: FALSE — DISTRIBUTION SAFE"
+              if value is True:
+                  return "fail", "get-task-allow: TRUE — FAIL"
+              return "fail", "get-task-allow: INVALID — FAIL"
+
+          cases = [
+              ({}, "pass"),
+              ({"get-task-allow": False}, "pass"),
+              ({"get-task-allow": True}, "fail"),
+              ({"get-task-allow": "false"}, "fail"),
+          ]
+          for entitlements, want in cases:
+              got, message = classify_get_task_allow(entitlements)
+              print(message)
+              if got != want:
+                  print("get-task-allow classification: FAIL")
+                  sys.exit(1)
+          print("get-task-allow classification: PASS")
+          PY
+
+      - name: Test App Check debug-token classification
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re, sys
+
+          def classify_debug_wiring(text):
+              vite = "VITE_APPCHECK_DEBUG_TOKEN" in text
+              assigned = re.search(r"FIREBASE_APPCHECK_DEBUG_TOKEN\s*=(?!=)", text) is not None
+              prop = re.search(r"\.FIREBASE_APPCHECK_DEBUG_TOKEN\s*=(?!=)", text) is not None
+              bypass = re.search(r"appcheck-debug-", text, re.IGNORECASE) is not None
+              return "fail" if (vite or assigned or prop or bypass) else "pass"
+
+          cases = [
+              ("", "pass"),
+              ("n.resolve(t.FIREBASE_APPCHECK_DEBUG_TOKEN)", "pass"),
+              ('typeof t.FIREBASE_APPCHECK_DEBUG_TOKEN == "string"', "pass"),
+              ("t.FIREBASE_APPCHECK_DEBUG_TOKEN !== true", "pass"),
+              ("VITE_APPCHECK_DEBUG_TOKEN", "fail"),
+              ("FIREBASE_APPCHECK_DEBUG_TOKEN=true", "fail"),
+              ('self.FIREBASE_APPCHECK_DEBUG_TOKEN="abc"', "fail"),
+              ("x.FIREBASE_APPCHECK_DEBUG_TOKEN=n", "fail"),
+              ("appcheck-debug-token", "fail"),
+          ]
+          for sample, want in cases:
+              got = classify_debug_wiring(sample)
+              if got != want:
+                  print("debug-token classification: FAIL")
+                  sys.exit(1)
+          print("debug-token classification: PASS")
+          PY
+
+      - name: Assert workflow security contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib, re, sys
+          text = pathlib.Path(".github/workflows/ios-testflight-upload.yml").read_text().replace("\r\n", "\n")
+          secret_ref = "secrets" + "."
+          on_block = text.split("\non:\n", 1)[1].split("\npermissions:\n", 1)[0]
+          if "workflow_dispatch" not in on_block:
+              print("workflow_dispatch trigger is missing")
+              sys.exit(1)
+          for needle in ("pull_request", "push", "schedule", "workflow_call", "workflow_run", "repository_dispatch"):
+              if needle in on_block:
+                  print(f"forbidden trigger: {needle}")
+                  sys.exit(1)
+          if not re.search(r"(?m)^permissions:\n  contents: read\s*$", text):
+              print("workflow permissions are not contents read")
+              sys.exit(1)
+          if ("contents: " + "write") in text or re.search(r"(?m)^[\t ]*[A-Za-z0-9_-]+: write\s*$", text):
+              print("workflow requests write permissions")
+              sys.exit(1)
+          if ("set " + "-x") in text:
+              print("workflow enables shell tracing")
+              sys.exit(1)
+          for label, needle in (
+              ("artifact upload", "upload-" + "artifact"),
+              ("hosted backend deploy", "firebase " + "deploy"),
+              ("continue on error", "continue-on-" + "error"),
+          ):
+              if needle in text:
+                  print(f"forbidden workflow token: {label}")
+                  sys.exit(1)
+          if re.search(r"(?m)^[\t ]*environment:\s*$", text) or re.search(r"(?m)^[\t ]*strategy:\s*$", text):
+              print("workflow uses an environment or a matrix")
+              sys.exit(1)
+          checkout_pin = "ref: ${{ github.sha }}\n          persist-credentials: false"
+          if text.count(checkout_pin) != 2:
+              print("checkouts are not pinned to the dispatched commit")
+              sys.exit(1)
+          if re.search(r"DEVELOPMENT_TEAM=[A-Z0-9]{10}([^A-Z0-9]|$)", text):
+              print("workflow contains a literal Team ID")
+              sys.exit(1)
+          guard = text.split("\n  dispatch-guard:\n", 1)[1].split("\n  contract:\n", 1)[0]
+          if "UPLOAD_PARQUEEN_TESTFLIGHT" not in guard or "refs/heads/main" not in guard:
+              print("dispatch guard does not require main and the confirmation phrase")
+              sys.exit(1)
+          if secret_ref in guard:
+              print("dispatch guard references secrets")
+              sys.exit(1)
+          before_upload = text.split("\n  testflight-upload:\n", 1)[0]
+          if secret_ref in before_upload:
+              print("secrets are referenced outside the upload job")
+              sys.exit(1)
+          upload_job = text.split("\n  testflight-upload:\n", 1)[1]
+          header = upload_job.split("\n    steps:\n", 1)[0]
+          for needle in (
+              "github.event_name == 'workflow_dispatch'",
+              "github.ref == 'refs/heads/main'",
+              "github.event.inputs.confirm == 'UPLOAD_PARQUEEN_TESTFLIGHT'",
+              "needs.dispatch-guard.result == 'success'",
+              "needs.contract.result == 'success'",
+              "runs-on: macos-26",
+          ):
+              if needle not in header:
+                  print(f"upload job guard missing: {needle}")
+                  sys.exit(1)
+
+          def step_body(source, title):
+              marker = "- name: " + title + "\n"
+              start = source.find(marker)
+              if start < 0:
+                  print(f"missing step: {title}")
+                  sys.exit(1)
+              rest = source[start + len(marker):]
+              nxt = rest.find("\n      - name: ")
+              return rest if nxt < 0 else rest[:nxt]
+
+          contract_job = text.split("\n  contract:\n", 1)[1].split("\n  testflight-upload:\n", 1)[0]
+          classify_body = step_body(contract_job, "Test get-task-allow classification")
+          for needle in (
+              '({}, "pass")',
+              '({"get-task-allow": False}, "pass")',
+              '({"get-task-allow": True}, "fail")',
+              '({"get-task-allow": "false"}, "fail")',
+          ):
+              if needle not in classify_body:
+                  print("get-task-allow classification test is incomplete")
+                  sys.exit(1)
+          if secret_ref in classify_body:
+              print("get-task-allow classification test references secrets")
+              sys.exit(1)
+          debug_body = step_body(contract_job, "Test App Check debug-token classification")
+          for needle in (
+              '("", "pass")',
+              "n.resolve(t.FIREBASE_APPCHECK_DEBUG_TOKEN)",
+              'typeof t.FIREBASE_APPCHECK_DEBUG_TOKEN == "string"',
+              "t.FIREBASE_APPCHECK_DEBUG_TOKEN !== true",
+              '"VITE_APPCHECK_DEBUG_TOKEN", "fail"',
+              "FIREBASE_APPCHECK_DEBUG_TOKEN=true",
+              'self.FIREBASE_APPCHECK_DEBUG_TOKEN="abc"',
+              "x.FIREBASE_APPCHECK_DEBUG_TOKEN=n",
+              "appcheck-debug-token",
+              "FIREBASE_APPCHECK_DEBUG_TOKEN\\s*=(?!=)",
+          ):
+              if needle not in debug_body:
+                  print("debug-token classification test is incomplete")
+                  sys.exit(1)
+          if secret_ref in debug_body:
+              print("debug-token classification test references secrets")
+              sys.exit(1)
+          archive_body = step_body(upload_job, "Archive iOS app")
+          for needle in (
+              "CODE_SIGN_IDENTITY=-",
+              "AD_HOC_CODE_SIGNING_ALLOWED=YES",
+              "CODE_SIGN_STYLE=Automatic",
+              'DEVELOPMENT_TEAM="${APPLE_TEAM_ID}"',
+              "-configuration Release",
+              "-destination 'generic/platform=iOS'",
+              "ParQueen.xcarchive",
+          ):
+              if needle not in archive_body:
+                  print("archive command missing ad-hoc signing setting")
+                  sys.exit(1)
+          for needle in (
+              "-allowProvisioningUpdates",
+              "-authenticationKeyPath",
+              "-authenticationKeyID",
+              "-authenticationKeyIssuerID",
+          ):
+              if needle in archive_body:
+                  print("archive command still requests Apple provisioning")
+                  sys.exit(1)
+          forced_identity = "CODE_SIGN_IDENTITY=\"" + "Apple " + "Distribution\""
+          dev_identity = "CODE_SIGN_IDENTITY=\"" + "iPhone " + "Developer\""
+          apple_development = "Apple " + "Development"
+          if forced_identity in archive_body or dev_identity in archive_body or apple_development in archive_body:
+              print("archive command still forces a provisioning identity")
+              sys.exit(1)
+          if "PROVISIONING_PROFILE" in archive_body:
+              print("archive command sets a provisioning profile")
+              sys.exit(1)
+          export_body = step_body(upload_job, "Export signed IPA")
+          for needle in (
+              "-allowProvisioningUpdates",
+              "-authenticationKeyPath",
+              "-authenticationKeyID",
+              "-authenticationKeyIssuerID",
+              "app-store-connect",
+              "<string>export</string>",
+              "manageAppVersionAndBuildNumber",
+              "<false/>",
+          ):
+              if needle not in export_body:
+                  print("export command missing distribution authentication")
+                  sys.exit(1)
+          if "<string>upload</string>" in export_body:
+              print("export destination uploads during export")
+              sys.exit(1)
+          verify_body = step_body(upload_job, "Verify signed IPA")
+          for needle in (
+              'entitlements.get("get-task-allow")',
+              "get-task-allow: ABSENT",
+              "get-task-allow: FALSE — DISTRIBUTION SAFE",
+              "get-task-allow: TRUE — FAIL",
+              "embedded.mobileprovision",
+              '"security", "cms", "-D"',
+              "application-identifier",
+              "com.apple.developer.team-identifier",
+              "keychain-access-groups",
+              "beta-reports-active",
+              "team identifier: MATCH",
+              "production web bundle: ABSENT",
+              "Mapbox configuration embedded:",
+              "App Check production configuration embedded:",
+              "Sentry runtime DSN embedded:",
+              "VITE App Check debug identifier:",
+              "Firebase App Check debug assignment:",
+              "known App Check debug bypass marker:",
+              "debug App Check token wiring: ABSENT",
+              "FIREBASE_APPCHECK_DEBUG_TOKEN\\s*=(?!=)",
+              "appcheck-debug-",
+              "ipa-stamp.txt",
+              "CFBundleIdentifier",
+              "app.parqueen",
+              "CFBundleShortVersionString",
+              "CFBundleVersion",
+              "CFBundleDisplayName",
+              "profile type: distribution",
+              "profile valid: YES",
+          ):
+              if needle not in verify_body:
+                  print("ipa verifier is missing a required check")
+                  sys.exit(1)
+          bare_firebase = '("FIREBASE_APPCHECK_DEBUG_TOKEN" in text)'
+          if bare_firebase in verify_body:
+              print("ipa verifier still treats a passive Firebase debug identifier as a leak")
+              sys.exit(1)
+          if "npx vitest run utils/appCheckBundleAssertion.test.ts" not in upload_job:
+              print("production App Check bundle assertion is missing")
+              sys.exit(1)
+          validate_at = upload_job.find("- name: Validate verified IPA\n")
+          upload_at = upload_job.find("- name: Upload verified IPA\n")
+          cleanup_at = upload_job.find("- name: Delete signing material\n")
+          if not (0 <= validate_at < upload_at < cleanup_at):
+              print("validation must run after verification and before the single upload")
+              sys.exit(1)
+          validate_body = step_body(upload_job, "Validate verified IPA")
+          upload_body = step_body(upload_job, "Upload verified IPA")
+          if validate_body.count("--validate-app") != 1 or "--upload-app" in validate_body:
+              print("validation step must call validate once and must not upload")
+              sys.exit(1)
+          if upload_body.count("--upload-app") != 1 or "--validate-app" in upload_body:
+              print("upload step must call upload once")
+              sys.exit(1)
+          if re.search(r"\bwhile\b", upload_body):
+              print("upload step can repeat the transfer")
+              sys.exit(1)
+          if "UPLOAD STATUS AMBIGUOUS — CHECK APP STORE CONNECT BEFORE RETRY" not in upload_body:
+              print("ambiguous upload guard is missing")
+              sys.exit(1)
+          if "validation-ok" not in validate_body or "validation-ok" not in upload_body:
+              print("upload is not bound to the validation result")
+              sys.exit(1)
+          if "ipa-stamp.txt" not in validate_body or "ipa-stamp.txt" not in upload_body:
+              print("upload is not bound to the verified IPA")
+              sys.exit(1)
+          cleanup_header = upload_job[cleanup_at:cleanup_at + 220]
+          cleanup_body = step_body(upload_job, "Delete signing material")
+          if "if: always()" not in cleanup_header:
+              print("cleanup is not unconditional")
+              sys.exit(1)
+          for needle in (
+              "AuthKey.p8",
+              ".appstoreconnect/private_keys",
+              "ExportOptions.plist",
+              "ipa-export",
+              "ipa-unpacked",
+              "ParQueen.xcarchive",
+              "embedded-profile.plist",
+              "validate.log",
+              "upload.log",
+              "AuthKey.p8: ABSENT",
+              "lookup private key: ABSENT",
+              "ipa export: ABSENT",
+              "xcarchive: ABSENT",
+          ):
+              if needle not in cleanup_body and needle not in cleanup_header:
+                  print(f"cleanup is missing: {needle}")
+                  sys.exit(1)
+          if "SENTRY_AUTH_TOKEN: \"\"" not in upload_job:
+              print("Sentry upload credentials are not forced empty")
+              sys.exit(1)
+          if secret_ref + "SENTRY_AUTH_TOKEN" in text:
+              print("workflow requires a Sentry auth token")
+              sys.exit(1)
+          if "openssl pkey -in" not in upload_job or "-noout" not in upload_job:
+              print("private key validation is missing")
+              sys.exit(1)
+          if ".appstoreconnect/private_keys" not in upload_job or "--p8-file-path" not in upload_job:
+              print("altool private key handling is missing")
+              sys.exit(1)
+          print("workflow security contract: PASS")
+          PY
+
+  testflight-upload:
+    name: testflight upload
+    needs: [dispatch-guard, contract]
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      github.event.inputs.confirm == 'UPLOAD_PARQUEEN_TESTFLIGHT' &&
+      needs.dispatch-guard.result == 'success' &&
+      needs.contract.result == 'success'
+    runs-on: macos-26
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: macOS and Xcode toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sw_vers
+          uname -m
+          xcodebuild -version
+          XCODE_VERSION="$(xcodebuild -version | awk '/^Xcode / { print $2 }')"
+          XCODE_MAJOR="${XCODE_VERSION%%.*}"
+          echo "Selected Xcode version: ${XCODE_VERSION}"
+          if ! [[ "${XCODE_MAJOR}" =~ ^[0-9]+$ ]] || [ "${XCODE_MAJOR}" -lt 26 ]; then
+            echo "::error::Xcode major version '${XCODE_MAJOR}' is below 26."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Install npm 10
+        run: npm install -g npm@10
+
+      - name: Check required secrets are present
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
+          VITE_MAPBOX_TOKEN: ${{ secrets.VITE_MAPBOX_TOKEN }}
+          VITE_FIREBASE_APPCHECK_SITE_KEY: ${{ secrets.VITE_FIREBASE_APPCHECK_SITE_KEY }}
+          VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+          VITE_FIREBASE_VAPID_KEY: ${{ secrets.VITE_FIREBASE_VAPID_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in APPLE_TEAM_ID ASC_ISSUER_ID ASC_KEY_ID ASC_API_KEY_P8_BASE64 VITE_MAPBOX_TOKEN VITE_FIREBASE_APPCHECK_SITE_KEY VITE_SENTRY_DSN VITE_FIREBASE_VAPID_KEY; do
+            if [ -n "$(printenv "${name}" 2>/dev/null || true)" ]; then
+              echo "${name}: PRESENT"
+            else
+              echo "${name}: MISSING"
+              missing=1
+            fi
+          done
+          if [ "${missing}" -ne 0 ]; then
+            echo "::error::One or more required secrets are missing."
+            exit 1
+          fi
+
+      - name: Install dependencies and typecheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npx tsc --noEmit
+          if [ -n "$(git status --short --untracked-files=no)" ]; then
+            echo "::error::npm ci or typecheck changed tracked files."
+            git status --short --untracked-files=no
+            exit 1
+          fi
+
+      - name: Build production web assets
+        env:
+          VITE_MAPBOX_TOKEN: ${{ secrets.VITE_MAPBOX_TOKEN }}
+          VITE_FIREBASE_APPCHECK_SITE_KEY: ${{ secrets.VITE_FIREBASE_APPCHECK_SITE_KEY }}
+          VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+          VITE_FIREBASE_VAPID_KEY: ${{ secrets.VITE_FIREBASE_VAPID_KEY }}
+          SENTRY_AUTH_TOKEN: ""
+          SENTRY_ORG: ""
+          SENTRY_PROJECT: ""
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build
+          test -f dist/index.html
+          echo "dist/index.html: PRESENT"
+
+      - name: Assert production App Check bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx vitest run utils/appCheckBundleAssertion.test.ts
+
+      - name: Copy web assets into the iOS shell
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx cap copy ios
+          test -d ios/App/App/public
+          test -f ios/App/App/public/index.html
+          test -f ios/App/App/capacitor.config.json
+          test -f ios/App/App/config.xml
+          tracked="$(git status --short --untracked-files=no)"
+          if [ -n "${tracked}" ]; then
+            echo "::error::cap copy changed tracked files."
+            printf '%s\n' "${tracked}"
+            exit 1
+          fi
+          echo "Capacitor iOS inputs: PRESENT"
+          echo "tracked mutations: NONE"
+
+      - name: Reconstruct App Store Connect API key
+        env:
+          ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, os, pathlib, re, sys
+          raw = re.sub(r"\s+", "", os.environ.get("ASC_API_KEY_P8_BASE64", ""))
+          try:
+              data = base64.b64decode(raw, validate=True)
+          except Exception:
+              print("private key decode: FAIL")
+              sys.exit(1)
+          if not data.startswith(b"-----BEGIN ") or b"PRIVATE KEY-----" not in data.splitlines()[0]:
+              print("private key decode: FAIL")
+              sys.exit(1)
+          path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "AuthKey.p8"
+          path.write_bytes(data)
+          path.chmod(0o600)
+          print("private key decode: PASS")
+          PY
+          mode="$(stat -f '%Lp' "${RUNNER_TEMP}/AuthKey.p8")"
+          if [ "${mode}" != "600" ]; then
+            echo "private key mode: FAIL"
+            exit 1
+          fi
+          echo "private key mode: 600"
+          if ! openssl pkey -in "${RUNNER_TEMP}/AuthKey.p8" -noout >/dev/null 2>"${RUNNER_TEMP}/pkey.err"; then
+            rm -f "${RUNNER_TEMP}/pkey.err"
+            echo "private key validation: FAIL"
+            exit 1
+          fi
+          rm -f "${RUNNER_TEMP}/pkey.err"
+          echo "private key validation: PASS"
+
+      - name: Archive iOS app
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOG="${RUNNER_TEMP}/archive.log"
+          set +e
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "${RUNNER_TEMP}/ParQueen.xcarchive" \
+            CODE_SIGN_IDENTITY=- \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGN_STYLE=Automatic \
+            DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
+            archive >"${LOG}" 2>&1
+          status=$?
+          set -e
+          python3 - "${LOG}" <<'PY'
+          import pathlib, sys, os
+          path = pathlib.Path(sys.argv[1])
+          text = path.read_text(errors="replace")
+          for name in ("APPLE_TEAM_ID", "ASC_ISSUER_ID", "ASC_KEY_ID", "ASC_API_KEY_P8_BASE64"):
+              value = os.environ.get(name) or ""
+              if len(value) >= 6:
+                  text = text.replace(value, "[REDACTED]")
+          path.write_text(text)
+          PY
+          if [ "${status}" -ne 0 ]; then
+            echo "::error::Archive failed."
+            LOG="${LOG}" python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          lines = Path(os.environ["LOG"]).read_text(errors="replace").splitlines()
+          idx = None
+          for i, line in enumerate(lines):
+              if re.search(r"error:|fatal error:|xcodebuild: error:|No profiles|requires a development team|Provisioning profile|Code Sign error|errSec", line):
+                  idx = i
+                  break
+          if idx is None:
+              print("No classified signing error line. Last 40 redacted log lines:")
+              print("\n".join(lines[-40:]))
+          else:
+              start = max(0, idx - 5)
+              end = min(len(lines), idx + 16)
+              print(f"First meaningful error at log line {idx + 1}")
+              print("\n".join(lines[start:end]))
+          PY
+            exit "${status}"
+          fi
+          test -d "${RUNNER_TEMP}/ParQueen.xcarchive"
+          echo "archive: PASS"
+
+      - name: Export signed IPA
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, pathlib
+          import xml.sax.saxutils as xml
+          team = xml.escape(os.environ["APPLE_TEAM_ID"])
+          plist = f"""<?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>destination</key>
+            <string>export</string>
+            <key>signingStyle</key>
+            <string>automatic</string>
+            <key>teamID</key>
+            <string>{team}</string>
+            <key>manageAppVersionAndBuildNumber</key>
+            <false/>
+          </dict>
+          </plist>
+          """
+          path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "ExportOptions.plist"
+          path.write_text(plist.strip() + "\n")
+          PY
+          plutil -lint "${RUNNER_TEMP}/ExportOptions.plist"
+          LOG="${RUNNER_TEMP}/export.log"
+          set +e
+          xcodebuild \
+            -exportArchive \
+            -archivePath "${RUNNER_TEMP}/ParQueen.xcarchive" \
+            -exportPath "${RUNNER_TEMP}/ipa-export" \
+            -exportOptionsPlist "${RUNNER_TEMP}/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "${RUNNER_TEMP}/AuthKey.p8" \
+            -authenticationKeyID "${ASC_KEY_ID}" \
+            -authenticationKeyIssuerID "${ASC_ISSUER_ID}" \
+            >"${LOG}" 2>&1
+          status=$?
+          set -e
+          python3 - "${LOG}" <<'PY'
+          import pathlib, sys, os
+          path = pathlib.Path(sys.argv[1])
+          text = path.read_text(errors="replace")
+          for name in ("APPLE_TEAM_ID", "ASC_ISSUER_ID", "ASC_KEY_ID", "ASC_API_KEY_P8_BASE64"):
+              value = os.environ.get(name) or ""
+              if len(value) >= 6:
+                  text = text.replace(value, "[REDACTED]")
+          path.write_text(text)
+          PY
+          if [ "${status}" -ne 0 ]; then
+            echo "::error::Export failed."
+            LOG="${LOG}" python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          lines = Path(os.environ["LOG"]).read_text(errors="replace").splitlines()
+          idx = None
+          for i, line in enumerate(lines):
+              if re.search(r"error:|fatal error:|xcodebuild: error:|No profiles|requires a development team|Provisioning profile|Code Sign error|errSec|exportArchive", line):
+                  idx = i
+                  break
+          if idx is None:
+              print("No classified export error line. Last 40 redacted log lines:")
+              print("\n".join(lines[-40:]))
+          else:
+              start = max(0, idx - 5)
+              end = min(len(lines), idx + 16)
+              print(f"First meaningful error at log line {idx + 1}")
+              print("\n".join(lines[start:end]))
+          PY
+            exit "${status}"
+          fi
+          echo "export: PASS"
+
+      - name: Verify signed IPA
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, os, pathlib, plistlib, re, subprocess, sys
+          from datetime import datetime, timezone
+          export = pathlib.Path(os.environ["RUNNER_TEMP"]) / "ipa-export"
+          ipas = sorted(export.rglob("*.ipa"))
+          if len(ipas) != 1:
+              print(f"ipa count: {len(ipas)}")
+              sys.exit(1)
+          ipa = ipas[0]
+          digest = hashlib.sha256(ipa.read_bytes()).hexdigest()
+          print(f"ipa filename: {ipa.name}")
+          print(f"ipa bytes: {ipa.stat().st_size}")
+          print(f"ipa sha256: {digest}")
+          unpack = pathlib.Path(os.environ["RUNNER_TEMP"]) / "ipa-unpacked"
+          unpack.mkdir(parents=True, exist_ok=True)
+          subprocess.run(["ditto", "-x", "-k", str(ipa), str(unpack)], check=True)
+          apps = [p for p in unpack.rglob("*.app") if p.is_dir()]
+          if len(apps) != 1:
+              print(f"app bundle count: {len(apps)}")
+              sys.exit(1)
+          app = apps[0]
+          info = plistlib.loads((app / "Info.plist").read_bytes())
+          expected = {
+              "CFBundleIdentifier": "app.parqueen",
+              "CFBundleShortVersionString": "1.0",
+              "CFBundleVersion": "1",
+              "CFBundleDisplayName": "ParQueen",
+          }
+          failed = False
+          for key, want in expected.items():
+              got = info.get(key)
+              if got == want:
+                  print(f"{key}: PASS")
+              else:
+                  print(f"{key}: FAIL")
+                  failed = True
+          verify = subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], capture_output=True)
+          print("codesign verification: PASS" if verify.returncode == 0 else "codesign verification: FAIL")
+          if verify.returncode != 0:
+              failed = True
+          ent = subprocess.run(
+              ["codesign", "-d", "--entitlements", ":-", str(app)],
+              capture_output=True,
+          )
+          if ent.returncode != 0 or not ent.stdout.strip():
+              print("entitlements: FAIL")
+              sys.exit(1)
+          entitlements = plistlib.loads(ent.stdout)
+          if any("aps-environment" in key for key in entitlements):
+              print("aps-environment: PRESENT")
+              sys.exit(1)
+          print("aps-environment: ABSENT")
+          allowed = {
+              "application-identifier",
+              "com.apple.developer.team-identifier",
+              "keychain-access-groups",
+              "beta-reports-active",
+              "get-task-allow",
+          }
+          unexpected = sorted(key for key in entitlements if key not in allowed)
+          if unexpected:
+              for key in unexpected:
+                  print(f"unexpected entitlement: {key}")
+              sys.exit(1)
+          if "get-task-allow" not in entitlements:
+              print("get-task-allow: ABSENT")
+          else:
+              get_task_allow = entitlements.get("get-task-allow")
+              if get_task_allow is False:
+                  print("get-task-allow: FALSE — DISTRIBUTION SAFE")
+              elif get_task_allow is True:
+                  print("get-task-allow: TRUE — FAIL")
+                  failed = True
+              else:
+                  print("get-task-allow: INVALID — FAIL")
+                  failed = True
+          for key in sorted(entitlements):
+              print(f"entitlement: {key}")
+          team = os.environ["APPLE_TEAM_ID"]
+          ident = entitlements.get("application-identifier")
+          team_ent = entitlements.get("com.apple.developer.team-identifier")
+          if ident == f"{team}.app.parqueen" and team_ent == team:
+              print("team identifier: MATCH")
+          else:
+              print("team identifier: MISMATCH")
+              failed = True
+          provision = app / "embedded.mobileprovision"
+          decoded = pathlib.Path(os.environ["RUNNER_TEMP"]) / "embedded-profile.plist"
+          try:
+              if not provision.is_file():
+                  print("embedded.mobileprovision: ABSENT")
+                  failed = True
+              else:
+                  print("embedded.mobileprovision: PRESENT")
+                  decode = subprocess.run(
+                      ["security", "cms", "-D", "-i", str(provision), "-o", str(decoded)],
+                      capture_output=True,
+                  )
+                  if decode.returncode != 0 or not decoded.is_file():
+                      print("embedded profile decode: FAIL")
+                      failed = True
+                  else:
+                      profile = plistlib.loads(decoded.read_bytes())
+                      profile_ent = profile.get("Entitlements")
+                      if not isinstance(profile_ent, dict):
+                          print("embedded profile entitlements: FAIL")
+                          failed = True
+                          profile_ent = {}
+                      app_id = profile_ent.get("application-identifier")
+                      if app_id == f"{team}.app.parqueen":
+                          print("profile application identifier: MATCH")
+                      else:
+                          print("profile application identifier: MISMATCH")
+                          failed = True
+                      teams = profile.get("TeamIdentifier")
+                      if isinstance(teams, list) and team in teams:
+                          print("profile team identifier: MATCH")
+                      else:
+                          print("profile team identifier: MISMATCH")
+                          failed = True
+                      if "get-task-allow" not in profile_ent:
+                          print("profile get-task-allow: ABSENT")
+                          failed = True
+                      else:
+                          profile_task_allow = profile_ent.get("get-task-allow")
+                          if profile_task_allow is False:
+                              print("profile get-task-allow: FALSE — DISTRIBUTION SAFE")
+                          elif profile_task_allow is True:
+                              print("profile get-task-allow: TRUE — FAIL")
+                              failed = True
+                          else:
+                              print("profile get-task-allow: INVALID — FAIL")
+                              failed = True
+                      if "beta-reports-active" not in profile_ent:
+                          print("profile beta-reports-active: ABSENT")
+                      elif profile_ent.get("beta-reports-active") is True:
+                          print("profile beta-reports-active: TRUE")
+                      elif profile_ent.get("beta-reports-active") is False:
+                          print("profile beta-reports-active: FALSE")
+                      else:
+                          print("profile beta-reports-active: INVALID")
+                          failed = True
+                      if "ProvisionedDevices" in profile:
+                          print("profile type: development")
+                          failed = True
+                      else:
+                          print("profile type: distribution")
+                      expiration = profile.get("ExpirationDate")
+                      if not isinstance(expiration, datetime):
+                          print("profile expiration: ABSENT")
+                          failed = True
+                      else:
+                          expiry = expiration if expiration.tzinfo else expiration.replace(tzinfo=timezone.utc)
+                          print(f"profile expiration: {expiry.date().isoformat()}")
+                          if expiry <= datetime.now(timezone.utc):
+                              print("profile valid: NO")
+                              failed = True
+                          else:
+                              print("profile valid: YES")
+          finally:
+              if decoded.exists():
+                  decoded.unlink()
+          public = app / "public"
+          if not public.is_dir() or not (public / "index.html").is_file():
+              print("production web bundle: ABSENT")
+              sys.exit(1)
+          chunks = []
+          for path in public.rglob("*"):
+              if path.is_file() and path.suffix.lower() in {".js", ".html", ".css", ".json"}:
+                  chunks.append(path.read_text(errors="replace"))
+          text = "\n".join(chunks)
+          mapbox = re.search(r"pk\.[A-Za-z0-9_-]{20,}", text) is not None
+          app_check = re.search(r"6L[A-Za-z0-9_-]{20,}", text) is not None
+          sentry = re.search(r"https://[A-Za-z0-9]+@[A-Za-z0-9.-]+\.sentry\.io/[0-9]+", text) is not None
+          vite_debug = "VITE_APPCHECK_DEBUG_TOKEN" in text
+          firebase_assignment = re.search(
+              r"FIREBASE_APPCHECK_DEBUG_TOKEN\s*=(?!=)",
+              text,
+          ) is not None or re.search(
+              r"\.FIREBASE_APPCHECK_DEBUG_TOKEN\s*=(?!=)",
+              text,
+          ) is not None
+          bypass = re.search(r"appcheck-debug-", text, re.IGNORECASE) is not None
+          print(f"Mapbox configuration embedded: {'YES' if mapbox else 'NO'}")
+          print(f"App Check production configuration embedded: {'YES' if app_check else 'NO'}")
+          print(f"Sentry runtime DSN embedded: {'YES' if sentry else 'NO'}")
+          print("VITE App Check debug identifier: " + ("PRESENT" if vite_debug else "ABSENT"))
+          print("Firebase App Check debug assignment: " + ("PRESENT" if firebase_assignment else "ABSENT"))
+          print("known App Check debug bypass marker: " + ("PRESENT" if bypass else "ABSENT"))
+          if vite_debug or firebase_assignment or bypass:
+              failed = True
+          else:
+              print("debug App Check token wiring: ABSENT")
+          if not mapbox or not app_check or not sentry:
+              failed = True
+          if failed:
+              sys.exit(1)
+          stamp = pathlib.Path(os.environ["RUNNER_TEMP"]) / "ipa-stamp.txt"
+          stamp.write_text(str(ipa.resolve()) + "\n" + digest + "\n")
+          print("ipa verification: PASS")
+          PY
+
+      - name: Inspect altool options
+        shell: bash
+        run: |
+          set -euo pipefail
+          HELP="${RUNNER_TEMP}/altool-help.txt"
+          set +e
+          xcrun altool --help >"${HELP}" 2>&1
+          set -e
+          python3 - <<'PY'
+          import os, pathlib, sys
+          help_path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "altool-help.txt"
+          help_text = help_path.read_text(errors="replace") if help_path.is_file() else ""
+          if not help_text.strip():
+              print("altool help: EMPTY")
+              sys.exit(1)
+
+          def present(flag):
+              return flag in help_text
+
+          for flag in (
+              "--validate-app",
+              "--upload-app",
+              "--apiKey",
+              "--apiIssuer",
+              "--api-key",
+              "--api-issuer",
+              "--file",
+              "-f",
+              "--type",
+              "--platform",
+              "--p8-file-path",
+          ):
+              print(f"altool option {flag}: {'PRESENT' if present(flag) else 'ABSENT'}")
+          if not present("--validate-app") or not present("--upload-app"):
+              print("altool help missing validate or upload")
+              sys.exit(1)
+
+          def choose(options, label):
+              for opt in options:
+                  if present(opt):
+                      print(f"selected {label}: {opt}")
+                      return opt
+              print(f"altool help missing {label}")
+              sys.exit(1)
+
+          file_flag = choose(["--file", "-f"], "file option")
+          type_flag = choose(["--type", "--platform"], "platform option")
+          api_key_flag = choose(["--apiKey", "--api-key"], "api key option")
+          api_issuer_flag = choose(["--apiIssuer", "--api-issuer"], "api issuer option")
+          use_explicit = False
+          needle = "--p8-file-path"
+          start = 0
+          while True:
+              idx = help_text.find(needle, start)
+              if idx < 0:
+                  break
+              window = help_text[max(0, idx - 800):idx + 160]
+              jwt_only = "generate-jwt" in window or "generate jwt" in window.lower()
+              upload_context = "--validate-app" in window or "--upload-app" in window
+              if upload_context and not jwt_only:
+                  use_explicit = True
+                  break
+              start = idx + len(needle)
+          if use_explicit:
+              print("private key path option: --p8-file-path")
+              p8_mode = "explicit"
+          else:
+              print("private key path option: ABSENT")
+              print("private key lookup: HOME/.appstoreconnect/private_keys")
+              p8_mode = "lookup"
+          flags = pathlib.Path(os.environ["RUNNER_TEMP"]) / "altool-flags.txt"
+          flags.write_text("\n".join([file_flag, type_flag, api_key_flag, api_issuer_flag, p8_mode]) + "\n")
+          PY
+          rm -f "${HELP}"
+
+      - name: Install altool private key
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          p8_mode="$(sed -n '5p' "${RUNNER_TEMP}/altool-flags.txt")"
+          case "${p8_mode}" in
+            lookup|explicit) ;;
+            *) echo "private key mode: REJECTED"; exit 1 ;;
+          esac
+          if [ ! -f "${RUNNER_TEMP}/AuthKey.p8" ]; then
+            echo "runner private key: ABSENT"
+            exit 1
+          fi
+          mode="$(stat -f '%Lp' "${RUNNER_TEMP}/AuthKey.p8")"
+          if [ "${mode}" != "600" ]; then
+            echo "runner private key mode: FAIL"
+            exit 1
+          fi
+          if [ "${p8_mode}" != "lookup" ]; then
+            echo "altool private key: EXPLICIT PATH"
+            exit 0
+          fi
+          python3 - <<'PY'
+          import os, pathlib, re, shutil, sys
+          key_id = os.environ.get("ASC_KEY_ID", "")
+          if not re.fullmatch(r"[A-Za-z0-9]+", key_id):
+              print("altool private key: FAIL")
+              sys.exit(1)
+          src = pathlib.Path(os.environ["RUNNER_TEMP"]) / "AuthKey.p8"
+          dest_dir = pathlib.Path.home() / ".appstoreconnect" / "private_keys"
+          dest_dir.mkdir(parents=True, exist_ok=True)
+          dest_dir.chmod(0o700)
+          dest = dest_dir / f"AuthKey_{key_id}.p8"
+          shutil.copyfile(src, dest)
+          dest.chmod(0o600)
+          if not dest.is_file() or (dest.stat().st_mode & 0o777) != 0o600:
+              print("altool private key mode: FAIL")
+              sys.exit(1)
+          print("altool private key: INSTALLED")
+          print("altool private key mode: 600")
+          PY
+
+      - name: Validate verified IPA
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          file_flag="$(sed -n '1p' "${RUNNER_TEMP}/altool-flags.txt")"
+          type_flag="$(sed -n '2p' "${RUNNER_TEMP}/altool-flags.txt")"
+          api_key_flag="$(sed -n '3p' "${RUNNER_TEMP}/altool-flags.txt")"
+          api_issuer_flag="$(sed -n '4p' "${RUNNER_TEMP}/altool-flags.txt")"
+          p8_mode="$(sed -n '5p' "${RUNNER_TEMP}/altool-flags.txt")"
+          case "${file_flag}" in
+            --file|-f) ;;
+            *) echo "file option: REJECTED"; exit 1 ;;
+          esac
+          case "${type_flag}" in
+            --type|--platform) ;;
+            *) echo "platform option: REJECTED"; exit 1 ;;
+          esac
+          case "${api_key_flag}" in
+            --apiKey|--api-key) ;;
+            *) echo "api key option: REJECTED"; exit 1 ;;
+          esac
+          case "${api_issuer_flag}" in
+            --apiIssuer|--api-issuer) ;;
+            *) echo "api issuer option: REJECTED"; exit 1 ;;
+          esac
+          case "${p8_mode}" in
+            lookup|explicit) ;;
+            *) echo "private key mode: REJECTED"; exit 1 ;;
+          esac
+          python3 - <<'PY'
+          import hashlib, os, pathlib, sys
+          stamp = pathlib.Path(os.environ["RUNNER_TEMP"]) / "ipa-stamp.txt"
+          lines = stamp.read_text().splitlines() if stamp.is_file() else []
+          if len(lines) != 2:
+              print("ipa stamp: FAIL")
+              sys.exit(1)
+          ipa = pathlib.Path(lines[0])
+          digest = lines[1]
+          export = (pathlib.Path(os.environ["RUNNER_TEMP"]) / "ipa-export").resolve()
+          resolved = ipa.resolve()
+          found = sorted(path.resolve() for path in export.rglob("*.ipa"))
+          if export not in resolved.parents or resolved.suffix != ".ipa" or found != [resolved]:
+              print("verified ipa location: FAIL")
+              sys.exit(1)
+          got = hashlib.sha256(resolved.read_bytes()).hexdigest()
+          if got != digest:
+              print("verified ipa hash: MISMATCH")
+              sys.exit(1)
+          print("verified ipa hash: MATCH")
+          pathlib.Path(os.environ["RUNNER_TEMP"], "ipa-path.txt").write_text(str(resolved) + "\n")
+          PY
+          IPA_PATH="$(tr -d '\r' < "${RUNNER_TEMP}/ipa-path.txt")"
+          LOG="${RUNNER_TEMP}/validate.log"
+          cmd=(
+            xcrun altool
+            --validate-app
+            "${file_flag}" "${IPA_PATH}"
+            "${type_flag}" ios
+            "${api_key_flag}" "${ASC_KEY_ID}"
+            "${api_issuer_flag}" "${ASC_ISSUER_ID}"
+          )
+          if [ "${p8_mode}" = "explicit" ]; then
+            cmd+=(--p8-file-path "${RUNNER_TEMP}/AuthKey.p8")
+          fi
+          set +e
+          "${cmd[@]}" >"${LOG}" 2>&1
+          status=$?
+          set -e
+          STATUS="${status}" LOG="${LOG}" python3 - <<'PY'
+          import os, pathlib, re, sys
+          path = pathlib.Path(os.environ["LOG"])
+          text = path.read_text(errors="replace")
+          for name in ("APPLE_TEAM_ID", "ASC_ISSUER_ID", "ASC_KEY_ID"):
+              value = os.environ.get(name) or ""
+              if len(value) >= 6:
+                  text = text.replace(value, "[REDACTED]")
+          text = re.sub(r"AuthKey_[A-Za-z0-9]+", "AuthKey_[REDACTED]", text)
+          text = re.sub(r"-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----", "[REDACTED_KEY]", text)
+          text = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "[REDACTED_EMAIL]", text)
+          path.write_text(text)
+          status = int(os.environ["STATUS"])
+          success = re.search(r"no errors validating|validation succeeded", text, re.I) is not None
+          ambiguous = re.search(
+              r"timed out|timeout|network connection|connection was lost|connection reset|could not connect|unable to connect|NSURLError|broken pipe|temporarily unavailable|service unavailable|try again later|SSL error|\bHTTP[/ ]50[0234]\b|\bstatus code[: ]+50[0234]\b",
+              text,
+              re.I,
+          ) is not None
+
+          def excerpt(body):
+              lines = body.splitlines()
+              idx = None
+              for i, line in enumerate(lines):
+                  if re.search(r"ERROR|error:|failed|Failed", line):
+                      idx = i
+                      break
+              if idx is None:
+                  return "\n".join(lines[-40:])
+              return "\n".join(lines[max(0, idx - 5):min(len(lines), idx + 16)])
+
+          if status == 0 and success:
+              stamp = pathlib.Path(os.environ["RUNNER_TEMP"]) / "ipa-stamp.txt"
+              digest = stamp.read_text().splitlines()[1]
+              pathlib.Path(os.environ["RUNNER_TEMP"], "validation-ok").write_text(digest + "\n")
+              print("Apple validation: PASS")
+              sys.exit(0)
+          if ambiguous or status == 0 or status in (124, 137, 143, 255):
+              print("Apple validation: AMBIGUOUS — upload not started")
+          else:
+              print("Apple validation: FAIL")
+          print(excerpt(text))
+          sys.exit(1)
+          PY
+
+      - name: Upload verified IPA
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "upload attempts authorized: 1"
+          file_flag="$(sed -n '1p' "${RUNNER_TEMP}/altool-flags.txt")"
+          type_flag="$(sed -n '2p' "${RUNNER_TEMP}/altool-flags.txt")"
+          api_key_flag="$(sed -n '3p' "${RUNNER_TEMP}/altool-flags.txt")"
+          api_issuer_flag="$(sed -n '4p' "${RUNNER_TEMP}/altool-flags.txt")"
+          p8_mode="$(sed -n '5p' "${RUNNER_TEMP}/altool-flags.txt")"
+          case "${file_flag}" in
+            --file|-f) ;;
+            *) echo "file option: REJECTED"; exit 1 ;;
+          esac
+          case "${type_flag}" in
+            --type|--platform) ;;
+            *) echo "platform option: REJECTED"; exit 1 ;;
+          esac
+          case "${api_key_flag}" in
+            --apiKey|--api-key) ;;
+            *) echo "api key option: REJECTED"; exit 1 ;;
+          esac
+          case "${api_issuer_flag}" in
+            --apiIssuer|--api-issuer) ;;
+            *) echo "api issuer option: REJECTED"; exit 1 ;;
+          esac
+          case "${p8_mode}" in
+            lookup|explicit) ;;
+            *) echo "private key mode: REJECTED"; exit 1 ;;
+          esac
+          REQUIRE_VALIDATION=1 python3 - <<'PY'
+          import hashlib, os, pathlib, sys
+          stamp = pathlib.Path(os.environ["RUNNER_TEMP"]) / "ipa-stamp.txt"
+          lines = stamp.read_text().splitlines() if stamp.is_file() else []
+          if len(lines) != 2:
+              print("ipa stamp: FAIL")
+              sys.exit(1)
+          ipa = pathlib.Path(lines[0])
+          digest = lines[1]
+          export = (pathlib.Path(os.environ["RUNNER_TEMP"]) / "ipa-export").resolve()
+          resolved = ipa.resolve()
+          found = sorted(path.resolve() for path in export.rglob("*.ipa"))
+          if export not in resolved.parents or resolved.suffix != ".ipa" or found != [resolved]:
+              print("verified ipa location: FAIL")
+              sys.exit(1)
+          got = hashlib.sha256(resolved.read_bytes()).hexdigest()
+          if got != digest:
+              print("verified ipa hash: MISMATCH")
+              sys.exit(1)
+          print("verified ipa hash: MATCH")
+          if os.environ.get("REQUIRE_VALIDATION") == "1":
+              marker = pathlib.Path(os.environ["RUNNER_TEMP"]) / "validation-ok"
+              if not marker.is_file() or marker.read_text().strip() != digest:
+                  print("Apple validation marker: ABSENT")
+                  sys.exit(1)
+              print("Apple validation marker: MATCH")
+          pathlib.Path(os.environ["RUNNER_TEMP"], "ipa-path.txt").write_text(str(resolved) + "\n")
+          PY
+          IPA_PATH="$(tr -d '\r' < "${RUNNER_TEMP}/ipa-path.txt")"
+          LOG="${RUNNER_TEMP}/upload.log"
+          cmd=(
+            xcrun altool
+            --upload-app
+            "${file_flag}" "${IPA_PATH}"
+            "${type_flag}" ios
+            "${api_key_flag}" "${ASC_KEY_ID}"
+            "${api_issuer_flag}" "${ASC_ISSUER_ID}"
+          )
+          if [ "${p8_mode}" = "explicit" ]; then
+            cmd+=(--p8-file-path "${RUNNER_TEMP}/AuthKey.p8")
+          fi
+          trap 'echo "UPLOAD STATUS AMBIGUOUS — CHECK APP STORE CONNECT BEFORE RETRY"; exit 1' TERM INT
+          set +e
+          "${cmd[@]}" >"${LOG}" 2>&1
+          status=$?
+          set -e
+          trap - TERM INT
+          STATUS="${status}" LOG="${LOG}" python3 - <<'PY'
+          import os, pathlib, re, sys
+          path = pathlib.Path(os.environ["LOG"])
+          text = path.read_text(errors="replace")
+          for name in ("APPLE_TEAM_ID", "ASC_ISSUER_ID", "ASC_KEY_ID"):
+              value = os.environ.get(name) or ""
+              if len(value) >= 6:
+                  text = text.replace(value, "[REDACTED]")
+          text = re.sub(r"AuthKey_[A-Za-z0-9]+", "AuthKey_[REDACTED]", text)
+          text = re.sub(r"-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----", "[REDACTED_KEY]", text)
+          text = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "[REDACTED_EMAIL]", text)
+          path.write_text(text)
+          status = int(os.environ["STATUS"])
+          success = re.search(r"no errors uploading|upload succeeded|uploaded successfully", text, re.I) is not None
+          ambiguous = re.search(
+              r"timed out|timeout|network connection|connection was lost|connection reset|could not connect|unable to connect|NSURLError|broken pipe|temporarily unavailable|service unavailable|try again later|SSL error|\bHTTP[/ ]50[0234]\b|\bstatus code[: ]+50[0234]\b",
+              text,
+              re.I,
+          ) is not None
+          delivery = re.search(
+              r"(?i)\b(?:delivery uuid|delivery id|request id)\b\s*[:=]\s*([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})",
+              text,
+          )
+
+          def excerpt(body):
+              lines = body.splitlines()
+              idx = None
+              for i, line in enumerate(lines):
+                  if re.search(r"ERROR|error:|failed|Failed", line):
+                      idx = i
+                      break
+              if idx is None:
+                  return "\n".join(lines[-40:])
+              return "\n".join(lines[max(0, idx - 5):min(len(lines), idx + 16)])
+
+          def report(line, extra=None):
+              print(line)
+              if extra:
+                  print(extra)
+              summary = os.environ.get("GITHUB_STEP_SUMMARY")
+              if summary:
+                  with open(summary, "a", encoding="utf-8") as handle:
+                      handle.write(line + "\n")
+                      if extra:
+                          handle.write(extra + "\n")
+
+          if status == 0 and success:
+              extra = f"delivery id: {delivery.group(1)}" if delivery else None
+              report("UPLOAD ACCEPTED", extra)
+              print("Apple accepted the binary delivery.")
+              sys.exit(0)
+          if ambiguous or status == 0 or status in (124, 137, 143, 255) or success:
+              report("UPLOAD STATUS AMBIGUOUS — CHECK APP STORE CONNECT BEFORE RETRY")
+          else:
+              report("UPLOAD FAILED")
+          print(excerpt(text))
+          sys.exit(1)
+          PY
+
+      - name: Delete signing material
+        if: always()
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            "${RUNNER_TEMP}/AuthKey.p8" \
+            "${RUNNER_TEMP}/ExportOptions.plist" \
+            "${RUNNER_TEMP}/archive.log" \
+            "${RUNNER_TEMP}/export.log" \
+            "${RUNNER_TEMP}/validate.log" \
+            "${RUNNER_TEMP}/upload.log" \
+            "${RUNNER_TEMP}/altool-help.txt" \
+            "${RUNNER_TEMP}/altool-flags.txt" \
+            "${RUNNER_TEMP}/ipa-stamp.txt" \
+            "${RUNNER_TEMP}/ipa-path.txt" \
+            "${RUNNER_TEMP}/validation-ok" \
+            "${RUNNER_TEMP}/pkey.err" \
+            "${RUNNER_TEMP}/embedded-profile.plist"
+          rm -rf \
+            "${RUNNER_TEMP}/ParQueen.xcarchive" \
+            "${RUNNER_TEMP}/ipa-export" \
+            "${RUNNER_TEMP}/ipa-unpacked"
+          python3 - <<'PY'
+          import os, pathlib, re, sys
+          base = pathlib.Path.home() / ".appstoreconnect" / "private_keys"
+          key_id = os.environ.get("ASC_KEY_ID", "")
+          if re.fullmatch(r"[A-Za-z0-9]+", key_id):
+              dest = base / f"AuthKey_{key_id}.p8"
+              if dest.exists():
+                  dest.unlink()
+              if dest.exists():
+                  print("lookup private key: STILL PRESENT")
+                  sys.exit(1)
+          elif base.is_dir() and any(base.glob("AuthKey_*.p8")):
+              print("lookup private key: STILL PRESENT")
+              sys.exit(1)
+          print("lookup private key: ABSENT")
+          PY
+          rmdir "${HOME}/.appstoreconnect/private_keys" 2>/dev/null || true
+          rmdir "${HOME}/.appstoreconnect" 2>/dev/null || true
+          if [ -e "${RUNNER_TEMP}/AuthKey.p8" ]; then
+            echo "AuthKey.p8: STILL PRESENT"
+            exit 1
+          fi
+          echo "AuthKey.p8: ABSENT"
+          if [ -e "${RUNNER_TEMP}/ipa-export" ]; then
+            echo "ipa export: STILL PRESENT"
+            exit 1
+          fi
+          echo "ipa export: ABSENT"
+          if [ -e "${RUNNER_TEMP}/ParQueen.xcarchive" ]; then
+            echo "xcarchive: STILL PRESENT"
+            exit 1
+          fi
+          echo "xcarchive: ABSENT"
