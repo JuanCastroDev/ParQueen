@@ -123,7 +123,7 @@ xcodebuild \
 - `destination` = `export` (write the IPA locally; do not upload)
 - `signingStyle` = `automatic`
 - `teamID` = the `APPLE_TEAM_ID` secret
-- `manageAppVersionAndBuildNumber` = false, so version `1.0` and build `1` stay as they are in the project
+- `manageAppVersionAndBuildNumber` = false, so version `1.0` and build `2` stay as they are in the project
 
 ```bash
 xcodebuild \

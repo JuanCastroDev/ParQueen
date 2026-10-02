@@ -283,6 +283,11 @@ jobs:
           fi
           echo "BUILD RESULT: SUCCESS"
           grep -n "BUILD SUCCEEDED" "${LOG}" || true
+          if grep -E -n '(warning|error):.*AppIcon|AppIcon.*(unassigned|warning|error)' "${LOG}"; then
+            echo "::error::AppIcon asset catalog reported a warning or error."
+            exit 1
+          fi
+          echo "AppIcon asset catalog: PASS"
 
       - name: Build evidence
         if: always()

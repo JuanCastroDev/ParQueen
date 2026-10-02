@@ -45,7 +45,7 @@ The archive step uses the Stage C ad-hoc settings: `CODE_SIGN_IDENTITY=-`, `AD_H
 
 Export is local. `destination` is `export`. `manageAppVersionAndBuildNumber` stays false, so this workflow does not change the marketing version or the build number.
 
-The IPA verifier must pass before Apple is contacted. It requires one IPA, bundle ID `app.parqueen`, version `1.0`, build `1`, display name `ParQueen`, a valid code signature, a distribution profile, team match, and the production web bundle. `aps-environment` must be absent. `get-task-allow` must be absent or boolean false on the app, and boolean false on the profile. Mapbox, production App Check, and the Sentry DSN must be embedded. Debug App Check wiring must be absent. The rules match the signed-archive workflow.
+The IPA verifier must pass before Apple is contacted. It requires one IPA, bundle ID `app.parqueen`, version `1.0`, build `2`, display name `ParQueen`, a valid code signature, a distribution profile, team match, and the production web bundle. `aps-environment` must be absent. `get-task-allow` must be absent or boolean false on the app, and boolean false on the profile. Mapbox, production App Check, and the Sentry DSN must be embedded. Debug App Check wiring must be absent. The rules match the signed-archive workflow.
 
 The verifier records the IPA path and SHA-256. Validation and upload both recompute that hash and stop if the file changed. Upload also requires the validation step to have accepted that same digest. The workflow does not repack the IPA between those steps.
 
@@ -57,7 +57,7 @@ There is one upload command. It is `xcrun altool --upload-app` with API-key auth
 
 ## Ambiguous upload
 
-Build `1` is not incremented here.
+The workflow does not increment the project build number.
 
 If the upload times out, the runner is disconnected, the network fails after the transfer starts, or Apple does not clearly accept or reject the delivery, the final status is:
 
@@ -73,13 +73,15 @@ A clear rejection is `UPLOAD FAILED`. A clear acceptance is `UPLOAD ACCEPTED`. A
 
 It does not mean processing has finished, the build is available in TestFlight, export compliance is complete, a testing group was assigned, external testing was approved, or the app was submitted for App Store review. Those steps stay manual.
 
-## Upload 1.0 (1) processing failure
+## TestFlight history
 
-Apple accepted delivery of marketing version 1.0, build 1, and then failed processing with ITMS-90683 (`NSPhotoLibraryUsageDescription` missing). The root cause was the Photos-capable `@capacitor/camera` plugin linked into the iOS binary. Sign scanning does not need gallery access, so the product decision is a camera-only Sign Scanner. The gallery path and the plugin were removed instead of adding an unused Photos purpose string.
+Upload #2 delivered marketing version 1.0, build 1. Apple accepted the delivery, then failed post-processing with ITMS-90683 because `NSPhotoLibraryUsageDescription` was missing. The Photos-capable `@capacitor/camera` plugin was linked into that binary.
 
-That rejection is not resolved until a later upload of this camera-only build finishes processing. Build 1 is reused because Apple allows the same build number when the previous upload status is Failed. This document does not dispatch that upload.
+D2 removed `@capacitor/camera` and made Sign Scanner camera-only. The gallery path was removed. The IPA verifier requires a non-empty `NSCameraUsageDescription` and rejects packaged `CapacitorCamera` or `IONCameraLib` bundle names. It does not require a Photos-library purpose string.
 
-The IPA verifier now requires a non-empty `NSCameraUsageDescription` and rejects packaged `CapacitorCamera` or `IONCameraLib` bundle names. It does not require a Photos-library purpose string.
+Upload #3 delivered the same marketing version 1.0, build 1, after that camera-only change. Apple accepted the delivery and post-processing completed. App Store Connect shows 1.0 (1) as Complete. That completed processing is the evidence that ITMS-90683 is resolved. Build 1 used the simplified pin mark, not the crowned ParQueen icon.
+
+The next upload is marketing version 1.0, build 2. The build number changed because a processed build number cannot be reused. The change in that build is the canonical crowned iOS app icon. This document does not dispatch that upload.
 
 ## Cleanup
 
