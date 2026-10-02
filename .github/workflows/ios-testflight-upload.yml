@@ -153,10 +153,114 @@ jobs:
           if re.search(r"(?m)^[\t ]*environment:\s*$", text) or re.search(r"(?m)^[\t ]*strategy:\s*$", text):
               print("workflow uses an environment or a matrix")
               sys.exit(1)
-          checkout_pin = "ref: ${{ github.sha }}\n          persist-credentials: false"
-          if text.count(checkout_pin) != 2:
+
+          def checkout_with_blocks(source):
+              uses_marker = "actions/" + "checkout@"
+              lines = source.splitlines()
+              blocks = []
+              index = 0
+              while index < len(lines):
+                  line = lines[index]
+                  stripped = line.lstrip(" ")
+                  if stripped.startswith("- uses:") and uses_marker in stripped:
+                      indent = len(line) - len(stripped)
+                      body = []
+                      index += 1
+                      while index < len(lines):
+                          nxt = lines[index]
+                          if nxt.strip() == "":
+                              look = index + 1
+                              while look < len(lines) and lines[look].strip() == "":
+                                  look += 1
+                              if look >= len(lines):
+                                  break
+                              look_line = lines[look]
+                              look_stripped = look_line.lstrip(" ")
+                              look_indent = len(look_line) - len(look_stripped)
+                              if look_indent <= indent:
+                                  break
+                              body.append(nxt)
+                              index += 1
+                              continue
+                          nxt_stripped = nxt.lstrip(" ")
+                          nxt_indent = len(nxt) - len(nxt_stripped)
+                          if nxt_indent <= indent:
+                              break
+                          body.append(nxt)
+                          index += 1
+                      blocks.append(body)
+                      continue
+                  index += 1
+              return blocks
+
+          def with_keys(body):
+              collecting = False
+              with_indent = None
+              keys = []
+              for line in body:
+                  stripped = line.lstrip(" ")
+                  if stripped == "":
+                      continue
+                  indent = len(line) - len(stripped)
+                  if not collecting:
+                      if stripped == "with:":
+                          collecting = True
+                          with_indent = indent
+                      continue
+                  if indent <= with_indent:
+                      break
+                  keys.append(stripped)
+              return keys
+
+          def classify_checkouts(source, pinned_ref, persist_false):
+              blocks = checkout_with_blocks(source)
+              if len(blocks) != 2:
+                  return "fail"
+              persist_prefix = "persist-" + "credentials:"
+              for body in blocks:
+                  keys = with_keys(body)
+                  ref_keys = [key for key in keys if key.startswith("ref:")]
+                  persist_keys = [key for key in keys if key.startswith(persist_prefix)]
+                  if ref_keys != [pinned_ref] or persist_keys != [persist_false]:
+                      return "fail"
+              return "pass"
+
+          def checkout_document(step_fields):
+              uses = "- uses: " + "actions/" + "checkout@" + "example"
+              lines = ["jobs:", "  demo:", "    steps:"]
+              for fields in step_fields:
+                  lines.append("      " + uses)
+                  lines.append("        with:")
+                  for field in fields:
+                      lines.append("          " + field)
+              return "\n".join(lines) + "\n"
+
+          ref_sha = "ref: " + "$" + "{{ " + "github." + "sha }}"
+          ref_main = "ref: " + "main"
+          persist_false = "persist-" + "credentials: false"
+          persist_true = "persist-" + "credentials: true"
+          checkout_cases = [
+              ("two pinned checkouts", [[ref_sha, persist_false], [ref_sha, persist_false]], "pass"),
+              ("missing ref", [[persist_false], [ref_sha, persist_false]], "fail"),
+              ("ref main", [[ref_main, persist_false], [ref_sha, persist_false]], "fail"),
+              ("missing persist", [[ref_sha], [ref_sha, persist_false]], "fail"),
+              ("persist true", [[ref_sha, persist_true], [ref_sha, persist_false]], "fail"),
+              ("third checkout", [[ref_sha, persist_false], [ref_sha, persist_false], [ref_sha, persist_false]], "fail"),
+          ]
+          for case_name, fields, want in checkout_cases:
+              got = classify_checkouts(checkout_document(fields), ref_sha, persist_false)
+              if got != want:
+                  print(f"checkout pin case failed: {case_name}")
+                  sys.exit(1)
+          decoy = "checker = \"" + ref_sha + "\\n          " + persist_false + "\"\n"
+          decoy_doc = decoy + checkout_document([[ref_sha, persist_false], [ref_sha, persist_false]])
+          if classify_checkouts(decoy_doc, ref_sha, persist_false) != "pass":
+              print("checkout pin case failed: self-match decoy")
+              sys.exit(1)
+          if classify_checkouts(text, ref_sha, persist_false) != "pass":
               print("checkouts are not pinned to the dispatched commit")
               sys.exit(1)
+          print("checkout pin classification: PASS")
           if re.search(r"DEVELOPMENT_TEAM=[A-Z0-9]{10}([^A-Z0-9]|$)", text):
               print("workflow contains a literal Team ID")
               sys.exit(1)

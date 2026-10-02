@@ -20,6 +20,10 @@ The job checks out `github.sha` for that dispatch. It rebuilds that commit. It d
 
 Rollback is to not dispatch the workflow.
 
+Manual run 1 (`37029996875`) stopped in the upload contract before any build or Apple call. The dispatch guard passed. The static checker then rejected the workflow because it global-counted a checkout-pin literal that also appeared in its own source. No archive, IPA, Apple validation, or TestFlight upload was attempted.
+
+The contract now finds the two real checkout steps and reads only each step's `with:` block. Both must pin `ref` to the dispatched commit and set `persist-credentials` to false. A third checkout step is rejected. The checker builds those match tokens dynamically, so it does not count its own source.
+
 ## Secrets
 
 Names only. The upload job stops if any of these are empty. It prints `PRESENT` or `MISSING` and nothing else about them.
