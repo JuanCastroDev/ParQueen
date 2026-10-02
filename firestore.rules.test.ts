@@ -8,6 +8,8 @@
  * Requires Java 11+ and Firebase CLI with the Firestore emulator installed.
  */
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import path from 'node:path';
 import { describe, it, beforeAll, afterAll, beforeEach, expect } from 'vitest';
 import {
     initializeTestEnvironment,
@@ -20,6 +22,7 @@ import {
     getDoc,
     getDocs,
     setDoc,
+    deleteDoc,
     addDoc,
     collection,
     query,
@@ -28,6 +31,12 @@ import {
     runTransaction,
 } from 'firebase/firestore';
 import { cancelClaimTransaction } from './views/street-parking/cancelClaimTransaction';
+import {
+    acquireActiveIncomingClaim,
+    activeIncomingClaimRef,
+    markClaimArrived,
+} from './views/street-parking/activeIncomingClaim';
+import { getTitleForCrowns } from './utils/crowns';
 import {
     completeFinderConfirmedHandoff,
     completeTerminalHandoff,
@@ -39,6 +48,7 @@ const OTHER_UID  = 'other-bbb-222';
 const ADMIN_UID  = 'admin-ccc-333';
 const THIRD_UID  = 'third-ddd-444';
 const PROJECT_ID = 'demo-parkqueen-rules-test';
+const requireFromFunctions = createRequire(path.join(process.cwd(), 'functions/package.json'));
 
 let testEnv: RulesTestEnvironment;
 
@@ -54,6 +64,45 @@ async function seed(col: string, id: string, data: object) {
     await testEnv.withSecurityRulesDisabled(async ctx => {
         await setDoc(doc(ctx.firestore(), col, id), data);
     });
+}
+
+async function seedActiveClaimInvariantOpen() {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'activeIncomingClaimRollout', 'status'), {
+            enforced: true,
+            locklessCount: 0,
+            duplicateUserCount: 0,
+            duplicatePingCount: 0,
+        });
+    });
+}
+
+async function closeActiveClaimRollout() {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await deleteDoc(doc(ctx.firestore(), 'activeIncomingClaimRollout', 'status'));
+    });
+}
+
+function rolloutTools() {
+    if (!process.env.FIRESTORE_EMULATOR_HOST) {
+        process.env.FIRESTORE_EMULATOR_HOST = '127.0.0.1:8080';
+    }
+    const { initializeApp, getApps } = requireFromFunctions('firebase-admin/app');
+    const { getFirestore, Timestamp: AdminTimestamp } = requireFromFunctions('firebase-admin/firestore');
+    const { reconcileActiveIncomingClaims } = requireFromFunctions('./activeIncomingClaim.js');
+    const name = 'a1-rollout';
+    const app = getApps().find((entry: { name: string }) => entry.name === name)
+        ?? initializeApp({ projectId: PROJECT_ID }, name);
+    return {
+        db: getFirestore(app),
+        reconcile: reconcileActiveIncomingClaims as (db: unknown, now: unknown) => Promise<{
+            enforced: boolean;
+            locklessCount: number;
+            duplicateUserCount: number;
+            duplicatePingCount: number;
+        }>,
+        now: () => AdminTimestamp.now(),
+    };
 }
 
 // ── Common timestamps ─────────────────────────────────────────────────────────
@@ -159,6 +208,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
     await testEnv.clearFirestore();
+    await seedActiveClaimInvariantOpen();
 });
 
 describe('curbIdentities — server-only canonical curb identity', () => {
@@ -1408,19 +1458,26 @@ describe('spots — claimer cancellation', () => {
     });
 
     it('CC8: a fresh claim on the same spot gets a different claimStartedAt than the one it replaced', async () => {
-        const { updateDoc } = await import('firebase/firestore');
+        await seed('users', OTHER_UID, { username: 'bob', crowns: 0 });
         await seed('spots', 'cc8', {
             finderId: OWNER_UID, finderName: 'TestFinder', address: '9 Reclaim Ave',
             lat: 40.71, lng: -74.03, status: 'available', pingMode: 'now',
             reportedAt: Timestamp.now(), expiresAt: FUTURE,
         });
+        const db = otherDb();
         const claimedAt = Timestamp.now();
-        await assertSucceeds(
-            updateDoc(doc(otherDb(), 'spots', 'cc8'), {
+        await assertSucceeds(runTransaction(db, async (tx) => {
+            tx.update(doc(db, 'spots', 'cc8'), {
                 status: 'interested', claimState: 'heading', interestedUserId: OTHER_UID,
                 interestExpiresAt: FUTURE, claimStartedAt: claimedAt,
-            })
-        );
+            });
+            tx.set(doc(db, 'users', OTHER_UID, 'activeIncomingClaims', 'current'), {
+                spotId: 'cc8',
+                claimStartedAt: claimedAt,
+                claimState: 'heading',
+                updatedAt: claimedAt,
+            });
+        }));
         let stored: any;
         await testEnv.withSecurityRulesDisabled(async ctx => {
             stored = (await getDoc(doc(ctx.firestore(), 'spots', 'cc8'))).data();
@@ -2447,34 +2504,67 @@ describe('spots — identity-display authority (SP)', () => {
         });
 
         it('SP-03: a legitimate claim with interestedUserName/Title/Vehicle* matching the claimer\'s live profile succeeds', async () => {
-            const { updateDoc: upd } = await import('firebase/firestore');
-            await assertSucceeds(upd(doc(otherDb(), 'spots', SPOT_ID), {
-                status: 'interested',
-                interestedUserId: OTHER_UID,
-                interestedUserName: 'claimerother',
-                interestedUserTitle: CLAIMER_TITLE,
-                interestedUserVehicleColor: 'red',
-                interestedUserVehicleType: 'suv',
-                interestedUserVehicleBrand: 'Toyota',
+            const db = otherDb();
+            const claimedAt = Timestamp.now();
+            await assertSucceeds(runTransaction(db, async (tx) => {
+                tx.update(doc(db, 'spots', SPOT_ID), {
+                    status: 'interested',
+                    claimState: 'heading',
+                    interestedUserId: OTHER_UID,
+                    interestedUserName: 'claimerother',
+                    interestedUserTitle: CLAIMER_TITLE,
+                    interestedUserVehicleColor: 'red',
+                    interestedUserVehicleType: 'suv',
+                    interestedUserVehicleBrand: 'Toyota',
+                    claimStartedAt: claimedAt,
+                });
+                tx.set(doc(db, 'users', OTHER_UID, 'activeIncomingClaims', 'current'), {
+                    spotId: SPOT_ID,
+                    claimStartedAt: claimedAt,
+                    claimState: 'heading',
+                    updatedAt: claimedAt,
+                });
             }));
         });
 
         it('SP-04: a claim with a forged interestedUserName is denied, even with the correct interestedUserId', async () => {
-            const { updateDoc: upd } = await import('firebase/firestore');
-            await assertFails(upd(doc(otherDb(), 'spots', SPOT_ID), {
-                status: 'interested',
-                interestedUserId: OTHER_UID,
-                interestedUserName: 'Impersonated Name',
+            const db = otherDb();
+            const claimedAt = Timestamp.now();
+            await assertFails(runTransaction(db, async (tx) => {
+                tx.update(doc(db, 'spots', SPOT_ID), {
+                    status: 'interested',
+                    claimState: 'heading',
+                    interestedUserId: OTHER_UID,
+                    interestedUserName: 'Impersonated Name',
+                    claimStartedAt: claimedAt,
+                });
+                tx.set(doc(db, 'users', OTHER_UID, 'activeIncomingClaims', 'current'), {
+                    spotId: SPOT_ID,
+                    claimStartedAt: claimedAt,
+                    claimState: 'heading',
+                    updatedAt: claimedAt,
+                });
             }));
         });
 
         it('SP-04b: a claim with a forged interestedUserTitle (crown-tier) is denied', async () => {
-            const { updateDoc: upd } = await import('firebase/firestore');
-            await assertFails(upd(doc(otherDb(), 'spots', SPOT_ID), {
-                status: 'interested',
-                interestedUserId: OTHER_UID,
-                interestedUserName: 'claimerother',
-                interestedUserTitle: 'Urban Legend',
+            const db = otherDb();
+            const claimedAt = Timestamp.now();
+            await assertFails(runTransaction(db, async (tx) => {
+                tx.update(doc(db, 'spots', SPOT_ID), {
+                    status: 'interested',
+                    claimState: 'heading',
+                    interestedUserId: OTHER_UID,
+                    interestedUserName: 'claimerother',
+                    interestedUserTitle: 'Urban Legend',
+                    claimStartedAt: claimedAt,
+                });
+                tx.set(doc(db, 'users', OTHER_UID, 'activeIncomingClaims', 'current'), {
+                    spotId: SPOT_ID,
+                    claimStartedAt: claimedAt,
+                    claimState: 'heading',
+                    updatedAt: claimedAt,
+                });
             }));
         });
 
@@ -2502,18 +2592,39 @@ describe('spots — identity-display authority (SP)', () => {
         });
 
         it('SP-10: a legitimate claimer cancellation (clearing interestedUser* fields to null) still succeeds unaffected', async () => {
-            const { updateDoc: upd } = await import('firebase/firestore');
-            await upd(doc(otherDb(), 'spots', SPOT_ID), {
-                status: 'interested', interestedUserId: OTHER_UID, interestedUserName: 'claimerother',
+            const db = otherDb();
+            const claimedAt = Timestamp.now();
+            const lockRef = doc(db, 'users', OTHER_UID, 'activeIncomingClaims', 'current');
+            await runTransaction(db, async (tx) => {
+                tx.update(doc(db, 'spots', SPOT_ID), {
+                    status: 'interested',
+                    claimState: 'heading',
+                    interestedUserId: OTHER_UID,
+                    interestedUserName: 'claimerother',
+                    interestedUserTitle: CLAIMER_TITLE,
+                    interestedUserVehicleColor: 'red',
+                    interestedUserVehicleType: 'suv',
+                    interestedUserVehicleBrand: 'Toyota',
+                    claimStartedAt: claimedAt,
+                });
+                tx.set(lockRef, {
+                    spotId: SPOT_ID,
+                    claimStartedAt: claimedAt,
+                    claimState: 'heading',
+                    updatedAt: claimedAt,
+                });
             });
-            await assertSucceeds(upd(doc(otherDb(), 'spots', SPOT_ID), {
-                status: 'available',
-                interestedUserId: null,
-                interestedUserName: null,
-                interestedUserVehicleColor: null,
-                interestedUserVehicleType: null,
-                interestedUserVehicleBrand: null,
-                interestedUserTitle: null,
+            await assertSucceeds(runTransaction(db, async (tx) => {
+                tx.update(doc(db, 'spots', SPOT_ID), {
+                    status: 'available',
+                    interestedUserId: null,
+                    interestedUserName: null,
+                    interestedUserVehicleColor: null,
+                    interestedUserVehicleType: null,
+                    interestedUserVehicleBrand: null,
+                    interestedUserTitle: null,
+                });
+                tx.delete(lockRef);
             }));
         });
     });
@@ -3394,13 +3505,22 @@ describe('§9 — Two-user workflow: finder ↔ claimer lifecycle', () => {
     });
 
     it('WF-08: OTHER can claim OWNER\'s available Ping (express interest)', async () => {
-        const { updateDoc: upd } = await import('firebase/firestore');
-        await assertSucceeds(
-            upd(doc(otherDb(), 'spots', WF_SPOT_ID), {
-                status:           'interested',
+        const db = otherDb();
+        const claimedAt = Timestamp.now();
+        await assertSucceeds(runTransaction(db, async (tx) => {
+            tx.update(doc(db, 'spots', WF_SPOT_ID), {
+                status: 'interested',
+                claimState: 'heading',
                 interestedUserId: OTHER_UID,
-            }),
-        );
+                claimStartedAt: claimedAt,
+            });
+            tx.set(doc(db, 'users', OTHER_UID, 'activeIncomingClaims', 'current'), {
+                spotId: WF_SPOT_ID,
+                claimStartedAt: claimedAt,
+                claimState: 'heading',
+                updatedAt: claimedAt,
+            });
+        }));
     });
 
     // ── Chat isolation ─────────────────────────────────────────────────────────
@@ -3499,5 +3619,487 @@ describe('PA-01–PA-09: users/{uid}/private/avatar rules', () => {
                 requestedAt: Timestamp.now(),
             }),
         );
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// A1 — one active incoming claim per user (HO-003)
+// Server authority is the lock at users/{uid}/activeIncomingClaims/current,
+// written in the same transaction as the Ping claim. These tests skip the
+// client checkAlreadyInterested query on purpose.
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('A1 — one active incoming claim', () => {
+    function availablePing(address: string) {
+        return {
+            finderId: OWNER_UID,
+            finderName: 'TestFinder',
+            address,
+            lat: 40.71,
+            lng: -74.01,
+            status: 'available',
+            pingMode: 'now' as const,
+            reportedAt: Timestamp.now(),
+            expiresAt: FUTURE,
+        };
+    }
+
+    async function seedClaimer(uid: string, username: string) {
+        await seed('users', uid, { username, fullName: username, crowns: 0 });
+    }
+
+    function claimPayload(
+        uid: string,
+        username: string,
+        claimState: 'heading' | 'committed',
+        claimStartedAt: Timestamp,
+        extra: Record<string, unknown> = {},
+    ) {
+        return {
+            status: 'interested',
+            claimState,
+            ownerLeavingNow: null,
+            interestedUserId: uid,
+            interestedUserName: username,
+            interestedUserVehicleColor: null,
+            interestedUserVehicleType: null,
+            interestedUserVehicleBrand: null,
+            interestedUserTitle: getTitleForCrowns(0),
+            claimStartedAt,
+            ...extra,
+        };
+    }
+
+    async function claimAs(
+        db: ReturnType<typeof otherDb>,
+        uid: string,
+        username: string,
+        spotId: string,
+        claimState: 'heading' | 'committed' = 'heading',
+    ) {
+        return acquireActiveIncomingClaim(db, {
+            spotId,
+            uid,
+            unavailableMessage: 'Someone already got this spot',
+            missingMessage: 'Spot no longer exists',
+            buildClaimFields: (_spot, startedAt) => claimPayload(uid, username, claimState, startedAt),
+        });
+    }
+
+    async function readSpot(id: string) {
+        let snap: any;
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            snap = await getDoc(doc(ctx.firestore(), 'spots', id));
+        });
+        return snap;
+    }
+
+    async function readLock(uid: string) {
+        let snap: any;
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            snap = await getDoc(activeIncomingClaimRef(ctx.firestore(), uid));
+        });
+        return snap;
+    }
+
+    async function seedLock(uid: string, spotId: string, claimStartedAt = Timestamp.now()) {
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            await setDoc(activeIncomingClaimRef(ctx.firestore(), uid), {
+                spotId,
+                claimStartedAt,
+                claimState: 'heading',
+                updatedAt: claimStartedAt,
+            });
+        });
+    }
+
+    it('A1-1: a claim with no existing lock succeeds and writes the lock in the same commit', async () => {
+        await seedClaimer(OTHER_UID, 'bob');
+        await seed('spots', 'a1-open', availablePing('A1 open'));
+        const db = otherDb();
+        await expect(claimAs(db, OTHER_UID, 'bob', 'a1-open')).resolves.toBe('claimed');
+        const spot = await readSpot('a1-open');
+        const lock = await readLock(OTHER_UID);
+        expect(spot.data().status).toBe('interested');
+        expect(spot.data().interestedUserId).toBe(OTHER_UID);
+        expect(lock.exists()).toBe(true);
+        expect(lock.data().spotId).toBe('a1-open');
+        expect(lock.data().claimState).toBe('heading');
+        expect(lock.data().claimStartedAt.isEqual(spot.data().claimStartedAt)).toBe(true);
+    });
+
+    it('A1-2: a malicious client that skips the client check cannot claim a second Ping without moving the lock', async () => {
+        await seedClaimer(OTHER_UID, 'bob');
+        await seed('spots', 'a1-held', availablePing('A1 held'));
+        await seed('spots', 'a1-second', availablePing('A1 second'));
+        const db = otherDb();
+        await claimAs(db, OTHER_UID, 'bob', 'a1-held');
+        const claimedAt = Timestamp.now();
+        await assertFails(runTransaction(db, async (tx) => {
+            tx.update(doc(db, 'spots', 'a1-second'), claimPayload(OTHER_UID, 'bob', 'heading', claimedAt));
+        }));
+        expect((await readSpot('a1-held')).data().interestedUserId).toBe(OTHER_UID);
+        expect((await readSpot('a1-second')).data().status).toBe('available');
+        expect((await readLock(OTHER_UID)).data().spotId).toBe('a1-held');
+    });
+
+    it('A1-3: moving the lock onto a second Ping while the first is still interested is denied', async () => {
+        await seedClaimer(OTHER_UID, 'bob');
+        await seed('spots', 'a1-first', availablePing('A1 first'));
+        await seed('spots', 'a1-other', availablePing('A1 other'));
+        const db = otherDb();
+        await claimAs(db, OTHER_UID, 'bob', 'a1-first');
+        const claimedAt = Timestamp.now();
+        await assertFails(runTransaction(db, async (tx) => {
+            tx.update(doc(db, 'spots', 'a1-other'), claimPayload(OTHER_UID, 'bob', 'heading', claimedAt));
+            tx.set(activeIncomingClaimRef(db, OTHER_UID), {
+                spotId: 'a1-other',
+                claimStartedAt: claimedAt,
+                claimState: 'heading',
+                updatedAt: claimedAt,
+            });
+        }));
+        expect((await readSpot('a1-first')).data().status).toBe('interested');
+        expect((await readSpot('a1-other')).data().status).toBe('available');
+        expect((await readLock(OTHER_UID)).data().spotId).toBe('a1-first');
+    });
+
+    it('A1-4: two parallel claims on different Pings by the same user produce exactly one active claim', async () => {
+        await seedClaimer(OTHER_UID, 'bob');
+        await seed('spots', 'a1-race-a', availablePing('A1 race A'));
+        await seed('spots', 'a1-race-b', availablePing('A1 race B'));
+        const db = otherDb();
+        const results = await Promise.allSettled([
+            claimAs(db, OTHER_UID, 'bob', 'a1-race-a'),
+            claimAs(db, OTHER_UID, 'bob', 'a1-race-b'),
+        ]);
+        expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+        const rejected = results.find((result) => result.status === 'rejected') as PromiseRejectedResult;
+        expect(rejected.reason?.code).toBe('permission-denied');
+
+        const spotA = await readSpot('a1-race-a');
+        const spotB = await readSpot('a1-race-b');
+        const interested = [spotA, spotB].filter((snap) => snap.data().status === 'interested');
+        expect(interested).toHaveLength(1);
+        expect(interested[0].data().interestedUserId).toBe(OTHER_UID);
+        expect((await readLock(OTHER_UID)).data().spotId).toBe(interested[0].id);
+    });
+
+    it('A1-5: same-Ping contention still denies the second claimer (isAvailableForClaim)', async () => {
+        await seedClaimer(OTHER_UID, 'bob');
+        await seedClaimer(THIRD_UID, 'cara');
+        await seed('spots', 'a1-same', availablePing('A1 same'));
+        await claimAs(otherDb(), OTHER_UID, 'bob', 'a1-same');
+        const db = thirdDb();
+        const claimedAt = Timestamp.now();
+        await assertFails(runTransaction(db, async (tx) => {
+            tx.update(doc(db, 'spots', 'a1-same'), claimPayload(THIRD_UID, 'cara', 'heading', claimedAt));
+            tx.set(activeIncomingClaimRef(db, THIRD_UID), {
+                spotId: 'a1-same',
+                claimStartedAt: claimedAt,
+                claimState: 'heading',
+                updatedAt: claimedAt,
+            });
+        }));
+        const spot = await readSpot('a1-same');
+        expect(spot.data().interestedUserId).toBe(OTHER_UID);
+        expect((await readLock(THIRD_UID)).exists()).toBe(false);
+    });
+
+    it('A1-6: a duplicate claim of the same Ping is idempotent and does not change the fingerprint', async () => {
+        await seedClaimer(OTHER_UID, 'bob');
+        await seed('spots', 'a1-dup', availablePing('A1 dup'));
+        const db = otherDb();
+        await claimAs(db, OTHER_UID, 'bob', 'a1-dup');
+        const before = await readSpot('a1-dup');
+        await expect(claimAs(db, OTHER_UID, 'bob', 'a1-dup')).resolves.toBe('already_held');
+        const after = await readSpot('a1-dup');
+        expect(after.data().claimStartedAt.isEqual(before.data().claimStartedAt)).toBe(true);
+        expect((await readLock(OTHER_UID)).data().spotId).toBe('a1-dup');
+    });
+
+    it('A1-7: a stale lock whose Ping is already released does not block the next claim', async () => {
+        await seedClaimer(OTHER_UID, 'bob');
+        await seed('spots', 'a1-released', {
+            ...availablePing('A1 released'),
+            status: 'available',
+            interestedUserId: null,
+        });
+        await seed('spots', 'a1-next', availablePing('A1 next'));
+        await seedLock(OTHER_UID, 'a1-released', Timestamp.fromMillis(Date.now() - 60_000));
+        const db = otherDb();
+        await expect(claimAs(db, OTHER_UID, 'bob', 'a1-next')).resolves.toBe('claimed');
+        expect((await readLock(OTHER_UID)).data().spotId).toBe('a1-next');
+        expect((await readSpot('a1-next')).data().interestedUserId).toBe(OTHER_UID);
+    });
+
+    it('A1-8: a stale lock whose Ping document is gone does not block the next claim', async () => {
+        await seedClaimer(OTHER_UID, 'bob');
+        await seed('spots', 'a1-after-delete', availablePing('A1 after delete'));
+        await seedLock(OTHER_UID, 'a1-missing-ping', Timestamp.fromMillis(Date.now() - 60_000));
+        await expect(claimAs(otherDb(), OTHER_UID, 'bob', 'a1-after-delete')).resolves.toBe('claimed');
+        expect((await readLock(OTHER_UID)).data().spotId).toBe('a1-after-delete');
+    });
+
+    it('A1-9: claimer cancel clears the matching lock in the same transaction', async () => {
+        await seedClaimer(OTHER_UID, 'bob');
+        await seed('spots', 'a1-cancel', availablePing('A1 cancel'));
+        const db = otherDb();
+        await claimAs(db, OTHER_UID, 'bob', 'a1-cancel');
+        const fingerprint = (await readSpot('a1-cancel')).data().claimStartedAt.toMillis();
+        await expect(cancelClaimTransaction(db, {
+            spotId: 'a1-cancel',
+            claimantId: OTHER_UID,
+            finderId: OWNER_UID,
+            fingerprint,
+            message: 'Changed my mind',
+        })).resolves.toBe('cancelled');
+        expect((await readSpot('a1-cancel')).data().status).toBe('available');
+        expect((await readSpot('a1-cancel')).data().interestedUserId).toBeNull();
+        expect((await readLock(OTHER_UID)).exists()).toBe(false);
+    });
+
+    it('A1-10: cancel does not delete a lock that names a different Ping', async () => {
+        await seedClaimer(OTHER_UID, 'bob');
+        const started = Timestamp.fromMillis(Date.now() - 60_000);
+        await seed('spots', 'a1-cancel-this', {
+            ...availablePing('A1 cancel this'),
+            status: 'interested',
+            claimState: 'heading',
+            interestedUserId: OTHER_UID,
+            claimStartedAt: started,
+            expiresAt: FUTURE,
+        });
+        await seed('spots', 'a1-lock-other', {
+            ...availablePing('A1 lock other'),
+            status: 'interested',
+            claimState: 'heading',
+            interestedUserId: OTHER_UID,
+            claimStartedAt: started,
+        });
+        await seedLock(OTHER_UID, 'a1-lock-other', started);
+        const db = otherDb();
+        await expect(cancelClaimTransaction(db, {
+            spotId: 'a1-cancel-this',
+            claimantId: OTHER_UID,
+            finderId: OWNER_UID,
+            fingerprint: started.toMillis(),
+            message: 'x',
+        })).resolves.toBe('cancelled');
+        expect((await readSpot('a1-cancel-this')).data().interestedUserId).toBeNull();
+        expect((await readLock(OTHER_UID)).data().spotId).toBe('a1-lock-other');
+    });
+
+    it('A1-11: arrival clears the matching lock, and a later claim is allowed', async () => {
+        await seedClaimer(OTHER_UID, 'bob');
+        await seed('spots', 'a1-arrive', availablePing('A1 arrive'));
+        await seed('spots', 'a1-after-arrive', availablePing('A1 after arrive'));
+        const db = otherDb();
+        await claimAs(db, OTHER_UID, 'bob', 'a1-arrive');
+        await markClaimArrived(db, 'a1-arrive', OTHER_UID);
+        expect((await readSpot('a1-arrive')).data().status).toBe('occupied');
+        expect((await readLock(OTHER_UID)).exists()).toBe(false);
+        await expect(claimAs(db, OTHER_UID, 'bob', 'a1-after-arrive')).resolves.toBe('claimed');
+        expect((await readLock(OTHER_UID)).data().spotId).toBe('a1-after-arrive');
+    });
+
+    it('A1-12: clearing a claim while leaving the matching lock behind is denied', async () => {
+        await seedClaimer(OTHER_UID, 'bob');
+        await seed('spots', 'a1-keep-lock', availablePing('A1 keep lock'));
+        const db = otherDb();
+        await claimAs(db, OTHER_UID, 'bob', 'a1-keep-lock');
+        const { updateDoc } = await import('firebase/firestore');
+        await assertFails(updateDoc(doc(db, 'spots', 'a1-keep-lock'), {
+            status: 'available',
+            claimState: null,
+            interestedUserId: null,
+            interestedUserName: null,
+            interestedUserVehicleColor: null,
+            interestedUserVehicleType: null,
+            interestedUserVehicleBrand: null,
+            interestedUserTitle: null,
+            etaMinutes: null,
+            interestExpiresAt: null,
+            claimStartedAt: null,
+            ownerLeavingNow: null,
+            ownerLeavingNowAt: null,
+            claimReminderAt: null,
+            claimReminderSentAt: null,
+            claimAutoReleaseAt: null,
+            claimAutoReleasedAt: null,
+        }));
+        expect((await readSpot('a1-keep-lock')).data().status).toBe('interested');
+        expect((await readLock(OTHER_UID)).data().spotId).toBe('a1-keep-lock');
+    });
+
+    it('A1-13: another user cannot read the lock, and a non-current doc id cannot be created', async () => {
+        await seedClaimer(OTHER_UID, 'bob');
+        await seed('spots', 'a1-private', availablePing('A1 private'));
+        await claimAs(otherDb(), OTHER_UID, 'bob', 'a1-private');
+        await assertFails(getDoc(activeIncomingClaimRef(thirdDb(), OTHER_UID)));
+        await assertSucceeds(getDoc(activeIncomingClaimRef(otherDb(), OTHER_UID)));
+        await assertFails(setDoc(doc(otherDb(), 'users', OTHER_UID, 'activeIncomingClaims', 'other'), {
+            spotId: 'a1-private',
+            claimStartedAt: Timestamp.now(),
+            claimState: 'heading',
+            updatedAt: Timestamp.now(),
+        }));
+    });
+
+    it('A1-14: a scheduled committed claim blocks a second claim', async () => {
+        await seedClaimer(OTHER_UID, 'bob');
+        await seed('spots', 'a1-committed', {
+            ...availablePing('A1 committed'),
+            pingMode: 'later',
+            reportedAt: FUTURE,
+            expiresAt: Timestamp.fromMillis(FUTURE.toMillis() + 3_600_000),
+        });
+        await seed('spots', 'a1-while-committed', availablePing('A1 while committed'));
+        const db = otherDb();
+        await expect(claimAs(db, OTHER_UID, 'bob', 'a1-committed', 'committed')).resolves.toBe('claimed');
+        expect((await readSpot('a1-committed')).data().claimState).toBe('committed');
+        await expect(claimAs(db, OTHER_UID, 'bob', 'a1-while-committed')).rejects.toMatchObject({
+            code: 'permission-denied',
+        });
+        expect((await readLock(OTHER_UID)).data().spotId).toBe('a1-committed');
+        expect((await readSpot('a1-while-committed')).data().status).toBe('available');
+    });
+
+    it('A1-15: driver terminal completion clears a leftover lock that still names the Ping', async () => {
+        await seedClaimer(OTHER_UID, 'bob');
+        const spotId = 'a1-terminal';
+        await seed('spots', spotId, {
+            ...interestedSpot,
+            status: 'occupied',
+            address: 'A1 terminal',
+        });
+        await seedLock(OTHER_UID, spotId);
+        const db = otherDb();
+        await expect(completeTerminalHandoff(db, {
+            spotId,
+            driverId: OTHER_UID,
+            driverName: 'bob',
+            finderId: OWNER_UID,
+            address: 'A1 terminal',
+            outcome: 'success',
+            failureReason: null,
+        })).resolves.toBe('created');
+        expect((await readLock(OTHER_UID)).exists()).toBe(false);
+    });
+
+    async function seedLegacyInterest(id: string, uid: string, claimStartedAt: Timestamp) {
+        await seed('spots', id, {
+            finderId: OWNER_UID,
+            finderName: 'TestFinder',
+            address: id,
+            lat: 40.71,
+            lng: -74.01,
+            status: 'interested',
+            pingMode: 'now',
+            claimState: 'heading',
+            interestedUserId: uid,
+            interestedUserName: 'bob',
+            claimStartedAt,
+            reportedAt: Timestamp.now(),
+            expiresAt: FUTURE,
+            interestExpiresAt: FUTURE,
+        });
+    }
+
+    it('A1-R001: a legacy lockless interested Ping cannot obtain a second claim before or after reconciliation', async () => {
+        await closeActiveClaimRollout();
+        await seedClaimer(OTHER_UID, 'bob');
+        await seedClaimer(THIRD_UID, 'cara');
+        const legacyStarted = Timestamp.fromMillis(Date.now() - 60_000);
+        await seedLegacyInterest('a1-r001-legacy', OTHER_UID, legacyStarted);
+        await seed('spots', 'a1-r001-new', availablePing('A1 R001 new'));
+        const db = otherDb();
+
+        await expect(claimAs(db, OTHER_UID, 'bob', 'a1-r001-new')).rejects.toMatchObject({
+            code: 'permission-denied',
+        });
+        expect((await readSpot('a1-r001-legacy')).data().interestedUserId).toBe(OTHER_UID);
+        expect((await readSpot('a1-r001-new')).data().status).toBe('available');
+        expect((await readLock(OTHER_UID)).exists()).toBe(false);
+
+        const tools = rolloutTools();
+        const repaired = await tools.reconcile(tools.db, tools.now());
+        expect(repaired.enforced).toBe(false);
+        expect(repaired.locklessCount).toBe(0);
+        expect(repaired.duplicateUserCount).toBe(0);
+        expect(repaired.duplicatePingCount).toBe(0);
+        const lock = await readLock(OTHER_UID);
+        expect(lock.exists()).toBe(true);
+        expect(lock.data().spotId).toBe('a1-r001-legacy');
+        expect(lock.data().claimStartedAt.toMillis()).toBe(legacyStarted.toMillis());
+
+        await expect(claimAs(db, OTHER_UID, 'bob', 'a1-r001-new')).rejects.toMatchObject({
+            code: 'permission-denied',
+        });
+
+        const confirmed = await tools.reconcile(tools.db, tools.now());
+        expect(confirmed.enforced).toBe(true);
+        expect(confirmed.locklessCount).toBe(0);
+        expect(confirmed.duplicateUserCount).toBe(0);
+        expect(confirmed.duplicatePingCount).toBe(0);
+        await expect(claimAs(db, OTHER_UID, 'bob', 'a1-r001-new')).rejects.toMatchObject({
+            code: 'permission-denied',
+        });
+        expect((await readSpot('a1-r001-legacy')).data().status).toBe('interested');
+        expect((await readSpot('a1-r001-new')).data().status).toBe('available');
+        expect((await readLock(OTHER_UID)).data().spotId).toBe('a1-r001-legacy');
+        await expect(claimAs(thirdDb(), THIRD_UID, 'cara', 'a1-r001-new')).resolves.toBe('claimed');
+    });
+
+    it('A1-R001b: duplicate interested Pings are released deterministically and reported before the gate opens', async () => {
+        await closeActiveClaimRollout();
+        await seedClaimer(OTHER_UID, 'bob');
+        const earlier = Timestamp.fromMillis(Date.now() - 120_000);
+        const later = Timestamp.fromMillis(Date.now() - 30_000);
+        await seedLegacyInterest('a1-r001-keep', OTHER_UID, earlier);
+        await seedLegacyInterest('a1-r001-drop', OTHER_UID, later);
+        await seed('spots', 'a1-r001-third', availablePing('A1 R001 third'));
+
+        const tools = rolloutTools();
+        const repaired = await tools.reconcile(tools.db, tools.now());
+        expect(repaired.enforced).toBe(false);
+        expect(repaired.duplicateUserCount).toBe(0);
+        expect(repaired.duplicatePingCount).toBe(0);
+        expect(repaired.locklessCount).toBe(0);
+        expect((await readSpot('a1-r001-keep')).data().interestedUserId).toBe(OTHER_UID);
+        const dropped = await readSpot('a1-r001-drop');
+        expect(dropped.data().status).toBe('available');
+        expect(dropped.data().interestedUserId).toBeNull();
+        expect((await readLock(OTHER_UID)).data().spotId).toBe('a1-r001-keep');
+
+        const conflictSnap = await tools.db.doc(`activeIncomingClaimConflicts/${OTHER_UID}`).get();
+        expect(conflictSnap.exists).toBe(true);
+        expect(conflictSnap.data().keptSpotId).toBe('a1-r001-keep');
+        expect(conflictSnap.data().releasedSpotIds).toEqual(['a1-r001-drop']);
+        expect(conflictSnap.data().rule).toBe('earliest_claimStartedAt_then_spotId');
+
+        await expect(claimAs(otherDb(), OTHER_UID, 'bob', 'a1-r001-third')).rejects.toMatchObject({
+            code: 'permission-denied',
+        });
+        const confirmed = await tools.reconcile(tools.db, tools.now());
+        expect(confirmed.enforced).toBe(true);
+        await expect(claimAs(otherDb(), OTHER_UID, 'bob', 'a1-r001-third')).rejects.toMatchObject({
+            code: 'permission-denied',
+        });
+        expect((await readSpot('a1-r001-keep')).data().status).toBe('interested');
+        expect((await readSpot('a1-r001-third')).data().status).toBe('available');
+    });
+
+    it('A1-R001c: a client cannot open or rewrite the rollout gate', async () => {
+        const db = otherDb();
+        await assertFails(setDoc(doc(db, 'activeIncomingClaimRollout', 'status'), {
+            enforced: true,
+            locklessCount: 0,
+            duplicateUserCount: 0,
+            duplicatePingCount: 0,
+        }));
+        await assertFails(setDoc(doc(db, 'activeIncomingClaimConflicts', OTHER_UID), {
+            keptSpotId: 'forged',
+            releasedSpotIds: [],
+        }));
     });
 });

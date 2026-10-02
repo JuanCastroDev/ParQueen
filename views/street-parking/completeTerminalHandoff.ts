@@ -2,6 +2,7 @@ import {
   collection, doc, getDoc, getDocs, query, runTransaction, setDoc, Timestamp, where,
 } from 'firebase/firestore';
 import { isHandoffFailureReason, spotFeedbackDocId } from '../../utils/spotFeedback';
+import { activeIncomingClaimRef, deleteLockIfNamesSpot } from './activeIncomingClaim';
 
 type Firestore = any;
 
@@ -95,6 +96,12 @@ async function commitTerminalHandoff(
   try {
     await runTransaction(db, async (tx) => {
       const spotSnap = await tx.get(spotRef);
+      // Only the driver can read their own lock. Finder confirmation must not
+      // touch it: a missing or foreign lock read would deny the whole handoff.
+      // Occupied is not an active claim, so a leftover lock does not block the
+      // next claim; the 15-minute sweeper deletes it.
+      const lockRef = activeIncomingClaimRef(db, params.driverId);
+      const lockSnap = params.actorId === params.driverId ? await tx.get(lockRef) : null;
       if (!spotSnap.exists()) throw new Error('Handoff spot no longer exists');
       const spot = spotSnap.data() as Record<string, any>;
       if (spot.finderId !== params.finderId
@@ -113,6 +120,7 @@ async function commitTerminalHandoff(
 
       tx.set(feedbackRef, feedback);
       if (notification) tx.set(notificationRef, notification);
+      if (lockSnap) deleteLockIfNamesSpot(tx, lockSnap, lockRef, params.spotId);
     });
     return 'created';
   } catch (error: any) {

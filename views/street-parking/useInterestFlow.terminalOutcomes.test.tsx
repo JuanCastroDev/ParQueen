@@ -159,6 +159,7 @@ describe('useInterestFlow — terminal handoff outcomes', () => {
         get: async (ref: any) => snapshotFor(ref),
         set: (ref: any, data: Record<string, any>) => staged.push({ ref, data }),
         update: (ref: any, data: Record<string, any>) => staged.push({ ref, data, merge: true }),
+        delete: (_ref: any) => {},
       });
       if (staged.some(({ ref }) => ref.__col === 'spotFeedback' && documents.has(pathOf(ref)))) {
         throw permissionDenied();
@@ -305,9 +306,11 @@ describe('useInterestFlow — terminal handoff outcomes', () => {
 
   it('a failed terminal write preserves the current step and remains retryable', async () => {
     const error = Object.assign(new Error('unavailable'), { code: 'unavailable' });
-    setDoc.mockRejectedValueOnce(error);
     const { getFlow } = mount();
     await arrive(getFlow);
+    // Arrival now commits through the same transaction helper, which applies
+    // its spot update via setDoc. Reject only the following terminal write.
+    setDoc.mockRejectedValueOnce(error);
 
     await expect(getFlow().handleHandoffOutcome('success')).rejects.toBe(error);
 

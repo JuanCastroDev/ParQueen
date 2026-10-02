@@ -46,6 +46,8 @@ describe('firestore.indexes.json — spots geoquery index', () => {
         expect(otherSpotsIndexFieldSets).toEqual([
             'finderId,reportedAt',
             'status,expiresAt',
+            // A1 reconciliation pages status==interested ordered by document id.
+            'status,__name__',
             'status,interestExpiresAt',
             'status,claimState,claimReminderAt',
             'status,claimState,claimAutoReleaseAt',
