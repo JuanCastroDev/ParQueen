@@ -35,6 +35,11 @@ export function useInterestFlow({
     const [interestError, setInterestError] = useState<string | null>(null);
     const [cancelingClaim, setCancelingClaim] = useState(false);
     const cancelingClaimRef = useRef(false);
+    // Session UX guards only. A1 still decides whether a claim or arrival write commits.
+    const [claiming, setClaiming] = useState(false);
+    const claimingRef = useRef(false);
+    const [arriving, setArriving] = useState(false);
+    const arrivingRef = useRef(false);
     const lastWrittenEtaRef = useRef<number | null>(null);
     const etaWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const expiryWarnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -199,9 +204,12 @@ export function useInterestFlow({
         claimStartedAt,
     });
 
+    const claimOrArriveInFlight = () =>
+        claimingRef.current || arrivingRef.current || cancelingClaimRef.current;
+
     const handleExpressInterest = async (etaMinutes: number) => {
         const spot = selectedItem;
-        if (!spot || !user || !db) return;
+        if (!spot || !user || !db || claimOrArriveInFlight()) return;
         setInterestError(null);
 
         const estMinutes = getEstDriveMinutes(spot);
@@ -210,33 +218,40 @@ export function useInterestFlow({
             return;
         }
 
-        const alreadyActive = await checkAlreadyInterested();
-        if (alreadyActive) {
-            setInterestError(ALREADY_CLAIMED_MESSAGE);
-            return;
-        }
-
+        claimingRef.current = true;
+        setClaiming(true);
         try {
-            const claimMinutes = Math.min(etaMinutes + 5, MAX_CLAIM_MINUTES);
-            await acquireActiveIncomingClaim(db, {
-                spotId: spot.id,
-                uid: user.id,
-                unavailableMessage: 'Someone already got this spot',
-                missingMessage: 'Spot no longer exists',
-                buildClaimFields: (_spot, claimStartedAt) => ({
-                    ...claimerFields(claimStartedAt, 'heading'),
-                    etaMinutes,
-                    interestExpiresAt: Timestamp.fromMillis(Date.now() + claimMinutes * 60000),
-                }),
-            });
+            const alreadyActive = await checkAlreadyInterested();
+            if (alreadyActive) {
+                setInterestError(ALREADY_CLAIMED_MESSAGE);
+                return;
+            }
 
-            const dest: [number, number] = [spot.lng, spot.lat];
-            activeRouteDestinationRef.current = dest;
-            setTrackedItemId(spot.id);
-            if (mapRef.current) drawRoute(mapRef.current, userLocation || NYC_CENTER, dest);
-        } catch (e: any) {
-            reportClaimFailure(e, 'immediate');
-            setInterestError(await claimErrorMessage(e, 'Failed to reserve spot'));
+            try {
+                const claimMinutes = Math.min(etaMinutes + 5, MAX_CLAIM_MINUTES);
+                await acquireActiveIncomingClaim(db, {
+                    spotId: spot.id,
+                    uid: user.id,
+                    unavailableMessage: 'Someone already got this spot',
+                    missingMessage: 'Spot no longer exists',
+                    buildClaimFields: (_spot, claimStartedAt) => ({
+                        ...claimerFields(claimStartedAt, 'heading'),
+                        etaMinutes,
+                        interestExpiresAt: Timestamp.fromMillis(Date.now() + claimMinutes * 60000),
+                    }),
+                });
+
+                const dest: [number, number] = [spot.lng, spot.lat];
+                activeRouteDestinationRef.current = dest;
+                setTrackedItemId(spot.id);
+                if (mapRef.current) drawRoute(mapRef.current, userLocation || NYC_CENTER, dest);
+            } catch (e: any) {
+                reportClaimFailure(e, 'immediate');
+                setInterestError(await claimErrorMessage(e, 'Failed to reserve spot'));
+            }
+        } finally {
+            claimingRef.current = false;
+            setClaiming(false);
         }
     };
 
@@ -294,7 +309,7 @@ export function useInterestFlow({
     };
 
     const handleCancelByClaimer = async (reason: string) => {
-        if (!selectedItem || !user || !db || cancelingClaimRef.current) return;
+        if (!selectedItem || !user || !db || cancelingClaimRef.current || claimingRef.current || arrivingRef.current) return;
         const messages: Record<string, string> = {
             "Found parking elsewhere": "The driver found parking elsewhere — your spot is available again.",
             "Traffic is too heavy": "The driver got stuck in traffic — your spot is available again.",
@@ -354,23 +369,30 @@ export function useInterestFlow({
     };
 
     const handleArrival = async () => {
-        if (!selectedItem || !user || !db) return;
-        handoffSpotRef.current = {
-            id: selectedItem.id,
-            lat: selectedItem.lat,
-            lng: selectedItem.lng,
-            address: selectedItem.title || selectedItem.address,
-            finderId: selectedItem.finderId,
-            finderName: selectedItem.finderName,
-            geohash: selectedItem.geohash,
-        };
-        setHandoffFinderName(selectedItem.finderName || null);
-        setHandoffAddress(selectedItem.title || selectedItem.address || '');
-        await markClaimArrived(db, selectedItem.id, user.id);
-        setTrackedItemId(null);
-        activeRouteDestinationRef.current = null;
-        if (mapRef.current) clearRoute(mapRef.current);
-        setHandoffStep('outcome');
+        if (!selectedItem || !user || !db || claimOrArriveInFlight()) return;
+        arrivingRef.current = true;
+        setArriving(true);
+        try {
+            handoffSpotRef.current = {
+                id: selectedItem.id,
+                lat: selectedItem.lat,
+                lng: selectedItem.lng,
+                address: selectedItem.title || selectedItem.address,
+                finderId: selectedItem.finderId,
+                finderName: selectedItem.finderName,
+                geohash: selectedItem.geohash,
+            };
+            setHandoffFinderName(selectedItem.finderName || null);
+            setHandoffAddress(selectedItem.title || selectedItem.address || '');
+            await markClaimArrived(db, selectedItem.id, user.id);
+            setTrackedItemId(null);
+            activeRouteDestinationRef.current = null;
+            if (mapRef.current) clearRoute(mapRef.current);
+            setHandoffStep('outcome');
+        } finally {
+            arrivingRef.current = false;
+            setArriving(false);
+        }
     };
 
     const handleHandoffOutcome = async (outcome: 'success' | 'failed') => {
@@ -449,77 +471,91 @@ export function useInterestFlow({
 
     const handleScheduledClaim = async () => {
         const spot = selectedItem;
-        if (!spot || !user || !db) return;
+        if (!spot || !user || !db || claimOrArriveInFlight()) return;
         setInterestError(null);
 
-        const alreadyActive = await checkAlreadyInterested();
-        if (alreadyActive) {
-            setInterestError(ALREADY_CLAIMED_MESSAGE);
-            return;
-        }
-
+        claimingRef.current = true;
+        setClaiming(true);
         try {
-            await acquireActiveIncomingClaim(db, {
-                spotId: spot.id,
-                uid: user.id,
-                unavailableMessage: 'Someone already claimed this spot',
-                missingMessage: 'Spot no longer exists',
-                buildClaimFields: (data, claimStartedAt) => {
-                    // Remind 20 min before departure; skip if already past
-                    const departureMs = data.reportedAt?.toMillis?.() ?? 0;
-                    const reminderMs = departureMs - 20 * 60 * 1000;
-                    const claimReminderAt = reminderMs > Date.now()
-                        ? Timestamp.fromMillis(reminderMs)
-                        : null;
-                    return {
-                        ...claimerFields(claimStartedAt, 'committed'),
-                        ownerLeavingNowAt: null,
-                        etaMinutes: null,
-                        // Claim lives as long as the spot itself — inherit spot's own expiry
-                        interestExpiresAt: data.expiresAt,
-                        claimReminderAt,
-                        claimReminderSentAt: null,
-                        claimAutoReleaseAt: departureMs
-                            ? Timestamp.fromMillis(departureMs + 10 * 60 * 1000)
-                            : null,
-                        claimAutoReleasedAt: null,
-                    };
-                },
-            });
+            const alreadyActive = await checkAlreadyInterested();
+            if (alreadyActive) {
+                setInterestError(ALREADY_CLAIMED_MESSAGE);
+                return;
+            }
 
-            // Track for snapshot disappearance detection — no route drawn yet
-            setTrackedItemId(spot.id);
-        } catch (e: any) {
-            reportClaimFailure(e, 'scheduled');
-            setInterestError(await claimErrorMessage(e, 'Failed to claim spot'));
+            try {
+                await acquireActiveIncomingClaim(db, {
+                    spotId: spot.id,
+                    uid: user.id,
+                    unavailableMessage: 'Someone already claimed this spot',
+                    missingMessage: 'Spot no longer exists',
+                    buildClaimFields: (data, claimStartedAt) => {
+                        // Remind 20 min before departure; skip if already past
+                        const departureMs = data.reportedAt?.toMillis?.() ?? 0;
+                        const reminderMs = departureMs - 20 * 60 * 1000;
+                        const claimReminderAt = reminderMs > Date.now()
+                            ? Timestamp.fromMillis(reminderMs)
+                            : null;
+                        return {
+                            ...claimerFields(claimStartedAt, 'committed'),
+                            ownerLeavingNowAt: null,
+                            etaMinutes: null,
+                            // Claim lives as long as the spot itself — inherit spot's own expiry
+                            interestExpiresAt: data.expiresAt,
+                            claimReminderAt,
+                            claimReminderSentAt: null,
+                            claimAutoReleaseAt: departureMs
+                                ? Timestamp.fromMillis(departureMs + 10 * 60 * 1000)
+                                : null,
+                            claimAutoReleasedAt: null,
+                        };
+                    },
+                });
+
+                // Track for snapshot disappearance detection — no route drawn yet
+                setTrackedItemId(spot.id);
+            } catch (e: any) {
+                reportClaimFailure(e, 'scheduled');
+                setInterestError(await claimErrorMessage(e, 'Failed to claim spot'));
+            }
+        } finally {
+            claimingRef.current = false;
+            setClaiming(false);
         }
     };
 
     const handleCommitToHeading = async () => {
         const spot = selectedItem;
-        if (!spot || !user || !db) return;
+        if (!spot || !user || !db || claimOrArriveInFlight()) return;
 
         const etaMinutes = getEstDriveMinutes(spot) ?? 5;
         const claimMinutes = Math.min(etaMinutes + 5, MAX_CLAIM_MINUTES);
 
-        let outcome: 'committed' | 'already_heading' | 'rejected';
+        claimingRef.current = true;
+        setClaiming(true);
         try {
-            outcome = await commitClaimToHeading(db, {
-                spotId: spot.id,
-                uid: user.id,
-                etaMinutes,
-                claimMinutes,
-            });
-        } catch {
-            // Permission denial or contention after auto-release: do not start
-            // navigation against a Ping this commit did not win.
-            return;
-        }
-        if (outcome === 'rejected') return;
+            let outcome: 'committed' | 'already_heading' | 'rejected';
+            try {
+                outcome = await commitClaimToHeading(db, {
+                    spotId: spot.id,
+                    uid: user.id,
+                    etaMinutes,
+                    claimMinutes,
+                });
+            } catch {
+                // Permission denial or contention after auto-release: do not start
+                // navigation against a Ping this commit did not win.
+                return;
+            }
+            if (outcome === 'rejected') return;
 
-        const dest: [number, number] = [spot.lng, spot.lat];
-        activeRouteDestinationRef.current = dest;
-        if (mapRef.current) drawRoute(mapRef.current, userLocation || NYC_CENTER, dest);
+            const dest: [number, number] = [spot.lng, spot.lat];
+            activeRouteDestinationRef.current = dest;
+            if (mapRef.current) drawRoute(mapRef.current, userLocation || NYC_CENTER, dest);
+        } finally {
+            claimingRef.current = false;
+            setClaiming(false);
+        }
     };
 
     const handleOwnerLeaveNow = async () => {
@@ -582,6 +618,8 @@ export function useInterestFlow({
         handleCancelByFinder,
         handleCancelByClaimer,
         cancelingClaim,
+        claiming,
+        arriving,
         handleFinderConfirmsArrival,
         handleDelayByFinder,
         handleArrival,
