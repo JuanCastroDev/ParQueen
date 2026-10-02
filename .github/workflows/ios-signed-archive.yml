@@ -148,6 +148,8 @@ jobs:
               "-authenticationKeyID",
               "-authenticationKeyIssuerID",
               'DEVELOPMENT_TEAM="${APPLE_TEAM_ID}"',
+              'CODE_SIGN_IDENTITY="Apple Distribution"',
+              "CODE_SIGN_STYLE=Automatic",
               "manageAppVersionAndBuildNumber",
           ]
           secret_ref = "secrets" + "."
@@ -177,6 +179,27 @@ jobs:
               if needle not in signed.split("\n    steps:", 1)[0]:
                   print(f"signed job guard missing: {needle}")
                   sys.exit(1)
+          archive_parts = signed.split("- name: Archive iOS app", 1)
+          if len(archive_parts) != 2:
+              print("archive step was not found")
+              sys.exit(1)
+          archive_body = archive_parts[1].split("- name: Export signed IPA", 1)[0]
+          for needle in (
+              'CODE_SIGN_IDENTITY="Apple Distribution"',
+              "CODE_SIGN_STYLE=Automatic",
+              'DEVELOPMENT_TEAM="${APPLE_TEAM_ID}"',
+              "-allowProvisioningUpdates",
+              "-authenticationKeyPath",
+              "-authenticationKeyID",
+              "-authenticationKeyIssuerID",
+          ):
+              if needle not in archive_body:
+                  print("archive command missing distribution signing setting")
+                  sys.exit(1)
+          dev_identity = "CODE_SIGN_IDENTITY=\"" + "iPhone " + "Developer\""
+          if dev_identity in archive_body:
+              print("archive command still requests development signing")
+              sys.exit(1)
           guard = before.split("\n  dispatch-guard:\n", 1)
           if len(guard) != 2 or "SIGN_PARQUEEN" not in guard[1] or "refs/heads/main" not in guard[1]:
               print("dispatch guard does not require main and the confirmation phrase")
@@ -372,6 +395,8 @@ jobs:
             -authenticationKeyPath "${RUNNER_TEMP}/AuthKey.p8" \
             -authenticationKeyID "${ASC_KEY_ID}" \
             -authenticationKeyIssuerID "${ASC_ISSUER_ID}" \
+            CODE_SIGN_STYLE=Automatic \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
             DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
             archive >"${LOG}" 2>&1
           status=$?

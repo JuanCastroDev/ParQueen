@@ -37,6 +37,8 @@ The `.p8` is decoded into `$RUNNER_TEMP`, mode `600`, checked with `openssl pkey
 
 Signing stays automatic. `DEVELOPMENT_TEAM` comes from `APPLE_TEAM_ID` on the `xcodebuild` command. The project does not store a Team ID or a provisioning profile.
 
+The Xcode project still inherits the Capacitor default identity `iPhone Developer`. The first signed run reached Apple provisioning and then looked for an iOS App Development profile, which requires a registered device. The archive command now sets `CODE_SIGN_STYLE=Automatic` and `CODE_SIGN_IDENTITY="Apple Distribution"` so the Release archive requests App Store distribution signing. No device is registered for this, and the project file is unchanged.
+
 Export uses Xcode 26 `app-store-connect`, destination `export`, automatic signing, and `manageAppVersionAndBuildNumber` false. The IPA stays on the ephemeral runner. The workflow does not send it to App Store Connect and does not publish it as a GitHub artifact.
 
 The verifier records the IPA filename, byte size, and SHA-256. It checks bundle ID `app.parqueen`, version `1.0`, build `1`, display name `ParQueen`, code signature, and entitlements. `aps-environment` must be absent. An entitlement outside the automatic App Store set (`application-identifier`, `com.apple.developer.team-identifier`, `keychain-access-groups`, `beta-reports-active`) stops the job.
