@@ -5,7 +5,7 @@ import { MapItem } from './types';
 import { getDistance, drawRoute, clearRoute, NYC_CENTER } from './utils';
 import { getTitleForCrowns } from '../../utils/crowns';
 import { getPingExpiresAtMs, timestampToMillis } from '../../utils/pingLifecycle';
-import { commitPingCreate, PING_SCHEDULE_HORIZON_MS } from './pingCreateBounds';
+import { commitPingCreate, PING_SCHEDULE_HORIZON_MS, PingCreateRejected } from './pingCreateBounds';
 import { cancelClaimTransaction } from './cancelClaimTransaction';
 import { acquireActiveIncomingClaim, ALREADY_CLAIMED_MESSAGE, markClaimArrived } from './activeIncomingClaim';
 import { commitClaimToHeading } from './commitToHeading';
@@ -21,6 +21,21 @@ interface UseInterestFlowOptions {
     userLocation: [number, number] | null;
     mapRef: React.RefObject<mapboxgl.Map | null>;
     activeRouteDestinationRef: React.MutableRefObject<[number, number] | null>;
+}
+
+/** Maps a departure re-ping denial to copy. Does not decide whether the write is allowed. */
+export function departurePingDenialCopy(error: unknown): { title: string; message: string } {
+    const title = t('ping_errors.denied_title');
+    if (error instanceof PingCreateRejected && error.reason === 'rate') {
+        return { title, message: t('ping_errors.rate_limit', { min: error.minutesLeft ?? 1 }) };
+    }
+    if (error instanceof PingCreateRejected && error.reason === 'origin') {
+        return { title, message: t('ping_errors.origin') };
+    }
+    if (error instanceof PingCreateRejected && error.reason === 'horizon') {
+        return { title, message: t('ping_errors.horizon') };
+    }
+    return { title, message: t('ping_errors.save_failed') };
 }
 
 const MAX_ETA_MINUTES = 7;
@@ -440,6 +455,13 @@ export function useInterestFlow({
         setSelectedItem(null);
     };
 
+    const showDeparturePingDenial = (copy: { title: string; message: string }) => {
+        setDriverNotification(copy.message);
+        setDriverNotifTitle(copy.title);
+        setDriverNotifVariant('warning');
+        setTimeout(() => { setDriverNotification(null); setDriverNotifTitle(null); }, 6000);
+    };
+
     const handleDeparturePing = async (durationMinutes: number) => {
         const spotSnap = handoffSpotRef.current;
         if (!spotSnap || !user) return;
@@ -470,7 +492,10 @@ export function useInterestFlow({
                     originSpotId: spotSnap.id,
                 },
             });
-        } catch {
+        } catch (error) {
+            // Rules stay the authority. Preflight already labels rate vs origin;
+            // a generic permission-denied still has to be visible.
+            showDeparturePingDenial(departurePingDenialCopy(error));
             return;
         }
 

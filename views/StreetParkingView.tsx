@@ -2803,7 +2803,7 @@ export const MapView: React.FC<MapViewProps> = ({
             )}
 
             {interestFlow.driverNotification && (
-                <div className="absolute top-20 left-0 right-0 flex justify-center z-20 px-4 pointer-events-none">
+                <div className="absolute top-20 left-0 right-0 flex justify-center z-40 px-4 pointer-events-none">
                     <button
                         onClick={interestFlow.clearDriverNotification}
                         className={`notif-slide-down pointer-events-auto flex items-start gap-3 px-4 py-3.5 rounded-2xl backdrop-blur-xl shadow-2xl border max-w-sm w-full text-left active:scale-[0.98] transition-transform ${
