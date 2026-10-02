@@ -160,13 +160,20 @@ describe('active incoming claim — release paths and 15-minute repair', () => {
     expect(lock.data().claimStartedAt.toMillis()).toBe(started.toMillis());
   });
 
-  it('does not steal a lock that still matches a different active claim', async () => {
+  it('A1-R001: reconciles duplicate interested Pings, reports the conflict, and does not reopen an expired loser', async () => {
     const uid = nextId('dual');
     const kept = nextId('dual_kept');
     const extra = nextId('dual_extra');
-    const started = Timestamp.now();
-    await lockRef(uid).set(lockData(kept, started));
-    for (const spotId of [kept, extra]) {
+    const expired = nextId('dual_expired');
+    const earlier = Timestamp.fromMillis(Date.now() - 120_000);
+    const middle = Timestamp.fromMillis(Date.now() - 60_000);
+    const latest = Timestamp.fromMillis(Date.now() - 10_000);
+    const spots = [
+      [kept, earlier, FUTURE],
+      [extra, middle, FUTURE],
+      [expired, latest, PAST],
+    ];
+    for (const [spotId, started, expiresAt] of spots) {
       await db.doc(`spots/${spotId}`).set({
         status: 'interested',
         claimState: 'heading',
@@ -174,7 +181,7 @@ describe('active incoming claim — release paths and 15-minute repair', () => {
         finderId: 'finder_x',
         pingMode: 'now',
         reportedAt: PAST,
-        expiresAt: FUTURE,
+        expiresAt,
         interestExpiresAt: FUTURE,
         claimStartedAt: started,
       });
@@ -183,8 +190,28 @@ describe('active incoming claim — release paths and 15-minute repair', () => {
     await indexModule.cleanupExpiredInterests.run();
 
     expect((await lockRef(uid).get()).data().spotId).toBe(kept);
-    expect((await db.doc(`spots/${extra}`).get()).data().status).toBe('interested');
-    expect((await db.doc(`spots/${extra}`).get()).data().interestedUserId).toBe(uid);
+    expect((await db.doc(`spots/${kept}`).get()).data().status).toBe('interested');
+    expect((await db.doc(`spots/${kept}`).get()).data().interestedUserId).toBe(uid);
+    const released = (await db.doc(`spots/${extra}`).get()).data();
+    expect(released.status).toBe('available');
+    expect(released.interestedUserId).toBeNull();
+    const expiredLoser = (await db.doc(`spots/${expired}`).get()).data();
+    expect(expiredLoser.status).toBe('interested');
+    expect(expiredLoser.interestedUserId).toBeNull();
+    const conflict = await db.doc(`activeIncomingClaimConflicts/${uid}`).get();
+    expect(conflict.exists).toBe(true);
+    expect(conflict.data().keptSpotId).toBe(kept);
+    expect(conflict.data().releasedSpotIds).toEqual([extra, expired]);
+    expect(conflict.data().rule).toBe('earliest_claimStartedAt_then_spotId');
+    const status = await db.doc('activeIncomingClaimRollout/status').get();
+    expect(status.data().enforced).toBe(false);
+    expect(status.data().locklessCount).toBe(0);
+    expect(status.data().duplicateUserCount).toBe(0);
+    expect(status.data().duplicatePingCount).toBe(0);
+
+    await indexModule.cleanupExpiredInterests.run();
+    expect((await db.doc(`spots/${kept}`).get()).data().interestedUserId).toBe(uid);
+    expect((await db.doc('activeIncomingClaimRollout/status').get()).data().enforced).toBe(true);
   });
 
   it('auto-release clears the matching lock and leaves claimStartedAt on the Ping', async () => {

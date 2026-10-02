@@ -93,24 +93,26 @@ describe('cleanupExpiredInterests Function contract', () => {
 
     it('CEI-4: a claim whose interestExpiresAt is still in the future is completely untouched', async () => {
         const id = nextId('notexpired');
-        await db.doc(`spots/${id}`).set(headingSpot({ interestExpiresAt: FUTURE }));
+        const claimer = nextId('claimer');
+        await db.doc(`spots/${id}`).set(headingSpot({ interestExpiresAt: FUTURE, interestedUserId: claimer }));
         await indexModule.cleanupExpiredInterests.run();
 
         const spot = await getSpot(id);
         expect(spot.status).toBe('interested');
-        expect(spot.interestedUserId).toBe('claimant_x');
+        expect(spot.interestedUserId).toBe(claimer);
     });
 
     it('CEI-5: a spot with no interestExpiresAt field at all (malformed/legacy) is never touched', async () => {
         const id = nextId('malformed');
-        const seed = headingSpot();
+        const claimer = nextId('claimer');
+        const seed = headingSpot({ interestedUserId: claimer });
         delete seed.interestExpiresAt;
         await db.doc(`spots/${id}`).set(seed);
         await indexModule.cleanupExpiredInterests.run();
 
         const spot = await getSpot(id);
         expect(spot.status).toBe('interested');
-        expect(spot.interestedUserId).toBe('claimant_x');
+        expect(spot.interestedUserId).toBe(claimer);
     });
 
     it('CEI-6: a committed (scheduled) claim not yet at its own expiry is untouched — this Function only acts on expired heading claims', async () => {
@@ -120,6 +122,7 @@ describe('cleanupExpiredInterests Function contract', () => {
             pingMode: 'later',
             expiresAt: FAR_FUTURE,
             interestExpiresAt: FAR_FUTURE, // committed claims mirror the Ping's own expiry
+            interestedUserId: nextId('claimer'),
         }));
         await indexModule.cleanupExpiredInterests.run();
 
@@ -143,10 +146,11 @@ describe('cleanupExpiredInterests Function contract', () => {
 
     it('CEI-8: a newer claim that replaces the stale one before cleanup runs is fully protected', async () => {
         const id = nextId('newer');
+        const newerClaimer = nextId('newer_claimer');
         await db.doc(`spots/${id}`).set(headingSpot()); // starts as an expired candidate
         // Simulate a race: someone re-claims the spot before the sweep executes.
         await db.doc(`spots/${id}`).update({
-            interestedUserId: 'newer_claimant',
+            interestedUserId: newerClaimer,
             interestExpiresAt: FUTURE,
         });
 
@@ -154,7 +158,7 @@ describe('cleanupExpiredInterests Function contract', () => {
 
         const spot = await getSpot(id);
         expect(spot.status).toBe('interested');
-        expect(spot.interestedUserId).toBe('newer_claimant');
+        expect(spot.interestedUserId).toBe(newerClaimer);
     });
 
     it('CEI-9: creates no notification documents (this Function has never sent any — confirms the fix does not introduce new side effects)', async () => {
@@ -182,7 +186,9 @@ describe('cleanupExpiredInterests Function contract', () => {
 
     it('CEI-11: a backlog larger than one processing batch drains across successive invocations without losing candidates', async () => {
         const ids = Array.from({ length: 120 }, () => nextId('backlog'));
-        await Promise.all(ids.map(id => db.doc(`spots/${id}`).set(headingSpot())));
+        // Distinct claimers: the active-claim reconciler releases a second
+        // interested Ping for the same uid, which would collapse this backlog.
+        await Promise.all(ids.map(id => db.doc(`spots/${id}`).set(headingSpot({ interestedUserId: id }))));
 
         await indexModule.cleanupExpiredInterests.run();
         const afterFirst = await Promise.all(ids.map(getSpot));

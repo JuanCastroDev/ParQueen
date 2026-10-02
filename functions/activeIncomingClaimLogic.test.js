@@ -6,9 +6,16 @@ const {
   STALE_ACTIVE_CLAIM_LOCK_MS,
   ACTIVE_INCOMING_CLAIM_COLLECTION,
   ACTIVE_INCOMING_CLAIM_DOC_ID,
+  ACTIVE_INCOMING_CLAIM_ROLLOUT_COLLECTION,
+  ACTIVE_INCOMING_CLAIM_ROLLOUT_DOC_ID,
+  CANONICAL_ACTIVE_CLAIM_RULE,
   pingHoldsActiveClaim,
   shouldGarbageCollectLock,
   lockNamesSpot,
+  planUserReconciliation,
+  auditActiveClaimGroups,
+  invariantMayBeEnforced,
+  releasedInterestPatch,
 } = require('./activeIncomingClaimLogic');
 
 const FIFTEEN_MIN = 15 * 60 * 1000;
@@ -81,7 +88,71 @@ describe('active incoming claim lock logic', () => {
     expect(server).toContain('ACTIVE_INCOMING_CLAIM_COLLECTION');
     expect(rules).toContain('match /activeIncomingClaims/{claimId}');
     expect(rules).toContain("claimId == 'current'");
+    expect(rules).toContain('activeIncomingClaimInvariantEnforced()');
+    expect(rules).toContain(`match /${ACTIVE_INCOMING_CLAIM_ROLLOUT_COLLECTION}/{docId}`);
+    expect(rules).toContain(ACTIVE_INCOMING_CLAIM_ROLLOUT_DOC_ID);
     // 15-minute TTL is sweeper GC, not a Rules duration.
     expect(rules).not.toContain("duration.value(15, 'm')");
+  });
+
+  it('keeps the collection-group updatedAt index and the interested-scan index deployable', () => {
+    const indexes = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'firestore.indexes.json'), 'utf8'));
+    const updatedAt = indexes.fieldOverrides.find((entry) =>
+      entry.collectionGroup === 'activeIncomingClaims' && entry.fieldPath === 'updatedAt');
+    expect(updatedAt.indexes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ queryScope: 'COLLECTION_GROUP' }),
+    ]));
+    const scan = indexes.indexes.find((entry) =>
+      entry.collectionGroup === 'spots'
+      && entry.fields.some((field) => field.fieldPath === 'status')
+      && entry.fields.some((field) => field.fieldPath === '__name__'));
+    expect(scan).toBeTruthy();
+  });
+
+  it('keeps the earliest claim and orders the rest for release', () => {
+    const plan = planUserReconciliation([
+      { spotId: 'b', claimStartedAtMs: 200 },
+      { spotId: 'a', claimStartedAtMs: 200 },
+      { spotId: 'c', claimStartedAtMs: 100 },
+      { spotId: 'd', claimStartedAtMs: Number.NaN },
+    ]);
+    expect(plan.keep.spotId).toBe('c');
+    expect(plan.release.map((claim) => claim.spotId)).toEqual(['a', 'b', 'd']);
+    expect(CANONICAL_ACTIVE_CLAIM_RULE).toBe('earliest_claimStartedAt_then_spotId');
+  });
+
+  it('counts lockless interested Pings and duplicate uids separately', () => {
+    const audit = auditActiveClaimGroups([
+      { spotIds: ['only'], lockSpotId: null },
+      { spotIds: ['kept', 'extra'], lockSpotId: 'kept' },
+      { spotIds: ['ready'], lockSpotId: 'ready' },
+    ]);
+    expect(audit).toEqual({
+      locklessCount: 2,
+      duplicateUserCount: 1,
+      duplicatePingCount: 1,
+      interestedWithClaimerCount: 4,
+    });
+    expect(invariantMayBeEnforced({ scanComplete: true, ...audit })).toBe(false);
+    expect(invariantMayBeEnforced({
+      scanComplete: true,
+      locklessCount: 0,
+      duplicateUserCount: 0,
+      duplicatePingCount: 0,
+    })).toBe(true);
+    expect(invariantMayBeEnforced({
+      scanComplete: false,
+      locklessCount: 0,
+      duplicateUserCount: 0,
+      duplicatePingCount: 0,
+    })).toBe(false);
+  });
+
+  it('releases a duplicate without reopening an already-expired Ping', () => {
+    const now = 1_000;
+    expect(releasedInterestPatch(now - 1, now).status).toBeUndefined();
+    expect(releasedInterestPatch(now - 1, now).interestedUserId).toBeNull();
+    expect(releasedInterestPatch(now + 1, now).status).toBe('available');
+    expect(releasedInterestPatch(Number.NaN, now).status).toBe('available');
   });
 });

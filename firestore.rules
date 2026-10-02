@@ -95,6 +95,19 @@ service cloud.firestore {
         || !existsAfter(path);
     }
 
+    // HO-003 rollout gate. Arm 1 stays fail-closed until reconciliation has
+    // written activeIncomingClaimRollout/status with enforced == true and
+    // zero lockless / duplicate counts. A missing doc denies the claim
+    // (get fails). Clients cannot write this doc. New claims still acquire
+    // the per-user lock in the same commit.
+    function activeIncomingClaimInvariantEnforced() {
+      let status = get(/databases/$(database)/documents/activeIncomingClaimRollout/status).data;
+      return status.enforced == true
+        && status.locklessCount == 0
+        && status.duplicateUserCount == 0
+        && status.duplicatePingCount == 0;
+    }
+
     function isAvailableForHold() {
       return resource.data.status == 'available'
         && resource.data.get('interestedUserId', null) == null
@@ -395,8 +408,10 @@ service cloud.firestore {
       allow update: if signedIn() && (
 
         // Arm 1: Claim an available spot (immediate or scheduled).
-        // The same commit must point this user's lock at this Ping.
+        // The rollout gate must already be clean, and the same commit must
+        // point this user's lock at this Ping.
         (isAvailableForClaim()
+          && activeIncomingClaimInvariantEnforced()
           && request.resource.data.interestedUserId == request.auth.uid
           && request.resource.data.status == 'interested'
           && matchesInterestedUserIdentity(request.resource.data)
@@ -858,6 +873,16 @@ service cloud.firestore {
         // docs/CHAT_DELETE_HARDENING.md.
         allow delete: if false;
       }
+    }
+
+    // Server-only rollout gate and duplicate-claim conflict reports.
+    // Clients must not open the one-active-claim invariant themselves.
+    match /activeIncomingClaimRollout/{docId} {
+      allow read, write: if false;
+    }
+
+    match /activeIncomingClaimConflicts/{uid} {
+      allow read, write: if false;
     }
   }
 }

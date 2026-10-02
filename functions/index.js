@@ -366,7 +366,7 @@ exports.cleanupExpiredInterests = onSchedule(
     try {
       const repair = await repairActiveIncomingClaims(db, now);
       console.log(
-        `activeIncomingClaims repair: gcExamined=${repair.gcExamined} gcDeleted=${repair.gcDeleted} backfillExamined=${repair.backfillExamined} backfilled=${repair.backfilled}`
+        `activeIncomingClaims repair: gcExamined=${repair.gcExamined} gcDeleted=${repair.gcDeleted} scanComplete=${repair.scanComplete} lockless=${repair.locklessCount} duplicateUsers=${repair.duplicateUserCount} duplicatePings=${repair.duplicatePingCount} enforced=${repair.enforced} locksEstablished=${repair.locksEstablished} duplicatesReleased=${repair.duplicatesReleased}`
       );
     } catch (e) {
       console.error("cleanupExpiredInterests: active-claim repair failed", sanitizeError(e));

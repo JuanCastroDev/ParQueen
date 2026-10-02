@@ -8,6 +8,8 @@
  * Requires Java 11+ and Firebase CLI with the Firestore emulator installed.
  */
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import path from 'node:path';
 import { describe, it, beforeAll, afterAll, beforeEach, expect } from 'vitest';
 import {
     initializeTestEnvironment,
@@ -20,6 +22,7 @@ import {
     getDoc,
     getDocs,
     setDoc,
+    deleteDoc,
     addDoc,
     collection,
     query,
@@ -45,6 +48,7 @@ const OTHER_UID  = 'other-bbb-222';
 const ADMIN_UID  = 'admin-ccc-333';
 const THIRD_UID  = 'third-ddd-444';
 const PROJECT_ID = 'demo-parkqueen-rules-test';
+const requireFromFunctions = createRequire(path.join(process.cwd(), 'functions/package.json'));
 
 let testEnv: RulesTestEnvironment;
 
@@ -60,6 +64,45 @@ async function seed(col: string, id: string, data: object) {
     await testEnv.withSecurityRulesDisabled(async ctx => {
         await setDoc(doc(ctx.firestore(), col, id), data);
     });
+}
+
+async function seedActiveClaimInvariantOpen() {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'activeIncomingClaimRollout', 'status'), {
+            enforced: true,
+            locklessCount: 0,
+            duplicateUserCount: 0,
+            duplicatePingCount: 0,
+        });
+    });
+}
+
+async function closeActiveClaimRollout() {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await deleteDoc(doc(ctx.firestore(), 'activeIncomingClaimRollout', 'status'));
+    });
+}
+
+function rolloutTools() {
+    if (!process.env.FIRESTORE_EMULATOR_HOST) {
+        process.env.FIRESTORE_EMULATOR_HOST = '127.0.0.1:8080';
+    }
+    const { initializeApp, getApps } = requireFromFunctions('firebase-admin/app');
+    const { getFirestore, Timestamp: AdminTimestamp } = requireFromFunctions('firebase-admin/firestore');
+    const { reconcileActiveIncomingClaims } = requireFromFunctions('./activeIncomingClaim.js');
+    const name = 'a1-rollout';
+    const app = getApps().find((entry: { name: string }) => entry.name === name)
+        ?? initializeApp({ projectId: PROJECT_ID }, name);
+    return {
+        db: getFirestore(app),
+        reconcile: reconcileActiveIncomingClaims as (db: unknown, now: unknown) => Promise<{
+            enforced: boolean;
+            locklessCount: number;
+            duplicateUserCount: number;
+            duplicatePingCount: number;
+        }>,
+        now: () => AdminTimestamp.now(),
+    };
 }
 
 // ── Common timestamps ─────────────────────────────────────────────────────────
@@ -165,6 +208,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
     await testEnv.clearFirestore();
+    await seedActiveClaimInvariantOpen();
 });
 
 describe('curbIdentities — server-only canonical curb identity', () => {
@@ -3940,5 +3984,122 @@ describe('A1 — one active incoming claim', () => {
             failureReason: null,
         })).resolves.toBe('created');
         expect((await readLock(OTHER_UID)).exists()).toBe(false);
+    });
+
+    async function seedLegacyInterest(id: string, uid: string, claimStartedAt: Timestamp) {
+        await seed('spots', id, {
+            finderId: OWNER_UID,
+            finderName: 'TestFinder',
+            address: id,
+            lat: 40.71,
+            lng: -74.01,
+            status: 'interested',
+            pingMode: 'now',
+            claimState: 'heading',
+            interestedUserId: uid,
+            interestedUserName: 'bob',
+            claimStartedAt,
+            reportedAt: Timestamp.now(),
+            expiresAt: FUTURE,
+            interestExpiresAt: FUTURE,
+        });
+    }
+
+    it('A1-R001: a legacy lockless interested Ping cannot obtain a second claim before or after reconciliation', async () => {
+        await closeActiveClaimRollout();
+        await seedClaimer(OTHER_UID, 'bob');
+        await seedClaimer(THIRD_UID, 'cara');
+        const legacyStarted = Timestamp.fromMillis(Date.now() - 60_000);
+        await seedLegacyInterest('a1-r001-legacy', OTHER_UID, legacyStarted);
+        await seed('spots', 'a1-r001-new', availablePing('A1 R001 new'));
+        const db = otherDb();
+
+        await expect(claimAs(db, OTHER_UID, 'bob', 'a1-r001-new')).rejects.toMatchObject({
+            code: 'permission-denied',
+        });
+        expect((await readSpot('a1-r001-legacy')).data().interestedUserId).toBe(OTHER_UID);
+        expect((await readSpot('a1-r001-new')).data().status).toBe('available');
+        expect((await readLock(OTHER_UID)).exists()).toBe(false);
+
+        const tools = rolloutTools();
+        const repaired = await tools.reconcile(tools.db, tools.now());
+        expect(repaired.enforced).toBe(false);
+        expect(repaired.locklessCount).toBe(0);
+        expect(repaired.duplicateUserCount).toBe(0);
+        expect(repaired.duplicatePingCount).toBe(0);
+        const lock = await readLock(OTHER_UID);
+        expect(lock.exists()).toBe(true);
+        expect(lock.data().spotId).toBe('a1-r001-legacy');
+        expect(lock.data().claimStartedAt.toMillis()).toBe(legacyStarted.toMillis());
+
+        await expect(claimAs(db, OTHER_UID, 'bob', 'a1-r001-new')).rejects.toMatchObject({
+            code: 'permission-denied',
+        });
+
+        const confirmed = await tools.reconcile(tools.db, tools.now());
+        expect(confirmed.enforced).toBe(true);
+        expect(confirmed.locklessCount).toBe(0);
+        expect(confirmed.duplicateUserCount).toBe(0);
+        expect(confirmed.duplicatePingCount).toBe(0);
+        await expect(claimAs(db, OTHER_UID, 'bob', 'a1-r001-new')).rejects.toMatchObject({
+            code: 'permission-denied',
+        });
+        expect((await readSpot('a1-r001-legacy')).data().status).toBe('interested');
+        expect((await readSpot('a1-r001-new')).data().status).toBe('available');
+        expect((await readLock(OTHER_UID)).data().spotId).toBe('a1-r001-legacy');
+        await expect(claimAs(thirdDb(), THIRD_UID, 'cara', 'a1-r001-new')).resolves.toBe('claimed');
+    });
+
+    it('A1-R001b: duplicate interested Pings are released deterministically and reported before the gate opens', async () => {
+        await closeActiveClaimRollout();
+        await seedClaimer(OTHER_UID, 'bob');
+        const earlier = Timestamp.fromMillis(Date.now() - 120_000);
+        const later = Timestamp.fromMillis(Date.now() - 30_000);
+        await seedLegacyInterest('a1-r001-keep', OTHER_UID, earlier);
+        await seedLegacyInterest('a1-r001-drop', OTHER_UID, later);
+        await seed('spots', 'a1-r001-third', availablePing('A1 R001 third'));
+
+        const tools = rolloutTools();
+        const repaired = await tools.reconcile(tools.db, tools.now());
+        expect(repaired.enforced).toBe(false);
+        expect(repaired.duplicateUserCount).toBe(0);
+        expect(repaired.duplicatePingCount).toBe(0);
+        expect(repaired.locklessCount).toBe(0);
+        expect((await readSpot('a1-r001-keep')).data().interestedUserId).toBe(OTHER_UID);
+        const dropped = await readSpot('a1-r001-drop');
+        expect(dropped.data().status).toBe('available');
+        expect(dropped.data().interestedUserId).toBeNull();
+        expect((await readLock(OTHER_UID)).data().spotId).toBe('a1-r001-keep');
+
+        const conflictSnap = await tools.db.doc(`activeIncomingClaimConflicts/${OTHER_UID}`).get();
+        expect(conflictSnap.exists).toBe(true);
+        expect(conflictSnap.data().keptSpotId).toBe('a1-r001-keep');
+        expect(conflictSnap.data().releasedSpotIds).toEqual(['a1-r001-drop']);
+        expect(conflictSnap.data().rule).toBe('earliest_claimStartedAt_then_spotId');
+
+        await expect(claimAs(otherDb(), OTHER_UID, 'bob', 'a1-r001-third')).rejects.toMatchObject({
+            code: 'permission-denied',
+        });
+        const confirmed = await tools.reconcile(tools.db, tools.now());
+        expect(confirmed.enforced).toBe(true);
+        await expect(claimAs(otherDb(), OTHER_UID, 'bob', 'a1-r001-third')).rejects.toMatchObject({
+            code: 'permission-denied',
+        });
+        expect((await readSpot('a1-r001-keep')).data().status).toBe('interested');
+        expect((await readSpot('a1-r001-third')).data().status).toBe('available');
+    });
+
+    it('A1-R001c: a client cannot open or rewrite the rollout gate', async () => {
+        const db = otherDb();
+        await assertFails(setDoc(doc(db, 'activeIncomingClaimRollout', 'status'), {
+            enforced: true,
+            locklessCount: 0,
+            duplicateUserCount: 0,
+            duplicatePingCount: 0,
+        }));
+        await assertFails(setDoc(doc(db, 'activeIncomingClaimConflicts', OTHER_UID), {
+            keptSpotId: 'forged',
+            releasedSpotIds: [],
+        }));
     });
 });
