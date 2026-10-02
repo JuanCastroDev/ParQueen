@@ -37,6 +37,7 @@ import {
     markClaimArrived,
 } from './views/street-parking/activeIncomingClaim';
 import { getTitleForCrowns } from './utils/crowns';
+import { timestampToMillis } from './utils/pingLifecycle';
 import {
     completeFinderConfirmedHandoff,
     completeTerminalHandoff,
@@ -1721,6 +1722,39 @@ describe('cancelClaimTransaction — transaction read/write ordering and behavio
         expect(outcome).toBe('stale_claim');
         const spot = await readSpot('tx12');
         expect(spot.interestedUserId).toBe(THIRD_UID); // newer claimant untouched
+    });
+
+    it('A2-HO-006: cancel with the claimStartedAt mapped by useSpotData returns cancelled', async () => {
+        await seed('spots', 'a2-fp', committedScheduledSpot);
+        let stored: any;
+        await testEnv.withSecurityRulesDisabled(async ctx => {
+            stored = (await getDoc(doc(ctx.firestore(), 'spots', 'a2-fp'))).data();
+        });
+        // Same expression as useSpotData's mappedFree claimStartedAt.
+        const mappedClaimStartedAt = stored.claimStartedAt ?? null;
+        const fingerprint = timestampToMillis(mappedClaimStartedAt);
+        expect(fingerprint).toBe(CLAIM_STARTED_AT.toMillis());
+
+        const outcome = await cancelClaimTransaction(otherDb(), {
+            spotId: 'a2-fp', claimantId: OTHER_UID, finderId: OWNER_UID,
+            fingerprint, message: 'Changed my mind',
+        });
+        expect(outcome).toBe('cancelled');
+        const spot = await readSpot('a2-fp');
+        expect(spot.status).toBe('available');
+        expect(spot.interestedUserId).toBeNull();
+    });
+
+    it('A2-HO-006b: a fingerprint that does not match claimStartedAt is stale_claim and leaves the claim', async () => {
+        await seed('spots', 'a2-stale', committedScheduledSpot);
+        const outcome = await cancelClaimTransaction(otherDb(), {
+            spotId: 'a2-stale', claimantId: OTHER_UID, finderId: OWNER_UID,
+            fingerprint: CLAIM_STARTED_AT.toMillis() + 1, message: 'x',
+        });
+        expect(outcome).toBe('stale_claim');
+        const spot = await readSpot('a2-stale');
+        expect(spot.interestedUserId).toBe(OTHER_UID);
+        expect(spot.claimStartedAt?.isEqual(CLAIM_STARTED_AT)).toBe(true);
     });
 
     it('TX-13: claimant receives no self-notification when they are also the Ping owner', async () => {
@@ -3521,6 +3555,36 @@ describe('§9 — Two-user workflow: finder ↔ claimer lifecycle', () => {
                 updatedAt: claimedAt,
             });
         }));
+    });
+
+    it('A2-HO-004: OWNER cannot claim their own available Ping', async () => {
+        const db = ownerDb();
+        const claimedAt = Timestamp.now();
+        await assertFails(runTransaction(db, async (tx) => {
+            tx.update(doc(db, 'spots', WF_SPOT_ID), {
+                status: 'interested',
+                claimState: 'heading',
+                interestedUserId: OWNER_UID,
+                claimStartedAt: claimedAt,
+            });
+            tx.set(doc(db, 'users', OWNER_UID, 'activeIncomingClaims', 'current'), {
+                spotId: WF_SPOT_ID,
+                claimStartedAt: claimedAt,
+                claimState: 'heading',
+                updatedAt: claimedAt,
+            });
+        }));
+
+        let spot: any;
+        let lockExists = true;
+        await testEnv.withSecurityRulesDisabled(async ctx => {
+            const fs = ctx.firestore();
+            spot = (await getDoc(doc(fs, 'spots', WF_SPOT_ID))).data();
+            lockExists = (await getDoc(doc(fs, 'users', OWNER_UID, 'activeIncomingClaims', 'current'))).exists();
+        });
+        expect(spot?.status).toBe('available');
+        expect(spot?.interestedUserId).toBeUndefined();
+        expect(lockExists).toBe(false);
     });
 
     // ── Chat isolation ─────────────────────────────────────────────────────────

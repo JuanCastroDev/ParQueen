@@ -410,7 +410,10 @@ service cloud.firestore {
         // Arm 1: Claim an available spot (immediate or scheduled).
         // The rollout gate must already be clean, and the same commit must
         // point this user's lock at this Ping.
+        // HO-004: the finder cannot claim their own Ping. Client canClaim
+        // already hides the button; this is the server denial.
         (isAvailableForClaim()
+          && request.auth.uid != resource.data.finderId
           && activeIncomingClaimInvariantEnforced()
           && request.resource.data.interestedUserId == request.auth.uid
           && request.resource.data.status == 'interested'

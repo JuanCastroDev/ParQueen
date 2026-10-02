@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
+import { timestampToMillis } from '../../utils/pingLifecycle';
 
 // Minimal localStorage polyfill — this vitest environment is plain Node,
 // with no DOM globals at all (not even jsdom), and useSpotData.ts reads/
@@ -174,5 +175,58 @@ describe('useSpotData transition semantics (real hook, mocked Firestore, DOM-fre
         // Region A must remain visible (filtered against A's own center) until
         // B's dataset is fully promoted — no empty-map flash mid-transition.
         expect(duringTransition).toEqual(['spotA']);
+    });
+
+    it('maps claimStartedAt from the Firestore document so the cancel fingerprint is non-null', async () => {
+        let latest: any = null;
+        const onResult = (r: any) => { latest = r; };
+
+        await act(async () => {
+            TestRenderer.create(React.createElement(Harness, { center: CENTER_A, radius: 2, onResult }));
+        });
+
+        const ranges = buildGeoQueryRanges(CENTER_A[1], CENTER_A[0], 2);
+        const started = { toMillis: () => 1_700_000_123_000 };
+        await act(async () => {
+            ranges.forEach((r, i) => {
+                const key = `${r.start}:${r.end}`;
+                if (i === 0) {
+                    emit(key, [{
+                        id: 'claimed',
+                        data: {
+                            lat: CENTER_A[1],
+                            lng: CENTER_A[0],
+                            geohash: 'dr5regy1',
+                            status: 'interested',
+                            finderId: 'owner',
+                            interestedUserId: 'me',
+                            reportedAt: { toMillis: () => Date.now() },
+                            expiresAt: { toMillis: () => Date.now() + 3_600_000 },
+                            address: 'Claimed curb',
+                            claimStartedAt: started,
+                        },
+                    }]);
+                } else {
+                    emit(key, []);
+                }
+            });
+        });
+
+        const mapped = latest.freeSpots.find((spot: any) => spot.id === 'claimed');
+        const visible = latest.radiusFilteredItems.find((spot: any) => spot.id === 'claimed');
+        expect(mapped.claimStartedAt).toBe(started);
+        expect(visible.claimStartedAt).toBe(started);
+        expect(timestampToMillis(visible.claimStartedAt)).toBe(1_700_000_123_000);
+
+        await act(async () => {
+            ranges.forEach((r, i) => {
+                const key = `${r.start}:${r.end}`;
+                if (i === 0) emit(key, [fakeSpot('plain', CENTER_A[1], CENTER_A[0], 'dr5regy1')]);
+                else emit(key, []);
+            });
+        });
+        const plain = latest.freeSpots.find((spot: any) => spot.id === 'plain');
+        expect(plain.claimStartedAt).toBeNull();
+        expect(timestampToMillis(plain.claimStartedAt)).toBe(0);
     });
 });
