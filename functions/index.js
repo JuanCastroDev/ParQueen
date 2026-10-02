@@ -243,6 +243,16 @@ exports.initUserPrivateAccount = onDocumentCreated(
   }
 );
 
+// Occupied + arrived_pending_outcome is durable handoff state. The Ping's
+// original expiresAt must not delete it. It stays until a terminal outcome
+// or the later B4 unconfirmed sweeper. Legacy occupied rows without this
+// claimState are not migrated and still follow general expiry.
+function isDurableArrivedPendingOutcome(spot) {
+  return !!spot
+    && spot.status === "occupied"
+    && spot.claimState === "arrived_pending_outcome";
+}
+
 // 1) Delete expired spots every hour
 exports.cleanupExpiredSpotsHourly = onSchedule(
   {
@@ -254,26 +264,42 @@ exports.cleanupExpiredSpotsHourly = onSchedule(
   },
   async () => {
     const now = Timestamp.now();
+    let cursor = null;
+    let deleted = 0;
+    let keptArrived = 0;
 
-    // batch delete in pages of 500
+    // Pages of 500, always advancing past the last doc. Kept arrival rows
+    // stay in the expiresAt range, so a page that deletes nothing must still
+    // move the cursor or the same 500 would be read forever.
     while (true) {
-      const snap = await db
+      let query = db
         .collection("spots")
         .where("expiresAt", "<=", now)
         .orderBy("expiresAt", "asc")
-        .limit(500)
-        .get();
+        .limit(500);
+      if (cursor) query = query.startAfter(cursor);
 
+      const snap = await query.get();
       if (snap.empty) break;
 
       const batch = db.batch();
-      snap.docs.forEach((d) => batch.delete(d.ref));
-      await batch.commit();
+      let deleteCount = 0;
+      for (const d of snap.docs) {
+        if (isDurableArrivedPendingOutcome(d.data())) {
+          keptArrived++;
+          continue;
+        }
+        batch.delete(d.ref);
+        deleteCount++;
+      }
+      if (deleteCount > 0) await batch.commit();
+      deleted += deleteCount;
 
       if (snap.size < 500) break;
+      cursor = snap.docs[snap.docs.length - 1];
     }
 
-    console.log("✅ cleanupExpiredSpotsHourly finished");
+    console.log(`✅ cleanupExpiredSpotsHourly finished deleted=${deleted} keptArrived=${keptArrived}`);
   }
 );
 
@@ -348,7 +374,8 @@ exports.cleanupExpiredInterests = onSchedule(
           // comparison never matches — so this document will not be selected
           // as a candidate again, regardless of whether status stays
           // "interested" (an already-expired Ping is fully removed within the
-          // hour by cleanupExpiredSpotsHourly regardless of status).
+          // hour by cleanupExpiredSpotsHourly, which still deletes every
+          // non-arrival status. occupied + arrived_pending_outcome is kept).
           const pingExpired = spot.expiresAt && spot.expiresAt.toMillis() <= now.toMillis();
           tx.update(d.ref, pingExpired ? clearFields : { ...clearFields, status: "available" });
           deleteMatchingActiveIncomingClaim(tx, lockSnap, d.id);
