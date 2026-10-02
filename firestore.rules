@@ -407,6 +407,18 @@ service cloud.firestore {
         && request.resource.data.lng >= -180 && request.resource.data.lng <= 180
         && request.resource.data.expiresAt is timestamp
         && request.resource.data.expiresAt > request.time
+        // A5 / SEC-002. Locked product caps (deny, never clamp):
+        //   expiresAt is at most 30 minutes after reportedAt (PING_LIVE_TTL_MS)
+        //   and, once reportedAt is in the past, at most 30 minutes after
+        //   request.time. reportedAt may be at most 12 hours ahead.
+        // Scheduled "later" pings stay live for 30 minutes after departure,
+        // so expiresAt may sit further than 30 minutes past request.time
+        // only while reportedAt itself is still in the future.
+        && request.resource.data.reportedAt is timestamp
+        && request.resource.data.reportedAt <= request.time + duration.value(12, 'h')
+        && request.resource.data.expiresAt <= request.resource.data.reportedAt + duration.value(30, 'm')
+        && (request.resource.data.reportedAt > request.time
+            || request.resource.data.expiresAt <= request.time + duration.value(30, 'm'))
         // 'source' is also written server-side (adminDeleteSpot sets 'admin'
         // via the Admin SDK, bypassing rules entirely) to drive
         // updateTrustOnSpotDelete's cancellation-penalty exemption — a client

@@ -2359,7 +2359,8 @@ describe('spots — create schema (TM-10)', () => {
         finderName: 'Alice',
         pingMode: 'now',
         reportedAt: Timestamp.now(),
-        expiresAt: FUTURE,
+        // A5: client creates must stay inside the 30-minute live TTL.
+        expiresAt: Timestamp.fromMillis(Date.now() + 25 * 60 * 1000),
         geohash: 'dr5ru',
         address: '123 Main St, New York, NY',
     };
@@ -2453,7 +2454,8 @@ describe('spots — identity-display authority (SP)', () => {
         lat: 40.71, lng: -74.01,
         type: 'free', status: 'available',
         geohash: 'dr5rv', pingMode: 'now',
-        reportedAt: Timestamp.now(), expiresAt: FUTURE,
+        reportedAt: Timestamp.now(),
+        expiresAt: Timestamp.fromMillis(Date.now() + 25 * 60 * 1000),
     };
     const SPOT_ID = 'sp-identity-spot';
 
@@ -3665,7 +3667,7 @@ describe('§9 — Two-user workflow: finder ↔ claimer lifecycle', () => {
                 geohash:    'dr5rv',
                 pingMode:   'now',
                 reportedAt: Timestamp.now(),
-                expiresAt:  FUTURE,
+                expiresAt:  Timestamp.fromMillis(Date.now() + 25 * 60 * 1000),
             }),
         );
     });
@@ -4440,5 +4442,89 @@ describe('A3 — commit to heading', () => {
         expect(spot.interestedUserId).toBe(OTHER_UID);
         expect(spot.claimAutoReleaseAt).toBeNull();
         expect(spot.claimStartedAt.isEqual(CLAIM_STARTED_AT)).toBe(true);
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// A5 — Ping lifetime bounds (SEC-002). Create-time caps only. Claim arms are
+// unchanged; seeded documents are not re-validated.
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('A5 — Ping lifetime bounds', () => {
+    const THIRTY_MIN = 30 * 60 * 1000;
+    const TWELVE_H = 12 * 60 * 60 * 1000;
+
+    function livePing(overrides: Record<string, unknown> = {}) {
+        const reportedAt = Timestamp.now();
+        return {
+            lat: 40.7128,
+            lng: -74.006,
+            type: 'free',
+            status: 'available',
+            finderId: OWNER_UID,
+            finderName: 'Alice',
+            pingMode: 'now',
+            reportedAt,
+            expiresAt: Timestamp.fromMillis(reportedAt.toMillis() + THIRTY_MIN),
+            geohash: 'dr5ru',
+            address: '123 Main St, New York, NY',
+            ...overrides,
+        };
+    }
+
+    beforeEach(async () => {
+        await seed('users', OWNER_UID, { id: OWNER_UID, username: 'Alice', crowns: 0, title: 'Newcomer' });
+    });
+
+    it('A5-TTL-POS: an honest 30-minute live Ping create succeeds', async () => {
+        await assertSucceeds(addDoc(collection(ownerDb(), 'spots'), livePing()));
+    });
+
+    it('A5-TTL-NEG: expiresAt more than 30 minutes after reportedAt is denied', async () => {
+        const reportedAt = Timestamp.now();
+        await assertFails(addDoc(collection(ownerDb(), 'spots'), livePing({
+            reportedAt,
+            expiresAt: Timestamp.fromMillis(reportedAt.toMillis() + THIRTY_MIN + 60_000),
+        })));
+    });
+
+    it('A5-TTL-POS: a reportedAt in the recent past still succeeds when expiresAt stays within 30 minutes of it', async () => {
+        const reportedAt = Timestamp.fromMillis(Date.now() - 5 * 60 * 1000);
+        await assertSucceeds(addDoc(collection(ownerDb(), 'spots'), livePing({
+            reportedAt,
+            expiresAt: Timestamp.fromMillis(reportedAt.toMillis() + THIRTY_MIN),
+        })));
+    });
+
+    it('A5-HORIZON-POS: My Car now and later within the 12-hour cap succeed', async () => {
+        const nowReported = Timestamp.now();
+        await assertSucceeds(setDoc(doc(ownerDb(), 'spots', 'a5-mycar-now'), livePing({
+            pingMode: 'now',
+            source: 'my_car',
+            reportedAt: nowReported,
+            expiresAt: Timestamp.fromMillis(nowReported.toMillis() + THIRTY_MIN),
+        })));
+
+        const laterReported = Timestamp.fromMillis(Date.now() + TWELVE_H - 60_000);
+        await assertSucceeds(setDoc(doc(ownerDb(), 'spots', 'a5-mycar-later'), livePing({
+            pingMode: 'later',
+            source: 'my_car',
+            reportedAt: laterReported,
+            expiresAt: Timestamp.fromMillis(laterReported.toMillis() + THIRTY_MIN),
+        })));
+    });
+
+    it('A5-HORIZON-NEG: reportedAt more than 12 hours ahead is denied', async () => {
+        const reportedAt = Timestamp.fromMillis(Date.now() + TWELVE_H + 5 * 60 * 1000);
+        await assertFails(addDoc(collection(ownerDb(), 'spots'), livePing({
+            pingMode: 'later',
+            reportedAt,
+            expiresAt: Timestamp.fromMillis(reportedAt.toMillis() + THIRTY_MIN),
+        })));
+    });
+
+    it('A5-GEOHASH: create still requires geohash (nearby delivery fields unchanged)', async () => {
+        const payload = livePing();
+        delete (payload as { geohash?: string }).geohash;
+        await assertFails(addDoc(collection(ownerDb(), 'spots'), payload));
     });
 });

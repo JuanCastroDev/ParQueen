@@ -5,6 +5,7 @@ import { MapItem } from './types';
 import { getDistance, drawRoute, clearRoute, NYC_CENTER } from './utils';
 import { getTitleForCrowns } from '../../utils/crowns';
 import { getPingExpiresAtMs, timestampToMillis } from '../../utils/pingLifecycle';
+import { PING_SCHEDULE_HORIZON_MS } from './pingCreateBounds';
 import { cancelClaimTransaction } from './cancelClaimTransaction';
 import { acquireActiveIncomingClaim, ALREADY_CLAIMED_MESSAGE, markClaimArrived } from './activeIncomingClaim';
 import { commitClaimToHeading } from './commitToHeading';
@@ -442,6 +443,8 @@ export function useInterestFlow({
     const handleDeparturePing = async (durationMinutes: number) => {
         const spotSnap = handoffSpotRef.current;
         if (!spotSnap || !user) return;
+        // Deny rather than clamp. Preset departure reminders are 30–120 minutes.
+        if (durationMinutes * 60_000 > PING_SCHEDULE_HORIZON_MS) return;
 
         const now = Date.now();
         const reportedAt = Timestamp.fromMillis(now + durationMinutes * 60000);

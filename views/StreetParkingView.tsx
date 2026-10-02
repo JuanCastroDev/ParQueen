@@ -44,6 +44,7 @@ import { useSearch } from './street-parking/useSearch';
 import { useSpotData } from './street-parking/useSpotData';
 import { useInterestFlow } from './street-parking/useInterestFlow';
 import { checkPingRateLimit } from './street-parking/pingRateLimit';
+import { isReportedAtWithinHorizon } from './street-parking/pingCreateBounds';
 import { reportPingCreationFailure } from './street-parking/pingFailureReporting';
 import { SpotDetailsCard } from './street-parking/SpotDetailsCard';
 import { BottomSheet } from './street-parking/BottomSheet';
@@ -1491,6 +1492,11 @@ export const MapView: React.FC<MapViewProps> = ({
             return;
         }
 
+        if (departureTime && !isReportedAtWithinHorizon(departureTime.getTime())) {
+            setMyCarDepartureError(t('ping_errors.horizon'));
+            return;
+        }
+
         setMyCarDepartureLoading(true);
         setMyCarDepartureError(null);
 
@@ -1595,6 +1601,11 @@ export const MapView: React.FC<MapViewProps> = ({
 
     const handleSaveSpot = async (departureTime: Date | null) => {
         if (isPinging || !user) return;
+
+        if (departureTime && !isReportedAtWithinHorizon(departureTime.getTime())) {
+            setPingError(t('ping_errors.horizon'));
+            return;
+        }
 
         if (!selectedItem) {
             const activeQ = query(collection(db, 'spots'), where('finderId', '==', user.id), where('status', 'in', ['available', 'interested']));
