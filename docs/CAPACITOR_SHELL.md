@@ -49,9 +49,9 @@ See `docs/ANDROID_PHASE_2B.md` for `@capacitor/geolocation`, the shared `utils/g
 
 See `docs/ANDROID_PHASE_2C.md` for `@capacitor/push-notifications`, `POST_NOTIFICATIONS`, and the shared `notificationRegistration` abstraction. Stacked on Phase 2B / PR #156.
 
-## Phase 2D (Android native camera / photo picker)
+## Phase 2D (camera-only Sign Scanner)
 
-See `docs/ANDROID_PHASE_2D.md` for `@capacitor/camera`, the shared `utils/signScanner` abstraction, FileProvider narrowing, and the physical Samsung AI Sign Scanner checklist.
+The Sign Scanner uses one camera file input (`accept="image/*"` `capture="environment"`) on Web, PWA, Android, and iOS. `@capacitor/camera` is not installed. Profile photos stay a separate file input. See `docs/ANDROID_PHASE_2D.md`.
 
 ## Phase 2E (Android App Check Play Integrity / Debug bridge)
 
@@ -59,4 +59,4 @@ See `docs/ANDROID_PHASE_2E.md` for the narrow native App Check Capacitor bridge,
 
 ## Out of scope (later phases)
 
-iOS native push / APNs, iOS native camera, iOS App Attest, iOS native auth, Mapbox native SDK, Play Console upload, background location, multi-device FCM token lists.
+iOS native push / APNs, iOS App Attest, iOS native auth, Mapbox native SDK, Play Console upload, background location, multi-device FCM token lists.

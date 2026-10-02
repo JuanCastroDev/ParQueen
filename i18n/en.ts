@@ -903,7 +903,6 @@ const en: Record<string, string> = {
     'assistant.hydrant_desc': "See if you're far enough from a hydrant.",
     'assistant.photo_hint': 'Take a clear photo of the full parking sign.',
     'assistant.open_camera': 'Open camera',
-    'assistant.choose_photos': 'Choose from photos',
     'assistant.privacy_note': 'Camera access is only used to scan the sign you choose.',
     'assistant.reading_sign': 'Reading the sign...',
     'assistant.result_yes': 'Looks like you can park here.',

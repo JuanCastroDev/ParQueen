@@ -296,6 +296,9 @@ jobs:
               "Firebase App Check debug assignment:",
               "known App Check debug bypass marker:",
               "debug App Check token wiring: ABSENT",
+              "privacy purpose NSCameraUsageDescription: PASS",
+              "privacy purpose NSCameraUsageDescription: FAIL",
+              "obsolete camera plugin artifacts: ABSENT",
               "FIREBASE_APPCHECK_DEBUG_TOKEN\\s*=(?!=)",
               "appcheck-debug-",
           ):
@@ -873,6 +876,31 @@ jobs:
               else:
                   print(f"{key}: FAIL")
                   failed = True
+          camera_purpose = info.get("NSCameraUsageDescription")
+          if isinstance(camera_purpose, str) and camera_purpose.strip():
+              print("privacy purpose NSCameraUsageDescription: PASS")
+          else:
+              print("privacy purpose NSCameraUsageDescription: FAIL")
+              failed = True
+          for photo_key in ("NSPhotoLibraryUsageDescription", "NSPhotoLibraryAddUsageDescription"):
+              if photo_key in info:
+                  print(f"privacy purpose {photo_key}: PRESENT")
+                  failed = True
+              else:
+                  print(f"privacy purpose {photo_key}: ABSENT")
+          obsolete = []
+          for artifact in app.rglob("*"):
+              artifact_name = artifact.name
+              for token in ("CapacitorCamera", "IONCameraLib"):
+                  if artifact_name == token or artifact_name.startswith(token + "."):
+                      obsolete.append(str(artifact.relative_to(app)))
+                      break
+          if obsolete:
+              for hit in obsolete:
+                  print(f"obsolete camera plugin artifact: {hit}")
+              failed = True
+          else:
+              print("obsolete camera plugin artifacts: ABSENT")
           verify = subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], capture_output=True)
           print("codesign verification: PASS" if verify.returncode == 0 else "codesign verification: FAIL")
           if verify.returncode != 0:

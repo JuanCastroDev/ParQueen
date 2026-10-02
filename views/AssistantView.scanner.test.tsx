@@ -25,12 +25,6 @@ vi.mock('./street-parking/useParkingTimer', () => ({
 import { AssistantView } from './AssistantView';
 import { loadRecentScans, recordScan, clearRecentScans } from '../utils/recentScans';
 
-class FakeFileReader {
-  result = 'data:image/png;base64,aW1hZ2U=';
-  onloadend: null | (() => void) = null;
-  readAsDataURL() { this.onloadend?.(); }
-}
-
 function collectText(node: TestRenderer.ReactTestInstance): string {
   const out: string[] = [];
   const visit = (n: TestRenderer.ReactTestInstance) => {
@@ -56,8 +50,10 @@ async function mount() {
 }
 async function choosePhoto(r: TestRenderer.ReactTestRenderer) {
   await act(async () => { buttonWith(r, 'Scan a Parking Sign').props.onClick(); });
+  const file = new Blob([Uint8Array.from([137, 80, 78, 71])], { type: 'image/png' });
   await act(async () => {
-    r.root.findAllByType('input')[0].props.onChange({ target: { files: [{}], value: '' } });
+    r.root.findAllByType('input')[0].props.onChange({ target: { files: [file], value: 'sign.png' } });
+    await Promise.resolve();
     await Promise.resolve();
   });
 }
@@ -65,7 +61,6 @@ async function choosePhoto(r: TestRenderer.ReactTestRenderer) {
 beforeEach(() => {
   analyzeParkingSign.mockReset();
   analyzeParkingSign.mockResolvedValue({ status: 'YES', explanation: 'Parking allowed after 6pm.' });
-  (globalThis as any).FileReader = FakeFileReader;
   clearRecentScans();
 });
 
@@ -262,6 +257,37 @@ describe('Sign Scanner â€” scan states', () => {
     expect(text).toContain("We couldn't read that sign.");
     expect(text).toContain('Try again');
     expect(text).toContain('Choose another photo');
+  });
+});
+
+describe('Sign Scanner camera capture', () => {
+  it('exposes one camera input and no gallery action', async () => {
+    const r = await mount();
+    await act(async () => { buttonWith(r, 'Scan a Parking Sign').props.onClick(); });
+    const inputs = r.root.findAllByType('input');
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0].props.type).toBe('file');
+    expect(inputs[0].props.accept).toBe('image/*');
+    expect(inputs[0].props.capture).toBe('environment');
+    expect(textOf(r)).toContain('Open camera');
+    expect(textOf(r)).not.toContain('Choose from photos');
+    expect(textOf(r)).not.toContain('Elegir de fotos');
+  });
+
+  it('ignores a second camera tap while the first capture is still open', async () => {
+    const inputClick = vi.fn();
+    let r: TestRenderer.ReactTestRenderer;
+    await act(async () => {
+      r = TestRenderer.create(<AssistantView />, {
+        createNodeMock: (element) => element.type === 'input' ? { click: inputClick } : null,
+      });
+    });
+    await act(async () => { buttonWith(r!, 'Scan a Parking Sign').props.onClick(); });
+    await act(async () => {
+      buttonWith(r!, 'Open camera').props.onClick();
+      buttonWith(r!, 'Open camera').props.onClick();
+    });
+    expect(inputClick).toHaveBeenCalledTimes(1);
   });
 });
 

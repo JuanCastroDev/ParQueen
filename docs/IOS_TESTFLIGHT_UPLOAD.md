@@ -73,6 +73,14 @@ A clear rejection is `UPLOAD FAILED`. A clear acceptance is `UPLOAD ACCEPTED`. A
 
 It does not mean processing has finished, the build is available in TestFlight, export compliance is complete, a testing group was assigned, external testing was approved, or the app was submitted for App Store review. Those steps stay manual.
 
+## Upload 1.0 (1) processing failure
+
+Apple accepted delivery of marketing version 1.0, build 1, and then failed processing with ITMS-90683 (`NSPhotoLibraryUsageDescription` missing). The root cause was the Photos-capable `@capacitor/camera` plugin linked into the iOS binary. Sign scanning does not need gallery access, so the product decision is a camera-only Sign Scanner. The gallery path and the plugin were removed instead of adding an unused Photos purpose string.
+
+That rejection is not resolved until a later upload of this camera-only build finishes processing. Build 1 is reused because Apple allows the same build number when the previous upload status is Failed. This document does not dispatch that upload.
+
+The IPA verifier now requires a non-empty `NSCameraUsageDescription` and rejects packaged `CapacitorCamera` or `IONCameraLib` bundle names. It does not require a Photos-library purpose string.
+
 ## Cleanup
 
 The cleanup step always deletes the temporary private key, the lookup-key copy, the export options plist, the IPA, the unpacked IPA, the xcarchive, the decoded provisioning profile, and the validation and upload logs. It then checks that the private key files, the IPA directory, and the archive are gone. Nothing is saved as a GitHub artifact.
