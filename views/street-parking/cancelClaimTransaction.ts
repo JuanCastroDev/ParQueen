@@ -55,6 +55,9 @@ function claimStatus(spot: Record<string, any>, claimantId: string, fingerprint:
  *     retry always resolves to `already_resolved` before it would ever
  *     attempt to write again.
  *
+ * An occupied Ping, or one already in arrived_pending_outcome, is
+ * already_resolved: cancel does not clear that durable arrival.
+ *
  * A permission-denied on commit does NOT automatically mean "someone else
  * already resolved it" — it could also mean this claim is still fully
  * intact and something else about the write was rejected (e.g. a stray
@@ -64,6 +67,7 @@ function claimStatus(spot: Record<string, any>, claimantId: string, fingerprint:
  * failed transaction and classify from what's actually true now:
  *   - claim is gone/cleared by someone else  -> already_resolved
  *   - a different claimant now holds it      -> stale_claim
+ *   - the same claim is occupied or arrived_pending_outcome -> already_resolved
  *   - the same claim is still fully active   -> rethrow (genuine failure)
  *   - the re-read itself fails               -> rethrow the original error
  */
@@ -89,6 +93,11 @@ export async function cancelClaimTransaction(
                 // of this exact call) or replaced by a newer claim — either way
                 // there is nothing to release and nothing to notify.
                 return releasedByOther ? 'already_resolved' : 'stale_claim';
+            }
+            // Arrival is durable. Cancel must not reopen an occupied Ping or
+            // clear arrived_pending_outcome back to available.
+            if (spot.status === 'occupied' || spot.claimState === 'arrived_pending_outcome') {
+                return 'already_resolved';
             }
 
             const lockRef = activeIncomingClaimRef(db, claimantId);
@@ -141,10 +150,12 @@ export async function cancelClaimTransaction(
         }
 
         if (!freshSnap.exists()) return 'already_resolved';
-        const { matches, releasedByOther } = claimStatus(
-            freshSnap.data() as Record<string, any>, claimantId, fingerprint
-        );
+        const fresh = freshSnap.data() as Record<string, any>;
+        const { matches, releasedByOther } = claimStatus(fresh, claimantId, fingerprint);
         if (!matches) return releasedByOther ? 'already_resolved' : 'stale_claim';
+        if (fresh.status === 'occupied' || fresh.claimState === 'arrived_pending_outcome') {
+            return 'already_resolved';
+        }
 
         // Same user, same claim generation, still fully active — the write
         // genuinely failed for some other reason. Report it as a real

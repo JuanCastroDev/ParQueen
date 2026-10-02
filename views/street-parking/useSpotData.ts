@@ -106,6 +106,7 @@ export function useSpotData({ userId, blockedUsers, searchCenter, showFree, show
                     originSpotId: s.originSpotId || null,
                     pingMode: s.pingMode || null,
                     claimState: s.claimState || null,
+                    arrivedAt: s.arrivedAt ?? null,
                     claimStartedAt: s.claimStartedAt ?? null,
                     ownerLeavingNow: s.ownerLeavingNow || null,
                     ownerLeavingNowAt: s.ownerLeavingNowAt || null,

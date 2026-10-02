@@ -4154,7 +4154,10 @@ describe('A1 — one active incoming claim', () => {
         const db = otherDb();
         await claimAs(db, OTHER_UID, 'bob', 'a1-arrive');
         await markClaimArrived(db, 'a1-arrive', OTHER_UID);
-        expect((await readSpot('a1-arrive')).data().status).toBe('occupied');
+        const arrived = (await readSpot('a1-arrive')).data();
+        expect(arrived.status).toBe('occupied');
+        expect(arrived.claimState).toBe('arrived_pending_outcome');
+        expect(arrived.arrivedAt).toBeTruthy();
         expect((await readLock(OTHER_UID)).exists()).toBe(false);
         await expect(claimAs(db, OTHER_UID, 'bob', 'a1-after-arrive')).resolves.toBe('claimed');
         expect((await readLock(OTHER_UID)).data().spotId).toBe('a1-after-arrive');
@@ -4683,5 +4686,325 @@ describe('A5 — Ping lifetime bounds', () => {
         await assertFails(commitBoundedPing(ownerDb(), OWNER_UID, 'a5-not-occupied', livePing({
             originSpotId: 'a5-still-available',
         }), 'a5-still-available'));
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// B1 — durable arrived_pending_outcome (HO-001 server half)
+// Arrival stays status=occupied and also records claimState + arrivedAt.
+// GPS is not part of the allow. B2 resume UI, B3 override, and B4 sweep are
+// not covered here.
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('B1 — durable arrived_pending_outcome', () => {
+    function headingPing(id: string, extra: Record<string, unknown> = {}) {
+        return {
+            finderId: OWNER_UID,
+            finderName: 'TestFinder',
+            address: id,
+            lat: 40.71,
+            lng: -74.01,
+            status: 'interested',
+            claimState: 'heading',
+            interestedUserId: OTHER_UID,
+            pingMode: 'now',
+            reportedAt: Timestamp.now(),
+            expiresAt: FUTURE,
+            claimStartedAt: Timestamp.fromMillis(Date.now() - 60_000),
+            ...extra,
+        };
+    }
+
+    async function seedLock(spotId: string) {
+        const started = Timestamp.now();
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            await setDoc(activeIncomingClaimRef(ctx.firestore(), OTHER_UID), {
+                spotId,
+                claimStartedAt: started,
+                claimState: 'heading',
+                updatedAt: started,
+            });
+        });
+    }
+
+    async function readSpot(id: string) {
+        let snap: any;
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            snap = await getDoc(doc(ctx.firestore(), 'spots', id));
+        });
+        return snap;
+    }
+
+    async function readLock() {
+        let snap: any;
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            snap = await getDoc(activeIncomingClaimRef(ctx.firestore(), OTHER_UID));
+        });
+        return snap;
+    }
+
+    const clearFields = {
+        claimState: null,
+        ownerLeavingNow: null,
+        ownerLeavingNowAt: null,
+        interestedUserId: null,
+        interestedUserName: null,
+        interestedUserVehicleColor: null,
+        interestedUserVehicleType: null,
+        interestedUserVehicleBrand: null,
+        interestedUserTitle: null,
+        etaMinutes: null,
+        interestExpiresAt: null,
+        claimReminderAt: null,
+        claimReminderSentAt: null,
+        claimAutoReleaseAt: null,
+        claimAutoReleasedAt: null,
+        claimStartedAt: null,
+    };
+
+    it('B1-POS: first arrival persists occupied + arrived_pending_outcome + arrivedAt and clears the lock without GPS', async () => {
+        const spotId = 'b1-pos';
+        await seed('spots', spotId, headingPing(spotId));
+        await seedLock(spotId);
+        const db = otherDb();
+
+        await assertSucceeds(runTransaction(db, async (tx) => {
+            tx.update(doc(db, 'spots', spotId), {
+                status: 'occupied',
+                claimState: 'arrived_pending_outcome',
+                arrivedAt: Timestamp.now(),
+            });
+            tx.delete(activeIncomingClaimRef(db, OTHER_UID));
+        }));
+
+        const spot = (await readSpot(spotId)).data();
+        expect(spot.status).toBe('occupied');
+        expect(spot.claimState).toBe('arrived_pending_outcome');
+        expect(spot.arrivedAt).toBeTruthy();
+        expect(spot.lat).toBe(40.71);
+        expect(spot.lng).toBe(-74.01);
+        expect((await readLock()).exists()).toBe(false);
+    });
+
+    it('B1-WRITE: markClaimArrived writes the durable fields and clears the matching lock', async () => {
+        const spotId = 'b1-write';
+        await seed('spots', spotId, headingPing(spotId));
+        await seedLock(spotId);
+
+        await markClaimArrived(otherDb(), spotId, OTHER_UID);
+
+        const spot = (await readSpot(spotId)).data();
+        expect(spot.status).toBe('occupied');
+        expect(spot.claimState).toBe('arrived_pending_outcome');
+        expect(typeof spot.arrivedAt?.toMillis).toBe('function');
+        expect((await readLock()).exists()).toBe(false);
+    });
+
+    it('B1-IDEM: a second markClaimArrived succeeds and does not rewrite arrivedAt', async () => {
+        const spotId = 'b1-idem';
+        await seed('spots', spotId, headingPing(spotId));
+        await seedLock(spotId);
+        const db = otherDb();
+        await markClaimArrived(db, spotId, OTHER_UID);
+        const first = (await readSpot(spotId)).data().arrivedAt;
+
+        await expect(markClaimArrived(db, spotId, OTHER_UID)).resolves.toBeUndefined();
+
+        const second = (await readSpot(spotId)).data();
+        expect(second.claimState).toBe('arrived_pending_outcome');
+        expect(second.status).toBe('occupied');
+        expect(second.arrivedAt.isEqual(first)).toBe(true);
+        expect((await readLock()).exists()).toBe(false);
+    });
+
+    it('B1-IDEM-RULES: an unchanged arrival replay is allowed and a new arrivedAt is denied', async () => {
+        const spotId = 'b1-idem-rules';
+        await seed('spots', spotId, headingPing(spotId));
+        await seedLock(spotId);
+        const db = otherDb();
+        await markClaimArrived(db, spotId, OTHER_UID);
+        const arrivedAt = (await readSpot(spotId)).data().arrivedAt;
+        const { updateDoc } = await import('firebase/firestore');
+
+        await assertSucceeds(updateDoc(doc(db, 'spots', spotId), {
+            status: 'occupied',
+            claimState: 'arrived_pending_outcome',
+            arrivedAt,
+        }));
+        await assertFails(updateDoc(doc(db, 'spots', spotId), {
+            status: 'occupied',
+            claimState: 'arrived_pending_outcome',
+            arrivedAt: Timestamp.now(),
+        }));
+        expect((await readSpot(spotId)).data().arrivedAt.isEqual(arrivedAt)).toBe(true);
+    });
+
+    it('B1-NEG: an extra field on arrival is denied', async () => {
+        const spotId = 'b1-extra';
+        await seed('spots', spotId, headingPing(spotId));
+        await seedLock(spotId);
+        const db = otherDb();
+        await assertFails(runTransaction(db, async (tx) => {
+            tx.update(doc(db, 'spots', spotId), {
+                status: 'occupied',
+                claimState: 'arrived_pending_outcome',
+                arrivedAt: Timestamp.now(),
+                etaMinutes: 1,
+            });
+            tx.delete(activeIncomingClaimRef(db, OTHER_UID));
+        }));
+        expect((await readSpot(spotId)).data().status).toBe('interested');
+        expect((await readLock()).data().spotId).toBe(spotId);
+    });
+
+    it('B1-NEG: arrival that does not become arrived_pending_outcome is denied', async () => {
+        const spotId = 'b1-status-only';
+        await seed('spots', spotId, headingPing(spotId));
+        await seedLock(spotId);
+        const db = otherDb();
+        const { updateDoc } = await import('firebase/firestore');
+
+        await assertFails(runTransaction(db, async (tx) => {
+            tx.update(doc(db, 'spots', spotId), { status: 'occupied' });
+            tx.delete(activeIncomingClaimRef(db, OTHER_UID));
+        }));
+        await assertFails(runTransaction(db, async (tx) => {
+            tx.update(doc(db, 'spots', spotId), {
+                status: 'occupied',
+                claimState: 'heading',
+                arrivedAt: Timestamp.now(),
+            });
+            tx.delete(activeIncomingClaimRef(db, OTHER_UID));
+        }));
+        await assertFails(updateDoc(doc(db, 'spots', spotId), {
+            claimState: 'arrived_pending_outcome',
+        }));
+
+        const spot = (await readSpot(spotId)).data();
+        expect(spot.status).toBe('interested');
+        expect(spot.claimState).toBe('heading');
+        expect(spot.arrivedAt).toBeUndefined();
+        expect((await readLock()).exists()).toBe(true);
+    });
+
+    it('B1-NEG: arrived_pending_outcome while a matching lock remains is denied', async () => {
+        const spotId = 'b1-lock';
+        await seed('spots', spotId, headingPing(spotId));
+        await seedLock(spotId);
+        const db = otherDb();
+        await assertFails(runTransaction(db, async (tx) => {
+            tx.update(doc(db, 'spots', spotId), {
+                status: 'occupied',
+                claimState: 'arrived_pending_outcome',
+                arrivedAt: Timestamp.now(),
+            });
+        }));
+        expect((await readSpot(spotId)).data().status).toBe('interested');
+        expect((await readLock()).data().spotId).toBe(spotId);
+    });
+
+    it('B1-NEG: terminal feedback already present cannot be reopened into awaiting outcome', async () => {
+        const spotId = 'b1-feedback';
+        await seed('spots', spotId, headingPing(spotId));
+        await seedLock(spotId);
+        await seed('spotFeedback', `${spotId}_${OTHER_UID}`, {
+            spotId,
+            userId: OTHER_UID,
+            finderId: OWNER_UID,
+            address: spotId,
+            outcome: 'success',
+            failureReason: null,
+            createdAt: Timestamp.now(),
+        });
+        const db = otherDb();
+        await assertFails(runTransaction(db, async (tx) => {
+            tx.update(doc(db, 'spots', spotId), {
+                status: 'occupied',
+                claimState: 'arrived_pending_outcome',
+                arrivedAt: Timestamp.now(),
+            });
+            tx.delete(activeIncomingClaimRef(db, OTHER_UID));
+        }));
+        expect((await readSpot(spotId)).data().claimState).toBe('heading');
+        expect((await readLock()).exists()).toBe(true);
+    });
+
+    it('B1-TERMINAL: completeTerminalHandoff still succeeds from occupied + arrived_pending_outcome', async () => {
+        const spotId = 'b1-terminal';
+        const arrivedAt = Timestamp.fromMillis(Date.now() - 60_000);
+        await seed('spots', spotId, headingPing(spotId, {
+            status: 'occupied',
+            claimState: 'arrived_pending_outcome',
+            arrivedAt,
+        }));
+
+        await expect(completeTerminalHandoff(otherDb(), {
+            spotId,
+            driverId: OTHER_UID,
+            driverName: 'TestDriver',
+            finderId: OWNER_UID,
+            address: spotId,
+            outcome: 'success',
+            failureReason: null,
+        })).resolves.toBe('created');
+
+        const spot = (await readSpot(spotId)).data();
+        expect(spot.status).toBe('occupied');
+        expect(spot.claimState).toBe('arrived_pending_outcome');
+        expect(spot.arrivedAt.isEqual(arrivedAt)).toBe(true);
+        const feedback = await getDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`));
+        expect(feedback.data()).toMatchObject({ outcome: 'success', failureReason: null });
+    });
+
+    it('B1-FINDER: finder confirm still completes when the claimer already arrived', async () => {
+        const spotId = 'b1-finder';
+        const arrivedAt = Timestamp.fromMillis(Date.now() - 30_000);
+        await seed('spots', spotId, headingPing(spotId, {
+            status: 'occupied',
+            claimState: 'arrived_pending_outcome',
+            arrivedAt,
+        }));
+
+        await expect(completeFinderConfirmedHandoff(ownerDb(), {
+            spotId,
+            driverId: OTHER_UID,
+            finderId: OWNER_UID,
+            finderName: 'TestFinder',
+            address: spotId,
+        })).resolves.toBe('created');
+
+        const spot = (await readSpot(spotId)).data();
+        expect(spot.status).toBe('occupied');
+        expect(spot.claimState).toBe('arrived_pending_outcome');
+        expect(spot.arrivedAt.isEqual(arrivedAt)).toBe(true);
+        const feedback = await getDoc(doc(ownerDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`));
+        expect(feedback.data()).toMatchObject({ outcome: 'success', confirmedByFinder: true });
+    });
+
+    it('B1-CANCEL: cancel after arrival does not reopen the Ping', async () => {
+        const spotId = 'b1-cancel';
+        await seed('spots', spotId, headingPing(spotId));
+        await seedLock(spotId);
+        const db = otherDb();
+        await markClaimArrived(db, spotId, OTHER_UID);
+        const arrivedAt = (await readSpot(spotId)).data().arrivedAt;
+        const { updateDoc } = await import('firebase/firestore');
+
+        await expect(cancelClaimTransaction(db, {
+            spotId,
+            claimantId: OTHER_UID,
+            finderId: OWNER_UID,
+            fingerprint: timestampToMillis((await readSpot(spotId)).data().claimStartedAt),
+            message: 'Changed my mind',
+        })).resolves.toBe('already_resolved');
+        await assertFails(updateDoc(doc(db, 'spots', spotId), {
+            ...clearFields,
+            status: 'available',
+        }));
+
+        const spot = (await readSpot(spotId)).data();
+        expect(spot.status).toBe('occupied');
+        expect(spot.claimState).toBe('arrived_pending_outcome');
+        expect(spot.interestedUserId).toBe(OTHER_UID);
+        expect(spot.arrivedAt.isEqual(arrivedAt)).toBe(true);
     });
 });

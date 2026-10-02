@@ -75,9 +75,15 @@ export async function acquireActiveIncomingClaim(
 }
 
 /**
- * Claimer arrival. Marks the Ping occupied and deletes the matching lock in
- * the same transaction. Already-occupied is success so a duplicate tap does
- * not fail after the first commit.
+ * Claimer arrival. On the first transition from interested, the same
+ * transaction sets status occupied, claimState arrived_pending_outcome, and
+ * arrivedAt, and deletes a lock that names this Ping.
+ *
+ * Already arrived_pending_outcome for this claimer is a success no-op and
+ * does not rewrite arrivedAt. An already-occupied Ping that is not in that
+ * phase (finder confirm, or a pre-B1 status-only arrival) is also a no-op:
+ * arrival must not reopen an awaiting-outcome phase. Terminal spotFeedback
+ * is enforced by Rules on the interested → arrived transition.
  */
 export async function markClaimArrived(db: Firestore, spotId: string, uid: string): Promise<void> {
     const spotRef = doc(db, 'spots', spotId);
@@ -88,11 +94,29 @@ export async function markClaimArrived(db: Firestore, spotId: string, uid: strin
         if (!spotSnap.exists()) throw new Error('Spot no longer exists');
         const spot = spotSnap.data() as Record<string, any>;
         if (spot.interestedUserId !== uid) throw new Error('Claim is no longer active');
-        if (spot.status === 'interested') {
-            tx.update(spotRef, { status: 'occupied' });
-        } else if (spot.status !== 'occupied') {
-            throw new Error('Claim is no longer active');
+
+        const alreadyArrived = spot.status === 'occupied'
+            && spot.claimState === 'arrived_pending_outcome';
+        if (alreadyArrived) {
+            deleteLockIfNamesSpot(tx, lockSnap, lockRef, spotId);
+            return;
         }
-        deleteLockIfNamesSpot(tx, lockSnap, lockRef, spotId);
+
+        if (spot.status === 'interested') {
+            tx.update(spotRef, {
+                status: 'occupied',
+                claimState: 'arrived_pending_outcome',
+                arrivedAt: Timestamp.now(),
+            });
+            deleteLockIfNamesSpot(tx, lockSnap, lockRef, spotId);
+            return;
+        }
+
+        if (spot.status === 'occupied') {
+            deleteLockIfNamesSpot(tx, lockSnap, lockRef, spotId);
+            return;
+        }
+
+        throw new Error('Claim is no longer active');
     });
 }

@@ -95,6 +95,24 @@ service cloud.firestore {
         || !existsAfter(path);
     }
 
+    // B1 arrival shape. status stays occupied; the durable phase is claimState.
+    // arrivedAt is stamped once, inside a short window of request.time, so a
+    // client cannot backdate it. Coordinates are intentionally not read —
+    // proximity is a client confidence signal, not a Rules allow.
+    function durableClaimerArrival() {
+      return request.resource.data.status == 'occupied'
+        && request.resource.data.claimState == 'arrived_pending_outcome'
+        && request.resource.data.arrivedAt is timestamp
+        && request.resource.data.arrivedAt >= request.time - duration.value(2, 'm')
+        && request.resource.data.arrivedAt <= request.time + duration.value(1, 'm');
+    }
+
+    // Same deterministic id as spotFeedbackDocId. exists() is false when the
+    // doc is missing; it does not require the client to read feedback.
+    function claimerTerminalFeedbackExists(spotId) {
+      return exists(/databases/$(database)/documents/spotFeedback/$(spotId + '_' + request.auth.uid));
+    }
+
     // HO-003 rollout gate. Arm 1 stays fail-closed until reconciliation has
     // written activeIncomingClaimRollout/status with enforced == true and
     // zero lockless / duplicate counts. A missing doc denies the claim
@@ -627,9 +645,12 @@ service cloud.firestore {
         // Arm 2: Claimer updates ETA
         || (isClaimer() && onlyChanges(['etaMinutes']))
 
-        // Arm 2b: Claimer commits to heading (scheduled → active)
+        // Arm 2b: Claimer commits to heading (scheduled → active).
+        // The result claimState is heading. arrived_pending_outcome is Arm 4 only.
         || (isClaimer()
           && request.resource.data.status == 'interested'
+          && request.resource.data.claimState == 'heading'
+          && resource.data.get('claimState', null) != 'arrived_pending_outcome'
           && onlyChanges(['claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
                           'etaMinutes', 'interestExpiresAt',
                           'claimReminderAt', 'claimReminderSentAt', 'claimAutoReleaseAt']))
@@ -637,8 +658,12 @@ service cloud.firestore {
         // Arm 3: Claimer cancels — clears all claimer metadata, Ping reopens.
         // Only valid while the Ping itself hasn't expired yet (an expired Ping
         // must never be reopened to 'available' — see Arm 3b for that case).
+        // Once the claimer has arrived, cancel must not reopen the Ping.
         || (isClaimer()
+          && resource.data.status == 'interested'
+          && resource.data.get('claimState', null) != 'arrived_pending_outcome'
           && request.resource.data.status == 'available'
+          && request.resource.data.get('claimState', null) != 'arrived_pending_outcome'
           && (resource.data.get('expiresAt', null) == null
               || resource.data.expiresAt > request.time)
           && matchingActiveClaimLockReleased(spotId)
@@ -652,7 +677,11 @@ service cloud.firestore {
 
         // Arm 3b: Claimer cancels a claim on an already-expired Ping — clears
         // claimer metadata but leaves status untouched (never reopens it).
+        // Occupied / arrived_pending_outcome stays put.
         || (isClaimer()
+          && resource.data.status == 'interested'
+          && resource.data.get('claimState', null) != 'arrived_pending_outcome'
+          && request.resource.data.get('claimState', null) != 'arrived_pending_outcome'
           && resource.data.get('expiresAt', null) != null
           && resource.data.expiresAt <= request.time
           && matchingActiveClaimLockReleased(spotId)
@@ -664,12 +693,26 @@ service cloud.firestore {
                           'claimReminderAt', 'claimReminderSentAt',
                           'claimAutoReleaseAt', 'claimAutoReleasedAt']))
 
-        // Arm 4: Claimer marks arrived. A lock naming this Ping must be deleted
-        // in the same commit; a missing lock still allows arrival.
+        // Arm 4: Claimer marks arrived. The same commit must set status
+        // occupied, claimState arrived_pending_outcome, and arrivedAt, and
+        // must delete a lock that names this Ping. A missing lock (legacy
+        // claim) still allows arrival. A second write is allowed only when
+        // those three fields are unchanged, so arrivedAt is not rewritten
+        // and a terminal handoff is not reopened. GPS is not required.
         || (isClaimer()
-          && request.resource.data.status == 'occupied'
           && matchingActiveClaimLockReleased(spotId)
-          && onlyChanges(['status']))
+          && onlyChanges(['status', 'claimState', 'arrivedAt'])
+          && (
+            (resource.data.status == 'interested'
+              && resource.data.get('claimState', null) != 'arrived_pending_outcome'
+              && !claimerTerminalFeedbackExists(spotId)
+              && durableClaimerArrival())
+            || (resource.data.status == 'occupied'
+              && resource.data.claimState == 'arrived_pending_outcome'
+              && request.resource.data.status == resource.data.status
+              && request.resource.data.claimState == resource.data.claimState
+              && request.resource.data.arrivedAt == resource.data.arrivedAt)
+          ))
 
         // Arm 5: Finder confirms arrival
         || (isFinder()
