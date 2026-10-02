@@ -11,6 +11,10 @@ export interface SafeErrorContext {
   route?: string;
   component?: string;
   errorCode?: string;
+  /** Closed platform label. Never a device identifier. */
+  platform?: 'ios' | 'android' | 'web';
+  /** Numeric watchdog budget. Never an account or token value. */
+  timeoutMs?: number;
 }
 
 /**
@@ -22,6 +26,8 @@ export function captureClientException(error: unknown, context?: SafeErrorContex
     if (context?.route) scope.setTag('route', context.route);
     if (context?.component) scope.setTag('component', context.component);
     if (context?.errorCode) scope.setTag('errorCode', context.errorCode);
+    if (context?.platform) scope.setTag('platform', context.platform);
+    if (typeof context?.timeoutMs === 'number') scope.setTag('timeoutMs', String(context.timeoutMs));
     Sentry.captureException(error);
   });
 }

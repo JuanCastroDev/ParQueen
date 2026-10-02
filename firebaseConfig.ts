@@ -1,8 +1,8 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { getMessaging, isSupported } from 'firebase/messaging';
 import { initializeParQueenAppCheck } from './utils/appCheck';
+import { initializeParQueenAuth } from './utils/authInitialization';
 
 const firebaseConfig = {
   apiKey: "AIzaSyCKSqWVd6JqpcrNUG6hei8Ug1njaIkAI7Y",
@@ -31,22 +31,19 @@ if (import.meta.env.DEV) {
 // same [DEFAULT] app rather than throwing app/duplicate-app.
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-// ── App Check (TM-12 / Phase 2E) ─────────────────────────────────────────────
-// Exactly one initializeAppCheck, split by platform in utils/appCheck.ts:
-//   Capacitor Android → CustomProvider wrapping the native Play Integrity /
-//     Debug bridge. Not gated on the reCAPTCHA site key. Never falls back
-//     to WebView reCAPTCHA.
-//   Web/PWA (and Capacitor iOS, out of scope) → existing
-//     ReCaptchaEnterpriseProvider, still gated on VITE_FIREBASE_APPCHECK_SITE_KEY.
-// isTokenAutoRefreshEnabled remains true on both paths.
-// Required before any protected Firebase service call so App Check tokens
-// are available when Auth/Firestore/Functions requests are issued.
-//
-// Enforcement of Cloud Functions is independent of this client init — see
-// docs/APP_CHECK_ROLLOUT.md. This phase does not change enforceAppCheck.
+// Initialization order for the default app:
+// 1. initializeApp / getApp
+// 2. initializeParQueenAppCheck — synchronous from this caller's perspective.
+//    It registers the existing provider and returns without awaiting a token,
+//    so it does not block Auth construction. Capacitor iOS stays on the web
+//    ReCaptchaEnterpriseProvider path. Native App Attest / DeviceCheck is a
+//    follow-up and is not part of this startup repair.
+// 3. initializeParQueenAuth — the only Auth initialization. Capacitor iOS uses
+//    initializeAuth with browserLocalPersistence and no popup/redirect resolver.
+//    Web, PWA, and Capacitor Android keep getAuth().
 initializeParQueenAppCheck(app);
 
-export const auth = getAuth(app);
+export const auth = initializeParQueenAuth(app);
 export const db = getFirestore(app);
 
 export const getFCM = async () => {

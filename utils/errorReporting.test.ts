@@ -39,7 +39,7 @@ describe('captureClientException', () => {
     expect(capturedScope.setTag).toHaveBeenCalledTimes(3);
   });
 
-  it('does not attach arbitrary fields — the context type only allows route/component/errorCode', () => {
+  it('does not attach arbitrary fields — props and other objects stay off the allowlist', () => {
     let capturedScope: any;
     withScope.mockImplementationOnce((cb: (scope: any) => void) => {
       capturedScope = { setTag: vi.fn() };

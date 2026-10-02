@@ -45,7 +45,7 @@ The archive step uses the Stage C ad-hoc settings: `CODE_SIGN_IDENTITY=-`, `AD_H
 
 Export is local. `destination` is `export`. `manageAppVersionAndBuildNumber` stays false, so this workflow does not change the marketing version or the build number.
 
-The IPA verifier must pass before Apple is contacted. It requires one IPA, bundle ID `app.parqueen`, version `1.0`, build `2`, display name `ParQueen`, a valid code signature, a distribution profile, team match, and the production web bundle. `aps-environment` must be absent. `get-task-allow` must be absent or boolean false on the app, and boolean false on the profile. Mapbox, production App Check, and the Sentry DSN must be embedded. Debug App Check wiring must be absent. The rules match the signed-archive workflow.
+The IPA verifier must pass before Apple is contacted. It requires one IPA, bundle ID `app.parqueen`, version `1.0`, build `3`, display name `ParQueen`, a valid code signature, a distribution profile, team match, and the production web bundle. `aps-environment` must be absent. `get-task-allow` must be absent or boolean false on the app, and boolean false on the profile. Mapbox, production App Check, and the Sentry DSN must be embedded. Debug App Check wiring must be absent. The rules match the signed-archive workflow.
 
 The verifier records the IPA path and SHA-256. Validation and upload both recompute that hash and stop if the file changed. Upload also requires the validation step to have accepted that same digest. The workflow does not repack the IPA between those steps.
 
@@ -81,7 +81,11 @@ D2 removed `@capacitor/camera` and made Sign Scanner camera-only. The gallery pa
 
 Upload #3 delivered the same marketing version 1.0, build 1, after that camera-only change. Apple accepted the delivery and post-processing completed. App Store Connect shows 1.0 (1) as Complete. That completed processing is the evidence that ITMS-90683 is resolved. Build 1 used the simplified pin mark, not the crowned ParQueen icon.
 
-The next upload is marketing version 1.0, build 2. The build number changed because a processed build number cannot be reused. The change in that build is the canonical crowned iOS app icon. This document does not dispatch that upload.
+Upload #4 delivered marketing version 1.0, build 2, with the canonical crowned app icon. Apple processing completed and the build installed from TestFlight. On a real iPhone the launch stays on the loading screen. Force-quit and relaunch reproduce it. Get Started never appears.
+
+IOS-LAUNCH-001: Firebase’s initial auth-state bootstrap never completed on the tested device. Evidence is consistent with Firebase Auth persistence initialization stalling before the first onAuthStateChanged callback. That is not a proven root cause. Build 2 is already processed, so it cannot be reused.
+
+The next upload is marketing version 1.0, build 3. It keeps the crowned icon and the camera-only Sign Scanner. Capacitor iOS Auth initializes with browser local persistence instead of the default IndexedDB persistence, and startup has an outer watchdog so the loading screen cannot wait forever. App Check stays enabled on the existing web reCAPTCHA path for Capacitor iOS. Replacing that path with native App Attest or DeviceCheck is a follow-up, not part of this build. This document does not dispatch that upload.
 
 ## Cleanup
 

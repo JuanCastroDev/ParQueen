@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { LoadingScreen } from './components/LoadingScreen';
+import { AuthStartupRecovery } from './components/AuthStartupRecovery';
 import { OnboardingView } from './views/OnboardingView';
 const LocationPromptView = lazy(() => import('./views/LocationPromptView').then(m => ({ default: m.LocationPromptView })));
 
@@ -40,6 +41,7 @@ import { readPersistedAccess, persistAccessChoice, persistReconciledAccess, shou
 import {
   AUTH_BOOTSTRAP_LOCATION_TIMEOUT_MS,
   AUTH_BOOTSTRAP_TIMEOUT_MS,
+  AUTH_INITIAL_STATE_TIMEOUT_MS,
   createBootstrapDeadline,
   createBootstrapGenerationTracker,
   decideAdminDomainAuthenticatedView,
@@ -50,6 +52,7 @@ import {
 } from './utils/authBootstrap';
 import { withTimeout } from './utils/withTimeout';
 import { captureClientException } from './utils/errorReporting';
+import { startupDiagnosticPlatform } from './utils/authInitialization';
 import { nearbyPermissionState, type LocationCallbacks } from './utils/nearbyActivity';
 import { checkLocationPermission, requestLocationPermission } from './utils/geolocation';
 import { resolveGeolocationPath } from './utils/geolocationPlatform';
@@ -121,6 +124,7 @@ export default function App() {
     return parsePersistedCount(localStorage.getItem('pendingUpdatesCount'));
   });
   const [loading, setLoading] = useState(true);
+  const [authStartupTimedOut, setAuthStartupTimedOut] = useState(false);
   const [theme, setTheme] = useState(() => {
     return localStorage.getItem('theme') || 'dark';
   });
@@ -246,7 +250,27 @@ export default function App() {
       captureClientException(error, { component: 'App', route });
     };
 
+    let active = true;
+    let sawInitialAuthState = false;
+    const initialStateTimer = setTimeout(() => {
+      if (!active || sawInitialAuthState) return;
+      setLoading(false);
+      setAuthStartupTimedOut(true);
+      const platform = startupDiagnosticPlatform();
+      captureClientException(new Error('auth_initial_state_timeout'), {
+        component: 'App',
+        route: 'auth_initial_state_timeout',
+        ...(platform ? { platform } : {}),
+        timeoutMs: AUTH_INITIAL_STATE_TIMEOUT_MS,
+      });
+    }, AUTH_INITIAL_STATE_TIMEOUT_MS);
+
     const authStateUnsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!active) return;
+      sawInitialAuthState = true;
+      clearTimeout(initialStateTimer);
+      if (!active) return;
+      setAuthStartupTimedOut(false);
       const generation = bootstrapGenerations.begin();
       const deadline = createBootstrapDeadline(AUTH_BOOTSTRAP_TIMEOUT_MS);
       userProfileUnsubscribe();
@@ -447,6 +471,8 @@ export default function App() {
     });
 
     return () => {
+      active = false;
+      clearTimeout(initialStateTimer);
       if (reauthCooldownRef.current) clearInterval(reauthCooldownRef.current);
       clearRecaptchaVerifier(reauthRecaptchaRef);
       bootstrapGenerations.begin(); // invalidate any in-flight bootstrap
@@ -863,6 +889,16 @@ export default function App() {
   };
 
   const renderView = () => {
+    if (authStartupTimedOut) {
+      return (
+        <AuthStartupRecovery
+          onRetry={() => {
+            window.location.reload();
+          }}
+        />
+      );
+    }
+
     if (loading) {
       return <LoadingScreen />;
     }
