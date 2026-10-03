@@ -65,7 +65,7 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
 
   async function boot() {
     const esbuild = require('esbuild') as typeof import('esbuild');
-    const postcss = require('postcss') as typeof import('postcss');
+    const postcss = require('postcss') as typeof import('postcss').default;
     const tailwind = require('tailwindcss');
     const autoprefixer = require('autoprefixer');
     const compiled = await postcss([tailwind(path.join(root, 'tailwind.config.js')), autoprefixer])
