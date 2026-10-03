@@ -67,7 +67,7 @@ jobs:
             echo "::error::PRODUCT_BUNDLE_IDENTIFIER is not exactly app.parqueen."
             exit 1
           fi
-          for setting in "MARKETING_VERSION = 1.0;" "CURRENT_PROJECT_VERSION = 4;" "IPHONEOS_DEPLOYMENT_TARGET = 15.0;" "CODE_SIGN_STYLE = Automatic;"; do
+          for setting in "MARKETING_VERSION = 1.0;" "CURRENT_PROJECT_VERSION = 5;" "IPHONEOS_DEPLOYMENT_TARGET = 15.0;" "CODE_SIGN_STYLE = Automatic;"; do
             if ! grep -F -q "${setting}" "${PBX}"; then
               echo "::error::Missing expected project setting: ${setting}"
               exit 1
@@ -77,12 +77,26 @@ jobs:
             echo "::error::DEVELOPMENT_TEAM must stay unset in source."
             exit 1
           fi
-          if grep -R -n "PROVISIONING_PROFILE\|CODE_SIGN_ENTITLEMENTS\|aps-environment" ios --include='*.pbxproj' --include='*.xcconfig' --include='*.plist' --include='*.entitlements'; then
-            echo "::error::Provisioning profile, entitlements, or aps-environment is present."
+          if grep -R -n "PROVISIONING_PROFILE" ios --include='*.pbxproj' --include='*.xcconfig' --include='*.plist'; then
+            echo "::error::A provisioning profile setting is present."
             exit 1
           fi
-          if find ios -name '*.entitlements' -print | grep -q .; then
-            echo "::error::An entitlements file is present."
+          test -f ios/App/App/App.entitlements
+          test -f ios/App/App/AppDebug.entitlements
+          if ! grep -q '<string>production</string>' ios/App/App/App.entitlements; then
+            echo "::error::Release entitlements must set aps-environment to production."
+            exit 1
+          fi
+          if ! grep -q '<string>development</string>' ios/App/App/AppDebug.entitlements; then
+            echo "::error::Debug entitlements must set aps-environment to development."
+            exit 1
+          fi
+          if ! grep -q 'CODE_SIGN_ENTITLEMENTS = App/App.entitlements;' "${PBX}"; then
+            echo "::error::Release CODE_SIGN_ENTITLEMENTS is missing."
+            exit 1
+          fi
+          if ! grep -q 'CODE_SIGN_ENTITLEMENTS = App/AppDebug.entitlements;' "${PBX}"; then
+            echo "::error::Debug CODE_SIGN_ENTITLEMENTS is missing."
             exit 1
           fi
           echo "Release signing configuration matches the unsigned baseline."
@@ -301,6 +315,9 @@ jobs:
               "export compliance ITSAppUsesNonExemptEncryption: FALSE",
               "export compliance ITSAppUsesNonExemptEncryption: FAIL",
               "obsolete camera plugin artifacts: ABSENT",
+              "aps-environment: production",
+              "UIBackgroundModes: fetch",
+              "UIBackgroundModes: remote-notification",
               "FIREBASE_APPCHECK_DEBUG_TOKEN\\s*=(?!=)",
               "appcheck-debug-",
           ):
@@ -525,7 +542,7 @@ jobs:
           echo "build: ${BUILD}"
           test "${IDENT}" = "app.parqueen"
           test "${VERSION}" = "1.0"
-          test "${BUILD}" = "4"
+          test "${BUILD}" = "5"
           echo "ad-hoc archive probe: PASS"
 
   dispatch-guard:
@@ -896,7 +913,7 @@ jobs:
           expected = {
               "CFBundleIdentifier": "app.parqueen",
               "CFBundleShortVersionString": "1.0",
-              "CFBundleVersion": "4",
+              "CFBundleVersion": "5",
               "CFBundleDisplayName": "ParQueen",
           }
           failed = False
@@ -949,16 +966,27 @@ jobs:
               print("entitlements: FAIL")
               sys.exit(1)
           entitlements = plistlib.loads(ent.stdout)
-          if any("aps-environment" in key for key in entitlements):
-              print("aps-environment: PRESENT")
+          if entitlements.get("aps-environment") != "production":
+              print("aps-environment: FAIL")
               sys.exit(1)
-          print("aps-environment: ABSENT")
+          print("aps-environment: production")
+          background_modes = info.get("UIBackgroundModes")
+          if (
+              not isinstance(background_modes, list)
+              or "fetch" not in background_modes
+              or "remote-notification" not in background_modes
+          ):
+              print("UIBackgroundModes: FAIL")
+              sys.exit(1)
+          print("UIBackgroundModes: fetch")
+          print("UIBackgroundModes: remote-notification")
           allowed = {
               "application-identifier",
               "com.apple.developer.team-identifier",
               "keychain-access-groups",
               "beta-reports-active",
               "get-task-allow",
+              "aps-environment",
           }
           unexpected = sorted(key for key in entitlements if key not in allowed)
           if unexpected:

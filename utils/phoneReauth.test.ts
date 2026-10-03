@@ -2,7 +2,9 @@ import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createNativePhoneReauthSession,
+  isAuthTimeRecent,
   PhoneReauthError,
+  readAuthTimeSeconds,
   requireAuthPhoneUser,
   requireLiveAuthUid,
   resendPhoneReauthentication,
@@ -28,6 +30,10 @@ const credentialFromVerification = vi.fn((verificationId: string, code: string) 
   kind: 'phone-credential',
 }));
 const startNative = vi.fn();
+const startIos = vi.fn();
+const confirmIos = vi.fn();
+const signInWithCustomToken = vi.fn();
+const signOut = vi.fn();
 const currentUser = {
   uid: 'uid-keep',
   phoneNumber: '+15555550100',
@@ -55,7 +61,7 @@ const webDeps = {
 
 const nativeDeps = {
   ...baseDeps,
-  resolvePath: () => 'native' as const,
+  resolvePath: () => 'native-android' as const,
 } as PhoneReauthDependencies;
 
 describe('requireAuthPhoneUser', () => {
@@ -188,18 +194,32 @@ describe('startPhoneReauthentication native Android path', () => {
 
 describe('startPhoneReauthentication Capacitor iOS path', () => {
   const iosDeps = {
-    ...nativeDeps,
+    ...baseDeps,
     resolvePath: () => resolvePhoneAuthPath({ isNative: true, platform: 'ios' }),
+    startIos,
+    confirmIos,
+    signInWithCustomToken,
+    signOut,
   } as PhoneReauthDependencies;
 
   beforeEach(() => {
     vi.clearAllMocks();
     authState.currentUser = currentUser;
-    startNative.mockResolvedValue({ verificationId: 'ios-reauth-vid' });
-    reauthenticateWithCredential.mockResolvedValue({ user: currentUser });
+    startIos.mockResolvedValue({ sessionId: 'opaque-reauth-session' });
+    signOut.mockResolvedValue(undefined);
+    signInWithCustomToken.mockResolvedValue({
+      user: {
+        uid: 'uid-keep',
+        getIdTokenResult: vi.fn().mockResolvedValue({
+          authTime: new Date().toISOString(),
+          claims: { auth_time: Math.floor(Date.now() / 1000) },
+        }),
+      },
+    });
+    confirmIos.mockResolvedValue({ customToken: 'reauth-custom-token', uid: 'uid-keep' });
   });
 
-  it('sends through the native bridge and confirms with reauthenticateWithCredential', async () => {
+  it('passes the current uid and signs the same user in with a custom token', async () => {
     const ref: RecaptchaVerifierRef = { current: null };
     const session = await startPhoneReauthentication({
       currentUser: currentUser as never,
@@ -209,14 +229,110 @@ describe('startPhoneReauthentication Capacitor iOS path', () => {
     });
     expect(replaceVerifier).not.toHaveBeenCalled();
     expect(reauthenticateWithPhoneNumber).not.toHaveBeenCalled();
-    expect(startNative).toHaveBeenCalledWith({ phoneNumber: '+15555550100' });
+    expect(startIos).toHaveBeenCalledWith({ phoneNumber: '+15555550100' });
     await session.confirm('123456');
-    expect(credentialFromVerification).toHaveBeenCalledWith('ios-reauth-vid', '123456');
-    expect(reauthenticateWithCredential).toHaveBeenCalledWith(currentUser, {
-      verificationId: 'ios-reauth-vid',
+    expect(credentialFromVerification).not.toHaveBeenCalled();
+    expect(reauthenticateWithCredential).not.toHaveBeenCalled();
+    expect(confirmIos).toHaveBeenCalledWith({
+      sessionId: 'opaque-reauth-session',
       code: '123456',
-      kind: 'phone-credential',
+      expectedUid: 'uid-keep',
     });
+    expect(signInWithCustomToken).toHaveBeenCalledWith(auth, 'reauth-custom-token');
+    expect(signOut).not.toHaveBeenCalled();
+  });
+
+  it('signs out when the native uid does not match before treating the session as fresh', async () => {
+    confirmIos.mockResolvedValue({ customToken: 'reauth-custom-token', uid: 'other-uid' });
+    const ref: RecaptchaVerifierRef = { current: null };
+    const session = await startPhoneReauthentication({
+      currentUser: currentUser as never,
+      recaptchaRef: ref,
+      containerId: 'reauth-recaptcha-anchor',
+      deps: iosDeps,
+    });
+    await expect(session.confirm('123456')).rejects.toMatchObject({ code: 'ios_phone_auth_uid_mismatch' });
+    expect(signInWithCustomToken).not.toHaveBeenCalled();
+    expect(signOut).toHaveBeenCalledWith(auth);
+  });
+
+  it('fails closed when the custom-token auth_time is older than the delete window', async () => {
+    signInWithCustomToken.mockResolvedValue({
+      user: {
+        uid: 'uid-keep',
+        getIdTokenResult: vi.fn().mockResolvedValue({
+          authTime: new Date(Date.now() - 601_000).toISOString(),
+          claims: { auth_time: Math.floor(Date.now() / 1000) - 601 },
+        }),
+      },
+    });
+    const ref: RecaptchaVerifierRef = { current: null };
+    const session = await startPhoneReauthentication({
+      currentUser: currentUser as never,
+      recaptchaRef: ref,
+      containerId: 'reauth-recaptcha-anchor',
+      deps: iosDeps,
+    });
+    await expect(session.confirm('123456')).rejects.toMatchObject({ code: 'ios_phone_auth_bridge_failed' });
+  });
+
+  it('does not let a raw Firebase ID-token error escape deletion reauth', async () => {
+    const leaked = 'id-token eyJhbGci +15555550100 otp 123456';
+    signInWithCustomToken.mockResolvedValue({
+      user: {
+        uid: 'uid-keep',
+        getIdTokenResult: vi.fn().mockRejectedValue(Object.assign(new Error(leaked), {
+          code: 'auth/internal-error',
+          stack: `Error: ${leaked}`,
+        })),
+      },
+    });
+    const ref: RecaptchaVerifierRef = { current: null };
+    const session = await startPhoneReauthentication({
+      currentUser: currentUser as never,
+      recaptchaRef: ref,
+      containerId: 'reauth-recaptcha-anchor',
+      deps: iosDeps,
+    });
+    await expect(session.confirm('123456')).rejects.toMatchObject({
+      code: 'ios_phone_auth_bridge_failed',
+      message: 'ios_phone_auth_bridge_failed',
+    });
+  });
+
+  it('maps network and throttle errors from the custom-token sign-in', async () => {
+    signInWithCustomToken.mockRejectedValue(Object.assign(new Error('socket +15555550100'), {
+      code: 'auth/network-request-failed',
+    }));
+    const ref: RecaptchaVerifierRef = { current: null };
+    const session = await startPhoneReauthentication({
+      currentUser: currentUser as never,
+      recaptchaRef: ref,
+      containerId: 'reauth-recaptcha-anchor',
+      deps: iosDeps,
+    });
+    await expect(session.confirm('123456')).rejects.toMatchObject({
+      code: 'ios_phone_auth_network',
+      message: 'ios_phone_auth_network',
+    });
+  });
+});
+
+describe('deleteAccount auth_time freshness', () => {
+  it('accepts a sign-in inside the 600 second window', () => {
+    const now = 1_700_000_000;
+    expect(isAuthTimeRecent(now - 30, now)).toBe(true);
+    expect(isAuthTimeRecent(now - 600, now)).toBe(true);
+  });
+
+  it('rejects a sign-in older than 600 seconds', () => {
+    const now = 1_700_000_000;
+    expect(isAuthTimeRecent(now - 601, now)).toBe(false);
+  });
+
+  it('reads auth_time from claims and from the ISO authTime field', () => {
+    expect(readAuthTimeSeconds({ claims: { auth_time: 1700000000 } })).toBe(1700000000);
+    expect(readAuthTimeSeconds({ authTime: '2023-11-14T22:13:20.000Z' })).toBe(Date.parse('2023-11-14T22:13:20.000Z') / 1000);
   });
 });
 

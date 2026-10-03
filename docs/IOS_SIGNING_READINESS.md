@@ -153,6 +153,8 @@ No capability is added in Stage B.
 
 App Check on Capacitor iOS uses the existing web reCAPTCHA Enterprise site key. Do not add App Attest for this build. Whether reCAPTCHA succeeds inside the device WebView is a later device test, not a signing change.
 
+Current source for build 5 declares the Push Notifications capability, Background Modes `fetch` and `remote-notification`, and `aps-environment`. Debug entitlements use `development`. Release entitlements use `production`. The signed IPA verifier requires `aps-environment` to be `production`. The Firebase iOS API key must be unrestricted or must permit the project's firebaseapp.com domain so the reCAPTCHA fallback can load. Creating the APNs key and enabling the capability on the Apple App ID remain manual steps outside this repository.
+
 An app-level `PrivacyInfo.xcprivacy` is still absent. That is not an entitlement and is not part of this signing setup.
 
 ## Readiness workflow

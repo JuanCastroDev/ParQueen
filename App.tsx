@@ -72,7 +72,7 @@ import type { AssistantAndroidBackHandle } from './views/AssistantView';
 import { App as CapacitorApp } from '@capacitor/app';
 import { legalViewFor } from './utils/inAppLegalNavigation';
 import type { PhoneVerificationSession } from './utils/phoneAuth';
-import { iosPhoneAuthUiTone, reportIosPhoneAuthFailure } from './utils/phoneAuthNative';
+import { iosPhoneAuthUiTone, reportIosPhoneAuthConfirmFailure, reportIosPhoneAuthFailure } from './utils/phoneAuthNative';
 import {
   requireAuthPhoneUser,
   resendPhoneReauthentication,
@@ -839,7 +839,10 @@ export default function App() {
       setDeletePhase('idle');
     } catch (e: any) {
       if (sessionGen !== reauthSessionGenRef.current) return;
-      if (e?.code === 'auth/account-switched') { try { await signOut(auth); } catch {} }
+      reportIosPhoneAuthConfirmFailure(e, 'deletion_reauth_confirm');
+      if (e?.code === 'auth/account-switched' || e?.code === 'ios_phone_auth_uid_mismatch') {
+        try { await signOut(auth); } catch {}
+      }
       clearReauthState();
       setDeletePhase('failed');
     } finally {

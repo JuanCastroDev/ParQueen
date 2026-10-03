@@ -6,11 +6,11 @@ describe('resolvePhoneAuthPath', () => {
     expect(resolvePhoneAuthPath({ isNative: false, platform: 'web' })).toBe('web');
   });
 
-  it('selects the native path on Capacitor Android', () => {
-    expect(resolvePhoneAuthPath({ isNative: true, platform: 'android' })).toBe('native');
+  it('selects the Android native path on Capacitor Android', () => {
+    expect(resolvePhoneAuthPath({ isNative: true, platform: 'android' })).toBe('native-android');
   });
 
-  it('selects the native path on Capacitor iOS', () => {
-    expect(resolvePhoneAuthPath({ isNative: true, platform: 'ios' })).toBe('native');
+  it('selects the iOS native path on Capacitor iOS', () => {
+    expect(resolvePhoneAuthPath({ isNative: true, platform: 'ios' })).toBe('native-ios');
   });
 });

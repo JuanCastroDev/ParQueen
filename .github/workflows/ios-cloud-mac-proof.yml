@@ -132,17 +132,15 @@ jobs:
           echo "PROVISIONING_PROFILE: not set"
 
           echo "=== entitlements ==="
-          ENTITLEMENTS="$(find ios -name '*.entitlements' -print || true)"
-          if [ -z "${ENTITLEMENTS}" ]; then
-            echo "entitlements files: none"
-          else
-            printf '%s\n' "${ENTITLEMENTS}"
-          fi
-          if grep -R -n "aps-environment" ios --include='*.plist' --include='*.entitlements' --include='*.pbxproj' --include='*.xcconfig'; then
-            echo "::error::Unexpected aps-environment entitlement. Stopping before build."
+          test -f ios/App/App/App.entitlements
+          test -f ios/App/App/AppDebug.entitlements
+          grep -q '<string>production</string>' ios/App/App/App.entitlements
+          grep -q '<string>development</string>' ios/App/App/AppDebug.entitlements
+          if grep -R -n "aps-environment" ios --include='*.plist' --include='*.pbxproj' --include='*.xcconfig'; then
+            echo "::error::aps-environment belongs only in the App entitlements files."
             exit 1
           fi
-          echo "aps-environment: not set"
+          echo "aps-environment: release production, debug development"
 
           echo "=== xcodebuild -list ==="
           xcodebuild -list -project ios/App/App.xcodeproj

@@ -50,7 +50,9 @@ describe('phone-auth flow integration', () => {
     const reauthHelper = read('utils/phoneReauth.ts');
     expect(reauthHelper).toContain("resolved.replaceVerifier(recaptchaRef, resolved.auth, containerId)");
     expect(reauthHelper).toContain('reauthenticateWithCredential');
-    expect(reauthHelper).toContain("resolved.resolvePath() === 'native'");
+    expect(reauthHelper).toContain("resolved.resolvePath() === 'native-android'");
+    expect(reauthHelper).toContain("resolved.resolvePath() === 'native-ios'");
+    expect(reauthHelper).toContain('signInWithCustomToken');
     expect(authNullBranch).toContain('clearReauthState()');
     expect(successfulConfirmation).toContain('clearReauthState()');
     expect(successfulConfirmation.indexOf('clearReauthState()')).toBeLessThan(successfulConfirmation.indexOf('await unlinkFcmTokenBeforeDeletion()'));

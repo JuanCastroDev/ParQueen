@@ -406,6 +406,9 @@ jobs:
               "export compliance ITSAppUsesNonExemptEncryption: FALSE",
               "export compliance ITSAppUsesNonExemptEncryption: FAIL",
               "obsolete camera plugin artifacts: ABSENT",
+              "aps-environment: production",
+              "UIBackgroundModes: fetch",
+              "UIBackgroundModes: remote-notification",
               "FIREBASE_APPCHECK_DEBUG_TOKEN\\s*=(?!=)",
               "appcheck-debug-",
               "ipa-stamp.txt",
@@ -844,7 +847,7 @@ jobs:
           expected = {
               "CFBundleIdentifier": "app.parqueen",
               "CFBundleShortVersionString": "1.0",
-              "CFBundleVersion": "4",
+              "CFBundleVersion": "5",
               "CFBundleDisplayName": "ParQueen",
           }
           failed = False
@@ -897,16 +900,27 @@ jobs:
               print("entitlements: FAIL")
               sys.exit(1)
           entitlements = plistlib.loads(ent.stdout)
-          if any("aps-environment" in key for key in entitlements):
-              print("aps-environment: PRESENT")
+          if entitlements.get("aps-environment") != "production":
+              print("aps-environment: FAIL")
               sys.exit(1)
-          print("aps-environment: ABSENT")
+          print("aps-environment: production")
+          background_modes = info.get("UIBackgroundModes")
+          if (
+              not isinstance(background_modes, list)
+              or "fetch" not in background_modes
+              or "remote-notification" not in background_modes
+          ):
+              print("UIBackgroundModes: FAIL")
+              sys.exit(1)
+          print("UIBackgroundModes: fetch")
+          print("UIBackgroundModes: remote-notification")
           allowed = {
               "application-identifier",
               "com.apple.developer.team-identifier",
               "keychain-access-groups",
               "beta-reports-active",
               "get-task-allow",
+              "aps-environment",
           }
           unexpected = sorted(key for key in entitlements if key not in allowed)
           if unexpected:

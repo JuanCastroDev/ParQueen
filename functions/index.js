@@ -23,6 +23,10 @@ const { osmNameToDOT, streetNameToLikePattern, dotSideToCardinal, BOROUGH_CODE_T
 const { redactForLog, sanitizeError } = require('./redactForLog');
 const { checkRateLimit } = require('./rateLimiter');
 const {
+  AUTH_BRIDGE_SERVICE_ACCOUNT,
+  exchangePhoneAuthSessionHandler,
+} = require('./exchangePhoneAuthSession');
+const {
   readActiveIncomingClaim,
   deleteMatchingActiveIncomingClaim,
   clearMatchingActiveIncomingClaim,
@@ -2936,6 +2940,17 @@ exports.adminArchiveSuspension = onCall(
     return { success: true };
   }
 );
+
+// Phone-auth bridge. Mints a custom token only for request.auth.uid.
+// The runtime service account is declared here and is created manually later.
+exports.exchangePhoneAuthSession = onCall({
+  region: 'us-central1',
+  enforceAppCheck: false,
+  serviceAccount: AUTH_BRIDGE_SERVICE_ACCOUNT,
+}, (request) => exchangePhoneAuthSessionHandler(request, {
+  checkRateLimit,
+  createCustomToken: (uid) => getAuth().createCustomToken(uid),
+}));
 
 // Delete account — idempotent; covers all user-linked collections, Storage, and Auth.
 // Job document at accountDeletionJobs/{uid} tracks state: running → failed | completed.
