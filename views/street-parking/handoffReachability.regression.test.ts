@@ -11,15 +11,17 @@ const root = path.resolve(__dirname, '../..');
 const css = readFileSync(path.join(root, 'index.css'), 'utf8');
 const sheetSource = readFileSync(path.join(__dirname, 'BottomSheet.tsx'), 'utf8');
 
-const chromeBin = ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser']
-  .find((bin) => {
-    try {
-      require('node:child_process').execFileSync('which', [bin], { stdio: 'ignore' });
-      return true;
-    } catch {
-      return false;
-    }
-  });
+function commandExists(bin: string) {
+  try {
+    require('node:child_process').execFileSync('which', [bin], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const chromeBin = ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'].find(commandExists);
+const xvfbBin = commandExists('Xvfb');
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('handoff reachability contract', () => {
@@ -368,6 +370,274 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
     expect(touchResult.short, JSON.stringify(touchResult)).toBe(true);
     expect(touchResult.prevented, JSON.stringify(touchResult)).not.toContain('touchmove');
     expect(touchResult.picked, JSON.stringify(touchResult)).toBe(touch.text);
+  }, 60000);
+});
+
+describe.skipIf(!chromeBin || !xvfbBin)('handoff failure reasons in a resized desktop window', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'handoff-desktop-'));
+  let server: Server;
+  let chrome: ChildProcess;
+  let chromeStderr = '';
+  let browser: ((method: string, params?: Record<string, unknown>) => Promise<any>) | undefined;
+  let xvfb: ChildProcess;
+  let page: (method: string, params?: Record<string, unknown>) => Promise<any>;
+  let port = 0;
+
+  beforeAll(async () => {
+    const esbuild = require('esbuild') as typeof import('esbuild');
+    const postcss = require('postcss') as typeof import('postcss').default;
+    const tailwind = require('tailwindcss');
+    const autoprefixer = require('autoprefixer');
+    const compiled = await postcss([tailwind(path.join(root, 'tailwind.config.js')), autoprefixer])
+      .process(css, { from: path.join(root, 'index.css') });
+    writeFileSync(path.join(dir, 'app.css'), compiled.css);
+    await esbuild.build({
+      absWorkingDir: root,
+      entryPoints: [path.join(__dirname, 'handoffReachability.fixture.tsx')],
+      bundle: true,
+      format: 'esm',
+      outfile: path.join(dir, 'fixture.js'),
+      jsx: 'automatic',
+      define: { 'process.env.NODE_ENV': '"development"' },
+    });
+    writeFileSync(path.join(dir, 'index.html'), `<!doctype html><html class="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/app.css"></head><body><div id="root"></div><script type="module" src="/fixture.js"></script></body></html>`);
+    server = createServer((req, res) => {
+      const url = new URL(req.url || '/', 'http://127.0.0.1');
+      const file = path.join(dir, url.pathname === '/' ? 'index.html' : url.pathname);
+      try {
+        const body = readFileSync(file);
+        const type = file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/html';
+        res.writeHead(200, { 'content-type': type });
+        res.end(body);
+      } catch {
+        res.writeHead(404);
+        res.end('missing');
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    port = (server.address() as { port: number }).port;
+
+    const profileDir = path.join(dir, 'profile');
+    const activePortFile = path.join(profileDir, 'DevToolsActivePort');
+    chromeStderr = '';
+    const display = 50 + Math.floor(Math.random() * 20);
+    xvfb = spawn('Xvfb', [`:${display}`, '-screen', '0', '1280x800x24', '-ac'], { stdio: 'ignore' });
+    await sleep(300);
+    chrome = spawn(chromeBin!, [
+      '--disable-gpu', '--no-sandbox', '--no-first-run', '--disable-dev-shm-usage',
+      '--window-size=420,780', '--window-position=0,0',
+      `--user-data-dir=${profileDir}`,
+      '--remote-debugging-port=0',
+    ], { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, DISPLAY: `:${display}` } });
+    chrome.stderr?.on('data', (chunk) => {
+      chromeStderr = (chromeStderr + String(chunk)).slice(-4000);
+    });
+
+    let debugPort = 0;
+    let browserPath = '';
+    for (let i = 0; i < 150 && (!debugPort || !browserPath); i++) {
+      if (chrome.exitCode !== null || chrome.signalCode !== null) break;
+      try {
+        const [portLine, pathLine] = readFileSync(activePortFile, 'utf8').trim().split(/\r?\n/);
+        const parsedPort = Number(portLine);
+        if (Number.isInteger(parsedPort) && parsedPort > 0 && pathLine) {
+          debugPort = parsedPort;
+          browserPath = pathLine;
+          break;
+        }
+      } catch {
+        // Chrome writes DevToolsActivePort only after the DevTools endpoint is ready.
+      }
+      await sleep(100);
+    }
+    if (!debugPort || !browserPath) {
+      const diagnostic = chromeStderr.replace(/\s+/g, ' ').trim().slice(-1000);
+      throw new Error(`Chrome DevTools did not start${diagnostic ? `: ${diagnostic}` : ''}`);
+    }
+
+    const browserWs = new WebSocket(
+      `ws://127.0.0.1:${debugPort}${browserPath.startsWith('/') ? browserPath : `/${browserPath}`}`,
+    );
+    await new Promise<void>((resolve, reject) => {
+      browserWs.addEventListener('open', () => resolve());
+      browserWs.addEventListener('error', () => reject(new Error('browser socket')));
+    });
+    browser = wire(browserWs);
+    const { targetId } = await browser('Target.createTarget', { url: 'about:blank' });
+    let target: { id: string; webSocketDebuggerUrl: string } | undefined;
+    for (let i = 0; i < 50 && !target; i++) {
+      try {
+        const list = await (await fetch(`http://127.0.0.1:${debugPort}/json/list`)).json() as Array<{ id: string; webSocketDebuggerUrl: string }>;
+        target = list.find((item) => item.id === targetId);
+      } catch {
+        // The target list may lag briefly behind Target.createTarget on busy CI hosts.
+      }
+      if (!target) await sleep(100);
+    }
+    if (!target) throw new Error('Chrome target did not become available');
+    const pageWs = new WebSocket(target.webSocketDebuggerUrl);
+    await new Promise<void>((resolve, reject) => {
+      pageWs.addEventListener('open', () => resolve());
+      pageWs.addEventListener('error', () => reject(new Error('page socket')));
+    });
+    page = wire(pageWs);
+    await page('Page.enable');
+    await page('Runtime.enable');
+  }, 60000);
+
+  afterAll(async () => {
+    const waitForChromeExit = (timeoutMs: number) => new Promise<boolean>((resolve) => {
+      if (!chrome || chrome.exitCode !== null || chrome.signalCode !== null) {
+        resolve(true);
+        return;
+      }
+      const onExit = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        chrome.off('exit', onExit);
+        resolve(false);
+      }, timeoutMs);
+      chrome.once('exit', onExit);
+    });
+
+    let chromeExited = !chrome || chrome.exitCode !== null || chrome.signalCode !== null;
+    if (!chromeExited) {
+      try {
+        await browser?.('Browser.close');
+      } catch {
+        // Browser.close can sever the DevTools socket before its response arrives.
+      }
+      chromeExited = await waitForChromeExit(3000);
+    }
+    if (!chromeExited && chrome && chrome.exitCode === null && chrome.signalCode === null) {
+      chrome.kill('SIGKILL');
+      chromeExited = await waitForChromeExit(3000);
+    }
+    if (xvfb && xvfb.exitCode === null && xvfb.signalCode === null) {
+      xvfb.kill('SIGKILL');
+    }
+
+    await new Promise<void>((resolve) => {
+      if (!server) {
+        resolve();
+        return;
+      }
+      server.close(() => resolve());
+    });
+
+    // CI runners occasionally keep Chrome profile files busy for a moment after
+    // process exit. Cleanup is hygiene, not part of the reachability assertion.
+    // Never turn otherwise-passing product assertions red for that OS race.
+    if (chromeExited) {
+      try {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 40, retryDelay: 100 });
+      } catch (error) {
+        const code = error && typeof error === 'object' ? (error as NodeJS.ErrnoException).code : undefined;
+        if (code !== 'ENOTEMPTY' && code !== 'EBUSY' && code !== 'EPERM') throw error;
+      }
+    }
+  });
+
+  async function ev<T>(expression: string): Promise<T> {
+    const res = await page('Runtime.evaluate', { expression, returnByValue: true });
+    if (res.exceptionDetails) throw new Error(JSON.stringify(res.exceptionDetails.exception || res.exceptionDetails));
+    return res.result.value as T;
+  }
+
+  it('delivers a desktop-window mouse click to a portrait failure reason after No luck', async () => {
+    await page('Page.navigate', { url: `http://127.0.0.1:${port}/?mode=sheet&step=outcome` });
+    for (let i = 0; i < 40; i++) {
+      const ready = await ev<boolean>('!![...document.querySelectorAll("button")].find((el) => el.textContent.includes("No luck"))');
+      if (ready) break;
+      await new Promise((r) => setTimeout(r, 100));
+      if (i === 39) throw new Error('outcome step did not render');
+    }
+    await new Promise((r) => setTimeout(r, 350));
+
+    const environment = await ev<{
+      viewport: string;
+      fine: boolean;
+      hover: boolean;
+      mobile: boolean;
+      portrait: boolean;
+    }>(`({
+      viewport: innerWidth + "x" + innerHeight,
+      fine: matchMedia("(pointer: fine)").matches,
+      hover: matchMedia("(hover: hover)").matches,
+      mobile: matchMedia("(max-width: 767px)").matches,
+      portrait: innerHeight > innerWidth,
+    })`);
+    expect(environment.fine, JSON.stringify(environment)).toBe(true);
+    expect(environment.hover, JSON.stringify(environment)).toBe(true);
+    expect(environment.mobile, JSON.stringify(environment)).toBe(true);
+    expect(environment.portrait, JSON.stringify(environment)).toBe(true);
+
+    const noLuck = await ev<{ x: number; y: number; hit: string; self: boolean }>(`(() => {
+      const button = [...document.querySelectorAll("button")].find((el) => el.textContent.includes("No luck"));
+      const rect = button.getBoundingClientRect();
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      return {
+        x, y,
+        self: !!(hit && (hit === button || button.contains(hit))),
+        hit: (hit && (hit.className || hit.tagName) || "").toString().slice(0, 80),
+      };
+    })()`);
+    expect(noLuck.self, noLuck.hit).toBe(true);
+    await page('Input.dispatchMouseEvent', { type: 'mouseMoved', x: noLuck.x, y: noLuck.y });
+    await page('Input.dispatchMouseEvent', { type: 'mousePressed', x: noLuck.x, y: noLuck.y, button: 'left', clickCount: 1 });
+    await page('Input.dispatchMouseEvent', { type: 'mouseReleased', x: noLuck.x, y: noLuck.y, button: 'left', clickCount: 1 });
+    await new Promise((r) => setTimeout(r, 80));
+    expect(await ev<string>('window.__step')).toBe('failure_reason');
+
+    await ev(`(() => {
+      window.__events = [];
+      for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+        document.addEventListener(type, (event) => {
+          const target = event.target;
+          window.__events.push({
+            type,
+            tag: target && target.tagName,
+            className: target && String(target.className || "").slice(0, 80),
+            text: target && String(target.textContent || "").trim().slice(0, 40),
+            defaultPrevented: event.defaultPrevented,
+          });
+        }, true);
+      }
+    })()`);
+
+    const reason = await ev<{ x: number; y: number; text: string; self: boolean; hit: string }>(`(() => {
+      const button = document.querySelector(".handoff-failure-reason");
+      const rect = button.getBoundingClientRect();
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      return {
+        x, y,
+        text: button.textContent.trim(),
+        self: !!(hit && (hit === button || button.contains(hit))),
+        hit: (hit && (hit.className || hit.tagName) || "").toString().slice(0, 80),
+      };
+    })()`);
+    expect(reason.self, reason.hit).toBe(true);
+    expect(reason.text).toContain('Someone else got it');
+
+    await page('Input.dispatchMouseEvent', { type: 'mouseMoved', x: reason.x, y: reason.y });
+    await page('Input.dispatchMouseEvent', { type: 'mousePressed', x: reason.x, y: reason.y, button: 'left', clickCount: 1 });
+    await page('Input.dispatchMouseEvent', { type: 'mouseReleased', x: reason.x + 3, y: reason.y + 2, button: 'left', clickCount: 1 });
+    await new Promise((r) => setTimeout(r, 80));
+
+    const result = await ev<{ picked: string | null; events: Array<{ type: string; className: string; defaultPrevented: boolean }> }>(
+      '({ picked: window.__picked, events: window.__events })',
+    );
+    const types = result.events.map((event) => event.type);
+    expect(types, JSON.stringify(result)).toEqual(expect.arrayContaining(['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']));
+    expect(result.events.every((event) => event.className.includes('handoff-failure-reason')), JSON.stringify(result)).toBe(true);
+    expect(result.events.some((event) => event.defaultPrevented), JSON.stringify(result)).toBe(false);
+    expect(result.picked, JSON.stringify(result)).toBe(reason.text);
   }, 60000);
 });
 

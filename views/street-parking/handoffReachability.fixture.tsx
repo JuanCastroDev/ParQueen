@@ -4,7 +4,9 @@ import { BottomSheet } from './BottomSheet';
 import { FinishHandoffChip } from './FinishHandoffChip';
 import { HandoffFlow } from './HandoffFlow';
 
-const initial = new URLSearchParams(location.search).get('mode') === 'chip' ? 'chip' : 'sheet';
+const params = new URLSearchParams(location.search);
+const initial = params.get('mode') === 'chip' ? 'chip' : 'sheet';
+const initialStep = params.get('step') === 'outcome' ? 'outcome' : 'failure_reason';
 
 function Nav() {
   return (
@@ -27,18 +29,22 @@ function Nav() {
 
 function Fixture() {
   const [mode, setMode] = useState<'chip' | 'sheet'>(initial);
+  const [step, setStep] = useState<'outcome' | 'failure_reason'>(initialStep);
   const [picked, setPicked] = useState<string | null>(null);
   const [resumed, setResumed] = useState(0);
-  (window as unknown as { __picked: string | null; __resumed: number }).__picked = picked;
+  (window as unknown as { __picked: string | null; __resumed: number; __step: string }).__picked = picked;
   (window as unknown as { __resumed: number }).__resumed = resumed;
+  (window as unknown as { __step: string }).__step = step;
 
   return (
     <div className="sp-page">
       <BottomSheet isOpen={mode === 'sheet'} ariaLabel="Handoff" onClose={() => setMode('chip')}>
         {mode === 'sheet' && (
           <HandoffFlow
-            step="failure_reason"
-            onOutcome={() => {}}
+            step={step}
+            onOutcome={(outcome) => {
+              if (outcome === 'failed') setStep('failure_reason');
+            }}
             onFailureReason={(reason) => setPicked(reason)}
             onSetTimer={() => {}}
             onSkip={() => setMode('chip')}

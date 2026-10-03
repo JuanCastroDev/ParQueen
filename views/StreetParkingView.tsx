@@ -2557,6 +2557,9 @@ export const MapView: React.FC<MapViewProps> = ({
                         finderName={interestFlow.handoffFinderName}
                         onOutcome={interestFlow.handleHandoffOutcome}
                         onFailureReason={interestFlow.handleFailureReason}
+                        submitError={interestFlow.handoffSubmitError}
+                        submitting={interestFlow.handoffSubmitting}
+                        onRetry={interestFlow.retryTerminalHandoff}
                         onSetTimer={(minutes) => parkingTimer.startTimer(minutes, interestFlow.handoffAddress)}
                         onSkip={() => {
                             const wasCelebration = interestFlow.handoffStep === 'celebration';
