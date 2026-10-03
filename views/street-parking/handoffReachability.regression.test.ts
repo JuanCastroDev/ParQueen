@@ -179,10 +179,26 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
     await page('Emulation.setDeviceMetricsOverride', metrics);
     if (mode === 'sheet') await page('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
     await page('Page.navigate', { url: `http://127.0.0.1:${port}/?mode=${mode}` });
-    await page('Emulation.setDeviceMetricsOverride', metrics);
-    const sized = await ev<{ w: number; h: number }>(`({ w: innerWidth, h: innerHeight })`);
+    let sized = { w: 0, h: 0, readyState: 'unknown' };
+    for (let i = 0; i < 100; i++) {
+      try {
+        // Navigation returns before Chrome necessarily applies the page viewport
+        // metadata. Re-apply emulation and wait for the requested layout viewport
+        // instead of sampling the transient 980px mobile fallback.
+        await page('Emulation.setDeviceMetricsOverride', metrics);
+        sized = await ev<{ w: number; h: number; readyState: string }>(
+          `({ w: innerWidth, h: innerHeight, readyState: document.readyState })`,
+        );
+        if (sized.readyState !== 'loading' && sized.w === width && sized.h === height) break;
+      } catch {
+        // The execution context may briefly disappear while navigation commits.
+      }
+      await sleep(100);
+    }
     if (sized.w !== width || sized.h !== height) {
-      throw new Error(`viewport ${sized.w}x${sized.h}, wanted ${width}x${height}`);
+      throw new Error(
+        `viewport ${sized.w}x${sized.h} (ready=${sized.readyState}), wanted ${width}x${height}`,
+      );
     }
     for (let i = 0; i < 40; i++) {
       const ready = await ev<boolean>(mode === 'chip'
