@@ -122,8 +122,11 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({ isOpen, onClose, child
             }
             const target = e.target as HTMLElement | null;
             const fromHandle = !!target?.closest('.pq-bottom-sheet-handle-row');
-            // If content is scrolled, only the handle starts a dismiss drag.
-            if (!fromHandle && sheet.scrollTop > 0) {
+            // Buttons, links, and fields must receive the click. A dismiss drag
+            // that preventDefaults touchmove cancels that click — fatal in the
+            // short landscape handoff sheet, where a small downward drift is common.
+            const fromControl = !!target?.closest('button, a, input, textarea, select, label');
+            if (!fromHandle && (sheet.scrollTop > 0 || fromControl)) {
                 dragStartY.current = null;
                 return;
             }

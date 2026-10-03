@@ -558,6 +558,21 @@ html, body, #root {
     gap: 10px;
   }
 
+  /* In-flow chip sits under the fixed primary nav because pb-0 beats the
+     nav-space padding. Pin it above that nav and the locate/car stack.
+     The short-landscape block below overrides the offset. */
+  .mobile-map-controls .finish-handoff-chip {
+    position: fixed;
+    bottom: calc(var(--mobile-primary-nav-space) + 136px);
+    left: max(16px, env(safe-area-inset-left, 0px));
+    right: max(16px, env(safe-area-inset-right, 0px));
+    z-index: 34;
+    width: auto;
+    max-width: 380px;
+    margin: 0 auto;
+    pointer-events: auto;
+  }
+
   .map-primary-cta {
     display: none;
   }
@@ -840,7 +855,7 @@ html, body, #root {
     margin: 0;
   }
 
-  .finish-handoff-chip {
+  .mobile-map-controls .finish-handoff-chip {
     position: fixed;
     bottom: calc(var(--mobile-primary-nav-space) + 72px);
     left: max(16px, env(safe-area-inset-left, 0px));
@@ -849,9 +864,10 @@ html, body, #root {
     width: auto;
     max-width: 380px;
     margin: 0 auto;
+    pointer-events: auto;
   }
 
-  .finish-handoff-chip:has(+ .map-timer-chip) {
+  .mobile-map-controls .finish-handoff-chip:has(+ .map-timer-chip) {
     bottom: calc(var(--mobile-primary-nav-space) + 118px);
   }
 
@@ -2861,9 +2877,28 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   }
 }
 
-/* Premium Ping / shared bottom sheet surface */
+/* Premium Ping / shared bottom sheet surface.
+   Fixed map controls are z-index 34 inside the map overlay. The sheet root
+   must paint above them, and those controls must not keep a hit target while
+   a sheet is open — a later utility (.z-30) would otherwise leave the root
+   under any control that escapes the overlay stacking context. */
+.sp-page .pq-bottom-sheet-root {
+  z-index: 40;
+}
+
+.sp-page:has(.pq-bottom-sheet-root) .map-secondary-controls,
+.sp-page:has(.pq-bottom-sheet-root) .map-secondary-controls *,
+.sp-page:has(.pq-bottom-sheet-root) .map-timer-chip,
+.sp-page:has(.pq-bottom-sheet-root) .map-timer-chip * {
+  pointer-events: none;
+}
+
 .pq-bottom-sheet-root {
   pointer-events: auto;
+}
+
+.pq-bottom-sheet .handoff-failure-reason {
+  touch-action: manipulation;
 }
 
 .pq-bottom-sheet-backdrop {
