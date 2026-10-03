@@ -20,6 +20,7 @@ const chromeBin = ['google-chrome', 'google-chrome-stable', 'chromium', 'chromiu
       return false;
     }
   });
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('handoff reachability contract', () => {
   it('pins Finish your handoff above the nav on portrait and normal mobile, not only short landscape', () => {
@@ -50,6 +51,7 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'handoff-reach-'));
   let server: Server;
   let chrome: ChildProcess;
+  let chromeStderr = '';
   let page: (method: string, params?: Record<string, unknown>) => Promise<any>;
   let port = 0;
 
@@ -58,9 +60,19 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
   }, 60000);
 
   afterAll(async () => {
-    chrome?.kill('SIGKILL');
-    await new Promise<void>((resolve) => server?.close(() => resolve()));
-    rmSync(dir, { recursive: true, force: true });
+    if (chrome && chrome.exitCode === null && chrome.signalCode === null) {
+      const exited = new Promise<void>((resolve) => chrome.once('exit', () => resolve()));
+      chrome.kill('SIGKILL');
+      await Promise.race([exited, sleep(5000)]);
+    }
+    await new Promise<void>((resolve) => {
+      if (!server) {
+        resolve();
+        return;
+      }
+      server.close(() => resolve());
+    });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   });
 
   async function boot() {
@@ -98,31 +110,61 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     port = (server.address() as { port: number }).port;
 
-    const debugPort = 9400 + Math.floor(Math.random() * 200);
+    const profileDir = path.join(dir, 'profile');
+    const activePortFile = path.join(profileDir, 'DevToolsActivePort');
+    chromeStderr = '';
     chrome = spawn(chromeBin!, [
       '--headless=new', '--disable-gpu', '--no-sandbox', '--no-first-run', '--disable-dev-shm-usage',
-      `--user-data-dir=${path.join(dir, 'profile')}`,
-      `--remote-debugging-port=${debugPort}`,
-    ], { stdio: 'ignore' });
-    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-    let version: { webSocketDebuggerUrl: string } | null = null;
-    for (let i = 0; i < 40 && !version; i++) {
+      `--user-data-dir=${profileDir}`,
+      '--remote-debugging-port=0',
+    ], { stdio: ['ignore', 'ignore', 'pipe'] });
+    chrome.stderr?.on('data', (chunk) => {
+      chromeStderr = (chromeStderr + String(chunk)).slice(-4000);
+    });
+
+    let debugPort = 0;
+    let browserPath = '';
+    for (let i = 0; i < 150 && (!debugPort || !browserPath); i++) {
+      if (chrome.exitCode !== null || chrome.signalCode !== null) break;
       try {
-        version = await (await fetch(`http://127.0.0.1:${debugPort}/json/version`)).json();
+        const [portLine, pathLine] = readFileSync(activePortFile, 'utf8').trim().split(/\r?\n/);
+        const parsedPort = Number(portLine);
+        if (Number.isInteger(parsedPort) && parsedPort > 0 && pathLine) {
+          debugPort = parsedPort;
+          browserPath = pathLine;
+          break;
+        }
       } catch {
-        await sleep(100);
+        // Chrome writes DevToolsActivePort only after the DevTools endpoint is ready.
       }
+      await sleep(100);
     }
-    if (!version) throw new Error('Chrome DevTools did not start');
-    const browserWs = new WebSocket(version.webSocketDebuggerUrl);
+    if (!debugPort || !browserPath) {
+      const diagnostic = chromeStderr.replace(/\s+/g, ' ').trim().slice(-1000);
+      throw new Error(`Chrome DevTools did not start${diagnostic ? `: ${diagnostic}` : ''}`);
+    }
+
+    const browserWs = new WebSocket(
+      `ws://127.0.0.1:${debugPort}${browserPath.startsWith('/') ? browserPath : `/${browserPath}`}`,
+    );
     await new Promise<void>((resolve, reject) => {
       browserWs.addEventListener('open', () => resolve());
       browserWs.addEventListener('error', () => reject(new Error('browser socket')));
     });
     const browser = wire(browserWs);
     const { targetId } = await browser('Target.createTarget', { url: 'about:blank' });
-    const list = await (await fetch(`http://127.0.0.1:${debugPort}/json/list`)).json() as Array<{ id: string; webSocketDebuggerUrl: string }>;
-    const pageWs = new WebSocket(list.find((t) => t.id === targetId)!.webSocketDebuggerUrl);
+    let target: { id: string; webSocketDebuggerUrl: string } | undefined;
+    for (let i = 0; i < 50 && !target; i++) {
+      try {
+        const list = await (await fetch(`http://127.0.0.1:${debugPort}/json/list`)).json() as Array<{ id: string; webSocketDebuggerUrl: string }>;
+        target = list.find((item) => item.id === targetId);
+      } catch {
+        // The target list may lag briefly behind Target.createTarget on busy CI hosts.
+      }
+      if (!target) await sleep(100);
+    }
+    if (!target) throw new Error('Chrome target did not become available');
+    const pageWs = new WebSocket(target.webSocketDebuggerUrl);
     await new Promise<void>((resolve, reject) => {
       pageWs.addEventListener('open', () => resolve());
       pageWs.addEventListener('error', () => reject(new Error('page socket')));
