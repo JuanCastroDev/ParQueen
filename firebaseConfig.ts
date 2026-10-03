@@ -3,6 +3,7 @@ import { getFirestore } from 'firebase/firestore';
 import { getMessaging, isSupported } from 'firebase/messaging';
 import { initializeParQueenAppCheck } from './utils/appCheck';
 import { initializeParQueenAuth } from './utils/authInitialization';
+import { resolveFirebaseApiKey } from './utils/firebaseApiKey';
 
 const firebaseConfig = {
   apiKey: "AIzaSyCKSqWVd6JqpcrNUG6hei8Ug1njaIkAI7Y",
@@ -12,6 +13,8 @@ const firebaseConfig = {
   messagingSenderId: "768131391875",
   appId: "1:768131391875:web:613c5d2a948862333196b6"
 };
+
+firebaseConfig.apiKey = resolveFirebaseApiKey(firebaseConfig.apiKey);
 
 // ── App Check debug token (DEV only) ─────────────────────────────────────────
 // import.meta.env.DEV → false in production builds (Vite static replacement);
