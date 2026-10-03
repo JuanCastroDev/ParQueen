@@ -49,6 +49,7 @@ import { reportPingCreationFailure } from './street-parking/pingFailureReporting
 import { SpotDetailsCard } from './street-parking/SpotDetailsCard';
 import { BottomSheet } from './street-parking/BottomSheet';
 import { HandoffFlow } from './street-parking/HandoffFlow';
+import { FinishHandoffChip } from './street-parking/FinishHandoffChip';
 import { ParkingActivitySheet } from './street-parking/ParkingActivitySheet';
 import { HeaderBar } from './street-parking/HeaderBar';
 import { NavigationBar } from './street-parking/NavigationBar';
@@ -2540,7 +2541,7 @@ export const MapView: React.FC<MapViewProps> = ({
                 )}
             </BottomSheet>
 
-            {/* Post-arrival handoff flow */}
+            {/* Post-arrival handoff flow. Dismiss hides this sheet only. */}
             <BottomSheet isOpen={interestFlow.handoffStep !== null} ariaLabel="Handoff" onClose={() => {
                 const wasCelebration = interestFlow.handoffStep === 'celebration';
                 const coords = interestFlow.handoffSpotCoords;
@@ -2916,6 +2917,11 @@ export const MapView: React.FC<MapViewProps> = ({
                             <Locate size={22} className="text-[var(--color-accent)]" />
                         </button>
                     </div>
+
+                    {/* Hidden while the handoff sheet is open. Dismiss brings it back; terminal feedback removes it. */}
+                    {interestFlow.unfinishedHandoff && interestFlow.handoffStep === null && (
+                        <FinishHandoffChip onResume={interestFlow.resumeUnfinishedHandoff} />
+                    )}
 
                     {/* Timer chip — subtle indicator that a reminder is active */}
                     {parkingTimer.timer && savedSpot && (

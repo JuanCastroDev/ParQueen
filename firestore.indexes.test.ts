@@ -50,6 +50,8 @@ describe('firestore.indexes.json — spots geoquery index', () => {
             'status,claimState,claimReminderAt',
             'status,claimState,claimAutoReleaseAt',
             'holdRequestStatus,status,holdTimerExpiresAt',
+            // B2 claimer resume: interestedUserId == uid AND claimState == arrived_pending_outcome
+            'interestedUserId,claimState',
         ]);
     });
 });

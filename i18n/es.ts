@@ -338,6 +338,7 @@ const es: Record<string, string> = {
     'handoff.reminder_set': 'Recordatorio listo',
     'handoff.reminder_set_body': 'Cuando sea hora de moverlo, te avisaremos para que no te lo pierdas.',
     'handoff.pay_it_forward_body': 'Cuando te vayas, te ayudaremos a hacer ping de este lugar para el próximo conductor.',
+    'handoff.resume_chip': 'Termina tu entrega',
 
     // Nearby Activity — remaining strings
     'nearby_activity.live': 'En vivo',

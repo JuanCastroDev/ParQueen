@@ -44,6 +44,10 @@ import {
     completeFinderConfirmedHandoff,
     completeTerminalHandoff,
 } from './views/street-parking/completeTerminalHandoff';
+import {
+    claimerArrivedSpotsQuery,
+    claimerTerminalFeedbackQuery,
+} from './views/street-parking/unfinishedHandoff';
 
 // ── Test identities ────────────────────────────────────────────────────────────
 const OWNER_UID  = 'owner-aaa-111';
@@ -5006,5 +5010,90 @@ describe('B1 — durable arrived_pending_outcome', () => {
         expect(spot.claimState).toBe('arrived_pending_outcome');
         expect(spot.interestedUserId).toBe(OTHER_UID);
         expect(spot.arrivedAt.isEqual(arrivedAt)).toBe(true);
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// B2 — claimer resume query. Occupied arrived Pings stay off the public feed.
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('B2 — claimer arrived resume query', () => {
+    async function seedResumeFixtures() {
+        await seed('spots', 'b2-open', {
+            finderId: OWNER_UID,
+            finderName: 'TestFinder',
+            address: '1 Resume St',
+            lat: 40.71,
+            lng: -74.01,
+            status: 'occupied',
+            claimState: 'arrived_pending_outcome',
+            interestedUserId: OTHER_UID,
+            arrivedAt: Timestamp.now(),
+            pingMode: 'now',
+            reportedAt: Timestamp.now(),
+            expiresAt: FUTURE,
+        });
+        await seed('spots', 'b2-heading', {
+            ...interestedSpot,
+            claimState: 'heading',
+            interestedUserId: OTHER_UID,
+        });
+        await seed('spots', 'b2-stranger', {
+            finderId: OWNER_UID,
+            finderName: 'TestFinder',
+            address: '9 Other St',
+            lat: 40.72,
+            lng: -74.02,
+            status: 'occupied',
+            claimState: 'arrived_pending_outcome',
+            interestedUserId: THIRD_UID,
+            arrivedAt: Timestamp.now(),
+            pingMode: 'now',
+            reportedAt: Timestamp.now(),
+            expiresAt: FUTURE,
+        });
+        await seed('spots', 'b2-available', availableSpot);
+    }
+
+    it('B2-QUERY: claimer lists only their own arrived_pending_outcome Pings', async () => {
+        await seedResumeFixtures();
+        const snap = await assertSucceeds(getDocs(claimerArrivedSpotsQuery(otherDb(), OTHER_UID)));
+        expect(snap.docs.map((d) => d.id).sort()).toEqual(['b2-open']);
+    });
+
+    it('B2-QUERY: another user cannot list the claimer\'s arrived Pings', async () => {
+        await seedResumeFixtures();
+        await assertFails(getDocs(claimerArrivedSpotsQuery(thirdDb(), OTHER_UID)));
+        await assertFails(getDocs(query(
+            collection(otherDb(), 'spots'),
+            where('claimState', '==', 'arrived_pending_outcome'),
+        )));
+    });
+
+    it('B2-QUERY: the public available/interested feed still excludes occupied arrived Pings', async () => {
+        await seedResumeFixtures();
+        const feed = await assertSucceeds(getDocs(query(
+            collection(otherDb(), 'spots'),
+            where('status', 'in', ['available', 'interested']),
+        )));
+        const ids = feed.docs.map((d) => d.id);
+        expect(ids).toContain('b2-available');
+        expect(ids).toContain('b2-heading');
+        expect(ids).not.toContain('b2-open');
+        expect(ids).not.toContain('b2-stranger');
+    });
+
+    it('B2-QUERY: claimer can list their own terminal feedback without a spot filter', async () => {
+        await seed('spotFeedback', `b2-open_${OTHER_UID}`, {
+            spotId: 'b2-open',
+            userId: OTHER_UID,
+            finderId: OWNER_UID,
+            outcome: 'success',
+            failureReason: null,
+            address: '1 Resume St',
+            createdAt: Timestamp.now(),
+        });
+        const snap = await assertSucceeds(getDocs(claimerTerminalFeedbackQuery(otherDb(), OTHER_UID)));
+        expect(snap.docs.map((d) => d.id)).toEqual([`b2-open_${OTHER_UID}`]);
+        await assertFails(getDocs(claimerTerminalFeedbackQuery(thirdDb(), OTHER_UID)));
     });
 });

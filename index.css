@@ -840,6 +840,21 @@ html, body, #root {
     margin: 0;
   }
 
+  .finish-handoff-chip {
+    position: fixed;
+    bottom: calc(var(--mobile-primary-nav-space) + 72px);
+    left: max(16px, env(safe-area-inset-left, 0px));
+    right: max(16px, env(safe-area-inset-right, 0px));
+    z-index: 34;
+    width: auto;
+    max-width: 380px;
+    margin: 0 auto;
+  }
+
+  .finish-handoff-chip:has(+ .map-timer-chip) {
+    bottom: calc(var(--mobile-primary-nav-space) + 118px);
+  }
+
 }
 
 @media (min-width: 768px) {

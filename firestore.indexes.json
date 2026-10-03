@@ -93,6 +93,14 @@
       ]
     },
     {
+      "collectionGroup": "spots",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "interestedUserId", "order": "ASCENDING" },
+        { "fieldPath": "claimState", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "spotFeedback",
       "queryScope": "COLLECTION",
       "fields": [
