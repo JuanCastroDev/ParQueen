@@ -10,8 +10,10 @@ import { cancelClaimTransaction } from './cancelClaimTransaction';
 import { acquireActiveIncomingClaim, ALREADY_CLAIMED_MESSAGE, markClaimArrived } from './activeIncomingClaim';
 import { commitClaimToHeading } from './commitToHeading';
 import { reportClaimFailure, reportClaimCancelFailure } from './claimFailureReporting';
+import { reportCriticalActionFailure } from '../../utils/errorReporting';
 import { t } from '../../i18n';
 import { completeFinderConfirmedHandoff, completeTerminalHandoff } from './completeTerminalHandoff';
+import { isHandoffFailureReason } from '../../utils/spotFeedback';
 import {
     claimerArrivedSpotsQuery,
     claimerTerminalFeedbackQuery,
@@ -68,6 +70,14 @@ export function useInterestFlow({
     const etaWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const expiryWarnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [handoffStep, setHandoffStep] = useState<'outcome' | 'celebration' | 'failure_reason' | null>(null);
+    const [handoffSubmitError, setHandoffSubmitError] = useState<string | null>(null);
+    const [handoffSubmitting, setHandoffSubmitting] = useState(false);
+    const handoffSubmitLock = useRef(false);
+    const lastTerminalAttempt = useRef<
+        | { outcome: 'success' }
+        | { outcome: 'failed'; reason: string }
+        | null
+    >(null);
     const [handoffFinderName, setHandoffFinderName] = useState<string | null>(null);
     const [handoffAddress, setHandoffAddress] = useState<string>('');
     const handoffSpotRef = useRef<{
@@ -519,50 +529,98 @@ export function useInterestFlow({
         }
     };
 
+    const showTerminalSubmitFailure = (error: unknown) => {
+        // A rejected terminal write used to be an uncaught promise, so the
+        // reason row looked like it had never received the click.
+        reportCriticalActionFailure('terminal_handoff', error);
+        setHandoffSubmitError(t('handoff.submit_failed'));
+    };
+
     const handleHandoffOutcome = async (outcome: 'success' | 'failed') => {
         const spotSnap = handoffSpotRef.current;
-        if (!spotSnap || !user) return;
+        if (!spotSnap || !user) {
+            if (outcome === 'success') showTerminalSubmitFailure(new Error('Handoff participants changed'));
+            return;
+        }
 
         if (outcome === 'failed') {
+            setHandoffSubmitError(null);
             setHandoffStep('failure_reason');
             return;
         }
 
-        await completeTerminalHandoff(db, {
-            spotId: spotSnap.id,
-            driverId: user.id,
-            driverName: user.username || 'Someone',
-            finderId: spotSnap.finderId,
-            address: spotSnap.address || '',
-            outcome: 'success',
-            failureReason: null,
-        });
+        if (handoffSubmitLock.current) return;
+        handoffSubmitLock.current = true;
+        lastTerminalAttempt.current = { outcome: 'success' };
+        setHandoffSubmitting(true);
+        setHandoffSubmitError(null);
+        try {
+            await completeTerminalHandoff(db, {
+                spotId: spotSnap.id,
+                driverId: user.id,
+                driverName: user.username || 'Someone',
+                finderId: spotSnap.finderId,
+                address: spotSnap.address || '',
+                outcome: 'success',
+                failureReason: null,
+            });
 
-        noteTerminalHandoff(spotSnap.id);
-        setHandoffSpotCoords({ lat: spotSnap.lat, lng: spotSnap.lng, address: spotSnap.address || '' });
-        setHandoffStep('celebration');
+            noteTerminalHandoff(spotSnap.id);
+            setHandoffSpotCoords({ lat: spotSnap.lat, lng: spotSnap.lng, address: spotSnap.address || '' });
+            setHandoffStep('celebration');
+        } catch (error) {
+            showTerminalSubmitFailure(error);
+        } finally {
+            handoffSubmitLock.current = false;
+            setHandoffSubmitting(false);
+        }
     };
 
     const handleFailureReason = async (reason: string) => {
         const spotSnap = handoffSpotRef.current;
-        if (!spotSnap || !user) return;
+        if (!spotSnap || !user) {
+            showTerminalSubmitFailure(new Error('Handoff participants changed'));
+            return;
+        }
+        if (!isHandoffFailureReason(reason)) {
+            throw new Error('Invalid handoff failure reason');
+        }
+        if (handoffSubmitLock.current) return;
+        handoffSubmitLock.current = true;
+        lastTerminalAttempt.current = { outcome: 'failed', reason };
+        setHandoffSubmitting(true);
+        setHandoffSubmitError(null);
+        try {
+            await completeTerminalHandoff(db, {
+                spotId: spotSnap.id,
+                driverId: user.id,
+                driverName: user.username || 'Someone',
+                finderId: spotSnap.finderId,
+                address: spotSnap.address || '',
+                outcome: 'failed',
+                failureReason: reason,
+            });
 
-        await completeTerminalHandoff(db, {
-            spotId: spotSnap.id,
-            driverId: user.id,
-            driverName: user.username || 'Someone',
-            finderId: spotSnap.finderId,
-            address: spotSnap.address || '',
-            outcome: 'failed',
-            failureReason: reason,
-        });
+            noteTerminalHandoff(spotSnap.id);
+            setHandoffStep(null);
+            setHandoffFinderName(null);
+            setHandoffAddress('');
+            handoffSpotRef.current = null;
+            setSelectedItem(null);
+            lastTerminalAttempt.current = null;
+        } catch (error) {
+            showTerminalSubmitFailure(error);
+        } finally {
+            handoffSubmitLock.current = false;
+            setHandoffSubmitting(false);
+        }
+    };
 
-        noteTerminalHandoff(spotSnap.id);
-        setHandoffStep(null);
-        setHandoffFinderName(null);
-        setHandoffAddress('');
-        handoffSpotRef.current = null;
-        setSelectedItem(null);
+    const retryTerminalHandoff = () => {
+        const attempt = lastTerminalAttempt.current;
+        if (!attempt) return;
+        if (attempt.outcome === 'success') return handleHandoffOutcome('success');
+        return handleFailureReason(attempt.reason);
     };
 
     const showDeparturePingDenial = (copy: { title: string; message: string }) => {
@@ -729,6 +787,10 @@ export function useInterestFlow({
 
     const handleSkipDeparture = () => {
         setHandoffStep(null);
+        setHandoffSubmitError(null);
+        setHandoffSubmitting(false);
+        handoffSubmitLock.current = false;
+        lastTerminalAttempt.current = null;
         setHandoffFinderName(null);
         setHandoffAddress('');
         setHandoffSpotCoords(null);
@@ -747,6 +809,9 @@ export function useInterestFlow({
         interestError,
         setInterestError,
         handoffStep,
+        handoffSubmitError,
+        handoffSubmitting,
+        retryTerminalHandoff,
         handoffFinderName,
         handoffAddress,
         handoffSpotCoords,

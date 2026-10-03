@@ -339,6 +339,9 @@ const en: Record<string, string> = {
     'handoff.reminder_set_body': "When it's time to move, we'll send you a nudge so you don't miss it.",
     'handoff.pay_it_forward_body': "When you leave, we'll help you ping this spot for the next driver.",
     'handoff.resume_chip': 'Finish your handoff',
+    'handoff.submit_saving': 'Saving…',
+    'handoff.submit_failed': "Couldn't save this outcome.",
+    'handoff.submit_retry': 'Try again',
 
     // Nearby Activity — remaining strings
     'nearby_activity.live': 'Live',

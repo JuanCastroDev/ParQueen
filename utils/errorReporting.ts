@@ -46,7 +46,8 @@ export type CriticalAction =
   | 'claim_cancel'
   | 'message_send'
   | 'chat_delete'
-  | 'chat_init';
+  | 'chat_init'
+  | 'terminal_handoff';
 
 /**
  * Deliberately tiny and low-cardinality — no document/user identifiers, no
