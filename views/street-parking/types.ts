@@ -33,7 +33,8 @@ export interface MapItem {
     holdRequestedBy?: string | null;
     holdTimerExpiresAt?: any;
     pingMode?: 'now' | 'later' | null;
-    claimState?: 'committed' | 'heading' | null;
+    claimState?: 'committed' | 'heading' | 'arrived_pending_outcome' | null;
+    arrivedAt?: any;
     claimStartedAt?: any;
     ownerLeavingNow?: boolean | null;
     ownerLeavingNowAt?: any;

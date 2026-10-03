@@ -229,4 +229,45 @@ describe('useSpotData transition semantics (real hook, mocked Firestore, DOM-fre
         expect(plain.claimStartedAt).toBeNull();
         expect(timestampToMillis(plain.claimStartedAt)).toBe(0);
     });
+
+    it('maps claimState and arrivedAt onto MapItem for a later resume read', async () => {
+        let latest: any = null;
+        const onResult = (r: any) => { latest = r; };
+
+        await act(async () => {
+            TestRenderer.create(React.createElement(Harness, { center: CENTER_A, radius: 2, onResult }));
+        });
+
+        const ranges = buildGeoQueryRanges(CENTER_A[1], CENTER_A[0], 2);
+        const arrivedAt = { toMillis: () => 1_700_000_999_000 };
+        await act(async () => {
+            ranges.forEach((r, i) => {
+                const key = `${r.start}:${r.end}`;
+                if (i === 0) {
+                    emit(key, [{
+                        id: 'arrived-fields',
+                        data: {
+                            lat: CENTER_A[1],
+                            lng: CENTER_A[0],
+                            geohash: 'dr5regy1',
+                            status: 'interested',
+                            finderId: 'owner',
+                            interestedUserId: 'me',
+                            reportedAt: { toMillis: () => Date.now() },
+                            expiresAt: { toMillis: () => Date.now() + 3_600_000 },
+                            address: 'Arrival fields',
+                            claimState: 'arrived_pending_outcome',
+                            arrivedAt,
+                        },
+                    }]);
+                } else {
+                    emit(key, []);
+                }
+            });
+        });
+
+        const mapped = latest.freeSpots.find((spot: any) => spot.id === 'arrived-fields');
+        expect(mapped.claimState).toBe('arrived_pending_outcome');
+        expect(mapped.arrivedAt).toBe(arrivedAt);
+    });
 });

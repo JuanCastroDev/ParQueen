@@ -73,6 +73,43 @@ describe('cancelClaimTransaction — post-failure error classification (Phase 3 
         await expect(cancelClaimTransaction({} as any, params)).rejects.toBe(err);
     });
 
+    it('an occupied arrived claim is already resolved and is not cleared', async () => {
+        const writes: string[] = [];
+        vi.mocked(runTransaction).mockImplementation(async (_db: unknown, callback: any) => callback({
+            get: async () => ({
+                exists: () => true,
+                data: () => ({
+                    status: 'occupied',
+                    claimState: 'arrived_pending_outcome',
+                    interestedUserId: 'u1',
+                    claimStartedAt: { toMillis: () => 123 },
+                }),
+            }),
+            update: () => writes.push('update'),
+            delete: () => writes.push('delete'),
+            set: () => writes.push('set'),
+        }));
+
+        await expect(cancelClaimTransaction({} as any, params)).resolves.toBe('already_resolved');
+        expect(writes).toEqual([]);
+    });
+
+    it('a permission-denied re-read of an arrived Ping is already resolved', async () => {
+        const err = permissionDenied();
+        vi.mocked(runTransaction).mockRejectedValue(err);
+        vi.mocked(getDoc).mockResolvedValue({
+            exists: () => true,
+            data: () => ({
+                status: 'occupied',
+                claimState: 'arrived_pending_outcome',
+                interestedUserId: 'u1',
+                claimStartedAt: { toMillis: () => 123 },
+            }),
+        } as any);
+
+        await expect(cancelClaimTransaction({} as any, params)).resolves.toBe('already_resolved');
+    });
+
     it('a non-permission-denied failure is rethrown immediately, without attempting a re-read at all', async () => {
         const err = Object.assign(new Error('unavailable'), { code: 'unavailable' });
         vi.mocked(runTransaction).mockRejectedValue(err);
