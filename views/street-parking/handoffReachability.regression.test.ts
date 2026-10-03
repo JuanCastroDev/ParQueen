@@ -52,6 +52,7 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
   let server: Server;
   let chrome: ChildProcess;
   let chromeStderr = '';
+  let browser: ((method: string, params?: Record<string, unknown>) => Promise<any>) | undefined;
   let page: (method: string, params?: Record<string, unknown>) => Promise<any>;
   let port = 0;
 
@@ -60,11 +61,36 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
   }, 60000);
 
   afterAll(async () => {
-    if (chrome && chrome.exitCode === null && chrome.signalCode === null) {
-      const exited = new Promise<void>((resolve) => chrome.once('exit', () => resolve()));
-      chrome.kill('SIGKILL');
-      await Promise.race([exited, sleep(5000)]);
+    const waitForChromeExit = (timeoutMs: number) => new Promise<boolean>((resolve) => {
+      if (!chrome || chrome.exitCode !== null || chrome.signalCode !== null) {
+        resolve(true);
+        return;
+      }
+      const onExit = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        chrome.off('exit', onExit);
+        resolve(false);
+      }, timeoutMs);
+      chrome.once('exit', onExit);
+    });
+
+    let chromeExited = !chrome || chrome.exitCode !== null || chrome.signalCode !== null;
+    if (!chromeExited) {
+      try {
+        await browser?.('Browser.close');
+      } catch {
+        // Browser.close can sever the DevTools socket before its response arrives.
+      }
+      chromeExited = await waitForChromeExit(3000);
     }
+    if (!chromeExited && chrome && chrome.exitCode === null && chrome.signalCode === null) {
+      chrome.kill('SIGKILL');
+      chromeExited = await waitForChromeExit(3000);
+    }
+
     await new Promise<void>((resolve) => {
       if (!server) {
         resolve();
@@ -72,7 +98,18 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
       }
       server.close(() => resolve());
     });
-    rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+
+    // CI runners occasionally keep Chrome profile files busy for a moment after
+    // process exit. Cleanup is hygiene, not part of the reachability assertion.
+    // Never turn otherwise-passing product assertions red for that OS race.
+    if (chromeExited) {
+      try {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 40, retryDelay: 100 });
+      } catch (error) {
+        const code = error && typeof error === 'object' ? (error as NodeJS.ErrnoException).code : undefined;
+        if (code !== 'ENOTEMPTY' && code !== 'EBUSY' && code !== 'EPERM') throw error;
+      }
+    }
   });
 
   async function boot() {
@@ -151,7 +188,7 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
       browserWs.addEventListener('open', () => resolve());
       browserWs.addEventListener('error', () => reject(new Error('browser socket')));
     });
-    const browser = wire(browserWs);
+    browser = wire(browserWs);
     const { targetId } = await browser('Target.createTarget', { url: 'about:blank' });
     let target: { id: string; webSocketDebuggerUrl: string } | undefined;
     for (let i = 0; i < 50 && !target; i++) {
