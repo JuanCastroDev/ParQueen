@@ -12,6 +12,14 @@ import { commitClaimToHeading } from './commitToHeading';
 import { reportClaimFailure, reportClaimCancelFailure } from './claimFailureReporting';
 import { t } from '../../i18n';
 import { completeFinderConfirmedHandoff, completeTerminalHandoff } from './completeTerminalHandoff';
+import {
+    claimerArrivedSpotsQuery,
+    claimerTerminalFeedbackQuery,
+    selectUnfinishedHandoff,
+    terminalSpotIdsFromFeedback,
+    type ClaimerSpotRecord,
+    type UnfinishedHandoff,
+} from './unfinishedHandoff';
 
 interface UseInterestFlowOptions {
     selectedItem: any;
@@ -67,6 +75,13 @@ export function useInterestFlow({
         finderId: string; finderName: string; geohash?: string;
     } | null>(null);
     const [handoffSpotCoords, setHandoffSpotCoords] = useState<{ lat: number; lng: number; address: string } | null>(null);
+    const [unfinishedHandoff, setUnfinishedHandoff] = useState<UnfinishedHandoff | null>(null);
+    const arrivedSpotsRef = useRef<ClaimerSpotRecord[]>([]);
+    const terminalSpotIdsRef = useRef<Set<string>>(new Set());
+    const optimisticTerminalRef = useRef<Set<string>>(new Set());
+    const resumeReadyRef = useRef({ spots: false, feedback: false });
+    const resumeUserIdRef = useRef<string | undefined>(user?.id);
+    resumeUserIdRef.current = user?.id;
     const [finderToast, setFinderToast] = useState<string | null>(null);
     const [finderToastTitle, setFinderToastTitle] = useState<string | null>(null);
     const [finderToastVariant, setFinderToastVariant] = useState<'success' | 'info'>('success');
@@ -125,6 +140,99 @@ export function useInterestFlow({
         });
         return () => unsub();
     }, [user?.id]);
+
+    // Claimer-scoped resume. Occupied arrived Pings are not on the public map
+    // feed. Dismissing the sheet does not write; only terminal feedback clears this.
+    useEffect(() => {
+        if (!user?.id || !db) {
+            arrivedSpotsRef.current = [];
+            terminalSpotIdsRef.current = new Set();
+            optimisticTerminalRef.current = new Set();
+            resumeReadyRef.current = { spots: false, feedback: false };
+            setUnfinishedHandoff(null);
+            return;
+        }
+        const uid = user.id;
+        let cancelled = false;
+        arrivedSpotsRef.current = [];
+        terminalSpotIdsRef.current = new Set();
+        optimisticTerminalRef.current = new Set();
+        resumeReadyRef.current = { spots: false, feedback: false };
+
+        const publish = () => {
+            if (cancelled || !resumeReadyRef.current.spots || !resumeReadyRef.current.feedback) return;
+            setUnfinishedHandoff(selectUnfinishedHandoff(
+                arrivedSpotsRef.current,
+                terminalSpotIdsRef.current,
+                uid,
+            ));
+        };
+
+        const unsubSpots = onSnapshot(
+            claimerArrivedSpotsQuery(db, uid),
+            (snap) => {
+                arrivedSpotsRef.current = snap.docs.map((spotDoc) => ({ id: spotDoc.id, data: spotDoc.data() }));
+                resumeReadyRef.current.spots = true;
+                publish();
+            },
+            () => {
+                arrivedSpotsRef.current = [];
+                resumeReadyRef.current.spots = true;
+                publish();
+            },
+        );
+        const unsubFeedback = onSnapshot(
+            claimerTerminalFeedbackQuery(db, uid),
+            (snap) => {
+                const ids = terminalSpotIdsFromFeedback(snap.docs);
+                for (const id of optimisticTerminalRef.current) ids.add(id);
+                terminalSpotIdsRef.current = ids;
+                resumeReadyRef.current.feedback = true;
+                publish();
+            },
+            () => {
+                resumeReadyRef.current.feedback = false;
+                if (!cancelled) setUnfinishedHandoff(null);
+            },
+        );
+        return () => {
+            cancelled = true;
+            unsubSpots();
+            unsubFeedback();
+        };
+    }, [user?.id]);
+
+    const noteTerminalHandoff = useCallback((spotId: string) => {
+        optimisticTerminalRef.current.add(spotId);
+        terminalSpotIdsRef.current.add(spotId);
+        const uid = resumeUserIdRef.current;
+        if (!uid || !resumeReadyRef.current.spots || !resumeReadyRef.current.feedback) {
+            setUnfinishedHandoff((current) => (current?.id === spotId ? null : current));
+            return;
+        }
+        setUnfinishedHandoff(selectUnfinishedHandoff(
+            arrivedSpotsRef.current,
+            terminalSpotIdsRef.current,
+            uid,
+        ));
+    }, []);
+
+    const resumeUnfinishedHandoff = useCallback(() => {
+        if (!unfinishedHandoff) return;
+        handoffSpotRef.current = {
+            id: unfinishedHandoff.id,
+            lat: unfinishedHandoff.lat,
+            lng: unfinishedHandoff.lng,
+            address: unfinishedHandoff.address,
+            finderId: unfinishedHandoff.finderId,
+            finderName: unfinishedHandoff.finderName,
+            geohash: unfinishedHandoff.geohash,
+        };
+        setHandoffFinderName(unfinishedHandoff.finderName || null);
+        setHandoffAddress(unfinishedHandoff.address || '');
+        // Kill, refresh, and sheet dismiss all reopen at the outcome step.
+        setHandoffStep('outcome');
+    }, [unfinishedHandoff]);
 
     // Dynamic ETA: debounce-write claimer's estimated drive time back to Firestore
     useEffect(() => {
@@ -430,6 +538,7 @@ export function useInterestFlow({
             failureReason: null,
         });
 
+        noteTerminalHandoff(spotSnap.id);
         setHandoffSpotCoords({ lat: spotSnap.lat, lng: spotSnap.lng, address: spotSnap.address || '' });
         setHandoffStep('celebration');
     };
@@ -448,6 +557,7 @@ export function useInterestFlow({
             failureReason: reason,
         });
 
+        noteTerminalHandoff(spotSnap.id);
         setHandoffStep(null);
         setHandoffFinderName(null);
         setHandoffAddress('');
@@ -640,6 +750,8 @@ export function useInterestFlow({
         handoffFinderName,
         handoffAddress,
         handoffSpotCoords,
+        unfinishedHandoff,
+        resumeUnfinishedHandoff,
         finderToast,
         finderToastTitle,
         finderToastVariant,
