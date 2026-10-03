@@ -28,6 +28,7 @@ Names only. The signed job stops if any of these are empty. It prints `PRESENT` 
 - `VITE_FIREBASE_APPCHECK_SITE_KEY`
 - `VITE_SENTRY_DSN`
 - `VITE_FIREBASE_VAPID_KEY`
+- `IOS_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_B64`
 
 `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, and `SENTRY_PROJECT` are not required. The production build leaves source-map upload off. The Sentry DSN can still be compiled into the app.
 

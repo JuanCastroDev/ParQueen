@@ -208,6 +208,34 @@ jobs:
           fi
           echo "No tracked mutations."
 
+      - name: Materialize GoogleService-Info.plist
+        env:
+          IOS_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_B64: ${{ secrets.IOS_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          import os
+          import plistlib
+          from pathlib import Path
+
+          value = os.environ.get("IOS_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_B64")
+          if not value:
+              raise SystemExit("missing IOS_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_B64")
+
+          target = Path("ios/App/App/GoogleService-Info.plist")
+          target.write_bytes(base64.b64decode(value, validate=True))
+          parsed = plistlib.loads(target.read_bytes())
+          if parsed.get("BUNDLE_ID") != "app.parqueen":
+              raise SystemExit("GoogleService-Info.plist BUNDLE_ID mismatch")
+          if parsed.get("GOOGLE_APP_ID") != "1:768131391875:ios:1356ad05455bd17a3196b6":
+              raise SystemExit("GoogleService-Info.plist GOOGLE_APP_ID mismatch")
+          print("GoogleService-Info.plist: PRESENT")
+          print("BUNDLE_ID: MATCH")
+          print("GOOGLE_APP_ID: MATCH")
+          PY
+
       - name: Resolve Swift package dependencies
         shell: bash
         run: |
@@ -294,6 +322,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
+          rm -f ios/App/App/GoogleService-Info.plist
           echo "=== runner ==="
           echo "runs-on: macos-26"
           echo "=== sw_vers ==="

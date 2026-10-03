@@ -13,10 +13,13 @@ export const readPhoneAuthPlatformEnv = (): PhoneAuthPlatformEnv => ({
 });
 
 /**
- * Web/PWA (and Capacitor iOS, which is out of this phase) keep Firebase JS
- * RecaptchaVerifier + signInWithPhoneNumber. Only Capacitor Android uses the
- * native Phone Auth bridge so SMS can be sent without WebView reCAPTCHA.
+ * Web/PWA keeps Firebase JS RecaptchaVerifier + signInWithPhoneNumber.
+ * Capacitor Android and Capacitor iOS use the native Phone Auth bridge.
+ * The native bridge returns a verification ID; the existing JS Auth instance
+ * completes sign-in or deletion reauth.
  */
 export const resolvePhoneAuthPath = (
   env: PhoneAuthPlatformEnv = readPhoneAuthPlatformEnv(),
-): PhoneAuthPath => (env.isNative && env.platform === 'android' ? 'native' : 'web');
+): PhoneAuthPath => (
+  env.isNative && (env.platform === 'android' || env.platform === 'ios') ? 'native' : 'web'
+);

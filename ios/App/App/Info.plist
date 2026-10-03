@@ -74,5 +74,16 @@
 	<string>ParQueen uses your location while the app is open to show nearby parking Pings and your position on the map.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>app-1-768131391875-ios-1356ad05455bd17a3196b6</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>
