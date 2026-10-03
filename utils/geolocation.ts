@@ -31,6 +31,8 @@ export interface AppPosition {
     longitude: number;
     accuracy: number | null;
   };
+  /** Device time of this fix, when the platform reports one. */
+  timestampMs?: number;
 }
 
 export interface AppPositionOptions {
@@ -73,11 +75,12 @@ export interface LocationBackend {
 export interface NativeGeolocationPlugin {
   getCurrentPosition: (options?: AppPositionOptions) => Promise<{
     coords: { latitude: number; longitude: number; accuracy?: number | null };
+    timestamp?: number;
   }>;
   watchPosition: (
     options: AppPositionOptions,
     callback: (
-      position: { coords: { latitude: number; longitude: number; accuracy?: number | null } } | null,
+      position: { coords: { latitude: number; longitude: number; accuracy?: number | null }; timestamp?: number } | null,
       err?: unknown,
     ) => void,
   ) => Promise<string>;
@@ -110,15 +113,20 @@ const emptySnapshot = (
 
 export const normalizePosition = (position: {
   coords: { latitude: number; longitude: number; accuracy?: number | null };
-}): AppPosition => ({
-  coords: {
-    latitude: position.coords.latitude,
-    longitude: position.coords.longitude,
-    accuracy: Number.isFinite(position.coords.accuracy as number)
-      ? (position.coords.accuracy as number)
-      : null,
-  },
-});
+  timestamp?: number;
+}): AppPosition => {
+  const normalized: AppPosition = {
+    coords: {
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      accuracy: Number.isFinite(position.coords.accuracy as number)
+        ? (position.coords.accuracy as number)
+        : null,
+    },
+  };
+  if (Number.isFinite(position.timestamp)) normalized.timestampMs = position.timestamp;
+  return normalized;
+};
 
 export const mapPluginPermissionStatus = (
   status: { location?: string; coarseLocation?: string },

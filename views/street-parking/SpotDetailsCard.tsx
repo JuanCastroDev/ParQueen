@@ -7,6 +7,8 @@ import { getVehicleHex, VehicleIcon } from '../../utils/vehicleIcon';
 import { getTierForTitle, TIER_VISUALS } from '../../utils/crowns';
 import { CrownBadge } from '../../utils/CrownBadge';
 import { derivePingLifecycle, timestampToMillis } from '../../utils/pingLifecycle';
+import { ArrivalGpsConfirm } from './ArrivalGpsConfirm';
+import type { ArrivalLocationReading } from './arrivalLocation';
 
 // QUICK_REPLIES moved inside SpotDetailsCardInner so they re-resolve on language change
 
@@ -33,6 +35,11 @@ interface SpotDetailsCardProps {
     interestError: string | null;
     estDriveMinutes: number | null;
     isWithinArrivalRange: boolean;
+    /** Present on the live map. Absent keeps the legacy proximity-disabled button for older callers. */
+    arrivalLocation?: ArrivalLocationReading;
+    onRetryArrivalLocation?: () => void;
+    arrivalLocationRetrying?: boolean;
+    arrivalNowMs?: number;
     maxEtaMinutes: number;
     manageMode?: boolean;
     nowMs?: number;
@@ -45,7 +52,8 @@ export const SpotDetailsCard: React.FC<SpotDetailsCardProps> = ({
     onHeadingThere, onScheduledClaim, onCommitToHeading, onOwnerLeaveNow,
     onEditSpot, onDeletePing, onArrival,
     onCancelByFinder, onCancelByClaimer, cancelingClaim = false, claiming = false, arriving = false, onDriverArrived, onMessageUser,
-    interestError, estDriveMinutes, isWithinArrivalRange, maxEtaMinutes, manageMode = false, nowMs = Date.now(),
+    interestError, estDriveMinutes, isWithinArrivalRange, arrivalLocation, onRetryArrivalLocation,
+    arrivalLocationRetrying = false, arrivalNowMs, maxEtaMinutes, manageMode = false, nowMs = Date.now(),
     backLabel, onBack,
 }) => {
     if (!selectedItem) return null;
@@ -61,7 +69,7 @@ export const SpotDetailsCard: React.FC<SpotDetailsCardProps> = ({
                     <span>{backLabel ?? 'Back'}</span>
                 </button>
             )}
-            <SpotDetailsCardInner {...{ selectedItem, freeSpots, user, userLocation, spotAddress, onHeadingThere, onScheduledClaim, onCommitToHeading, onOwnerLeaveNow, onEditSpot, onDeletePing, onArrival, onCancelByFinder, onCancelByClaimer, cancelingClaim, claiming, arriving, onDriverArrived, onMessageUser, interestError, estDriveMinutes, isWithinArrivalRange, maxEtaMinutes, manageMode, nowMs }} />
+            <SpotDetailsCardInner {...{ selectedItem, freeSpots, user, userLocation, spotAddress, onHeadingThere, onScheduledClaim, onCommitToHeading, onOwnerLeaveNow, onEditSpot, onDeletePing, onArrival, onCancelByFinder, onCancelByClaimer, cancelingClaim, claiming, arriving, onDriverArrived, onMessageUser, interestError, estDriveMinutes, isWithinArrivalRange, arrivalLocation, onRetryArrivalLocation, arrivalLocationRetrying, arrivalNowMs, maxEtaMinutes, manageMode, nowMs }} />
         </>
     );
 };
@@ -71,7 +79,8 @@ const SpotDetailsCardInner: React.FC<Omit<SpotDetailsCardProps, 'backLabel' | 'o
     onHeadingThere, onScheduledClaim, onCommitToHeading, onOwnerLeaveNow,
     onEditSpot, onDeletePing, onArrival,
     onCancelByFinder, onCancelByClaimer, cancelingClaim = false, claiming = false, arriving = false, onDriverArrived, onMessageUser,
-    interestError, estDriveMinutes, isWithinArrivalRange, maxEtaMinutes, manageMode = false, nowMs = Date.now(),
+    interestError, estDriveMinutes, isWithinArrivalRange, arrivalLocation, onRetryArrivalLocation,
+    arrivalLocationRetrying = false, arrivalNowMs, maxEtaMinutes, manageMode = false, nowMs = Date.now(),
 }) => {
     useLang();
     const claimerCancelReasons = [
@@ -224,12 +233,26 @@ const SpotDetailsCardInner: React.FC<Omit<SpotDetailsCardProps, 'backLabel' | 'o
                                 {t('claim_flow.message')}
                             </button>
                         </div>
-                        <button onClick={onArrival} disabled={!isWithinArrivalRange || handoffWriteInFlight}
-                            aria-busy={arriving}
-                            className="w-full font-bold py-4 rounded-2xl transition-all text-sm active:scale-95 text-white disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 flex items-center justify-center gap-2"
-                            style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>
-                            {isWithinArrivalRange ? t('claim_flow.ive_arrived') : (distanceText ? t('claim_flow.dist_away', { dist: distanceText }) : t('claim_flow.get_closer'))}
-                        </button>
+                        {arrivalLocation ? (
+                            <ArrivalGpsConfirm
+                                spotId={selectedItem.id}
+                                spot={{ lat: selectedItem.lat, lng: selectedItem.lng }}
+                                reading={arrivalLocation}
+                                nowMs={arrivalNowMs}
+                                arriving={arriving}
+                                handoffWriteInFlight={handoffWriteInFlight}
+                                retrying={arrivalLocationRetrying}
+                                onArrival={onArrival}
+                                onRetry={onRetryArrivalLocation}
+                            />
+                        ) : (
+                            <button onClick={onArrival} disabled={!isWithinArrivalRange || handoffWriteInFlight}
+                                aria-busy={arriving}
+                                className="w-full font-bold py-4 rounded-2xl transition-all text-sm active:scale-95 text-white disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 flex items-center justify-center gap-2"
+                                style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>
+                                {isWithinArrivalRange ? t('claim_flow.ive_arrived') : (distanceText ? t('claim_flow.dist_away', { dist: distanceText }) : t('claim_flow.get_closer'))}
+                            </button>
+                        )}
                     </>
                 )}
             </div>
