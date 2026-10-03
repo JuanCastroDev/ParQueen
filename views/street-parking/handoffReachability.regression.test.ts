@@ -373,6 +373,11 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
   }, 60000);
 });
 
+// Headed Chrome on Xvfb, not headless. Headless reports pointer:none and hover:none,
+// which is not a resized desktop window. This suite is skipped when Chrome or Xvfb
+// is missing. A "Chrome DevTools did not start" error here is that environment
+// failing to boot, not a missed click on the failure-reason button. The assertions
+// below run only after DevTools is up, and they require pointer:fine and hover:hover.
 describe.skipIf(!chromeBin || !xvfbBin)('handoff failure reasons in a resized desktop window', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'handoff-desktop-'));
   let server: Server;
