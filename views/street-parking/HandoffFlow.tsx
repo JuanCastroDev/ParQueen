@@ -238,8 +238,9 @@ export const HandoffFlow: React.FC<HandoffFlowProps> = ({
                     {FAILURE_REASONS.map(({ label, icon: Icon }) => (
                         <button
                             key={label}
+                            type="button"
                             onClick={() => onFailureReason(label)}
-                            className="w-full py-3 px-4 rounded-2xl text-sm font-semibold border border-[var(--color-border)] bg-white/5 hover:bg-white/10 transition-all active:scale-95 text-[var(--color-text)] flex items-center gap-3"
+                            className="handoff-failure-reason w-full py-3 px-4 rounded-2xl text-sm font-semibold border border-[var(--color-border)] bg-white/5 hover:bg-white/10 transition-all active:scale-95 text-[var(--color-text)] flex items-center gap-3"
                         >
                             <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
                                 style={{ background: 'rgba(30,117,255,0.12)', border: '1px solid rgba(30,117,255,0.2)' }}>
