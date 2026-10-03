@@ -97,8 +97,9 @@ export const HandoffFlow: React.FC<HandoffFlowProps> = ({
                         <button
                             type="button"
                             data-testid="handoff-submit-retry"
-                            onClick={onRetry}
-                            className="mt-3 w-full py-3 rounded-2xl text-sm font-bold text-white transition-all active:scale-95"
+                            disabled={submitting}
+                            onClick={() => { if (!submitting) return onRetry(); }}
+                            className="mt-3 w-full py-3 rounded-2xl text-sm font-bold text-white transition-all active:scale-95 disabled:opacity-50"
                             style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}
                         >
                             {t('handoff.submit_retry')}
@@ -122,8 +123,12 @@ export const HandoffFlow: React.FC<HandoffFlowProps> = ({
                 <p className="text-sm text-[var(--color-text-secondary)] mb-6">Let us know how it went</p>
                 <div className="flex gap-3">
                     <button
-                        onClick={() => { if (!submitted) { setSubmitted(true); onOutcome('success'); } }}
-                        disabled={submitted}
+                        onClick={() => {
+                            if (submitted || submitting) return;
+                            setSubmitted(true);
+                            return onOutcome('success');
+                        }}
+                        disabled={submitted || submitting}
                         className="flex-1 py-3.5 rounded-2xl text-sm font-bold text-white flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50"
                         style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}
                     >
@@ -131,8 +136,12 @@ export const HandoffFlow: React.FC<HandoffFlowProps> = ({
                         Yes, I'm in!
                     </button>
                     <button
-                        onClick={() => { if (!submitted) { setSubmitted(true); onOutcome('failed'); } }}
-                        disabled={submitted}
+                        onClick={() => {
+                            if (submitted || submitting) return;
+                            setSubmitted(true);
+                            return onOutcome('failed');
+                        }}
+                        disabled={submitted || submitting}
                         className="flex-1 py-3.5 rounded-2xl text-sm font-bold border border-[var(--color-border)] bg-white/5 hover:bg-white/10 transition-all active:scale-95 text-[var(--color-text)] flex items-center justify-center gap-2 disabled:opacity-50"
                     >
                         <XCircle size={16} className="text-[var(--color-danger)]" />
@@ -276,7 +285,7 @@ export const HandoffFlow: React.FC<HandoffFlowProps> = ({
                             key={label}
                             type="button"
                             disabled={submitting}
-                            onClick={() => onFailureReason(label)}
+                            onClick={() => { if (!submitting) return onFailureReason(label); }}
                             className="handoff-failure-reason w-full py-3 px-4 rounded-2xl text-sm font-semibold border border-[var(--color-border)] bg-white/5 hover:bg-white/10 transition-all active:scale-95 text-[var(--color-text)] flex items-center gap-3 disabled:opacity-50"
                         >
                             <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"

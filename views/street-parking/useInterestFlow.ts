@@ -537,6 +537,11 @@ export function useInterestFlow({
     };
 
     const handleHandoffOutcome = async (outcome: 'success' | 'failed') => {
+        // The lock covers every terminal choice, including the local step
+        // change for "No luck". An in-flight success retry must not walk
+        // the outcome screen onto the failure-reason path.
+        if (handoffSubmitLock.current) return;
+
         const spotSnap = handoffSpotRef.current;
         if (!spotSnap || !user) {
             if (outcome === 'success') showTerminalSubmitFailure(new Error('Handoff participants changed'));
@@ -549,7 +554,6 @@ export function useInterestFlow({
             return;
         }
 
-        if (handoffSubmitLock.current) return;
         handoffSubmitLock.current = true;
         lastTerminalAttempt.current = { outcome: 'success' };
         setHandoffSubmitting(true);
@@ -618,7 +622,7 @@ export function useInterestFlow({
 
     const retryTerminalHandoff = () => {
         const attempt = lastTerminalAttempt.current;
-        if (!attempt) return;
+        if (!attempt || handoffSubmitLock.current) return;
         if (attempt.outcome === 'success') return handleHandoffOutcome('success');
         return handleFailureReason(attempt.reason);
     };
