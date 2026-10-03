@@ -1,6 +1,6 @@
 import { Capacitor } from '@capacitor/core';
 
-export type PhoneAuthPath = 'web' | 'native';
+export type PhoneAuthPath = 'web' | 'native-android' | 'native-ios';
 
 export interface PhoneAuthPlatformEnv {
   isNative: boolean;
@@ -14,12 +14,14 @@ export const readPhoneAuthPlatformEnv = (): PhoneAuthPlatformEnv => ({
 
 /**
  * Web/PWA keeps Firebase JS RecaptchaVerifier + signInWithPhoneNumber.
- * Capacitor Android and Capacitor iOS use the native Phone Auth bridge.
- * The native bridge returns a verification ID; the existing JS Auth instance
- * completes sign-in or deletion reauth.
+ * Capacitor Android keeps native send plus JS PhoneAuthProvider.credential.
+ * Capacitor iOS verifies and confirms on the Apple SDK, then bridges with a custom token.
  */
 export const resolvePhoneAuthPath = (
   env: PhoneAuthPlatformEnv = readPhoneAuthPlatformEnv(),
-): PhoneAuthPath => (
-  env.isNative && (env.platform === 'android' || env.platform === 'ios') ? 'native' : 'web'
-);
+): PhoneAuthPath => {
+  if (!env.isNative) return 'web';
+  if (env.platform === 'android') return 'native-android';
+  if (env.platform === 'ios') return 'native-ios';
+  return 'web';
+};

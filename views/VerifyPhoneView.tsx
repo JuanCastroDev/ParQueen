@@ -6,7 +6,7 @@ import { filterOtpInput, otpErrorKey, isOtpComplete } from '../utils/otp';
 import { SignupProgress } from '../components/SignupProgress';
 import { clearRecaptchaVerifier } from '../utils/recaptchaLifecycle';
 import { resendPhoneVerification, type PhoneVerificationSession } from '../utils/phoneAuth';
-import { iosPhoneAuthUiTone, reportIosPhoneAuthFailure } from '../utils/phoneAuthNative';
+import { iosPhoneAuthUiTone, reportIosPhoneAuthConfirmFailure, reportIosPhoneAuthFailure } from '../utils/phoneAuthNative';
 
 interface VerifyPhoneViewProps {
     // phone is canonical E.164, e.g. "+15555551234" or "+51987654321"
@@ -76,7 +76,7 @@ export const VerifyPhoneView: React.FC<VerifyPhoneViewProps> = ({
             clearRecaptchaVerifier(recaptchaRef);
             onVerify(confirmation);
         } catch (e: any) {
-            console.error('OTP verification failed:', e?.code);
+            reportIosPhoneAuthConfirmFailure(e, 'signup_confirm_code');
             setError(t(otpErrorKey(e?.code ?? '')));
             // Firebase never accepts a rejected code on a retry, so the digits are
             // dead weight. Leaving them stranded was the bug: maxLength=6 meant a
