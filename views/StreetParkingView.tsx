@@ -18,7 +18,12 @@ import { t, useLang } from '../i18n';
 import { VehicleIcon } from '../utils/vehicleIcon';
 import { getTitleForCrowns } from '../utils/crowns';
 import { createUserLocationGeohashPersister } from '../utils/userLocationGeohash';
-import { getCurrentPosition, isGeolocationAvailable, watchPosition, type LocationWatchHandle } from '../utils/geolocation';
+import { getCurrentPosition, isGeolocationAvailable, LocationPositionError, watchPosition, type LocationWatchHandle } from '../utils/geolocation';
+import {
+    arrivalFixFromPosition,
+    nextArrivalReading,
+    type ArrivalLocationReading,
+} from './street-parking/arrivalLocation';
 import { aggregateLocationSamples, collectLocationBurst } from '../utils/locationBurst';
 import {
     resolveCanonicalCurbWithLocation,
@@ -148,6 +153,34 @@ export const MapView: React.FC<MapViewProps> = ({
     const [selectedItem, setSelectedItem] = useState<any | null>(null);
     const [selectedItemManageMode, setSelectedItemManageMode] = useState(false);
     const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
+    const [arrivalReading, setArrivalReading] = useState<ArrivalLocationReading>({ fix: null, fault: null });
+    const [arrivalLocationRetrying, setArrivalLocationRetrying] = useState(false);
+    const arrivalRetryRef = useRef(false);
+    const retryArrivalLocation = useCallback(async () => {
+        if (arrivalRetryRef.current) return;
+        arrivalRetryRef.current = true;
+        setArrivalLocationRetrying(true);
+        try {
+            const position = await getCurrentPosition({
+                enableHighAccuracy: true,
+                timeout: 10000,
+                maximumAge: 0,
+            });
+            const fix = arrivalFixFromPosition(position, Date.now());
+            if (!fix) {
+                setArrivalReading(current => nextArrivalReading(current, { type: 'error', kind: 'unavailable' }));
+                return;
+            }
+            setArrivalReading({ fix, fault: null });
+            setUserLocation([fix.lng, fix.lat]);
+        } catch (error) {
+            const kind = error instanceof LocationPositionError ? error.kind : 'unavailable';
+            setArrivalReading(current => nextArrivalReading(current, { type: 'error', kind }));
+        } finally {
+            arrivalRetryRef.current = false;
+            setArrivalLocationRetrying(false);
+        }
+    }, []);
     const [searchCenter, setSearchCenter] = useState<[number, number] | null>(null);
     const [mapReady, setMapReady] = useState(false);
     const [stackGroup, setStackGroup] = useState<MapItem[] | null>(null);
@@ -1193,6 +1226,11 @@ export const MapView: React.FC<MapViewProps> = ({
                     }
                     const newLocation: [number, number] = [longitude, latitude];
                     setUserLocation(newLocation);
+                    const arrivalFix = arrivalFixFromPosition(
+                        { coords: { latitude, longitude }, timestampMs: position.timestampMs },
+                        Date.now(),
+                    );
+                    if (arrivalFix) setArrivalReading({ fix: arrivalFix, fault: null });
 
                     if (!mapRef.current) {
                         clearTimeout(fallbackTimer);
@@ -1215,15 +1253,17 @@ export const MapView: React.FC<MapViewProps> = ({
                         console.error("Geohash generation failed:", (err as any)?.name ?? 'unknown');
                     }
                 },
-                () => {
+                (error) => {
                     clearTimeout(fallbackTimer);
                     if (!mapRef.current) initMap(NYC_CENTER);
+                    setArrivalReading(current => nextArrivalReading(current, { type: 'error', kind: error.kind }));
                 },
                 { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
             );
         } else {
             clearTimeout(fallbackTimer);
             initMap(NYC_CENTER);
+            setArrivalReading({ fix: null, fault: 'unavailable' });
         }
 
         return () => {
@@ -1953,6 +1993,9 @@ export const MapView: React.FC<MapViewProps> = ({
                     interestError={interestFlow.interestError}
                     estDriveMinutes={selectedItem ? interestFlow.getEstDriveMinutes(selectedItem) : null}
                     isWithinArrivalRange={selectedItem ? interestFlow.isWithinArrivalRange(selectedItem) : false}
+                    arrivalLocation={arrivalReading}
+                    onRetryArrivalLocation={() => { void retryArrivalLocation(); }}
+                    arrivalLocationRetrying={arrivalLocationRetrying}
                     maxEtaMinutes={interestFlow.MAX_ETA_MINUTES}
                     manageMode={selectedItemManageMode}
                     nowMs={nowMs}
