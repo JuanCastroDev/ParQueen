@@ -36,6 +36,7 @@ Names only. The upload job stops if any of these are empty. It prints `PRESENT` 
 - `VITE_FIREBASE_APPCHECK_SITE_KEY`
 - `VITE_SENTRY_DSN`
 - `VITE_FIREBASE_VAPID_KEY`
+- `IOS_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_B64`
 
 `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, and `SENTRY_PROJECT` are not required. The production build leaves source-map upload off.
 
@@ -85,7 +86,7 @@ Upload #4 delivered marketing version 1.0, build 2, with the canonical crowned a
 
 IOS-LAUNCH-001: Firebase’s initial auth-state bootstrap never completed on the tested device. Evidence is consistent with Firebase Auth persistence initialization stalling before the first onAuthStateChanged callback. That is not a proven root cause. Build 2 is already processed, so it cannot be reused.
 
-The next upload is marketing version 1.0, build 3. It keeps the crowned icon and the camera-only Sign Scanner. Capacitor iOS Auth initializes with browser local persistence instead of the default IndexedDB persistence, and startup has an outer watchdog so the loading screen cannot wait forever. App Check stays enabled on the existing web reCAPTCHA path for Capacitor iOS. Replacing that path with native App Attest or DeviceCheck is a follow-up, not part of this build. This document does not dispatch that upload.
+The next upload is marketing version 1.0, build 4. It keeps the crowned icon, the camera-only Sign Scanner, the D4 Capacitor iOS Auth persistence repair, and the startup watchdog. Phone sign-in on Capacitor iOS sends the SMS through the native Firebase Apple Phone Auth bridge and finishes on the existing JavaScript Auth session. `GoogleService-Info.plist` stays untracked. The TestFlight job writes it from `IOS_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_B64` before archive and checks only the bundle ID and Firebase iOS app ID. Silent APNs app verification is not part of this build; the Apple SDK uses its reCAPTCHA fallback. App Check stays on the existing web reCAPTCHA path. This document does not dispatch that upload.
 
 ## Cleanup
 

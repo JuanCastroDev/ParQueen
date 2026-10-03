@@ -6,6 +6,7 @@ import { filterOtpInput, otpErrorKey, isOtpComplete } from '../utils/otp';
 import { SignupProgress } from '../components/SignupProgress';
 import { clearRecaptchaVerifier } from '../utils/recaptchaLifecycle';
 import { resendPhoneVerification, type PhoneVerificationSession } from '../utils/phoneAuth';
+import { iosPhoneAuthUiTone, reportIosPhoneAuthFailure } from '../utils/phoneAuthNative';
 
 interface VerifyPhoneViewProps {
     // phone is canonical E.164, e.g. "+15555551234" or "+51987654321"
@@ -114,7 +115,13 @@ export const VerifyPhoneView: React.FC<VerifyPhoneViewProps> = ({
         } catch (e: any) {
             clearRecaptchaVerifier(recaptchaRef);
             console.error('Resend failed:', maskPhone(phone), e?.code);
-            if (['auth/invalid-app-credential', 'auth/missing-app-credential', 'auth/captcha-check-failed'].includes(e?.code)) {
+            const iosTone = iosPhoneAuthUiTone(e);
+            if (iosTone) {
+                reportIosPhoneAuthFailure(e, 'signup_resend_code');
+                if (iosTone === 'invalid_number') setError(t('create_account.error_invalid'));
+                else if (iosTone === 'too_many_requests') setError(t('create_account.error_too_many'));
+                else setError(t('verify_phone.resend_failed'));
+            } else if (['auth/invalid-app-credential', 'auth/missing-app-credential', 'auth/captcha-check-failed'].includes(e?.code)) {
                 setError(t('phone_auth.error_expired'));
             } else {
                 setError(t('verify_phone.resend_failed'));

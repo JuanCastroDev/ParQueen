@@ -19,6 +19,7 @@ import {
     startPhoneVerification,
     type PhoneVerificationSession,
 } from '../utils/phoneAuth';
+import { iosPhoneAuthUiTone, reportIosPhoneAuthFailure } from '../utils/phoneAuthNative';
 
 interface CreateAccountViewProps {
     onContinue: (phoneE164: string, confirmationResult: PhoneVerificationSession) => void;
@@ -109,7 +110,13 @@ export const CreateAccountView: React.FC<CreateAccountViewProps> = ({ onContinue
             clearRecaptchaVerifier(recaptchaRef);
             // Log masked — never log full phone
             console.error('Send OTP failed:', maskPhone(phoneE164), e?.code);
-            if (e.code === 'auth/too-many-requests') setError(t('create_account.error_too_many'));
+            const iosTone = iosPhoneAuthUiTone(e);
+            if (iosTone) {
+                reportIosPhoneAuthFailure(e, 'signup_send_code');
+                if (iosTone === 'invalid_number') setError(t('create_account.error_invalid'));
+                else if (iosTone === 'too_many_requests') setError(t('create_account.error_too_many'));
+                else setError(t('create_account.error_generic'));
+            } else if (e.code === 'auth/too-many-requests') setError(t('create_account.error_too_many'));
             else if (e.code === 'auth/invalid-phone-number') setError(t('create_account.error_invalid'));
             else if (['auth/invalid-app-credential', 'auth/missing-app-credential', 'auth/captcha-check-failed'].includes(e?.code)) {
                 setError(t('phone_auth.error_expired'));

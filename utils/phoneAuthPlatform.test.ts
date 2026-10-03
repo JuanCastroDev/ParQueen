@@ -6,11 +6,11 @@ describe('resolvePhoneAuthPath', () => {
     expect(resolvePhoneAuthPath({ isNative: false, platform: 'web' })).toBe('web');
   });
 
-  it('selects the native path only on Capacitor Android', () => {
+  it('selects the native path on Capacitor Android', () => {
     expect(resolvePhoneAuthPath({ isNative: true, platform: 'android' })).toBe('native');
   });
 
-  it('keeps the web path on Capacitor iOS so this phase does not change iOS auth', () => {
-    expect(resolvePhoneAuthPath({ isNative: true, platform: 'ios' })).toBe('web');
+  it('selects the native path on Capacitor iOS', () => {
+    expect(resolvePhoneAuthPath({ isNative: true, platform: 'ios' })).toBe('native');
   });
 });

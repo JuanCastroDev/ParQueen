@@ -72,6 +72,7 @@ import type { AssistantAndroidBackHandle } from './views/AssistantView';
 import { App as CapacitorApp } from '@capacitor/app';
 import { legalViewFor } from './utils/inAppLegalNavigation';
 import type { PhoneVerificationSession } from './utils/phoneAuth';
+import { iosPhoneAuthUiTone, reportIosPhoneAuthFailure } from './utils/phoneAuthNative';
 import {
   requireAuthPhoneUser,
   resendPhoneReauthentication,
@@ -780,7 +781,7 @@ export default function App() {
     reauthSendingRef.current = true;
     setReauthError('');
     try {
-      // Web uses Recaptcha; Android native uses PhoneAuth + reauthenticateWithCredential.
+      // Web uses Recaptcha. Android and iOS native use PhoneAuth + reauthenticateWithCredential.
       const result = await startPhoneReauthentication({
         currentUser,
         recaptchaRef: reauthRecaptchaRef,
@@ -793,7 +794,19 @@ export default function App() {
     } catch (error: any) {
       if (sessionGen !== reauthSessionGenRef.current) return;
       clearReauthState();
-      if (['auth/invalid-app-credential', 'auth/missing-app-credential', 'auth/captcha-check-failed'].includes(error?.code)) {
+      const iosTone = iosPhoneAuthUiTone(error);
+      if (iosTone) {
+        reportIosPhoneAuthFailure(error, 'deletion_reauth_send');
+        if (iosTone === 'invalid_number') {
+          setReauthError(t('create_account.error_invalid'));
+          setDeletePhase('reauth_entering_phone');
+        } else if (iosTone === 'too_many_requests') {
+          setReauthError(t('create_account.error_too_many'));
+          setDeletePhase('reauth_entering_phone');
+        } else {
+          setDeletePhase('failed');
+        }
+      } else if (['auth/invalid-app-credential', 'auth/missing-app-credential', 'auth/captcha-check-failed'].includes(error?.code)) {
         setReauthError(t('phone_auth.error_expired'));
         setDeletePhase('reauth_entering_phone');
       } else {
@@ -858,7 +871,19 @@ export default function App() {
     } catch (error: any) {
       if (sessionGen !== reauthSessionGenRef.current) return;
       clearReauthState();
-      if (['auth/invalid-app-credential', 'auth/missing-app-credential', 'auth/captcha-check-failed'].includes(error?.code)) {
+      const iosTone = iosPhoneAuthUiTone(error);
+      if (iosTone) {
+        reportIosPhoneAuthFailure(error, 'deletion_reauth_resend');
+        if (iosTone === 'invalid_number') {
+          setReauthError(t('create_account.error_invalid'));
+          setDeletePhase('reauth_entering_phone');
+        } else if (iosTone === 'too_many_requests') {
+          setReauthError(t('create_account.error_too_many'));
+          setDeletePhase('reauth_entering_phone');
+        } else {
+          setDeletePhase('failed');
+        }
+      } else if (['auth/invalid-app-credential', 'auth/missing-app-credential', 'auth/captcha-check-failed'].includes(error?.code)) {
         setReauthError(t('phone_auth.error_expired'));
         setDeletePhase('reauth_entering_phone');
       } else {

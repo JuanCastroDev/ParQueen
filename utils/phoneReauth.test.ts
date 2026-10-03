@@ -9,6 +9,7 @@ import {
   startPhoneReauthentication,
   type PhoneReauthDependencies,
 } from './phoneReauth';
+import { resolvePhoneAuthPath } from './phoneAuthPlatform';
 import type { RecaptchaVerifierRef } from './recaptchaLifecycle';
 
 const replaceVerifier = vi.fn((ref: RecaptchaVerifierRef, _auth: unknown, _id: string) => {
@@ -179,6 +180,40 @@ describe('startPhoneReauthentication native Android path', () => {
     expect(credentialFromVerification).toHaveBeenCalledWith('native-reauth-vid', '123456');
     expect(reauthenticateWithCredential).toHaveBeenCalledWith(currentUser, {
       verificationId: 'native-reauth-vid',
+      code: '123456',
+      kind: 'phone-credential',
+    });
+  });
+});
+
+describe('startPhoneReauthentication Capacitor iOS path', () => {
+  const iosDeps = {
+    ...nativeDeps,
+    resolvePath: () => resolvePhoneAuthPath({ isNative: true, platform: 'ios' }),
+  } as PhoneReauthDependencies;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    authState.currentUser = currentUser;
+    startNative.mockResolvedValue({ verificationId: 'ios-reauth-vid' });
+    reauthenticateWithCredential.mockResolvedValue({ user: currentUser });
+  });
+
+  it('sends through the native bridge and confirms with reauthenticateWithCredential', async () => {
+    const ref: RecaptchaVerifierRef = { current: null };
+    const session = await startPhoneReauthentication({
+      currentUser: currentUser as never,
+      recaptchaRef: ref,
+      containerId: 'reauth-recaptcha-anchor',
+      deps: iosDeps,
+    });
+    expect(replaceVerifier).not.toHaveBeenCalled();
+    expect(reauthenticateWithPhoneNumber).not.toHaveBeenCalled();
+    expect(startNative).toHaveBeenCalledWith({ phoneNumber: '+15555550100' });
+    await session.confirm('123456');
+    expect(credentialFromVerification).toHaveBeenCalledWith('ios-reauth-vid', '123456');
+    expect(reauthenticateWithCredential).toHaveBeenCalledWith(currentUser, {
+      verificationId: 'ios-reauth-vid',
       code: '123456',
       kind: 'phone-credential',
     });

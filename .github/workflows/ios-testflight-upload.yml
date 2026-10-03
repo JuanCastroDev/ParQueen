@@ -541,11 +541,12 @@ jobs:
           VITE_FIREBASE_APPCHECK_SITE_KEY: ${{ secrets.VITE_FIREBASE_APPCHECK_SITE_KEY }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
           VITE_FIREBASE_VAPID_KEY: ${{ secrets.VITE_FIREBASE_VAPID_KEY }}
+          IOS_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_B64: ${{ secrets.IOS_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_B64 }}
         shell: bash
         run: |
           set -euo pipefail
           missing=0
-          for name in APPLE_TEAM_ID ASC_ISSUER_ID ASC_KEY_ID ASC_API_KEY_P8_BASE64 VITE_MAPBOX_TOKEN VITE_FIREBASE_APPCHECK_SITE_KEY VITE_SENTRY_DSN VITE_FIREBASE_VAPID_KEY; do
+          for name in APPLE_TEAM_ID ASC_ISSUER_ID ASC_KEY_ID ASC_API_KEY_P8_BASE64 VITE_MAPBOX_TOKEN VITE_FIREBASE_APPCHECK_SITE_KEY VITE_SENTRY_DSN VITE_FIREBASE_VAPID_KEY IOS_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_B64; do
             if [ -n "$(printenv "${name}" 2>/dev/null || true)" ]; then
               echo "${name}: PRESENT"
             else
@@ -645,6 +646,34 @@ jobs:
           fi
           rm -f "${RUNNER_TEMP}/pkey.err"
           echo "private key validation: PASS"
+
+      - name: Materialize GoogleService-Info.plist
+        env:
+          IOS_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_B64: ${{ secrets.IOS_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          import os
+          import plistlib
+          from pathlib import Path
+
+          value = os.environ.get("IOS_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_B64")
+          if not value:
+              raise SystemExit("missing IOS_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_B64")
+
+          target = Path("ios/App/App/GoogleService-Info.plist")
+          target.write_bytes(base64.b64decode(value, validate=True))
+          parsed = plistlib.loads(target.read_bytes())
+          if parsed.get("BUNDLE_ID") != "app.parqueen":
+              raise SystemExit("GoogleService-Info.plist BUNDLE_ID mismatch")
+          if parsed.get("GOOGLE_APP_ID") != "1:768131391875:ios:1356ad05455bd17a3196b6":
+              raise SystemExit("GoogleService-Info.plist GOOGLE_APP_ID mismatch")
+          print("GoogleService-Info.plist: PRESENT")
+          print("BUNDLE_ID: MATCH")
+          print("GOOGLE_APP_ID: MATCH")
+          PY
 
       - name: Archive iOS app
         env:
@@ -815,7 +844,7 @@ jobs:
           expected = {
               "CFBundleIdentifier": "app.parqueen",
               "CFBundleShortVersionString": "1.0",
-              "CFBundleVersion": "3",
+              "CFBundleVersion": "4",
               "CFBundleDisplayName": "ParQueen",
           }
           failed = False
@@ -1405,6 +1434,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          rm -f ios/App/App/GoogleService-Info.plist
           rm -f \
             "${RUNNER_TEMP}/AuthKey.p8" \
             "${RUNNER_TEMP}/ExportOptions.plist" \

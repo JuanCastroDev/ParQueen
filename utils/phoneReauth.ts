@@ -143,7 +143,7 @@ const assertReadyForVerification = (
 /**
  * Start (or resend) phone reauthentication for account deletion.
  * Web/PWA: RecaptchaVerifier + reauthenticateWithPhoneNumber.
- * Android native: nativeStartPhoneVerification -> verificationId session.
+ * Android and iOS native: nativeStartPhoneVerification -> verificationId session.
  */
 export async function startPhoneReauthentication(
   options: StartPhoneReauthenticationOptions,
