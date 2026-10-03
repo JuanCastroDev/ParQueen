@@ -50,7 +50,7 @@ describe('native iOS phone auth project contract', () => {
     expect(release).toContain('OTHER_LDFLAGS = (');
     expect(release).toContain('"$(inherited)",');
     expect(release).toContain('"-ObjC",');
-    expect(release).toContain('CURRENT_PROJECT_VERSION = 5;');
+    expect(release).toContain('CURRENT_PROJECT_VERSION = 6;');
     expect(release).toContain('MARKETING_VERSION = 1.0;');
     expect(release).toContain('CODE_SIGN_ENTITLEMENTS = App/App.entitlements;');
   });
