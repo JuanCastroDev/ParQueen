@@ -105,7 +105,7 @@ describe('§6 — App Check prod bundle assertions', () => {
         const providerArg = src.slice(providerCallIdx, src.indexOf(')', providerCallIdx));
         expect(providerArg).toMatch(/appCheckSiteKey/);
         expect(providerArg).not.toMatch(/"[A-Za-z0-9_-]{20,}"/);
-        const nativeReturnIdx = src.indexOf("if (path === 'native-android')");
+        const nativeReturnIdx = src.indexOf("path === 'native-android' || path === 'native-ios'");
         const recaptchaIdx = src.indexOf('new Recaptcha(');
         expect(nativeReturnIdx).toBeGreaterThan(-1);
         expect(src.lastIndexOf('return;', recaptchaIdx)).toBeGreaterThan(nativeReturnIdx);
