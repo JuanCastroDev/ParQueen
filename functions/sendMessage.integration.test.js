@@ -358,7 +358,7 @@ describe('sendMessage — authoritative chat message write path', () => {
         const indexSrc = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
         const callStart = indexSrc.indexOf('exports.sendMessage = onCall(');
         expect(callStart).toBeGreaterThan(-1);
-        const optionsSlice = indexSrc.slice(callStart, callStart + 600);
+        const optionsSlice = indexSrc.slice(callStart, callStart + 1200);
         expect(optionsSlice).toMatch(/serviceAccount:\s*'parqueen-user@parkqueen-46475363-ccf36\.iam\.gserviceaccount\.com'/);
 
         // exports._sendMessageHandler is a bare function export (not onCall-
@@ -368,12 +368,12 @@ describe('sendMessage — authoritative chat message write path', () => {
         expect(indexSrc).toMatch(/exports\._sendMessageHandler\s*=\s*sendMessageHandler;/);
     });
 
-    it("SM-20a: App Check contract — enforceAppCheck:true is present in sendMessage's own options slice", () => {
+    it("SM-20a: release hotfix contract — sendMessage does not enforce App Check", () => {
         const indexSrc = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
         const callStart = indexSrc.indexOf('exports.sendMessage = onCall(');
         expect(callStart).toBeGreaterThan(-1);
-        const optionsSlice = indexSrc.slice(callStart, callStart + 600);
-        expect(optionsSlice).toMatch(/enforceAppCheck:\s*true/);
+        const optionsSlice = indexSrc.slice(callStart, callStart + 1200);
+        expect(optionsSlice).toMatch(/enforceAppCheck:\s*false/);
         expect(optionsSlice).not.toMatch(/consumeAppCheckToken/);
     });
 
@@ -506,17 +506,20 @@ describe('sendMessage — authoritative chat message write path', () => {
         await cleanupChat(weirdChatId);
     });
 
-    it('SM-20b: App Check canary HTTP boundary — a valid auth token but no App Check token is rejected before the handler runs', async () => {
+    it('SM-20b: release hotfix boundary — valid Firebase Auth can send without an App Check token', async () => {
         const idToken = await signInUser(uidA);
-        // Raw HTTP call (not callDirect): the onCall wrapper's
-        // enforceAppCheck:true gate only exists at the transport layer —
-        // a real, valid, current auth token is not enough by itself.
-        const resp = await callFn('sendMessage', idToken, { chatId, clientRequestId: testId('m'), text: 'hi' });
-        expect(resp.error?.status).toBe('UNAUTHENTICATED');
-        expect(resp.result).toBeUndefined();
-        // Confirm the transport rejection really did stop before any write.
-        const msgsSnap = await db.collection('chats').doc(chatId).collection('messages').get();
-        expect(msgsSnap.empty).toBe(true);
+        // Raw HTTP call (not callDirect): this proves the deployed onCall
+        // boundary no longer returns the App-Check-driven 401 that blocked
+        // production web and TestFlight iOS messaging. The handler still
+        // requires request.auth and all normal authorization/moderation rules.
+        const clientRequestId = testId('m');
+        const resp = await callFn('sendMessage', idToken, { chatId, clientRequestId, text: 'hi' });
+        expect(resp.error).toBeUndefined();
+        expect(resp.result?.success).toBe(true);
+        const msg = await db.collection('chats').doc(chatId).collection('messages').doc(clientRequestId).get();
+        expect(msg.exists).toBe(true);
+        expect(msg.data().senderId).toBe(uidA);
+        expect(msg.data().text).toBe('hi');
         await adminAuth.deleteUser(uidA).catch(() => {});
     });
 });

@@ -6,13 +6,17 @@ bridge) does not change enforcement.
 
 ## Current enforcement (source of truth: `functions/index.js`)
 
-Exactly **five** callables currently declare `enforceAppCheck: true`. Do not
-treat this list as “all callables” or “none”:
+Exactly **four** callables currently declare `enforceAppCheck: true`. Do not
+treat this list as “all callables” or “none”. `sendMessage` is temporarily
+unenforced as a production release hotfix because valid signed-in web and
+TestFlight iOS clients were receiving HTTP 401 at the callable verification
+boundary. Re-enable it only after valid App Check traffic is proven on both
+surfaces:
 
 | Callable | Status |
 | --- | --- |
 | `deleteChat` | **Enforced now** |
-| `sendMessage` | **Enforced now** |
+| `sendMessage` | **Temporarily unenforced — release hotfix** |
 | `updateDisplayName` | **Enforced now** |
 | `adminReadView` | **Enforced now** (Stage 4A admin canary) |
 | `checkHydrantDistance` | **Enforced now** |
@@ -74,8 +78,10 @@ Do **not** combine these with the Android bridge spike:
 
 Rollback for a newly enforced callable: set that callable's
 `enforceAppCheck` back to `false` and redeploy Functions. Do not roll back
-the five current canaries as a bundle unless metrics show they are blocking
-legitimate traffic.
+the four current canaries as a bundle unless metrics show they are blocking
+legitimate traffic. For `sendMessage`, the forward path is the opposite:
+prove valid App Check tokens from both web/PWA and iOS, then deliberately
+restore `enforceAppCheck: true` in its own change.
 
 ## Dev debug token (web only)
 
