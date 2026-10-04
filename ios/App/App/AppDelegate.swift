@@ -1,7 +1,21 @@
 import UIKit
 import Capacitor
 import FirebaseAuth
+import FirebaseAppCheck
 import FirebaseCore
+
+private final class ParQueenAppCheckProviderFactory: NSObject, AppCheckProviderFactory {
+    func createProvider(with app: FirebaseApp) -> AppCheckProvider? {
+        #if targetEnvironment(simulator)
+        return AppCheckDebugProvider(app: app)
+        #else
+        if #available(iOS 14.0, *) {
+            return AppAttestProvider(app: app)
+        }
+        return DeviceCheckProvider(app: app)
+        #endif
+    }
+}
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -11,6 +25,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         if Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist") != nil {
             if FirebaseApp.app() == nil {
+                AppCheck.setAppCheckProviderFactory(ParQueenAppCheckProviderFactory())
                 FirebaseApp.configure()
             }
             if FirebaseApp.app() != nil {

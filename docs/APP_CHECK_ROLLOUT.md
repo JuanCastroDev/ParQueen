@@ -37,7 +37,7 @@ deliberately still off — see `docs/PROFILE_IDENTITY_HARDENING.md`.
 | --- | --- | --- |
 | Web / PWA | `ReCaptchaEnterpriseProvider` | `VITE_FIREBASE_APPCHECK_SITE_KEY` (unchanged) |
 | Capacitor Android | Native Play Integrity (release) or Debug (`BuildConfig.DEBUG`), fed to Firebase JS via `CustomProvider` | Not the reCAPTCHA site key. No WebView reCAPTCHA fallback. See `docs/ANDROID_PHASE_2E.md`. |
-| Capacitor iOS | Same as Web / PWA | App Attest is **future** / out of Phase 2E |
+| Capacitor iOS | Native App Attest (Debug provider on simulator), fed to Firebase JS via `CustomProvider` | No WebView reCAPTCHA fallback. Firebase Console app `app.parqueen` is registered for App Attest. |
 
 `initializeAppCheck` runs **exactly once**.
 `isTokenAutoRefreshEnabled: true` on both the native and reCAPTCHA paths.
@@ -52,7 +52,7 @@ CI-print, or PR-paste that secret.
 
 Premature enforcement on callables without observed valid-token traffic
 locks out legitimate clients (web without a site key, Android without a
-registered Play Integrity app / debug token, iOS still on reCAPTCHA). The
+registered Play Integrity app / debug token, or iOS without a valid App Attest token). The
 five enforced callables were turned on in earlier hardening canaries; the
 rest wait for metrics.
 
@@ -74,7 +74,7 @@ Do **not** combine these with the Android bridge spike:
    - `claimUsername` (only after fresh post-App-Check-client traffic)
 5. Deploy Functions only after that observation window.
    `firebase deploy --only functions` — not part of Phase 2E.
-6. iOS App Attest remains a later native phase.
+6. iOS App Attest is now the native iOS provider; keep `sendMessage` unenforced until physical TestFlight traffic proves valid tokens.
 
 Rollback for a newly enforced callable: set that callable's
 `enforceAppCheck` back to `false` and redeploy Functions. Do not roll back
@@ -99,4 +99,4 @@ included in production web bundles.
 - [ ] Operator: Samsung debug-APK App Check validation per
       `docs/ANDROID_PHASE_2E.md` (device-local debug secret; do not paste it)
 - [ ] Product: decide the next callable to enforce after the current five
-- [ ] Future: iOS App Attest
+- [ ] Physical TestFlight proof: iOS App Attest produces valid traffic before `sendMessage` enforcement is restored

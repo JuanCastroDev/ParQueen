@@ -37,10 +37,9 @@ const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 // Initialization order for the default app:
 // 1. initializeApp / getApp
 // 2. initializeParQueenAppCheck — synchronous from this caller's perspective.
-//    It registers the existing provider and returns without awaiting a token,
-//    so it does not block Auth construction. Capacitor iOS stays on the web
-//    ReCaptchaEnterpriseProvider path. Native App Attest / DeviceCheck is a
-//    follow-up and is not part of this startup repair.
+//    It registers the platform provider and returns without awaiting a token.
+//    Web/PWA use ReCaptchaEnterpriseProvider. Capacitor Android and iOS use
+//    the native App Check bridge; iOS is backed by App Attest.
 // 3. initializeParQueenAuth — the only Auth initialization. Capacitor iOS uses
 //    initializeAuth with browserLocalPersistence and no popup/redirect resolver.
 //    Web, PWA, and Capacitor Android keep getAuth().

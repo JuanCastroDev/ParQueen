@@ -21,6 +21,8 @@
 		A1B5D5052F00000100AA0005 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = A1B5D5062F00000100AA0006 /* FirebaseAuth */; };
 		A1B5D5092F00000100AA0009 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = A1B5D50A2F00000100AA000A /* FirebaseCore */; };
 		A1B5D50B2F00000100AA000B /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = A1B5D50C2F00000100AA000C /* FirebaseFunctions */; };
+		A1B5D50F2F00000100AA000F /* AppCheckBridgePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B5D5112F00000100AA0011 /* AppCheckBridgePlugin.swift */; };
+		A1B5D5102F00000100AA0010 /* FirebaseAppCheck in Frameworks */ = {isa = PBXBuildFile; productRef = A1B5D5122F00000100AA0012 /* FirebaseAppCheck */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -36,6 +38,7 @@
 		9582B6822FE993A50072D4E8 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		A1B5D5032F00000100AA0003 /* PhoneAuthPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneAuthPlugin.swift; sourceTree = "<group>"; };
 		A1B5D5042F00000100AA0004 /* ParQueenBridgeViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParQueenBridgeViewController.swift; sourceTree = "<group>"; };
+		A1B5D5112F00000100AA0011 /* AppCheckBridgePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppCheckBridgePlugin.swift; sourceTree = "<group>"; };
 		A1B5D50D2F00000100AA000D /* AppDebug.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AppDebug.entitlements; sourceTree = "<group>"; };
 		A1B5D50E2F00000100AA000E /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
 		958DCC722DB07C7200EA8C5F /* debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = debug.xcconfig; path = ../debug.xcconfig; sourceTree = SOURCE_ROOT; };
@@ -50,6 +53,7 @@
 				A1B5D5052F00000100AA0005 /* FirebaseAuth in Frameworks */,
 				A1B5D5092F00000100AA0009 /* FirebaseCore in Frameworks */,
 				A1B5D50B2F00000100AA000B /* FirebaseFunctions in Frameworks */,
+				A1B5D5102F00000100AA0010 /* FirebaseAppCheck in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -79,6 +83,7 @@
 				9582B6822FE993A50072D4E8 /* SceneDelegate.swift */,
 				A1B5D5032F00000100AA0003 /* PhoneAuthPlugin.swift */,
 				A1B5D5042F00000100AA0004 /* ParQueenBridgeViewController.swift */,
+				A1B5D5112F00000100AA0011 /* AppCheckBridgePlugin.swift */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
@@ -115,6 +120,7 @@
 				A1B5D5062F00000100AA0006 /* FirebaseAuth */,
 				A1B5D50A2F00000100AA000A /* FirebaseCore */,
 				A1B5D50C2F00000100AA000C /* FirebaseFunctions */,
+				A1B5D5122F00000100AA0012 /* FirebaseAppCheck */,
 			);
 			productName = App;
 			productReference = 504EC3041FED79650016851F /* App.app */;
@@ -188,6 +194,7 @@
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
 				A1B5D5012F00000100AA0001 /* PhoneAuthPlugin.swift in Sources */,
 				A1B5D5022F00000100AA0002 /* ParQueenBridgeViewController.swift in Sources */,
+				A1B5D50F2F00000100AA000F /* AppCheckBridgePlugin.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -329,7 +336,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/AppDebug.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -356,7 +363,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -454,6 +461,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A1B5D5072F00000100AA0007 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseFunctions;
+		};
+		A1B5D5122F00000100AA0012 /* FirebaseAppCheck */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B5D5072F00000100AA0007 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAppCheck;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

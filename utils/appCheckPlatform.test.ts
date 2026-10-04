@@ -10,7 +10,7 @@ describe('resolveAppCheckPath', () => {
     expect(resolveAppCheckPath({ isNative: true, platform: 'android' })).toBe('native-android');
   });
 
-  it('keeps the web path on Capacitor iOS so this phase does not add App Attest', () => {
-    expect(resolveAppCheckPath({ isNative: true, platform: 'ios' })).toBe('web');
+  it('selects the native App Attest bridge on Capacitor iOS', () => {
+    expect(resolveAppCheckPath({ isNative: true, platform: 'ios' })).toBe('native-ios');
   });
 });

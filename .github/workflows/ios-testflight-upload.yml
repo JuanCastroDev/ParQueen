@@ -851,7 +851,7 @@ jobs:
           expected = {
               "CFBundleIdentifier": "app.parqueen",
               "CFBundleShortVersionString": "1.0",
-              "CFBundleVersion": "7",
+              "CFBundleVersion": "8",
               "CFBundleDisplayName": "ParQueen",
           }
           failed = False
@@ -908,6 +908,10 @@ jobs:
               print("aps-environment: FAIL")
               sys.exit(1)
           print("aps-environment: production")
+          if entitlements.get("com.apple.developer.devicecheck.appattest-environment") != "production":
+              print("App Attest entitlement: FAIL")
+              sys.exit(1)
+          print("App Attest entitlement: production")
           background_modes = info.get("UIBackgroundModes")
           if (
               not isinstance(background_modes, list)
@@ -925,6 +929,7 @@ jobs:
               "beta-reports-active",
               "get-task-allow",
               "aps-environment",
+              "com.apple.developer.devicecheck.appattest-environment",
           }
           unexpected = sorted(key for key in entitlements if key not in allowed)
           if unexpected:
@@ -1000,6 +1005,11 @@ jobs:
                           else:
                               print("profile get-task-allow: INVALID — FAIL")
                               failed = True
+                      if profile_ent.get("com.apple.developer.devicecheck.appattest-environment") != "production":
+                          print("profile App Attest entitlement: FAIL")
+                          failed = True
+                      else:
+                          print("profile App Attest entitlement: production")
                       if "beta-reports-active" not in profile_ent:
                           print("profile beta-reports-active: ABSENT")
                       elif profile_ent.get("beta-reports-active") is True:

@@ -78,14 +78,19 @@ describe('initializeParQueenAppCheck', () => {
     }));
   });
 
-  it('keeps ReCaptchaEnterpriseProvider on Capacitor iOS (web path) and does not use the native bridge', () => {
+  it('uses CustomProvider on Capacitor iOS and does not construct ReCaptchaEnterpriseProvider', async () => {
     initializeParQueenAppCheck(app, {
       ...webDeps(),
-      resolvePath: () => 'web',
+      resolvePath: () => 'native-ios',
+      getNativeToken,
     });
-    expect(ReCaptchaEnterpriseProvider).toHaveBeenCalledTimes(1);
-    expect(CustomProvider).not.toHaveBeenCalled();
-    expect(getNativeToken).not.toHaveBeenCalled();
+    expect(CustomProvider).toHaveBeenCalledTimes(1);
+    expect(ReCaptchaEnterpriseProvider).not.toHaveBeenCalled();
+    await expect(capturedCustomGetToken()()).resolves.toEqual({
+      token: 'test-token-not-for-console',
+      expireTimeMillis: 1_700_000_000_000,
+    });
+    expect(getNativeToken).toHaveBeenCalledTimes(1);
   });
 
   it('does not initialize App Check twice', () => {
