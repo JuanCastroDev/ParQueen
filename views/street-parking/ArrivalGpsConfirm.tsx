@@ -2,9 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { t } from '../../i18n';
 import {
+    INITIAL_ARRIVAL_RANGE_MEMORY,
     stabilizeArrivalLocation,
     type ArrivalLocationReading,
-    type ArrivalRangeMemory,
+    type ArrivalRangeStabilityMemory,
 } from './arrivalLocation';
 
 interface ArrivalGpsConfirmProps {
@@ -52,25 +53,35 @@ export const ArrivalGpsConfirm: React.FC<ArrivalGpsConfirmProps> = ({
     onRetry,
 }) => {
     const nowMs = useArrivalClock(frozenNowMs);
-    const [rangeMemory, setRangeMemory] = useState<{ spotId: string; value: ArrivalRangeMemory }>({
+    const [rangeMemory, setRangeMemory] = useState<{ spotId: string; value: ArrivalRangeStabilityMemory }>({
         spotId,
-        value: 'unknown',
+        value: INITIAL_ARRIVAL_RANGE_MEMORY,
     });
-    const previousRange = rangeMemory.spotId === spotId ? rangeMemory.value : 'unknown';
+    const previous = rangeMemory.spotId === spotId ? rangeMemory.value : INITIAL_ARRIVAL_RANGE_MEMORY;
     const stabilized = stabilizeArrivalLocation({
         reading,
         spot,
         nowMs,
-        previousRange,
+        previous,
     });
     const decision = stabilized.decision;
 
     useEffect(() => {
         setRangeMemory(current => {
-            if (current.spotId === spotId && current.value === stabilized.nextRange) return current;
-            return { spotId, value: stabilized.nextRange };
+            const sameSpot = current.spotId === spotId;
+            const sameValue = sameSpot
+                && current.value.stable === stabilized.next.stable
+                && current.value.candidate === stabilized.next.candidate
+                && current.value.confirmations === stabilized.next.confirmations;
+            if (sameValue) return current;
+            return { spotId, value: stabilized.next };
         });
-    }, [spotId, stabilized.nextRange]);
+    }, [
+        spotId,
+        stabilized.next.stable,
+        stabilized.next.candidate,
+        stabilized.next.confirmations,
+    ]);
 
     const decisionToken = decision.kind === 'override'
         ? `${spotId}:override:${decision.reason}`
