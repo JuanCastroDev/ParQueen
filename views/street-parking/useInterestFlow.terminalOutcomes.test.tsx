@@ -212,6 +212,24 @@ function updatesTo(collection: string) {
   return calls.filter(([ref]) => ref.__col === collection);
 }
 
+function mountDurableFinder() {
+  const finder = { id: 'finder-1', username: 'Finder', crowns: 0 };
+  documents.set('spots/spot-1', {
+    ...spot,
+    status: 'occupied',
+    claimState: 'arrived_pending_outcome',
+    arrivedAt: { toMillis: () => Date.now() },
+    interestedUserId: 'driver-1',
+    interestedUserName: 'Driver',
+  });
+  return mount(finder, {
+    ...spot,
+    status: 'occupied',
+    interestedUserId: 'driver-1',
+    interestedUserName: 'Driver',
+  }, true);
+}
+
 describe('useInterestFlow — terminal handoff outcomes', () => {
   beforeEach(() => {
     addDoc.mockClear();
@@ -340,6 +358,160 @@ describe('useInterestFlow — terminal handoff outcomes', () => {
     expect([...documents.keys()].filter((path) => path.startsWith('spotNotifications/'))).toHaveLength(0);
     expect(addDoc).toHaveBeenCalledTimes(0);
     expect(runTransaction).not.toHaveBeenCalled();
+    assertClientDidNotAward();
+  });
+
+  it('a rejected finder attestation shows a visible error', async () => {
+    const error = Object.assign(new Error('unavailable'), { code: 'unavailable' });
+    const { getFlow, renderer, setSelectedItem } = mountDurableFinder();
+    setDoc.mockRejectedValueOnce(error);
+
+    await act(async () => { await getFlow().handleFinderConfirmsArrival(); });
+
+    expect(getFlow().handoffStep).toBe('finder_attest');
+    expect(getFlow().handoffSubmitError).toBe("Couldn't save this outcome.");
+    expect(reportCriticalActionFailure).toHaveBeenCalledWith('terminal_handoff', error);
+    const alert = renderer.root.findByProps({ 'data-testid': 'handoff-submit-error' });
+    expect(buttonText(alert)).toContain("Couldn't save this outcome.");
+    expect(renderer.root.findByProps({ 'data-testid': 'finder-attest-error' })).toBeTruthy();
+    expect(setSelectedItem).not.toHaveBeenCalledWith(null);
+    expect(documents.get('spots/spot-1')?.claimState).toBe('arrived_pending_outcome');
+    expect(feedbackPaths()).toEqual([]);
+    expect(getFlow().finderToast).toBeNull();
+    assertClientDidNotAward();
+  });
+
+  it('a rejected finder attestation keeps a retry action', async () => {
+    const error = Object.assign(new Error('unavailable'), { code: 'unavailable' });
+    const { getFlow, renderer } = mountDurableFinder();
+    setDoc.mockRejectedValueOnce(error);
+
+    await act(async () => { await getFlow().handleFinderConfirmsArrival(); });
+
+    expect(getFlow().handoffSubmitting).toBe(false);
+    const retry = renderer.root.findByProps({ 'data-testid': 'handoff-submit-retry' });
+    expect(retry.props.disabled).toBe(false);
+    expect(buttonText(retry)).toContain('Try again');
+    expect(renderer.root.findAll((node) => node.type === 'button' && buttonText(node).includes('No luck'))).toHaveLength(0);
+  });
+
+  it('finder retry uses the deterministic finder attestation id', async () => {
+    const error = Object.assign(new Error('unavailable'), { code: 'unavailable' });
+    const { getFlow, renderer } = mountDurableFinder();
+    setDoc.mockRejectedValueOnce(error);
+    await act(async () => { await getFlow().handleFinderConfirmsArrival(); });
+
+    const retry = renderer.root.findByProps({ 'data-testid': 'handoff-submit-retry' });
+    await act(async () => { await retry.props.onClick(); });
+
+    const feedbackWrites = writesTo('spotFeedback');
+    expect(feedbackWrites).toHaveLength(2);
+    for (const call of feedbackWrites) {
+      expect(call).toHaveLength(2);
+      expect(call[0]).toMatchObject({ __col: 'spotFeedback', __id: 'spot-1_driver-1_finder' });
+      expect(call[1]).toMatchObject({
+        outcome: 'participant_success',
+        role: 'finder',
+        userId: 'driver-1',
+        finderId: 'finder-1',
+        failureReason: null,
+      });
+    }
+    expect(documents.get('spotFeedback/spot-1_driver-1_finder')?.outcome).toBe('participant_success');
+    expect(documents.has('spotFeedback/spot-1_driver-1')).toBe(false);
+  });
+
+  it('a duplicate finder retry cannot fire while a submission is in flight', async () => {
+    const error = Object.assign(new Error('unavailable'), { code: 'unavailable' });
+    const { getFlow, renderer } = mountDurableFinder();
+    setDoc.mockRejectedValueOnce(error);
+    await act(async () => { await getFlow().handleFinderConfirmsArrival(); });
+
+    const gate = deferred();
+    const writesBeforeRetry = setDoc.mock.calls.length;
+    setDoc.mockImplementationOnce(async (ref, data) => {
+      documents.set(pathOf(ref), data);
+      await gate.promise;
+    });
+    let retryDone!: Promise<unknown>;
+    act(() => {
+      retryDone = renderer.root.findByProps({ 'data-testid': 'handoff-submit-retry' }).props.onClick();
+    });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(getFlow().handoffSubmitting).toBe(true);
+    expect(getFlow().handoffStep).toBe('finder_attest');
+    expect(setDoc.mock.calls.length).toBe(writesBeforeRetry + 1);
+    expect(setDoc.mock.calls.at(-1)?.[0]).toMatchObject({
+      __col: 'spotFeedback',
+      __id: 'spot-1_driver-1_finder',
+    });
+    expect(renderer.root.findByProps({ 'data-testid': 'handoff-submit-pending' })).toBeTruthy();
+    expect(renderer.root.findAllByProps({ 'data-testid': 'handoff-submit-retry' })).toHaveLength(0);
+
+    await act(async () => {
+      await getFlow().retryTerminalHandoff();
+      await getFlow().handleFinderConfirmsArrival();
+    });
+
+    expect(setDoc.mock.calls.length).toBe(writesBeforeRetry + 1);
+    expect(getFlow().handoffStep).toBe('finder_attest');
+    expect(documents.get('spots/spot-1')?.claimState).toBe('arrived_pending_outcome');
+
+    await act(async () => {
+      gate.resolve();
+      await retryDone;
+    });
+  });
+
+  it('a successful finder retry returns to waiting for mutual confirmation', async () => {
+    const error = Object.assign(new Error('unavailable'), { code: 'unavailable' });
+    const { getFlow, renderer } = mountDurableFinder();
+    setDoc.mockRejectedValueOnce(error);
+    await act(async () => { await getFlow().handleFinderConfirmsArrival(); });
+    expect(getFlow().handoffStep).toBe('finder_attest');
+
+    await act(async () => {
+      await renderer.root.findByProps({ 'data-testid': 'handoff-submit-retry' }).props.onClick();
+    });
+
+    expect(getFlow().handoffSubmitting).toBe(false);
+    expect(getFlow().handoffSubmitError).toBeNull();
+    expect(getFlow().handoffStep).toBe('waiting');
+    expect(renderer.root.findByProps({ 'data-testid': 'handoff-waiting' })).toBeTruthy();
+    expect(buttonText(renderer.root.findByProps({ 'data-testid': 'handoff-waiting' }))).toContain('Waiting on the other driver');
+    expect(documents.get('spots/spot-1')?.claimState).toBe('arrived_pending_outcome');
+    expect(documents.get('spotFeedback/spot-1_driver-1_finder')).toMatchObject({
+      outcome: 'participant_success',
+      role: 'finder',
+      userId: 'driver-1',
+    });
+    expect(getFlow().finderToast).toBeNull();
+    expect(getFlow().driverNotification).toBeNull();
+  });
+
+  it('no Crown copy appears before the server claimState is completed_success', async () => {
+    const error = Object.assign(new Error('unavailable'), { code: 'unavailable' });
+    const { getFlow, renderer } = mountDurableFinder();
+    setDoc.mockRejectedValueOnce(error);
+    await act(async () => { await getFlow().handleFinderConfirmsArrival(); });
+
+    expect(buttonText(renderer.root)).not.toMatch(/Crown|\+1|\+2/);
+    expect(renderer.root.findAllByProps({ 'data-testid': 'handoff-crown-copy' })).toHaveLength(0);
+    expect(getFlow().finderToast).toBeNull();
+    expect(documents.get('spots/spot-1')?.claimState).toBe('arrived_pending_outcome');
+
+    await act(async () => {
+      await renderer.root.findByProps({ 'data-testid': 'handoff-submit-retry' }).props.onClick();
+    });
+
+    expect(getFlow().handoffStep).toBe('waiting');
+    expect(buttonText(renderer.root)).not.toMatch(/Crown|\+1|\+2/);
+    expect(renderer.root.findAllByProps({ 'data-testid': 'handoff-crown-copy' })).toHaveLength(0);
+    expect(getFlow().finderToastTitle).toBeNull();
+    expect(getFlow().finderToast).toBeNull();
+    expect(getFlow().driverNotification).toBeNull();
+    expect(documents.get('spots/spot-1')?.claimState).toBe('arrived_pending_outcome');
     assertClientDidNotAward();
   });
 

@@ -17,7 +17,7 @@ const REMINDER_OPTIONS = [
 ];
 
 interface HandoffFlowProps {
-    step: 'outcome' | 'celebration' | 'failure_reason' | 'waiting';
+    step: 'outcome' | 'celebration' | 'failure_reason' | 'waiting' | 'finder_attest';
     finderName?: string | null;
     onOutcome: (outcome: 'success' | 'failed') => void;
     onFailureReason: (reason: string) => void;
@@ -148,6 +148,14 @@ export const HandoffFlow: React.FC<HandoffFlowProps> = ({
                         No luck
                     </button>
                 </div>
+                {submissionStatus}
+            </div>
+        );
+    }
+
+    if (step === 'finder_attest') {
+        return (
+            <div data-testid="finder-attest-error">
                 {submissionStatus}
             </div>
         );

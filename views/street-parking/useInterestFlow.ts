@@ -70,7 +70,7 @@ export function useInterestFlow({
     const lastWrittenEtaRef = useRef<number | null>(null);
     const etaWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const expiryWarnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const [handoffStep, setHandoffStep] = useState<'outcome' | 'celebration' | 'failure_reason' | 'waiting' | null>(null);
+    const [handoffStep, setHandoffStep] = useState<'outcome' | 'celebration' | 'failure_reason' | 'waiting' | 'finder_attest' | null>(null);
     const handoffStepRef = useRef(handoffStep);
     handoffStepRef.current = handoffStep;
     const [handoffSubmitError, setHandoffSubmitError] = useState<string | null>(null);
@@ -81,6 +81,12 @@ export function useInterestFlow({
         | { outcome: 'failed'; reason: string }
         | null
     >(null);
+    const finderAttestRef = useRef<{
+        spotId: string;
+        claimerId: string;
+        address: string;
+        claimerName: string;
+    } | null>(null);
     const [handoffFinderName, setHandoffFinderName] = useState<string | null>(null);
     const [handoffAddress, setHandoffAddress] = useState<string>('');
     const handoffSpotRef = useRef<{
@@ -488,31 +494,50 @@ export function useInterestFlow({
     };
 
     // Finder attests only after the claimer arrival is already durable.
-    // Crowns copy waits for the server award.
-    const handleFinderConfirmsArrival = async () => {
-        if (!selectedItem || !user || !db) return;
-        const claimerId = selectedItem.interestedUserId;
-        const claimerName = selectedItem.interestedUserName || t('handoff.other_driver');
-        if (!claimerId) return;
+    // A rejected write stays on this sheet with a retry, and Crowns copy
+    // waits for the server award.
+    const submitFinderAttestation = async () => {
+        if (!user || !db || handoffSubmitLock.current) return;
+        const fromCard = selectedItem?.interestedUserId ? {
+            spotId: selectedItem.id as string,
+            claimerId: selectedItem.interestedUserId as string,
+            address: String(selectedItem.title || selectedItem.address || ''),
+            claimerName: String(selectedItem.interestedUserName || t('handoff.other_driver')),
+        } : null;
+        const attempt = finderAttestRef.current ?? fromCard;
+        if (!attempt?.claimerId || attempt.claimerId === user.id) return;
 
+        finderAttestRef.current = attempt;
+        handoffSubmitLock.current = true;
+        setHandoffSubmitting(true);
+        setHandoffSubmitError(null);
         try {
             await attestParticipantSuccess(db, {
-                spotId: selectedItem.id,
-                claimerId,
+                spotId: attempt.spotId,
+                claimerId: attempt.claimerId,
                 finderId: user.id,
-                address: selectedItem.title || selectedItem.address || '',
+                address: attempt.address,
                 role: 'finder',
                 actorId: user.id,
             });
+            finderAttestRef.current = null;
+            setSelectedItem(null);
+            enterAttestationWaiting(attempt.spotId, 'finder', attempt.claimerName);
         } catch (error) {
-            if (error instanceof ArrivalNotDurableError) return;
-            reportCriticalActionFailure('terminal_handoff', error);
-            return;
+            if (error instanceof ArrivalNotDurableError) {
+                finderAttestRef.current = null;
+                return;
+            }
+            showTerminalSubmitFailure(error);
+            handoffStepRef.current = 'finder_attest';
+            setHandoffStep('finder_attest');
+        } finally {
+            handoffSubmitLock.current = false;
+            setHandoffSubmitting(false);
         }
-
-        setSelectedItem(null);
-        enterAttestationWaiting(selectedItem.id, 'finder', claimerName);
     };
+
+    const handleFinderConfirmsArrival = () => submitFinderAttestation();
 
     // Claim identity used to detect a stale/superseded claim. claimStartedAt is
     // set once when a claim is created (handleExpressInterest / handleScheduledClaim)
@@ -704,8 +729,10 @@ export function useInterestFlow({
     };
 
     const retryTerminalHandoff = () => {
+        if (handoffSubmitLock.current) return;
+        if (finderAttestRef.current) return submitFinderAttestation();
         const attempt = lastTerminalAttempt.current;
-        if (!attempt || handoffSubmitLock.current) return;
+        if (!attempt) return;
         if (attempt.outcome === 'success') return handleHandoffOutcome('success');
         return handleFailureReason(attempt.reason);
     };
@@ -879,6 +906,7 @@ export function useInterestFlow({
         setHandoffSubmitting(false);
         handoffSubmitLock.current = false;
         lastTerminalAttempt.current = null;
+        finderAttestRef.current = null;
         setHandoffFinderName(null);
         setHandoffAddress('');
         setHandoffSpotCoords(null);

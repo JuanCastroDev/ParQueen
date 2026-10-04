@@ -42,7 +42,6 @@ import { getTitleForCrowns } from './utils/crowns';
 import { timestampToMillis } from './utils/pingLifecycle';
 import { advancePingRate, PingCreateRejected } from './views/street-parking/pingCreateBounds';
 import {
-    completeFinderConfirmedHandoff,
     completeTerminalHandoff,
 } from './views/street-parking/completeTerminalHandoff';
 import {
@@ -869,18 +868,20 @@ describe('spotFeedback', () => {
         })).rejects.toThrow(/PERMISSION_DENIED|permission-denied/);
     });
 
-    it('F17: finder success before durable arrival is denied, including the legacy confirm helper', async () => {
+    it('F17: finder success before durable arrival is denied', async () => {
         const spotId = 'finder-terminal-success-spot';
         await seed('spots', spotId, interestedSpot);
-        const params = {
-            spotId,
-            driverId: OTHER_UID,
-            finderId: OWNER_UID,
-            finderName: 'TestFinder',
-            address: '999 Finder Success St',
-        };
 
-        await expect(completeFinderConfirmedHandoff(ownerDb(), params)).rejects.toMatchObject({ code: 'permission-denied' });
+        await assertFails(setDoc(doc(ownerDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`), {
+            spotId,
+            userId: OTHER_UID,
+            finderId: OWNER_UID,
+            address: '999 Finder Success St',
+            outcome: 'success',
+            failureReason: null,
+            confirmedByFinder: true,
+            createdAt: Timestamp.now(),
+        }));
         await assertFails(setDoc(doc(ownerDb(), 'spotFeedback', `${spotId}_${OTHER_UID}_finder`), {
             spotId,
             userId: OTHER_UID,
@@ -5021,13 +5022,16 @@ describe('B1 — durable arrived_pending_outcome', () => {
             arrivedAt,
         }));
 
-        await expect(completeFinderConfirmedHandoff(ownerDb(), {
+        await assertFails(setDoc(doc(ownerDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`), {
             spotId,
-            driverId: OTHER_UID,
+            userId: OTHER_UID,
             finderId: OWNER_UID,
-            finderName: 'TestFinder',
             address: spotId,
-        })).rejects.toMatchObject({ code: 'permission-denied' });
+            outcome: 'success',
+            failureReason: null,
+            confirmedByFinder: true,
+            createdAt: Timestamp.now(),
+        }));
         await assertSucceeds(setDoc(doc(ownerDb(), 'spotFeedback', `${spotId}_${OTHER_UID}_finder`), {
             spotId,
             userId: OTHER_UID,
@@ -5227,7 +5231,7 @@ describe('B4 — client cannot create unconfirmed', () => {
         expect(claimState).toBe('arrived_pending_outcome');
     });
 
-    it('B4-LATE: a success or finder confirm after unconfirmed does not overwrite feedback or notify', async () => {
+    it('B4-LATE: a success write after unconfirmed does not overwrite feedback or notify', async () => {
         await seedArrived();
         await seed('spotFeedback', `${spotId}_${OTHER_UID}`, {
             spotId,
@@ -5248,13 +5252,16 @@ describe('B4 — client cannot create unconfirmed', () => {
             outcome: 'success',
             failureReason: null,
         })).rejects.toMatchObject({ code: 'permission-denied' });
-        await expect(completeFinderConfirmedHandoff(ownerDb(), {
+        await assertFails(setDoc(doc(ownerDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`), {
             spotId,
-            driverId: OTHER_UID,
+            userId: OTHER_UID,
             finderId: OWNER_UID,
-            finderName: 'TestFinder',
             address: '1 Unconfirmed St',
-        })).rejects.toMatchObject({ code: 'permission-denied' });
+            outcome: 'success',
+            failureReason: null,
+            confirmedByFinder: true,
+            createdAt: Timestamp.now(),
+        }));
 
         await testEnv.withSecurityRulesDisabled(async (ctx) => {
             const db = ctx.firestore();
