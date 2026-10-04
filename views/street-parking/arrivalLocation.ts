@@ -138,10 +138,11 @@ export function arrivalFixFromPosition(
     const timestampMs = typeof reported === 'number' && Number.isFinite(reported) && reported > 0
         ? reported
         : receivedAtMs;
-    const accuracyMeters = Number.isFinite(position.coords.accuracy as number)
-        ? (position.coords.accuracy as number)
-        : null;
-    return { lat, lng, timestampMs, accuracyMeters };
+    const fix: ArrivalLocationFix = { lat, lng, timestampMs };
+    if (Number.isFinite(position.coords.accuracy as number)) {
+        fix.accuracyMeters = position.coords.accuracy as number;
+    }
+    return fix;
 }
 
 /**
