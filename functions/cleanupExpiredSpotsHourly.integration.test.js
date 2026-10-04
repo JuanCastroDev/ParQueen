@@ -86,7 +86,59 @@ function spot(overrides) {
     };
 }
 
+// Vitest runs larger files first. This file is larger than
+// eventarcRetryHardening.integration.test.js, so these spot creates now
+// finish immediately before that file. Each create still invokes
+// incrementTotalSpotsPinged, which writes the shared stats/global counter
+// after this file returns. That file's duplicate-delivery tests diff the
+// same counter and expect exactly 1. The trigger backlog can sit quiet for
+// a moment and then run, so a quiet counter is not enough: wait until this
+// file's creates have all been counted, then until the counter stops. The
+// expected delta stays 1.
+let spotsCreated = 0;
+
+async function createSpot(id, data) {
+    spotsCreated += 1;
+    await db.doc(`spots/${id}`).set(data);
+}
+
+function queueSpot(batch, id, data) {
+    spotsCreated += 1;
+    batch.set(db.doc(`spots/${id}`), data);
+}
+
+async function settleSpotCreateCounter(baseline) {
+    if (spotsCreated === 0) return;
+    const statsRef = db.doc('stats/global');
+    let last = null;
+    let stableReads = 0;
+    for (let attempt = 0; attempt < 200; attempt++) {
+        const current = (await statsRef.get()).data()?.totalSpotsPinged || 0;
+        const caughtUp = current - baseline >= spotsCreated;
+        if (caughtUp && current === last) {
+            stableReads += 1;
+            if (stableReads >= 4) return;
+        } else {
+            stableReads = 0;
+            last = current;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    const current = (await statsRef.get()).data()?.totalSpotsPinged || 0;
+    throw new Error(`spot-create counter did not settle at ${current} after ${spotsCreated} creates from ${baseline}`);
+}
+
 describe('cleanupExpiredSpotsHourly durability', () => {
+    let counterBaseline = 0;
+
+    beforeAll(async () => {
+        counterBaseline = (await db.doc('stats/global').get()).data()?.totalSpotsPinged || 0;
+    });
+
+    afterAll(async () => {
+        await settleSpotCreateCounter(counterBaseline);
+    }, 60000);
+
     it('CESH-3: keeps an expired arrived_pending_outcome Ping and still deletes ordinary expired Pings', async () => {
         const arrivedId = `cesh_arrived_${RUN}`;
         const availableId = `cesh_available_${RUN}`;
@@ -95,24 +147,24 @@ describe('cleanupExpiredSpotsHourly durability', () => {
         const liveId = `cesh_live_${RUN}`;
         const arrivedAt = Timestamp.fromMillis(Date.now() - 30_000);
 
-        await db.doc(`spots/${arrivedId}`).set(spot({
+        await createSpot(arrivedId, spot({
             status: 'occupied',
             claimState: 'arrived_pending_outcome',
             arrivedAt,
             interestedUserId: 'claimer_x',
         }));
-        await db.doc(`spots/${availableId}`).set(spot({ status: 'available', claimState: null }));
-        await db.doc(`spots/${interestedId}`).set(spot({
+        await createSpot(availableId, spot({ status: 'available', claimState: null }));
+        await createSpot(interestedId, spot({
             status: 'interested',
             claimState: 'heading',
             interestedUserId: 'claimer_y',
         }));
-        await db.doc(`spots/${legacyOccupiedId}`).set(spot({
+        await createSpot(legacyOccupiedId, spot({
             status: 'occupied',
             claimState: 'heading',
             interestedUserId: 'claimer_z',
         }));
-        await db.doc(`spots/${liveId}`).set(spot({ status: 'available', expiresAt: FUTURE }));
+        await createSpot(liveId, spot({ status: 'available', expiresAt: FUTURE }));
 
         await indexModule.cleanupExpiredSpotsHourly.run();
 
@@ -137,7 +189,7 @@ describe('cleanupExpiredSpotsHourly durability', () => {
         const laterId = `cesh_after_page_${RUN}`;
         let batch = db.batch();
         pageIds.forEach((id, index) => {
-            batch.set(db.doc(`spots/${id}`), spot({
+            queueSpot(batch, id, spot({
                 status: 'occupied',
                 claimState: 'arrived_pending_outcome',
                 arrivedAt: ANCIENT,
@@ -148,7 +200,7 @@ describe('cleanupExpiredSpotsHourly durability', () => {
         });
         await batch.commit();
         batch = db.batch();
-        batch.set(db.doc(`spots/${laterId}`), spot({
+        queueSpot(batch, laterId, spot({
             status: 'available',
             claimState: null,
             expiresAt: Timestamp.fromMillis(ANCIENT.toMillis() + 1),
@@ -170,7 +222,7 @@ describe('cleanupExpiredSpotsHourly durability', () => {
         const legacyId = `cesh_legacy_still_${RUN}`;
         const arrivedAt = Timestamp.fromMillis(Date.now() - 3 * 60 * 60_000);
 
-        await db.doc(`spots/${closedId}`).set(spot({
+        await createSpot(closedId, spot({
             status: 'occupied',
             claimState: 'unconfirmed',
             arrivedAt,
@@ -182,20 +234,20 @@ describe('cleanupExpiredSpotsHourly durability', () => {
             interestedUserId: 'claimer_forged_missing',
         });
         delete missing.arrivedAt;
-        await db.doc(`spots/${missingId}`).set(missing);
-        await db.doc(`spots/${nulledId}`).set(spot({
+        await createSpot(missingId, missing);
+        await createSpot(nulledId, spot({
             status: 'occupied',
             claimState: 'unconfirmed',
             arrivedAt: null,
             interestedUserId: 'claimer_forged_null',
         }));
-        await db.doc(`spots/${malformedId}`).set(spot({
+        await createSpot(malformedId, spot({
             status: 'occupied',
             claimState: 'unconfirmed',
             arrivedAt: 'not-a-timestamp',
             interestedUserId: 'claimer_forged_string',
         }));
-        await db.doc(`spots/${legacyId}`).set(spot({
+        await createSpot(legacyId, spot({
             status: 'occupied',
             claimState: 'heading',
             interestedUserId: 'claimer_legacy',

@@ -579,9 +579,11 @@ describe('adminReadView — coordinated read-side session hardening', () => {
         //     identity already does);
         //   - parqueen-cleanup@... on the expireStaleWaitlistSignups scheduled
         //     job, alongside the other scheduled deletion jobs.
-        // This counts serviceAccount declarations, not exported functions.
+        // cleanupAbandonedArrivedHandoffs adds one more declaration of that
+        // same parqueen-cleanup identity. It is not a new principal. This
+        // counts serviceAccount declarations, not exported functions.
         const allServiceAccountMatches = indexSrc.match(/serviceAccount:\s*'[^']+'/g) || [];
-        expect(allServiceAccountMatches).toHaveLength(44);
+        expect(allServiceAccountMatches).toHaveLength(45);
     });
 
     it("AR-29: Runtime-IAM canary config-contract — moderateAvatarUpload's serviceAccount is the dedicated avatar-moderator identity, Storage-trigger config unaffected", () => {
