@@ -1791,7 +1791,16 @@ exports._sendMessageHandler = sendMessageHandler;
 exports.sendMessage = onCall(
   {
     region: 'us-central1',
-    enforceAppCheck: true,
+    // TEMPORARY RELEASE HOTFIX: production web + TestFlight iOS are reaching
+    // this callable with valid Firebase Auth but are receiving HTTP 401 at
+    // the callable verification boundary. Messaging is otherwise protected
+    // by request.auth, participant membership, rate limiting, server-side
+    // moderation, and mutual block enforcement inside sendMessageHandler.
+    //
+    // Re-enable App Check only after valid-token traffic is proven on both
+    // Web/PWA and Capacitor iOS. Do not silently flip this back on as part of
+    // an unrelated hardening change.
+    enforceAppCheck: false,
     serviceAccount: 'parqueen-user@parkqueen-46475363-ccf36.iam.gserviceaccount.com',
   },
   sendMessageHandler
