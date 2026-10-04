@@ -709,7 +709,9 @@ describe('Trust-event runtimes (Wave 7B-2)', () => {
         const fn = src.slice(start, src.indexOf('exports.scheduleCleaningReminders', start));
         expect(fn).toMatch(/serviceAccount:\s*'parqueen-system-events@parkqueen-46475363-ccf36\.iam\.gserviceaccount\.com'/);
         expect(fn).toMatch(/document:\s*'spotFeedback\/\{feedbackId\}'/);
-        expect(fn).toMatch(/applyTrustDelta\(finderId, 'handoffsCompleted', `\$\{event\.params\.feedbackId\}:finder`\)/);
+        expect(fn).toMatch(/outcome !== 'participant_success'/);
+        expect(fn).toMatch(/joinMutualSuccess\(db, event, mutualSuccessDeps\)/);
+        expect(fn).not.toMatch(/applyTrustDelta/);
     });
 
     it('TB2-2: Runtime-IAM canary config-contract — updateTrustOnSpotDelete runs as the dedicated parqueen-system-events identity', () => {
@@ -723,19 +725,51 @@ describe('Trust-event runtimes (Wave 7B-2)', () => {
         expect(fn).toMatch(/expiresAt\.toMillis\(\) <= deletionTimeMs/);
     });
 
-    it('TB2-3: updateTrustOnFeedback duplicate delivery — the same feedback event applies only one trust delta', async () => {
+    it('TB2-3: updateTrustOnFeedback duplicate delivery — the same mutual handoff applies only one trust delta', async () => {
         const finderId = nextId('tb2_finder');
-        const feedbackId = nextId('tb2_feedback');
+        const driverId = nextId('tb2_driver');
+        const spotId = nextId('tb2_spot');
+        const feedbackId = `${spotId}_${driverId}`;
+        const createdAt = Timestamp.fromMillis(Date.now() - 30_000);
+        const attestation = {
+            spotId,
+            userId: driverId,
+            finderId,
+            outcome: 'participant_success',
+            role: 'finder',
+            failureReason: null,
+            address: '1 Trust St',
+            createdAt,
+        };
         await seedUser(finderId);
-        const event = createdEvent(feedbackId, { outcome: 'success', finderId }, nextId('event'));
+        await seedUser(driverId);
+        await db.doc(`spots/${spotId}`).set({
+            status: 'occupied',
+            claimState: 'arrived_pending_outcome',
+            arrivedAt: Timestamp.fromMillis(Date.now() - 60_000),
+            interestedUserId: driverId,
+            finderId,
+        });
+        await db.doc(`spotFeedback/${feedbackId}`).set({ ...attestation, role: 'claimer' });
+        await db.doc(`spotFeedback/${feedbackId}_finder`).set(attestation);
+        const event = {
+            id: nextId('event'),
+            params: { feedbackId: `${feedbackId}_finder` },
+            data: { id: `${feedbackId}_finder`, data: () => attestation },
+            time: new Date().toISOString(),
+        };
 
         await indexModule.updateTrustOnFeedback.run(event);
         await indexModule.updateTrustOnFeedback.run(event);
 
         const userSnap = await db.doc(`users/${finderId}`).get();
         expect(userSnap.data().trustStats.handoffsCompleted).toBe(1);
+        expect((await db.doc(`users/${driverId}`).get()).data().crowns).toBe(1);
+        expect(userSnap.data().crowns).toBe(2);
 
         await cleanupUser(finderId, `${feedbackId}:finder`);
+        await db.doc(`users/${driverId}`).delete();
+        await db.doc(`functionEvents/awardCrowns_${feedbackId}`).delete();
     });
 
     it('TB2-4: updateTrustOnSpotDelete duplicate delivery — the same deletion event applies only one trust delta', async () => {
