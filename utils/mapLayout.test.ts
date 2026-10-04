@@ -97,4 +97,23 @@ describe('existing Mapbox functionality preserved', () => {
     // light-mode label styling, so it is no longer a single line.
     expect(spv).toMatch(/map\.on\('load',\s*\(\)\s*=>\s*\{[\s\S]{0,200}?map\.resize\(\);/);
   });
+
+
+  it('does not mark the map ready until Mapbox fires the load event', () => {
+    const initStart = spv.indexOf('const initMap = (center: [number, number]) => {');
+    const loadStart = spv.indexOf("map.on('load'", initStart);
+    expect(initStart).toBeGreaterThan(-1);
+    expect(loadStart).toBeGreaterThan(initStart);
+    expect(spv.slice(initStart, loadStart)).not.toContain('setMapReady(true)');
+    expect(spv.slice(loadStart, loadStart + 300)).toContain('setMapReady(true)');
+  });
+
+  it('surfaces initial Mapbox errors with a visible reload recovery path', () => {
+    expect(spv).toContain("map.on('error'");
+    expect(spv).toContain("console.error('Mapbox initial load failed:'");
+    expect(spv).toContain('setMapLoadError(true)');
+    expect(spv).toContain("t('map.load_failed')");
+    expect(spv).toContain("t('map.load_retry')");
+    expect(spv).toContain('window.location.reload()');
+  });
 });

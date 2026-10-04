@@ -541,6 +541,7 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
           VITE_MAPBOX_TOKEN: ${{ secrets.VITE_MAPBOX_TOKEN }}
+          VITE_MAPBOX_IOS_TOKEN: ${{ secrets.VITE_MAPBOX_IOS_TOKEN }}
           VITE_FIREBASE_APPCHECK_SITE_KEY: ${{ secrets.VITE_FIREBASE_APPCHECK_SITE_KEY }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
           VITE_FIREBASE_VAPID_KEY: ${{ secrets.VITE_FIREBASE_VAPID_KEY }}
@@ -550,7 +551,7 @@ jobs:
         run: |
           set -euo pipefail
           missing=0
-          for name in APPLE_TEAM_ID ASC_ISSUER_ID ASC_KEY_ID ASC_API_KEY_P8_BASE64 VITE_MAPBOX_TOKEN VITE_FIREBASE_APPCHECK_SITE_KEY VITE_SENTRY_DSN VITE_FIREBASE_VAPID_KEY VITE_FIREBASE_IOS_JS_API_KEY IOS_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_B64; do
+          for name in APPLE_TEAM_ID ASC_ISSUER_ID ASC_KEY_ID ASC_API_KEY_P8_BASE64 VITE_MAPBOX_TOKEN VITE_MAPBOX_IOS_TOKEN VITE_FIREBASE_APPCHECK_SITE_KEY VITE_SENTRY_DSN VITE_FIREBASE_VAPID_KEY VITE_FIREBASE_IOS_JS_API_KEY IOS_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_B64; do
             if [ -n "$(printenv "${name}" 2>/dev/null || true)" ]; then
               echo "${name}: PRESENT"
             else
@@ -578,6 +579,7 @@ jobs:
       - name: Build production web assets
         env:
           VITE_MAPBOX_TOKEN: ${{ secrets.VITE_MAPBOX_TOKEN }}
+          VITE_MAPBOX_IOS_TOKEN: ${{ secrets.VITE_MAPBOX_IOS_TOKEN }}
           VITE_FIREBASE_APPCHECK_SITE_KEY: ${{ secrets.VITE_FIREBASE_APPCHECK_SITE_KEY }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
           VITE_FIREBASE_VAPID_KEY: ${{ secrets.VITE_FIREBASE_VAPID_KEY }}
@@ -849,7 +851,7 @@ jobs:
           expected = {
               "CFBundleIdentifier": "app.parqueen",
               "CFBundleShortVersionString": "1.0",
-              "CFBundleVersion": "6",
+              "CFBundleVersion": "7",
               "CFBundleDisplayName": "ParQueen",
           }
           failed = False
