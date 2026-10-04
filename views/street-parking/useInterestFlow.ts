@@ -22,6 +22,7 @@ import {
     type ClaimerSpotRecord,
     type UnfinishedHandoff,
 } from './unfinishedHandoff';
+import { ARRIVAL_DISTANCE_KM } from './arrivalLocation';
 
 interface UseInterestFlowOptions {
     selectedItem: any;
@@ -50,7 +51,6 @@ export function departurePingDenialCopy(error: unknown): { title: string; messag
 
 const MAX_ETA_MINUTES = 7;
 const MAX_CLAIM_MINUTES = 15;
-const ARRIVAL_DISTANCE_KM = 0.015; // ~50 feet
 const ETA_OPTIONS = [2, 5, 8, 10];
 const kmToEstMinutes = (km: number) => Math.ceil((km / 25) * 60);
 

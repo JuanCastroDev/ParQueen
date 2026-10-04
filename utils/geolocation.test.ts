@@ -51,6 +51,12 @@ describe('normalizePosition', () => {
     expect(normalized.coords).toEqual({ latitude: 40.7128, longitude: -74.006, accuracy: 12 });
     expect(normalized).not.toHaveProperty('coords.altitude');
   });
+
+  it('keeps a platform fix timestamp and omits it when the platform has none', () => {
+    expect(normalizePosition({ coords: sampleCoords, timestamp: 1_700_000_000_000 }).timestampMs)
+      .toBe(1_700_000_000_000);
+    expect(normalizePosition({ coords: sampleCoords })).not.toHaveProperty('timestampMs');
+  });
 });
 
 describe('mapPluginPermissionStatus', () => {
