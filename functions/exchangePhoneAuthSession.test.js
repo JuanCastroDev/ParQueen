@@ -141,10 +141,13 @@ describe('exchangePhoneAuthSession', () => {
     expect(HANDLER_SRC).toContain(AUTH_BRIDGE_SERVICE_ACCOUNT);
     expect(block).toContain('exchangePhoneAuthSessionHandler');
     expect(block).not.toContain('request.data.uid');
-    for (const name of ['deleteChat', 'sendMessage', 'updateDisplayName', 'adminReadView', 'checkHydrantDistance']) {
+    for (const name of ['deleteChat', 'updateDisplayName', 'adminReadView', 'checkHydrantDistance']) {
       const fnStart = INDEX_SRC.indexOf(`exports.${name}`);
       const marker = INDEX_SRC.indexOf('enforceAppCheck:', fnStart);
       expect(INDEX_SRC.slice(marker, marker + 40)).toMatch(/^enforceAppCheck:\s*true/);
     }
+    const sendStart = INDEX_SRC.indexOf('exports.sendMessage');
+    const sendMarker = INDEX_SRC.indexOf('enforceAppCheck:', sendStart);
+    expect(INDEX_SRC.slice(sendMarker, sendMarker + 40)).toMatch(/^enforceAppCheck:\s*false/);
   });
 });
