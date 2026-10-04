@@ -172,19 +172,29 @@ describe('stabilizeArrivalLocation', () => {
         expect(ARRIVAL_RANGE_CONFIRMATIONS).toBe(2);
     });
 
-    it('requires consecutive evidence before leaving the initial checking state', () => {
+    it('enters immediately on a strict in-range fix', () => {
         const firstNear = step(INITIAL_ARRIVAL_RANGE_MEMORY, 12);
-        expect(firstNear.decision).toEqual({ kind: 'pending' });
+        expect(firstNear.decision).toEqual({ kind: 'arrive' });
         expect(firstNear.next).toEqual({
+            stable: 'in_range',
+            candidate: null,
+            confirmations: 0,
+        });
+    });
+
+    it('requires consecutive far evidence before showing the initial out-of-range warning', () => {
+        const firstFar = step(INITIAL_ARRIVAL_RANGE_MEMORY, 80, 10);
+        expect(firstFar.decision).toEqual({ kind: 'pending' });
+        expect(firstFar.next).toEqual({
             stable: 'unknown',
-            candidate: 'in_range',
+            candidate: 'out_of_range',
             confirmations: 1,
         });
 
-        const secondNear = step(firstNear.next, 11);
-        expect(secondNear.decision).toEqual({ kind: 'arrive' });
-        expect(secondNear.next).toEqual({
-            stable: 'in_range',
+        const secondFar = step(firstFar.next, 82, 10);
+        expect(secondFar.decision).toEqual({ kind: 'out_of_range' });
+        expect(secondFar.next).toEqual({
+            stable: 'out_of_range',
             candidate: null,
             confirmations: 0,
         });
