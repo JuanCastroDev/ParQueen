@@ -1,9 +1,16 @@
 'use strict';
 
 const { FieldPath, Timestamp } = require('firebase-admin/firestore');
+const {
+  TWO_HOURS_MS,
+  finderAttestationId,
+  isMutualSuccessPair,
+} = require('./handoffSuccessContract');
 
 // Juan 2026-10-02: unresolved arrived handoffs close two hours after arrivedAt.
-const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+// Mutual success (both timely participant attestations) is not an abandoned
+// arrival. One-sided success is: past the same clock it becomes unconfirmed
+// and the attestation document is left in place.
 const DEFAULT_PAGE_SIZE = 200;
 const MAX_PAGES = 10000;
 
@@ -70,8 +77,9 @@ function formatAbandonedArrivalSweepLog(counts) {
 
 /**
  * Close one abandoned arrival inside a transaction.
- * An existing terminal feedback doc always wins: it is not overwritten, and a
- * success or failed outcome is never paired with claimState unconfirmed.
+ * Failed feedback and a timely mutual success are terminal: they are not
+ * overwritten and are not paired with claimState unconfirmed. A one-sided
+ * success attestation is retained and the Ping becomes unconfirmed.
  * Returns converted | skipped-terminal | skipped-legacy | ineligible | missing | error.
  */
 async function closeAbandonedArrivedHandoff(db, spotRef, nowMs) {
@@ -90,10 +98,31 @@ async function closeAbandonedArrivedHandoff(db, spotRef, nowMs) {
     }
 
     const feedbackRef = db.collection('spotFeedback').doc(feedbackId);
+    const finderFeedbackRef = db.collection('spotFeedback').doc(finderAttestationId(fresh.id, claimerId));
     const feedbackSnap = await tx.get(feedbackRef);
+    const finderSnap = await tx.get(finderFeedbackRef);
+    const claimerData = feedbackSnap.exists ? feedbackSnap.data() : null;
+    const finderData = finderSnap.exists ? finderSnap.data() : null;
+
+    // Both timely success attestations beat cleanup. Do not write unconfirmed.
+    // The award transaction sets completed_success; a retry of this sweep sees
+    // that claimState and is no longer eligible.
+    if (isMutualSuccessPair({
+      spotId: fresh.id,
+      claimerId,
+      finderId,
+      claimerDocId: feedbackId,
+      claimerData,
+      finderDocId: finderAttestationId(fresh.id, claimerId),
+      finderData,
+      spot,
+    })) {
+      return 'skipped-terminal';
+    }
+
     if (feedbackSnap.exists) {
-      const outcome = feedbackSnap.data() && feedbackSnap.data().outcome;
-      if (outcome === 'success' || outcome === 'failed') return 'skipped-terminal';
+      const outcome = claimerData && claimerData.outcome;
+      if (outcome === 'failed') return 'skipped-terminal';
       if (outcome === 'unconfirmed') {
         if (spot.claimState !== 'unconfirmed') {
           tx.update(spotRef, { claimState: 'unconfirmed' });
@@ -101,7 +130,17 @@ async function closeAbandonedArrivedHandoff(db, spotRef, nowMs) {
         }
         return 'skipped-terminal';
       }
+      // One-sided or late success: seal the handoff. Keep the attestation.
+      if (outcome === 'success' || outcome === 'participant_success') {
+        tx.update(spotRef, { claimState: 'unconfirmed' });
+        return 'converted';
+      }
       return 'skipped-terminal';
+    }
+
+    if (finderData && (finderData.outcome === 'participant_success' || finderData.outcome === 'success')) {
+      tx.update(spotRef, { claimState: 'unconfirmed' });
+      return 'converted';
     }
 
     const address = typeof spot.address === 'string' ? spot.address : '';

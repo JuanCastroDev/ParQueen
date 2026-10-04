@@ -265,4 +265,32 @@ describe('cleanupExpiredSpotsHourly durability', () => {
         expect((await db.doc(`spots/${malformedId}`).get()).exists).toBe(false);
         expect((await db.doc(`spots/${legacyId}`).get()).exists).toBe(false);
     });
+
+    it('CESH-6: keeps occupied completed_success when arrivedAt is real and deletes it when arrivedAt is missing', async () => {
+        const keptId = `cesh_completed_${RUN}`;
+        const missingId = `cesh_completed_missing_${RUN}`;
+        const arrivedAt = Timestamp.fromMillis(Date.now() - 3 * 60 * 60_000);
+        await createSpot(keptId, spot({
+            status: 'occupied',
+            claimState: 'completed_success',
+            arrivedAt,
+            interestedUserId: 'claimer_done',
+        }));
+        const missing = spot({
+            status: 'occupied',
+            claimState: 'completed_success',
+            interestedUserId: 'claimer_done_missing',
+        });
+        delete missing.arrivedAt;
+        await createSpot(missingId, missing);
+
+        await indexModule.cleanupExpiredSpotsHourly.run();
+
+        const kept = await db.doc(`spots/${keptId}`).get();
+        expect(kept.exists).toBe(true);
+        expect(kept.data().claimState).toBe('completed_success');
+        expect(kept.data().status).toBe('occupied');
+        expect(kept.data().arrivedAt.toMillis()).toBe(arrivedAt.toMillis());
+        expect((await db.doc(`spots/${missingId}`).get()).exists).toBe(false);
+    });
 });

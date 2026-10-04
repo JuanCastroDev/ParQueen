@@ -545,18 +545,32 @@ describe('spotFeedback', () => {
         );
     });
 
-    it('F7: signed-in user can create feedback', async () => {
+    it('F7: signed-in claimer can create their own success attestation only after durable arrival', async () => {
         await seed('spots', 'feedback-spot', {
             ...interestedSpot,
             status: 'occupied',
+            claimState: 'arrived_pending_outcome',
+            arrivedAt: Timestamp.fromMillis(Date.now() - 60_000),
         });
-        await assertSucceeds(
+        await assertFails(
             setDoc(doc(otherDb(), 'spotFeedback', `feedback-spot_${OTHER_UID}`), {
                 spotId:    'feedback-spot',
                 userId:    OTHER_UID,
                 finderId:  OWNER_UID,
                 address:   '999 New St',
                 outcome:   'success',
+                failureReason: null,
+                createdAt: Timestamp.now(),
+            })
+        );
+        await assertSucceeds(
+            setDoc(doc(otherDb(), 'spotFeedback', `feedback-spot_${OTHER_UID}`), {
+                spotId:    'feedback-spot',
+                userId:    OTHER_UID,
+                finderId:  OWNER_UID,
+                address:   '999 New St',
+                outcome:   'participant_success',
+                role:      'claimer',
                 failureReason: null,
                 createdAt: Timestamp.now(),
             })
@@ -724,7 +738,7 @@ describe('spotFeedback', () => {
 
     it('F12e: unchanged backend guards reject failed/null before authoritative Crown or trust work', () => {
         const source = readFileSync('functions/index.js', 'utf8');
-        const successOnlyGuard = "if (!data || data.outcome !== 'success') return;";
+        const participantGuard = "if (!data || data.outcome !== 'participant_success') return;";
         const awardCrowns = source.slice(
             source.indexOf('exports.awardCrowns = onDocumentCreated('),
             source.indexOf('exports.adminDeleteSpot'),
@@ -734,10 +748,12 @@ describe('spotFeedback', () => {
             source.indexOf('exports.scheduleCleaningReminders'),
         );
 
-        expect(awardCrowns.indexOf(successOnlyGuard)).toBeGreaterThan(-1);
-        expect(awardCrowns.indexOf(successOnlyGuard)).toBeLessThan(awardCrowns.indexOf('db.runTransaction'));
-        expect(updateTrust.indexOf(successOnlyGuard)).toBeGreaterThan(-1);
-        expect(updateTrust.indexOf(successOnlyGuard)).toBeLessThan(updateTrust.indexOf('applyTrustDelta'));
+        expect(awardCrowns.indexOf(participantGuard)).toBeGreaterThan(-1);
+        expect(awardCrowns.indexOf(participantGuard)).toBeLessThan(awardCrowns.indexOf('joinMutualSuccess'));
+        expect(updateTrust.indexOf(participantGuard)).toBeGreaterThan(-1);
+        expect(updateTrust.indexOf(participantGuard)).toBeLessThan(updateTrust.indexOf('joinMutualSuccess'));
+        expect(awardCrowns).not.toMatch(/outcome !== 'success'/);
+        expect(updateTrust).not.toMatch(/applyTrustDelta/);
     });
 
     it('F13: successful feedback cannot smuggle a failure reason', async () => {
@@ -759,12 +775,15 @@ describe('spotFeedback', () => {
         );
     });
 
-    it('F14: valid participant atomically completes success once with one finder notification', async () => {
+    it('F14: the pre-C2 success write is denied, and a claimer attestation does not finish the handoff', async () => {
         const spotId = 'terminal-success-spot';
         const feedbackId = `${spotId}_${OTHER_UID}`;
+        const arrivedAt = Timestamp.fromMillis(Date.now() - 60_000);
         await seed('spots', spotId, {
             ...interestedSpot,
             status: 'occupied',
+            claimState: 'arrived_pending_outcome',
+            arrivedAt,
         });
         const params = {
             spotId,
@@ -776,17 +795,33 @@ describe('spotFeedback', () => {
             failureReason: null,
         };
 
-        await expect(completeTerminalHandoff(otherDb(), params)).resolves.toBe('created');
-        await expect(completeTerminalHandoff(otherDb(), params)).resolves.toBe('already_completed');
+        await expect(completeTerminalHandoff(otherDb(), params)).rejects.toMatchObject({ code: 'permission-denied' });
+        await assertSucceeds(setDoc(doc(otherDb(), 'spotFeedback', feedbackId), {
+            spotId,
+            userId: OTHER_UID,
+            finderId: OWNER_UID,
+            address: '999 Success St',
+            outcome: 'participant_success',
+            role: 'claimer',
+            failureReason: null,
+            createdAt: Timestamp.now(),
+        }));
+        await assertFails(setDoc(doc(otherDb(), 'spotFeedback', feedbackId), {
+            spotId,
+            userId: OTHER_UID,
+            finderId: OWNER_UID,
+            address: '999 Success St',
+            outcome: 'participant_success',
+            role: 'claimer',
+            failureReason: null,
+            createdAt: Timestamp.now(),
+        }));
 
         const feedback = await getDoc(doc(otherDb(), 'spotFeedback', feedbackId));
-        expect(feedback.data()).toMatchObject({ outcome: 'success', failureReason: null });
-        const notification = await getDoc(doc(ownerDb(), 'spotNotifications', `handoff_success_${feedbackId}`));
-        expect(notification.data()).toMatchObject({
-            senderId: OTHER_UID,
-            targetUserId: OWNER_UID,
-            type: 'handoff_success',
-        });
+        expect(feedback.data()).toMatchObject({ outcome: 'participant_success', role: 'claimer', failureReason: null });
+        const spot = await getDoc(doc(otherDb(), 'spots', spotId));
+        expect(spot.data()?.claimState).toBe('arrived_pending_outcome');
+        expect(spot.data()?.arrivedAt.isEqual(arrivedAt)).toBe(true);
     });
 
     it('F15: valid participant atomically completes failed feedback with its final reason once', async () => {
@@ -834,9 +869,8 @@ describe('spotFeedback', () => {
         })).rejects.toThrow(/PERMISSION_DENIED|permission-denied/);
     });
 
-    it('F17: finder-confirmed success atomically occupies the spot and completes once', async () => {
+    it('F17: finder success before durable arrival is denied, including the legacy confirm helper', async () => {
         const spotId = 'finder-terminal-success-spot';
-        const feedbackId = `${spotId}_${OTHER_UID}`;
         await seed('spots', spotId, interestedSpot);
         const params = {
             spotId,
@@ -846,22 +880,21 @@ describe('spotFeedback', () => {
             address: '999 Finder Success St',
         };
 
-        await expect(completeFinderConfirmedHandoff(ownerDb(), params)).resolves.toBe('created');
-        await expect(completeFinderConfirmedHandoff(ownerDb(), params)).resolves.toBe('already_completed');
+        await expect(completeFinderConfirmedHandoff(ownerDb(), params)).rejects.toMatchObject({ code: 'permission-denied' });
+        await assertFails(setDoc(doc(ownerDb(), 'spotFeedback', `${spotId}_${OTHER_UID}_finder`), {
+            spotId,
+            userId: OTHER_UID,
+            finderId: OWNER_UID,
+            address: '999 Finder Success St',
+            outcome: 'participant_success',
+            role: 'finder',
+            failureReason: null,
+            createdAt: Timestamp.now(),
+        }));
 
         const spot = await getDoc(doc(ownerDb(), 'spots', spotId));
-        expect(spot.data()?.status).toBe('occupied');
-        const feedback = await getDoc(doc(ownerDb(), 'spotFeedback', feedbackId));
-        expect(feedback.data()).toMatchObject({
-            outcome: 'success',
-            confirmedByFinder: true,
-        });
-        const notification = await getDoc(doc(otherDb(), 'spotNotifications', `handoff_success_${feedbackId}`));
-        expect(notification.data()).toMatchObject({
-            senderId: OWNER_UID,
-            targetUserId: OTHER_UID,
-            type: 'handoff_success',
-        });
+        expect(spot.data()?.status).toBe('interested');
+        expect(spot.data()?.claimState).toBeUndefined();
     });
 
     it('F18: retry repairs a legacy success missing its finder notification without updating feedback', async () => {
@@ -4236,19 +4269,28 @@ describe('A1 — one active incoming claim', () => {
         await seed('spots', spotId, {
             ...interestedSpot,
             status: 'occupied',
+            claimState: 'arrived_pending_outcome',
+            arrivedAt: Timestamp.fromMillis(Date.now() - 60_000),
             address: 'A1 terminal',
         });
         await seedLock(OTHER_UID, spotId);
         const db = otherDb();
-        await expect(completeTerminalHandoff(db, {
-            spotId,
-            driverId: OTHER_UID,
-            driverName: 'bob',
-            finderId: OWNER_UID,
-            address: 'A1 terminal',
-            outcome: 'success',
-            failureReason: null,
-        })).resolves.toBe('created');
+        const feedbackId = `${spotId}_${OTHER_UID}`;
+        await assertSucceeds(runTransaction(db, async (tx) => {
+            const lockRef = activeIncomingClaimRef(db, OTHER_UID);
+            const lockSnap = await tx.get(lockRef);
+            tx.set(doc(db, 'spotFeedback', feedbackId), {
+                spotId,
+                userId: OTHER_UID,
+                finderId: OWNER_UID,
+                outcome: 'participant_success',
+                role: 'claimer',
+                failureReason: null,
+                address: 'A1 terminal',
+                createdAt: Timestamp.now(),
+            });
+            if (lockSnap.exists() && lockSnap.data()?.spotId === spotId) tx.delete(lockRef);
+        }));
         expect((await readLock(OTHER_UID)).exists()).toBe(false);
     });
 
@@ -4933,7 +4975,7 @@ describe('B1 — durable arrived_pending_outcome', () => {
         expect((await readLock()).exists()).toBe(true);
     });
 
-    it('B1-TERMINAL: completeTerminalHandoff still succeeds from occupied + arrived_pending_outcome', async () => {
+    it('B1-TERMINAL: a claimer success attestation does not rewrite arrival, and legacy success is denied', async () => {
         const spotId = 'b1-terminal';
         const arrivedAt = Timestamp.fromMillis(Date.now() - 60_000);
         await seed('spots', spotId, headingPing(spotId, {
@@ -4950,17 +4992,27 @@ describe('B1 — durable arrived_pending_outcome', () => {
             address: spotId,
             outcome: 'success',
             failureReason: null,
-        })).resolves.toBe('created');
+        })).rejects.toMatchObject({ code: 'permission-denied' });
+        await assertSucceeds(setDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`), {
+            spotId,
+            userId: OTHER_UID,
+            finderId: OWNER_UID,
+            address: spotId,
+            outcome: 'participant_success',
+            role: 'claimer',
+            failureReason: null,
+            createdAt: Timestamp.now(),
+        }));
 
         const spot = (await readSpot(spotId)).data();
         expect(spot.status).toBe('occupied');
         expect(spot.claimState).toBe('arrived_pending_outcome');
         expect(spot.arrivedAt.isEqual(arrivedAt)).toBe(true);
         const feedback = await getDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`));
-        expect(feedback.data()).toMatchObject({ outcome: 'success', failureReason: null });
+        expect(feedback.data()).toMatchObject({ outcome: 'participant_success', role: 'claimer', failureReason: null });
     });
 
-    it('B1-FINDER: finder confirm still completes when the claimer already arrived', async () => {
+    it('B1-FINDER: finder success is a separate attestation and does not rewrite arrival', async () => {
         const spotId = 'b1-finder';
         const arrivedAt = Timestamp.fromMillis(Date.now() - 30_000);
         await seed('spots', spotId, headingPing(spotId, {
@@ -4975,14 +5027,25 @@ describe('B1 — durable arrived_pending_outcome', () => {
             finderId: OWNER_UID,
             finderName: 'TestFinder',
             address: spotId,
-        })).resolves.toBe('created');
+        })).rejects.toMatchObject({ code: 'permission-denied' });
+        await assertSucceeds(setDoc(doc(ownerDb(), 'spotFeedback', `${spotId}_${OTHER_UID}_finder`), {
+            spotId,
+            userId: OTHER_UID,
+            finderId: OWNER_UID,
+            address: spotId,
+            outcome: 'participant_success',
+            role: 'finder',
+            failureReason: null,
+            createdAt: Timestamp.now(),
+        }));
 
         const spot = (await readSpot(spotId)).data();
         expect(spot.status).toBe('occupied');
         expect(spot.claimState).toBe('arrived_pending_outcome');
         expect(spot.arrivedAt.isEqual(arrivedAt)).toBe(true);
-        const feedback = await getDoc(doc(ownerDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`));
-        expect(feedback.data()).toMatchObject({ outcome: 'success', confirmedByFinder: true });
+        const feedback = await getDoc(doc(ownerDb(), 'spotFeedback', `${spotId}_${OTHER_UID}_finder`));
+        expect(feedback.data()).toMatchObject({ outcome: 'participant_success', role: 'finder' });
+        await assertFails(getDoc(doc(thirdDb(), 'spotFeedback', `${spotId}_${OTHER_UID}_finder`)));
     });
 
     it('B1-CANCEL: cancel after arrival does not reopen the Ping', async () => {
@@ -5202,5 +5265,126 @@ describe('B4 — client cannot create unconfirmed', () => {
             const notices = await getDocs(query(collection(db, 'spotNotifications'), where('spotId', '==', spotId)));
             expect(notices.docs.filter((snap) => snap.data().type === 'handoff_success')).toHaveLength(0);
         });
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// C1 — Design A participant attestations. outcome success is not a client write.
+// One attestation is not terminal: claimState stays arrived_pending_outcome.
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('C1 — participant success attestations', () => {
+    function arrivedSpot(id: string, extra: Record<string, unknown> = {}) {
+        return {
+            finderId: OWNER_UID,
+            finderName: 'TestFinder',
+            address: id,
+            lat: 40.71,
+            lng: -74.01,
+            status: 'occupied',
+            claimState: 'arrived_pending_outcome',
+            interestedUserId: OTHER_UID,
+            arrivedAt: Timestamp.fromMillis(Date.now() - 60_000),
+            pingMode: 'now',
+            reportedAt: Timestamp.now(),
+            expiresAt: FUTURE,
+            ...extra,
+        };
+    }
+
+    function claimerAttestation(spotId: string, extra: Record<string, unknown> = {}) {
+        return {
+            spotId,
+            userId: OTHER_UID,
+            finderId: OWNER_UID,
+            outcome: 'participant_success',
+            role: 'claimer',
+            failureReason: null,
+            address: spotId,
+            createdAt: Timestamp.now(),
+            ...extra,
+        };
+    }
+
+    function finderAttestation(spotId: string, extra: Record<string, unknown> = {}) {
+        return {
+            spotId,
+            userId: OTHER_UID,
+            finderId: OWNER_UID,
+            outcome: 'participant_success',
+            role: 'finder',
+            failureReason: null,
+            address: spotId,
+            createdAt: Timestamp.now(),
+            ...extra,
+        };
+    }
+
+    it('C1-OWN: each participant can create only their own attestation', async () => {
+        const spotId = 'c1-own';
+        await seed('spots', spotId, arrivedSpot(spotId));
+        await assertFails(setDoc(doc(ownerDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`), claimerAttestation(spotId)));
+        await assertFails(setDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}_finder`), finderAttestation(spotId)));
+        await assertSucceeds(setDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`), claimerAttestation(spotId)));
+        await assertSucceeds(setDoc(doc(ownerDb(), 'spotFeedback', `${spotId}_${OTHER_UID}_finder`), finderAttestation(spotId)));
+        await assertFails(updateDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`), { outcome: 'failed' }));
+        await assertFails(deleteDoc(doc(ownerDb(), 'spotFeedback', `${spotId}_${OTHER_UID}_finder`)));
+        await assertFails(updateDoc(doc(ownerDb(), 'spotFeedback', `${spotId}_${OTHER_UID}_finder`), { role: 'claimer' }));
+    });
+
+    it('C1-ARRIVAL: finder success is rejected before durable arrival', async () => {
+        const spotId = 'c1-before-arrival';
+        await seed('spots', spotId, arrivedSpot(spotId, {
+            status: 'occupied',
+            claimState: 'heading',
+            arrivedAt: null,
+        }));
+        await assertFails(setDoc(doc(ownerDb(), 'spotFeedback', `${spotId}_${OTHER_UID}_finder`), finderAttestation(spotId)));
+        await assertFails(setDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`), claimerAttestation(spotId)));
+    });
+
+    it('C1-SERVER: clients cannot write completed_success, functionEvents, or crowns', async () => {
+        const spotId = 'c1-server';
+        await seed('spots', spotId, arrivedSpot(spotId));
+        await assertFails(updateDoc(doc(otherDb(), 'spots', spotId), { claimState: 'completed_success' }));
+        await assertFails(updateDoc(doc(ownerDb(), 'spots', spotId), { claimState: 'completed_success' }));
+        await assertFails(setDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`), claimerAttestation(spotId, {
+            outcome: 'completed_success',
+        })));
+        await assertFails(setDoc(doc(otherDb(), 'functionEvents', `awardCrowns_${spotId}`), { outcome: 'awarded' }));
+        await assertFails(setDoc(doc(ownerDb(), 'functionEvents', `awardCrowns_${spotId}`), { outcome: 'awarded' }));
+        await seed('users', OTHER_UID, { username: 'bob', crowns: 0, title: 'Newcomer' });
+        await assertFails(updateDoc(doc(otherDb(), 'users', OTHER_UID), { crowns: 9, title: 'Trusted Driver' }));
+    });
+
+    it('C1-PAIR: self-pair and a mismatched finder are denied', async () => {
+        const spotId = 'c1-self';
+        await seed('spots', spotId, arrivedSpot(spotId, {
+            finderId: OTHER_UID,
+            interestedUserId: OTHER_UID,
+        }));
+        await assertFails(setDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`), claimerAttestation(spotId, {
+            finderId: OTHER_UID,
+        })));
+
+        const mismatch = 'c1-mismatch';
+        await seed('spots', mismatch, arrivedSpot(mismatch));
+        await assertFails(setDoc(doc(otherDb(), 'spotFeedback', `${mismatch}_${OTHER_UID}`), claimerAttestation(mismatch, {
+            finderId: THIRD_UID,
+        })));
+        await assertFails(setDoc(doc(thirdDb(), 'spotFeedback', `${mismatch}_${OTHER_UID}_finder`), finderAttestation(mismatch, {
+            finderId: THIRD_UID,
+        })));
+    });
+
+    it('C1-READ: claimer reads both attestations and the finder reads only the finder doc', async () => {
+        const spotId = 'c1-read';
+        await seed('spots', spotId, arrivedSpot(spotId));
+        await seed('spotFeedback', `${spotId}_${OTHER_UID}`, claimerAttestation(spotId));
+        await seed('spotFeedback', `${spotId}_${OTHER_UID}_finder`, finderAttestation(spotId));
+        await assertSucceeds(getDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`)));
+        await assertSucceeds(getDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}_finder`)));
+        await assertSucceeds(getDoc(doc(ownerDb(), 'spotFeedback', `${spotId}_${OTHER_UID}_finder`)));
+        await assertFails(getDoc(doc(ownerDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`)));
+        await assertFails(getDoc(doc(thirdDb(), 'spotFeedback', `${spotId}_${OTHER_UID}_finder`)));
     });
 });

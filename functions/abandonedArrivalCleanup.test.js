@@ -39,6 +39,7 @@ describe('abandoned arrival eligibility', () => {
     expect(isEligibleAbandonedArrival(arrived({ status: 'interested' }), NOW)).toBe(false);
     expect(isEligibleAbandonedArrival(arrived({ claimState: 'heading' }), NOW)).toBe(false);
     expect(isEligibleAbandonedArrival(arrived({ claimState: 'unconfirmed' }), NOW)).toBe(false);
+    expect(isEligibleAbandonedArrival(arrived({ claimState: 'completed_success' }), NOW)).toBe(false);
   });
 
   it('does not treat malformed or missing arrivedAt as eligible, and counts only missing as legacy', () => {

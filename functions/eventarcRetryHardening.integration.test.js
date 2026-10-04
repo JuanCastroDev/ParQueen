@@ -130,19 +130,49 @@ describe('incrementTotalSpotsPinged duplicate-delivery safety', () => {
 describe('updateTrustOnFeedback duplicate-delivery safety', () => {
     it('the same feedback-created event delivered twice applies handoffsCompleted only once', async () => {
         const finderId = nextId('finder');
-        const feedbackId = `${nextId('spot')}_${nextId('driver')}`;
+        const driverId = nextId('driver');
+        const spotId = nextId('spot');
+        const feedbackId = `${spotId}_${driverId}`;
+        const createdAt = Timestamp.fromMillis(Date.now() - 30_000);
+        const attestation = {
+            spotId,
+            userId: driverId,
+            finderId,
+            outcome: 'participant_success',
+            role: 'claimer',
+            failureReason: null,
+            address: '1 Trust St',
+            createdAt,
+        };
+        await db.doc(`users/${driverId}`).set({ crowns: 0 });
         await db.doc(`users/${finderId}`).set({ crowns: 0 });
+        await db.doc(`spots/${spotId}`).set({
+            status: 'occupied',
+            claimState: 'arrived_pending_outcome',
+            arrivedAt: Timestamp.fromMillis(Date.now() - 60_000),
+            interestedUserId: driverId,
+            finderId,
+        });
+        await db.doc(`spotFeedback/${feedbackId}`).set(attestation);
+        await db.doc(`spotFeedback/${feedbackId}_finder`).set({ ...attestation, role: 'finder' });
 
-        const event = createdEvent(feedbackId, { feedbackId }, { outcome: 'success', finderId });
+        const event = createdEvent(feedbackId, { feedbackId }, attestation);
         await indexModule.updateTrustOnFeedback.run(event);
         await indexModule.updateTrustOnFeedback.run(event);
 
         const userSnap = await db.doc(`users/${finderId}`).get();
         expect(userSnap.data().trustStats.handoffsCompleted).toBe(1);
+        expect((await db.doc(`users/${driverId}`).get()).data().crowns).toBe(1);
+        expect(userSnap.data().crowns).toBe(2);
 
         await cleanup(
+            db.doc(`users/${driverId}`),
             db.doc(`users/${finderId}`),
             db.doc(`users/${finderId}/processedTrustEvents/${feedbackId}:finder`),
+            db.doc(`functionEvents/awardCrowns_${feedbackId}`),
+            db.doc(`spots/${spotId}`),
+            db.doc(`spotFeedback/${feedbackId}`),
+            db.doc(`spotFeedback/${feedbackId}_finder`),
         );
     });
 

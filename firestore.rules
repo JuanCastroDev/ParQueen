@@ -871,71 +871,127 @@ service cloud.firestore {
       allow delete: if signedIn() && resource.data.targetUserId == request.auth.uid;
     }
 
-    match /spotFeedback/{feedbackId} {
-      allow create: if signedIn()
-        && request.resource.data.keys().hasAll(
+    // Design A attestations. outcome is participant_success, not success:
+    // today's resume reader treats success and failed as terminal, and a
+    // one-sided attestation must leave Finish-your-handoff pending.
+    // Crowns, trust, unconfirmed, and completed_success are server-only.
+    function participantSuccessShape(data) {
+      return data.keys().hasAll(
+          ['spotId', 'userId', 'finderId', 'outcome', 'address', 'createdAt', 'role'])
+        && data.keys().hasOnly(
+          ['spotId', 'userId', 'finderId', 'outcome', 'failureReason',
+           'address', 'createdAt', 'role'])
+        && data.spotId is string
+        && data.spotId.size() > 0
+        && data.userId is string
+        && data.userId.size() > 0
+        && data.finderId is string
+        && data.finderId.size() > 0
+        && data.userId != data.finderId
+        && data.outcome == 'participant_success'
+        && data.get('failureReason', null) == null
+        && data.address is string
+        && data.address.size() <= 500
+        && data.createdAt is timestamp
+        && data.createdAt <= request.time
+        && data.createdAt >= request.time - duration.value(5, 'm');
+    }
+
+    function durableArrivedFor(spotId) {
+      let path = /databases/$(database)/documents/spots/$(spotId);
+      let spot = getAfter(path).data;
+      return exists(path)
+        && spot.status == 'occupied'
+        && spot.claimState == 'arrived_pending_outcome'
+        && spot.arrivedAt is timestamp;
+    }
+
+    function claimerFailureCreate(feedbackId) {
+      let data = request.resource.data;
+      let path = /databases/$(database)/documents/spots/$(data.spotId);
+      let spot = getAfter(path).data;
+      return signedIn()
+        && data.keys().hasAll(
              ['spotId', 'userId', 'finderId', 'outcome', 'address', 'createdAt'])
-        && request.resource.data.keys().hasOnly(
+        && data.keys().hasOnly(
              ['spotId', 'userId', 'finderId', 'outcome', 'failureReason',
-              'address', 'confirmedByFinder', 'createdAt'])
-        && request.resource.data.spotId is string
-        && request.resource.data.userId is string
-        && request.resource.data.finderId is string
-        && request.resource.data.outcome in ['success', 'failed']
+              'address', 'createdAt'])
+        && data.spotId is string
+        && data.userId is string
+        && data.finderId is string
+        && data.outcome == 'failed'
+        && ('failureReason' in data)
         && (
-          (request.resource.data.outcome == 'success'
-            && request.resource.data.get('failureReason', null) == null)
-          || (request.resource.data.outcome == 'failed'
-            && ('failureReason' in request.resource.data)
-            && (
-              // Temporary rollout bridge: pre-#90 cached clients create an
-              // explicit null; #90 clients create the final reason initially.
-              // Feedback stays immutable. Remove after legacy clients retire
-              // or a minimum-version/forced-refresh mechanism exists.
-              request.resource.data.failureReason == null
-              || request.resource.data.failureReason in [
-                'Someone else got it',
-                "Finder hadn't left yet",
-                "Couldn't find the location",
-                'Other'
-              ]
-            ))
+          // Temporary rollout bridge: pre-#90 cached clients create an
+          // explicit null; #90 clients create the final reason initially.
+          // Feedback stays immutable. Remove after legacy clients retire
+          // or a minimum-version/forced-refresh mechanism exists.
+          data.failureReason == null
+          || data.failureReason in [
+            'Someone else got it',
+            "Finder hadn't left yet",
+            "Couldn't find the location",
+            'Other'
+          ]
         )
-        && request.resource.data.address is string
-        && request.resource.data.address.size() <= 500
-        && request.resource.data.createdAt is timestamp
-        && request.resource.data.createdAt <= request.time
-        && request.resource.data.createdAt >= request.time - duration.value(5, 'm')
-        && (
-          (request.auth.uid == request.resource.data.userId
-            && !('confirmedByFinder' in request.resource.data))
-          || (request.auth.uid == request.resource.data.finderId
-            && request.resource.data.confirmedByFinder == true
-            && request.resource.data.outcome == 'success'
-            && request.resource.data.failureReason == null)
-        )
-        && feedbackId == request.resource.data.spotId + '_' + request.resource.data.userId
-        && exists(/databases/$(database)/documents/spots/$(request.resource.data.spotId))
-        && getAfter(/databases/$(database)/documents/spots/$(request.resource.data.spotId)).data.status == 'occupied'
-        && (
-          (request.auth.uid == request.resource.data.userId
-            && getAfter(/databases/$(database)/documents/spots/$(request.resource.data.spotId)).data
-                 .get('interestedUserId', null) == request.auth.uid
-            && getAfter(/databases/$(database)/documents/spots/$(request.resource.data.spotId)).data.finderId
-                 == request.resource.data.finderId)
-          || (request.auth.uid == request.resource.data.finderId
-            && getAfter(/databases/$(database)/documents/spots/$(request.resource.data.spotId)).data.finderId
-                 == request.auth.uid
-            && getAfter(/databases/$(database)/documents/spots/$(request.resource.data.spotId)).data
-                 .get('interestedUserId', null) == request.resource.data.userId)
-        );
+        && data.address is string
+        && data.address.size() <= 500
+        && data.createdAt is timestamp
+        && data.createdAt <= request.time
+        && data.createdAt >= request.time - duration.value(5, 'm')
+        && request.auth.uid == data.userId
+        && feedbackId == data.spotId + '_' + data.userId
+        && exists(path)
+        && spot.status == 'occupied'
+        && spot.get('interestedUserId', null) == request.auth.uid
+        && spot.finderId == data.finderId;
+    }
+
+    function claimerSuccessAttestation(feedbackId) {
+      let data = request.resource.data;
+      let path = /databases/$(database)/documents/spots/$(data.spotId);
+      let spot = getAfter(path).data;
+      return signedIn()
+        && participantSuccessShape(data)
+        && data.role == 'claimer'
+        && request.auth.uid == data.userId
+        && feedbackId == data.spotId + '_' + data.userId
+        && durableArrivedFor(data.spotId)
+        && spot.get('interestedUserId', null) == request.auth.uid
+        && spot.finderId == data.finderId;
+    }
+
+    function finderSuccessAttestation(feedbackId) {
+      let data = request.resource.data;
+      let path = /databases/$(database)/documents/spots/$(data.spotId);
+      let spot = getAfter(path).data;
+      return signedIn()
+        && participantSuccessShape(data)
+        && data.role == 'finder'
+        && request.auth.uid == data.finderId
+        && feedbackId == data.spotId + '_' + data.userId + '_finder'
+        && durableArrivedFor(data.spotId)
+        && spot.finderId == request.auth.uid
+        && spot.get('interestedUserId', null) == data.userId;
+    }
+
+    match /spotFeedback/{feedbackId} {
+      allow create: if claimerFailureCreate(feedbackId)
+        || claimerSuccessAttestation(feedbackId)
+        || finderSuccessAttestation(feedbackId);
       // Direct admin read removed: never read by any Admin Dashboard
       // component — confirmed via full-repo search. Reads stay participant-only
-      // so either side can safely reconcile its deterministic terminal retry.
+      // so either side can safely reconcile its deterministic retry.
+      // Finder success lives on its own doc; confirmedByFinder remains the
+      // legacy read for finder-authored success docs already in the wild.
       allow read: if signedIn()
         && (resource.data.userId == request.auth.uid
           || (resource.data.finderId == request.auth.uid
-            && resource.data.get('confirmedByFinder', false) == true));
+            && resource.data.get('confirmedByFinder', false) == true)
+          || (resource.data.finderId == request.auth.uid
+            && resource.data.outcome == 'participant_success'
+            && resource.data.role == 'finder'
+            && feedbackId == resource.data.spotId + '_' + resource.data.userId + '_finder'));
       allow update, delete: if false;
     }
 
@@ -1149,6 +1205,11 @@ service cloud.firestore {
         // docs/CHAT_DELETE_HARDENING.md.
         allow delete: if false;
       }
+    }
+
+    // Award idempotency markers. Admin SDK only.
+    match /functionEvents/{eventId} {
+      allow read, write: if false;
     }
 
     // Server-only rollout gate and duplicate-claim conflict reports.
