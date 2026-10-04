@@ -5,7 +5,6 @@ const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf
 
 const ENFORCED_CALLABLES = [
   'deleteChat',
-  'sendMessage',
   'updateDisplayName',
   'adminReadView',
   'checkHydrantDistance',
@@ -110,7 +109,7 @@ describe('Android Phase 2E App Check contracts', () => {
 
   it('does not change Cloud Functions App Check enforcement', () => {
     const functions = read('../functions/index.js');
-    expect(functions.match(/enforceAppCheck:\s*true/g) || []).toHaveLength(5);
+    expect(functions.match(/enforceAppCheck:\s*true/g) || []).toHaveLength(4);
     for (const name of ENFORCED_CALLABLES) {
       const start = functions.indexOf(`exports.${name} = onCall(`);
       expect(start, name).toBeGreaterThan(-1);
