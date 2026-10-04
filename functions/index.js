@@ -32,6 +32,10 @@ const {
   clearMatchingActiveIncomingClaim,
   repairActiveIncomingClaims,
 } = require('./activeIncomingClaim');
+const {
+  sweepAbandonedArrivedHandoffs,
+  formatAbandonedArrivalSweepLog,
+} = require('./abandonedArrivalCleanup');
 const { releasedInterestPatch } = require('./activeIncomingClaimLogic');
 const { requireCurrentAdmin, requireCurrentAuthenticatedUser } = require('./adminAuth');
 const { isSweepNYCData, computeSegmentUpdate, computeRuleUpdate } = require('./backfillLogic');
@@ -248,13 +252,20 @@ exports.initUserPrivateAccount = onDocumentCreated(
 );
 
 // Occupied + arrived_pending_outcome is durable handoff state. The Ping's
-// original expiresAt must not delete it. It stays until a terminal outcome
-// or the later B4 unconfirmed sweeper. Legacy occupied rows without this
-// claimState are not migrated and still follow general expiry.
+// original expiresAt must not delete it. cleanupAbandonedArrivedHandoffs
+// closes that state as unconfirmed; the closed row is kept too. This job is
+// not the close path. Legacy occupied rows that are neither of those shapes
+// are not migrated and still follow general expiry.
 function isDurableArrivedPendingOutcome(spot) {
   return !!spot
     && spot.status === "occupied"
     && spot.claimState === "arrived_pending_outcome";
+}
+
+function isTerminalUnconfirmedHandoff(spot) {
+  return !!spot
+    && spot.status === "occupied"
+    && spot.claimState === "unconfirmed";
 }
 
 // 1) Delete expired spots every hour
@@ -289,7 +300,8 @@ exports.cleanupExpiredSpotsHourly = onSchedule(
       const batch = db.batch();
       let deleteCount = 0;
       for (const d of snap.docs) {
-        if (isDurableArrivedPendingOutcome(d.data())) {
+        const spot = d.data();
+        if (isDurableArrivedPendingOutcome(spot) || isTerminalUnconfirmedHandoff(spot)) {
           keptArrived++;
           continue;
         }
@@ -511,6 +523,23 @@ async function releaseExpiredPendingHoldRequests(now) {
     `✅ cleanupExpiredHolds: cleared ${cleared} expired pending holds, skipped ${skipped}, errors ${errors}`
   );
 }
+
+// 1e) Close abandoned arrived handoffs. Admin SDK only. Clients cannot write
+// outcome unconfirmed. Crowns and handoff-success notifications stay on the
+// existing success feedback path; this job does not call them.
+exports.cleanupAbandonedArrivedHandoffs = onSchedule(
+  {
+    schedule: "every 1 hours",
+    timeZone: "America/Toronto",
+    region: "us-central1",
+    memory: "256MiB",
+    serviceAccount: 'parqueen-cleanup@parkqueen-46475363-ccf36.iam.gserviceaccount.com',
+  },
+  async () => {
+    const counts = await sweepAbandonedArrivedHandoffs(db, Timestamp.now().toMillis());
+    console.log(formatAbandonedArrivalSweepLog(counts));
+  }
+);
 
 // Bilingual copy for scheduled claim notifications.
 // lang defaults to 'en' for any missing/unrecognised value.

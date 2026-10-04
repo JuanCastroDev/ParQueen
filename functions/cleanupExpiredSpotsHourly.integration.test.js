@@ -152,4 +152,31 @@ describe('cleanupExpiredSpotsHourly durability', () => {
         expect(kept.every((snap) => snap.exists && snap.data().claimState === 'arrived_pending_outcome')).toBe(true);
         expect((await db.doc(`spots/${laterId}`).get()).exists).toBe(false);
     }, 60000);
+
+    it('CESH-5: keeps a closed unconfirmed handoff and still deletes a legacy occupied Ping', async () => {
+        const closedId = `cesh_unconfirmed_${RUN}`;
+        const legacyId = `cesh_legacy_still_${RUN}`;
+        const arrivedAt = Timestamp.fromMillis(Date.now() - 3 * 60 * 60_000);
+
+        await db.doc(`spots/${closedId}`).set(spot({
+            status: 'occupied',
+            claimState: 'unconfirmed',
+            arrivedAt,
+            interestedUserId: 'claimer_closed',
+        }));
+        await db.doc(`spots/${legacyId}`).set(spot({
+            status: 'occupied',
+            claimState: 'heading',
+            interestedUserId: 'claimer_legacy',
+        }));
+
+        await indexModule.cleanupExpiredSpotsHourly.run();
+
+        const closed = await db.doc(`spots/${closedId}`).get();
+        expect(closed.exists).toBe(true);
+        expect(closed.data().claimState).toBe('unconfirmed');
+        expect(closed.data().status).toBe('occupied');
+        expect(closed.data().arrivedAt.toMillis()).toBe(arrivedAt.toMillis());
+        expect((await db.doc(`spots/${legacyId}`).get()).exists).toBe(false);
+    });
 });

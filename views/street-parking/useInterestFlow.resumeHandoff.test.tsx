@@ -391,6 +391,7 @@ describe('useInterestFlow — resumable finish-your-handoff', () => {
     const chosen = selectUnfinishedHandoff([
       { id: 'older', data: { ...arrivedSpot, arrivedAt: { toMillis: () => 1 } } },
       { id: 'heading', data: { ...arrivedSpot, claimState: 'heading' } },
+      { id: 'closed', data: { ...arrivedSpot, claimState: 'unconfirmed', arrivedAt: { toMillis: () => 50 } } },
       { id: 'done', data: { ...arrivedSpot, arrivedAt: { toMillis: () => 9 } } },
       { id: 'newer', data: { ...arrivedSpot, arrivedAt: { toMillis: () => 8 } } },
       { id: 'stranger', data: { ...arrivedSpot, interestedUserId: 'other' } },
