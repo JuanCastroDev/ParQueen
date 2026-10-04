@@ -32,7 +32,7 @@ describe('iOS foreground location stability contract', () => {
   it('keeps GPS accuracy in the arrival reading and uses the stabilizer in the UI', () => {
     expect(mapSource).toContain('{ coords: { latitude, longitude, accuracy }, timestampMs: position.timestampMs }');
     expect(arrivalUiSource).toContain('stabilizeArrivalLocation');
-    expect(arrivalUiSource).toContain('previousRange');
-    expect(arrivalUiSource).toContain('stabilized.nextRange');
+    expect(arrivalUiSource).toContain('INITIAL_ARRIVAL_RANGE_MEMORY');
+    expect(arrivalUiSource).toContain('stabilized.next.confirmations');
   });
 });

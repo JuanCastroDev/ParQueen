@@ -16,6 +16,22 @@ export const ARRIVAL_EXIT_DISTANCE_KM = 0.03;
 
 export type ArrivalLocationFault = 'permission_denied' | 'unavailable';
 export type ArrivalRangeMemory = 'unknown' | 'in_range' | 'out_of_range';
+export type ArrivalRangeCandidate = 'in_range' | 'out_of_range';
+
+export interface ArrivalRangeStabilityMemory {
+    stable: ArrivalRangeMemory;
+    candidate: ArrivalRangeCandidate | null;
+    confirmations: number;
+}
+
+export const INITIAL_ARRIVAL_RANGE_MEMORY: ArrivalRangeStabilityMemory = {
+    stable: 'unknown',
+    candidate: null,
+    confirmations: 0,
+};
+
+/** Two consecutive fixes are required before the handoff UI changes range state. */
+export const ARRIVAL_RANGE_CONFIRMATIONS = 2;
 
 export interface ArrivalLocationFix {
     lat: number;
@@ -84,34 +100,84 @@ export function stabilizeArrivalLocation(input: {
     reading: ArrivalLocationReading;
     spot: { lat: number; lng: number };
     nowMs: number;
-    previousRange: ArrivalRangeMemory;
-}): { decision: ArrivalLocationDecision; nextRange: ArrivalRangeMemory } {
+    previous: ArrivalRangeStabilityMemory;
+}): { decision: ArrivalLocationDecision; next: ArrivalRangeStabilityMemory } {
     const decision = classifyArrivalLocation(input);
 
-    if (decision.kind === 'arrive') {
-        return { decision, nextRange: 'in_range' };
-    }
-
-    if (decision.kind !== 'out_of_range' || !finiteFix(input.reading.fix)) {
-        return { decision, nextRange: 'unknown' };
-    }
-
-    if (input.previousRange !== 'in_range') {
-        return { decision, nextRange: 'out_of_range' };
+    // Location faults/staleness remain immediate safety states. Do not let a
+    // previous proximity latch hide them.
+    if (decision.kind === 'override' || decision.kind === 'pending') {
+        return { decision, next: INITIAL_ARRIVAL_RANGE_MEMORY };
     }
 
     const fix = input.reading.fix;
+    if (!finiteFix(fix)) {
+        return { decision: { kind: 'pending' }, next: INITIAL_ARRIVAL_RANGE_MEMORY };
+    }
+
     const distanceKm = getDistance(fix.lat, fix.lng, input.spot.lat, input.spot.lng);
     const accuracyKm = Number.isFinite(fix.accuracyMeters as number) && (fix.accuracyMeters as number) > 0
         ? (fix.accuracyMeters as number) / 1000
         : 0;
     const definitelyOutsideKm = Math.max(0, distanceKm - accuracyKm);
 
-    if (definitelyOutsideKm <= ARRIVAL_EXIT_DISTANCE_KM) {
-        return { decision: { kind: 'arrive' }, nextRange: 'in_range' };
+    // Entering is intentionally strict at 15 m. Leaving an already in-range
+    // state is intentionally stricter: one noisy fix cannot eject the driver
+    // unless it is clearly beyond the 30 m exit radius after accounting for
+    // horizontal accuracy.
+    let signal: ArrivalRangeCandidate;
+    if (distanceKm <= ARRIVAL_DISTANCE_KM) {
+        signal = 'in_range';
+    } else if (input.previous.stable === 'in_range' && definitelyOutsideKm <= ARRIVAL_EXIT_DISTANCE_KM) {
+        signal = 'in_range';
+    } else {
+        signal = 'out_of_range';
     }
 
-    return { decision, nextRange: 'out_of_range' };
+    // A strict in-range fix is strong enough to enter immediately. This keeps
+    // "I've arrived" responsive while the exit path below remains deliberately
+    // resistant to one-off GPS jumps.
+    if (input.previous.stable === 'unknown' && signal === 'in_range') {
+        return {
+            decision: { kind: 'arrive' },
+            next: { stable: 'in_range', candidate: null, confirmations: 0 },
+        };
+    }
+
+    // If the current fix agrees with the stable state, clear any pending
+    // transition immediately.
+    if (input.previous.stable === signal) {
+        return {
+            decision: signal === 'in_range' ? { kind: 'arrive' } : { kind: 'out_of_range' },
+            next: { stable: signal, candidate: null, confirmations: 0 },
+        };
+    }
+
+    const confirmations = input.previous.candidate === signal
+        ? input.previous.confirmations + 1
+        : 1;
+
+    // Do not change what the user sees on a single contradictory GPS sample.
+    if (confirmations < ARRIVAL_RANGE_CONFIRMATIONS) {
+        const heldDecision: ArrivalLocationDecision = input.previous.stable === 'in_range'
+            ? { kind: 'arrive' }
+            : input.previous.stable === 'out_of_range'
+                ? { kind: 'out_of_range' }
+                : { kind: 'pending' };
+        return {
+            decision: heldDecision,
+            next: {
+                stable: input.previous.stable,
+                candidate: signal,
+                confirmations,
+            },
+        };
+    }
+
+    return {
+        decision: signal === 'in_range' ? { kind: 'arrive' } : { kind: 'out_of_range' },
+        next: { stable: signal, candidate: null, confirmations: 0 },
+    };
 }
 
 /**
