@@ -23,10 +23,15 @@ interface HandoffFlowProps {
     onFailureReason: (reason: string) => void;
     onSetTimer: (minutes: number) => void;
     onSkip: () => void;
+    /** Set when the terminal write was rejected. Stays inside this sheet. */
+    submitError?: string | null;
+    submitting?: boolean;
+    onRetry?: () => void;
 }
 
 export const HandoffFlow: React.FC<HandoffFlowProps> = ({
     step, finderName, onOutcome, onFailureReason, onSetTimer, onSkip,
+    submitError = null, submitting = false, onRetry,
 }) => {
     useLang();
     const [submitted, setSubmitted] = useState(false);
@@ -41,6 +46,10 @@ export const HandoffFlow: React.FC<HandoffFlowProps> = ({
     // Stable ref so the auto-close timeout always calls the latest onSkip
     const onSkipRef = useRef(onSkip);
     onSkipRef.current = onSkip;
+
+    useEffect(() => {
+        if (submitError) setSubmitted(false);
+    }, [submitError]);
 
     useEffect(() => {
         if (step === 'celebration') {
@@ -74,6 +83,33 @@ export const HandoffFlow: React.FC<HandoffFlowProps> = ({
         handleSetTimer(minutes);
     };
 
+    const submissionStatus = (submitting || submitError) ? (
+        <div className="mt-4">
+            {submitting && (
+                <p data-testid="handoff-submit-pending" className="text-sm text-center text-[var(--color-text-secondary)]">
+                    {t('handoff.submit_saving')}
+                </p>
+            )}
+            {submitError && !submitting && (
+                <div role="alert" data-testid="handoff-submit-error" className="rounded-2xl border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 px-4 py-3 text-center">
+                    <p className="text-sm font-semibold text-[var(--color-text)]">{submitError}</p>
+                    {onRetry && (
+                        <button
+                            type="button"
+                            data-testid="handoff-submit-retry"
+                            disabled={submitting}
+                            onClick={() => { if (!submitting) return onRetry(); }}
+                            className="mt-3 w-full py-3 rounded-2xl text-sm font-bold text-white transition-all active:scale-95 disabled:opacity-50"
+                            style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}
+                        >
+                            {t('handoff.submit_retry')}
+                        </button>
+                    )}
+                </div>
+            )}
+        </div>
+    ) : null;
+
     if (step === 'outcome') {
         return (
             <div className="text-center">
@@ -87,8 +123,12 @@ export const HandoffFlow: React.FC<HandoffFlowProps> = ({
                 <p className="text-sm text-[var(--color-text-secondary)] mb-6">Let us know how it went</p>
                 <div className="flex gap-3">
                     <button
-                        onClick={() => { if (!submitted) { setSubmitted(true); onOutcome('success'); } }}
-                        disabled={submitted}
+                        onClick={() => {
+                            if (submitted || submitting) return;
+                            setSubmitted(true);
+                            return onOutcome('success');
+                        }}
+                        disabled={submitted || submitting}
                         className="flex-1 py-3.5 rounded-2xl text-sm font-bold text-white flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50"
                         style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}
                     >
@@ -96,14 +136,19 @@ export const HandoffFlow: React.FC<HandoffFlowProps> = ({
                         Yes, I'm in!
                     </button>
                     <button
-                        onClick={() => { if (!submitted) { setSubmitted(true); onOutcome('failed'); } }}
-                        disabled={submitted}
+                        onClick={() => {
+                            if (submitted || submitting) return;
+                            setSubmitted(true);
+                            return onOutcome('failed');
+                        }}
+                        disabled={submitted || submitting}
                         className="flex-1 py-3.5 rounded-2xl text-sm font-bold border border-[var(--color-border)] bg-white/5 hover:bg-white/10 transition-all active:scale-95 text-[var(--color-text)] flex items-center justify-center gap-2 disabled:opacity-50"
                     >
                         <XCircle size={16} className="text-[var(--color-danger)]" />
                         No luck
                     </button>
                 </div>
+                {submissionStatus}
             </div>
         );
     }
@@ -239,8 +284,9 @@ export const HandoffFlow: React.FC<HandoffFlowProps> = ({
                         <button
                             key={label}
                             type="button"
-                            onClick={() => onFailureReason(label)}
-                            className="handoff-failure-reason w-full py-3 px-4 rounded-2xl text-sm font-semibold border border-[var(--color-border)] bg-white/5 hover:bg-white/10 transition-all active:scale-95 text-[var(--color-text)] flex items-center gap-3"
+                            disabled={submitting}
+                            onClick={() => { if (!submitting) return onFailureReason(label); }}
+                            className="handoff-failure-reason w-full py-3 px-4 rounded-2xl text-sm font-semibold border border-[var(--color-border)] bg-white/5 hover:bg-white/10 transition-all active:scale-95 text-[var(--color-text)] flex items-center gap-3 disabled:opacity-50"
                         >
                             <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
                                 style={{ background: 'rgba(30,117,255,0.12)', border: '1px solid rgba(30,117,255,0.2)' }}>
@@ -250,6 +296,7 @@ export const HandoffFlow: React.FC<HandoffFlowProps> = ({
                         </button>
                     ))}
                 </div>
+                {submissionStatus}
             </div>
         );
     }

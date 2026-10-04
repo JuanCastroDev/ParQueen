@@ -188,7 +188,7 @@ describe('useInterestFlow — critical-action failure reporting', () => {
     await act(async () => { await firstCall; });
   });
 
-  it('handleHandoffOutcome remains uncaught on failure (no local catch) — Sentry\'s global handler covers it, so no explicit report is added here', async () => {
+  it('handleHandoffOutcome reports terminal_handoff and stays on the outcome step when the write fails', async () => {
     runTransaction.mockImplementationOnce(async (_db, cb) => cb({
       get: async () => ({ exists: () => true, data: () => ({ status: 'interested', interestedUserId: 'u1' }) }),
       update: vi.fn(),
@@ -200,7 +200,10 @@ describe('useInterestFlow — critical-action failure reporting', () => {
     // Establish handoffSpotRef via handleArrival first, matching real flow.
     await act(async () => { await getFlow().handleArrival(); });
 
-    await expect(getFlow().handleHandoffOutcome('success')).rejects.toBe(txError);
-    expect(reportCriticalActionFailure).not.toHaveBeenCalled();
+    await act(async () => { await getFlow().handleHandoffOutcome('success'); });
+    expect(reportCriticalActionFailure).toHaveBeenCalledTimes(1);
+    expect(reportCriticalActionFailure).toHaveBeenCalledWith('terminal_handoff', txError);
+    expect(getFlow().handoffStep).toBe('outcome');
+    expect(getFlow().handoffSubmitError).toBe("Couldn't save this outcome.");
   });
 });

@@ -52,9 +52,12 @@ vi.mock('firebase/firestore', () => ({
 }));
 
 vi.mock('./cancelClaimTransaction', () => ({ cancelClaimTransaction: vi.fn() }));
-vi.mock('../../utils/errorReporting', () => ({ reportCriticalActionFailure: vi.fn() }));
+const { reportCriticalActionFailure } = vi.hoisted(() => ({ reportCriticalActionFailure: vi.fn() }));
+vi.mock('../../utils/errorReporting', () => ({ reportCriticalActionFailure }));
 
 import { useInterestFlow } from './useInterestFlow';
+import { HandoffFlow } from './HandoffFlow';
+import { selectUnfinishedHandoff } from './unfinishedHandoff';
 
 const user = { id: 'driver-1', username: 'Driver', crowns: 0 };
 const spot = {
@@ -82,44 +85,82 @@ function snapshotFor(ref: { __col: string; __id: string }) {
   };
 }
 
-function mount(currentUser: typeof user = user) {
+function mount(currentUser: typeof user = user, selected: typeof spot | Record<string, unknown> = spot, withSheet = false) {
   let flow!: ReturnType<typeof useInterestFlow>;
   const setSelectedItem = vi.fn();
+  let renderer!: TestRenderer.ReactTestRenderer;
   act(() => {
-    TestRenderer.create(
+    renderer = TestRenderer.create(
       <Harness
         onReady={(next) => { flow = next; }}
         setSelectedItem={setSelectedItem}
         currentUser={currentUser}
+        selected={selected}
+        withSheet={withSheet}
       />,
     );
   });
-  return { getFlow: () => flow, setSelectedItem };
+  return { getFlow: () => flow, setSelectedItem, renderer };
 }
 
 function Harness({
-  onReady, setSelectedItem, currentUser = user,
+  onReady, setSelectedItem, currentUser = user, selected = spot, withSheet = false,
 }: {
   onReady: (flow: ReturnType<typeof useInterestFlow>) => void;
   setSelectedItem: React.Dispatch<React.SetStateAction<any>>;
   currentUser?: typeof user;
+  selected?: typeof spot | Record<string, unknown>;
+  withSheet?: boolean;
 }) {
   const flow = useInterestFlow({
-    selectedItem: spot,
+    selectedItem: selected as typeof spot,
     setSelectedItem,
     user: currentUser,
-    freeSpots: [spot],
+    freeSpots: [selected as typeof spot],
     userLocation: null,
     mapRef: { current: null },
     activeRouteDestinationRef: { current: null },
   });
   onReady(flow);
-  return null;
+  if (!withSheet || !flow.handoffStep) return null;
+  return (
+    <HandoffFlow
+      step={flow.handoffStep}
+      finderName={flow.handoffFinderName}
+      onOutcome={flow.handleHandoffOutcome}
+      onFailureReason={flow.handleFailureReason}
+      onSetTimer={() => {}}
+      onSkip={() => {}}
+      submitError={flow.handoffSubmitError}
+      submitting={flow.handoffSubmitting}
+      onRetry={flow.retryTerminalHandoff}
+    />
+  );
 }
 
 async function arrive(getFlow: () => ReturnType<typeof useInterestFlow>) {
   await act(async () => { await getFlow().handleArrival(); });
   expect(getFlow().handoffStep).toBe('outcome');
+}
+
+function buttonText(node: TestRenderer.ReactTestInstance): string {
+  return node.children.map((child) => (
+    typeof child === 'string' ? child : buttonText(child)
+  )).join('');
+}
+
+function findButton(renderer: TestRenderer.ReactTestRenderer, label: string) {
+  return renderer.root.findAll((node) => node.type === 'button' && buttonText(node).includes(label))[0];
+}
+
+function deferred() {
+  let resolve!: () => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 function writesTo(collection: string) {
@@ -152,6 +193,7 @@ describe('useInterestFlow — terminal handoff outcomes', () => {
     });
     documents.clear();
     documents.set('spots/spot-1', { ...spot });
+    reportCriticalActionFailure.mockClear();
     getDoc.mockImplementation(async (ref) => snapshotFor(ref));
     runTransaction.mockImplementation(async (_db, callback) => {
       const staged: Array<{ ref: any; data: Record<string, any>; merge?: boolean }> = [];
@@ -312,8 +354,176 @@ describe('useInterestFlow — terminal handoff outcomes', () => {
     // its spot update via setDoc. Reject only the following terminal write.
     setDoc.mockRejectedValueOnce(error);
 
-    await expect(getFlow().handleHandoffOutcome('success')).rejects.toBe(error);
+    await act(async () => { await getFlow().handleHandoffOutcome('success'); });
 
     expect(getFlow().handoffStep).toBe('outcome');
+    expect(getFlow().handoffSubmitError).toBe("Couldn't save this outcome.");
+    expect(reportCriticalActionFailure).toHaveBeenCalledWith('terminal_handoff', error);
+  });
+
+  it('a reason click runs the handler, and a rejected write stays visible inside the sheet', async () => {
+    const denied = Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' });
+    const { getFlow, renderer } = mount(user, spot, true);
+    await arrive(getFlow);
+
+    const noLuck = findButton(renderer, 'No luck');
+    await act(async () => { noLuck.props.onClick(); });
+    expect(getFlow().handoffStep).toBe('failure_reason');
+
+    runTransaction.mockRejectedValueOnce(denied);
+    const reason = renderer.root.findAll((node) => (
+      typeof node.props.className === 'string' && node.props.className.includes('handoff-failure-reason')
+    ))[0];
+    await act(async () => { await reason.props.onClick(); });
+
+    expect(runTransaction).toHaveBeenCalled();
+    expect(writesTo('spotFeedback')).toHaveLength(0);
+    expect(getFlow().handoffStep).toBe('failure_reason');
+    expect(getFlow().handoffSubmitError).toBe("Couldn't save this outcome.");
+    expect(reportCriticalActionFailure).toHaveBeenCalledWith('terminal_handoff', denied);
+    const alert = renderer.root.findByProps({ 'data-testid': 'handoff-submit-error' });
+    expect(buttonText(alert)).toContain("Couldn't save this outcome.");
+
+    const retry = renderer.root.findByProps({ 'data-testid': 'handoff-submit-retry' });
+    await act(async () => { await retry.props.onClick(); });
+    expect(getFlow().handoffStep).toBeNull();
+    expect(writesTo('spotFeedback')).toHaveLength(1);
+    expect(writesTo('spotFeedback')[0][1]).toMatchObject({
+      outcome: 'failed',
+      failureReason: 'Someone else got it',
+    });
+  });
+
+  it('the recorded canary shape throws Handoff participants changed before any feedback write', async () => {
+    const driver = { id: 'RLWYDF4op5WOJj0ivZvzcAJGY5M2', username: 'AndroidTest', crowns: 0 };
+    const canaryId = 'b2-chip-canary-20261002';
+    const canary = {
+      ...spot,
+      id: canaryId,
+      lat: -77,
+      lng: 0,
+      address: 'SYNTHETIC B2 CHIP CHECK',
+      title: 'SYNTHETIC B2 CHIP CHECK',
+      finderName: 'B2 canary',
+      finderId: '',
+      status: 'occupied' as const,
+      interestedUserId: driver.id,
+    };
+    const canaryData = {
+      lat: -77,
+      lng: 0,
+      address: 'SYNTHETIC B2 CHIP CHECK',
+      finderName: 'B2 canary',
+      status: 'occupied',
+      claimState: 'arrived_pending_outcome',
+      interestedUserId: driver.id,
+      arrivedAt: { toMillis: () => 1_759_000_000_000 },
+    };
+    documents.set(`spots/${canaryId}`, canaryData);
+    expect(selectUnfinishedHandoff(
+      [{ id: canaryId, data: canaryData }],
+      new Set(),
+      driver.id,
+    )?.finderId).toBe('');
+    const { getFlow } = mount(driver, canary);
+    await arrive(getFlow);
+    await act(async () => { await getFlow().handleHandoffOutcome('failed'); });
+
+    await act(async () => { await getFlow().handleFailureReason("Couldn't find the location"); });
+
+    expect(getFlow().handoffStep).toBe('failure_reason');
+    expect(getFlow().handoffSubmitError).toBe("Couldn't save this outcome.");
+    expect(writesTo('spotFeedback')).toHaveLength(0);
+    const reported = reportCriticalActionFailure.mock.calls.at(-1);
+    expect(reported?.[0]).toBe('terminal_handoff');
+    expect(reported?.[1]).toMatchObject({ message: 'Handoff participants changed' });
+    expect(`spotFeedback/${canaryId}_${driver.id}`).toBe('spotFeedback/b2-chip-canary-20261002_RLWYDF4op5WOJj0ivZvzcAJGY5M2');
+  });
+
+  it('an in-flight success retry holds the submit lock over No luck and a second retry', async () => {
+    const error = Object.assign(new Error('unavailable'), { code: 'unavailable' });
+    const { getFlow, renderer } = mount(user, spot, true);
+    await arrive(getFlow);
+
+    runTransaction.mockRejectedValueOnce(error);
+    await act(async () => { await findButton(renderer, "Yes, I'm in").props.onClick(); });
+
+    expect(getFlow().handoffStep).toBe('outcome');
+    expect(getFlow().handoffSubmitting).toBe(false);
+    expect(getFlow().handoffSubmitError).toBe("Couldn't save this outcome.");
+    expect(buttonText(renderer.root.findByProps({ 'data-testid': 'handoff-submit-error' }))).toContain("Couldn't save this outcome.");
+
+    const gate = deferred();
+    const writesBeforeRetry = runTransaction.mock.calls.length;
+    runTransaction.mockImplementationOnce(() => gate.promise);
+    let retryDone!: Promise<unknown>;
+    act(() => { retryDone = findButton(renderer, 'Try again').props.onClick(); });
+
+    expect(getFlow().handoffSubmitting).toBe(true);
+    expect(getFlow().handoffStep).toBe('outcome');
+    expect(renderer.root.findByProps({ 'data-testid': 'handoff-submit-pending' })).toBeTruthy();
+    expect(runTransaction.mock.calls.length).toBe(writesBeforeRetry + 1);
+    expect(findButton(renderer, "Yes, I'm in").props.disabled).toBe(true);
+    expect(findButton(renderer, 'No luck').props.disabled).toBe(true);
+    expect(renderer.root.findAllByProps({ 'data-testid': 'handoff-submit-retry' })).toHaveLength(0);
+
+    await act(async () => {
+      findButton(renderer, 'No luck').props.onClick();
+      await getFlow().handleHandoffOutcome('failed');
+      await getFlow().retryTerminalHandoff();
+      findButton(renderer, "Yes, I'm in").props.onClick();
+    });
+
+    expect(getFlow().handoffStep).toBe('outcome');
+    expect(getFlow().handoffSubmitting).toBe(true);
+    expect(runTransaction.mock.calls.length).toBe(writesBeforeRetry + 1);
+
+    await act(async () => {
+      gate.reject(error);
+      await retryDone;
+    });
+
+    expect(getFlow().handoffSubmitting).toBe(false);
+    expect(getFlow().handoffStep).toBe('outcome');
+    expect(getFlow().handoffSubmitError).toBe("Couldn't save this outcome.");
+    const noLuck = findButton(renderer, 'No luck');
+    const retry = renderer.root.findByProps({ 'data-testid': 'handoff-submit-retry' });
+    expect(noLuck.props.disabled).toBe(false);
+    expect(findButton(renderer, "Yes, I'm in").props.disabled).toBe(false);
+    expect(retry.props.disabled).toBe(false);
+
+    await act(async () => { await noLuck.props.onClick(); });
+    expect(getFlow().handoffStep).toBe('failure_reason');
+    expect(writesTo('spotFeedback')).toHaveLength(0);
+  });
+
+  it('a success retry that resolves leaves the outcome controls and reaches celebration', async () => {
+    const error = Object.assign(new Error('unavailable'), { code: 'unavailable' });
+    const { getFlow, renderer } = mount(user, spot, true);
+    await arrive(getFlow);
+
+    runTransaction.mockRejectedValueOnce(error);
+    await act(async () => { await findButton(renderer, "Yes, I'm in").props.onClick(); });
+    expect(getFlow().handoffSubmitError).toBe("Couldn't save this outcome.");
+
+    const gate = deferred();
+    const writesBeforeRetry = runTransaction.mock.calls.length;
+    runTransaction.mockImplementationOnce(() => gate.promise);
+    let retryDone!: Promise<unknown>;
+    act(() => { retryDone = findButton(renderer, 'Try again').props.onClick(); });
+
+    expect(getFlow().handoffSubmitting).toBe(true);
+    await act(async () => { await getFlow().handleHandoffOutcome('failed'); });
+    expect(getFlow().handoffStep).toBe('outcome');
+    expect(runTransaction.mock.calls.length).toBe(writesBeforeRetry + 1);
+
+    await act(async () => {
+      gate.resolve();
+      await retryDone;
+    });
+
+    expect(getFlow().handoffSubmitting).toBe(false);
+    expect(getFlow().handoffSubmitError).toBeNull();
+    expect(getFlow().handoffStep).toBe('celebration');
   });
 });
