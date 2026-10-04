@@ -45,9 +45,10 @@ describe('StreetParkingView re-ping geohash fix', () => {
         expect(first.length).toBeGreaterThan(0);
     });
 
-    it('CASE 5: the normal immediate-ping path (userLocation) still derives geohash the same way, unchanged', () => {
+    it('CASE 5: the normal immediate-ping path derives geohash from the exact frozen coordinates it writes', () => {
+        expect(source).toContain('const pingLocation = pingLocationSnapshot ?? userLocation;');
         expect(source).toMatch(
-            /geohash:\s*geofire\.geohashForLocation\(\[userLocation\[1\],\s*userLocation\[0\]\]\)/,
+            /lat:\s*pingLocation\[1\],[\s\S]*?lng:\s*pingLocation\[0\],[\s\S]*?geohash:\s*geofire\.geohashForLocation\(\[pingLocation\[1\],\s*pingLocation\[0\]\]\)/,
         );
     });
 
