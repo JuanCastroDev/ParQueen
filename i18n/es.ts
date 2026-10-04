@@ -218,6 +218,8 @@ const es: Record<string, string> = {
     'map.free_spots_plural': '{count} lugares libres cerca',
     'map.no_spots_nearby': 'No hay lugares activos cerca',
     'map.no_spots_available_now': 'No hay lugares disponibles ahora.',
+    'map.load_failed': 'No se pudo cargar el mapa.',
+    'map.load_retry': 'Intentar de nuevo',
     'map.view_nearby_spot': 'Ver lugar de estacionamiento cercano',
     'map.view_nearby_spots': 'Ver lugares de estacionamiento cercanos',
     'map.nearby_spots_title': 'Lugares cercanos',
