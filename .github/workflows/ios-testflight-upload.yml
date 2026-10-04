@@ -851,7 +851,7 @@ jobs:
           expected = {
               "CFBundleIdentifier": "app.parqueen",
               "CFBundleShortVersionString": "1.0",
-              "CFBundleVersion": "8",
+              "CFBundleVersion": "9",
               "CFBundleDisplayName": "ParQueen",
           }
           failed = False
