@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { getDistance } from './utils';
 import {
     ARRIVAL_DISTANCE_KM,
+    ARRIVAL_EXIT_DISTANCE_KM,
     ARRIVAL_LOCATION_MAX_AGE_MS,
     arrivalFixFromPosition,
     classifyArrivalLocation,
     finishArrivalLocationWait,
     nextArrivalReading,
+    stabilizeArrivalLocation,
     type ArrivalLocationReading,
+    type ArrivalRangeMemory,
 } from './arrivalLocation';
 
 const NOW = 1_700_000_000_000;
@@ -142,6 +145,63 @@ describe('classifyArrivalLocation', () => {
     });
 });
 
+
+describe('stabilizeArrivalLocation', () => {
+    const fixAtMeters = (meters: number, accuracyMeters = 10) => ({
+        lat: spot.lat + (meters / 111_000),
+        lng: spot.lng,
+        timestampMs: NOW - 1_000,
+        accuracyMeters,
+    });
+
+    it('uses a wider exit radius than the strict arrival radius', () => {
+        expect(ARRIVAL_EXIT_DISTANCE_KM).toBeGreaterThan(ARRIVAL_DISTANCE_KM);
+    });
+
+    it('does not flicker out of range when GPS jitters around the 15 m boundary', () => {
+        let memory: ArrivalRangeMemory = 'unknown';
+
+        for (const meters of [12, 18, 13, 20, 11]) {
+            const stabilized = stabilizeArrivalLocation({
+                reading: reading({ fix: fixAtMeters(meters) }),
+                spot,
+                nowMs: NOW,
+                previousRange: memory,
+            });
+            expect(stabilized.decision).toEqual({ kind: 'arrive' });
+            expect(stabilized.nextRange).toBe('in_range');
+            memory = stabilized.nextRange;
+        }
+    });
+
+    it('leaves the latched in-range state once the fix is clearly far away', () => {
+        const stabilized = stabilizeArrivalLocation({
+            reading: reading({ fix: fixAtMeters(80, 10) }),
+            spot,
+            nowMs: NOW,
+            previousRange: 'in_range',
+        });
+        expect(stabilized.decision).toEqual({ kind: 'out_of_range' });
+        expect(stabilized.nextRange).toBe('out_of_range');
+    });
+
+    it('does not hide stale or unavailable location behind the in-range latch', () => {
+        expect(stabilizeArrivalLocation({
+            reading: reading({ fix: { ...fixAtMeters(10), timestampMs: NOW - 120_001 } }),
+            spot,
+            nowMs: NOW,
+            previousRange: 'in_range',
+        }).decision).toEqual({ kind: 'override', reason: 'stale' });
+
+        expect(stabilizeArrivalLocation({
+            reading: reading({ fix: null, fault: 'unavailable' }),
+            spot,
+            nowMs: NOW,
+            previousRange: 'in_range',
+        }).decision).toEqual({ kind: 'override', reason: 'unavailable' });
+    });
+});
+
 describe('finishArrivalLocationWait', () => {
     it('moves a still-pending reading to unavailable when the bounded wait ends', () => {
         const settled = finishArrivalLocationWait(reading());
@@ -201,6 +261,13 @@ describe('arrival location updates', () => {
             { coords: { latitude: 40.7, longitude: -74 } },
             NOW,
         )?.timestampMs).toBe(NOW);
+    });
+
+    it('preserves platform horizontal accuracy when it is available', () => {
+        expect(arrivalFixFromPosition(
+            { coords: { latitude: 40.7, longitude: -74, accuracy: 8.5 }, timestampMs: NOW },
+            NOW,
+        )).toEqual({ lat: 40.7, lng: -74, timestampMs: NOW, accuracyMeters: 8.5 });
     });
 
     it('drops the last fix on permission denial and keeps it for other failures', () => {
