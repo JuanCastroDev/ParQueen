@@ -154,6 +154,10 @@ export const MapView: React.FC<MapViewProps> = ({
     const [selectedItem, setSelectedItem] = useState<any | null>(null);
     const [selectedItemManageMode, setSelectedItemManageMode] = useState(false);
     const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
+    // A new Ping uses one frozen foreground fix for both the displayed address and
+    // the eventual spot write. Continuous GPS updates must not make the sheet
+    // bounce between "Locating" and a resolved street name.
+    const [pingLocationSnapshot, setPingLocationSnapshot] = useState<[number, number] | null>(null);
     const [arrivalReading, setArrivalReading] = useState<ArrivalLocationReading>({ fix: null, fault: null });
     const [arrivalLocationRetrying, setArrivalLocationRetrying] = useState(false);
     const arrivalRetryRef = useRef(false);
@@ -1243,7 +1247,7 @@ export const MapView: React.FC<MapViewProps> = ({
                     const newLocation: [number, number] = [longitude, latitude];
                     setUserLocation(newLocation);
                     const arrivalFix = arrivalFixFromPosition(
-                        { coords: { latitude, longitude }, timestampMs: position.timestampMs },
+                        { coords: { latitude, longitude, accuracy }, timestampMs: position.timestampMs },
                         Date.now(),
                     );
                     if (arrivalFix) setArrivalReading({ fix: arrivalFix, fault: null });
@@ -1454,29 +1458,48 @@ export const MapView: React.FC<MapViewProps> = ({
         lastParkedMarkerRef.current = marker;
     }, [savedSpot?.savedAt, mapReady]);
 
-    // Spot address resolution
+    // Freeze the first usable foreground fix while a NEW Ping sheet is open.
+    // The map's continuous watcher can keep updating independently.
     useEffect(() => {
-        const spot = selectedItem || (spotData.freeSpots.length > 0 ? spotData.freeSpots[0] : null);
-        const coords = spot
-            ? { lng: spot.lng, lat: spot.lat, title: spot.title, address: spot.address }
-            : userLocation ? { lng: userLocation[0], lat: userLocation[1], title: null, address: null } : null;
-        if (!coords) { setSpotAddress(""); return; }
-        if (coords.title) { setSpotAddress(coords.title); return; }
-        if (coords.address) { setSpotAddress(coords.address); return; }
+        if (!isSpotModalOpen || selectedItem || pingLocationSnapshot || !userLocation) return;
+        setPingLocationSnapshot([userLocation[0], userLocation[1]]);
+    }, [isSpotModalOpen, selectedItem, pingLocationSnapshot, userLocation]);
+
+    // Spot address resolution. New Ping creation resolves the frozen snapshot,
+    // not every watchPosition update, so GPS jitter cannot restart this UI.
+    useEffect(() => {
+        let cancelled = false;
+        const coords = selectedItem
+            ? { lng: selectedItem.lng, lat: selectedItem.lat, title: selectedItem.title, address: selectedItem.address }
+            : isSpotModalOpen && pingLocationSnapshot
+                ? { lng: pingLocationSnapshot[0], lat: pingLocationSnapshot[1], title: null, address: null }
+                : null;
+
+        if (!coords) {
+            if (isSpotModalOpen) setSpotAddress("");
+            return () => { cancelled = true; };
+        }
+        if (coords.title) { setSpotAddress(coords.title); return () => { cancelled = true; }; }
+        if (coords.address) { setSpotAddress(coords.address); return () => { cancelled = true; }; }
         const mapboxToken = getMapboxToken();
 
         setSpotAddress(t('my_car.resolving_address'));
         fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${coords.lng},${coords.lat}.json?types=address&access_token=${mapboxToken}&limit=1`)
             .then(res => res.json())
             .then(data => {
+                if (cancelled) return;
                 if (data.features && data.features.length > 0) {
                     setSpotAddress(data.features[0].place_name.split(',')[0]);
                 } else {
                     setSpotAddress(`Coordinates: ${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)}`);
                 }
             })
-            .catch(() => { setSpotAddress(t('my_car.street_spot')); });
-    }, [selectedItem, spotData.freeSpots, userLocation]);
+            .catch(() => {
+                if (!cancelled) setSpotAddress(t('my_car.street_spot'));
+            });
+
+        return () => { cancelled = true; };
+    }, [selectedItem, isSpotModalOpen, pingLocationSnapshot]);
 
     // User location marker
     useEffect(() => {
@@ -1694,6 +1717,7 @@ export const MapView: React.FC<MapViewProps> = ({
 
         const onSaveSuccess = () => {
             setIsPinging(false);
+            setPingLocationSnapshot(null);
             setSelectedItem(null);
             if (isDepartureFlowRef.current) {
                 isDepartureFlowRef.current = false;
@@ -1712,6 +1736,7 @@ export const MapView: React.FC<MapViewProps> = ({
                 setPingError(t('ping_errors.save_failed'));
             }
             setIsPinging(false);
+            setPingLocationSnapshot(null);
         };
 
         if (selectedItem) {
@@ -1767,10 +1792,11 @@ export const MapView: React.FC<MapViewProps> = ({
                 console.error("Error checking rate limit:", (error as any)?.code ?? 'unknown');
             }
 
-            if (userLocation) {
+            const pingLocation = pingLocationSnapshot ?? userLocation;
+            if (pingLocation) {
                 const newSpotData = {
-                    lat: userLocation[1],
-                    lng: userLocation[0],
+                    lat: pingLocation[1],
+                    lng: pingLocation[0],
                     type: 'free',
                     status: 'available',
                     finderId: user.id,
@@ -1782,8 +1808,8 @@ export const MapView: React.FC<MapViewProps> = ({
                     pingMode: departureTime ? 'later' : 'now',
                     reportedAt,
                     expiresAt,
-                    geohash: geofire.geohashForLocation([userLocation[1], userLocation[0]]),
-                    address: await reverseGeocode(userLocation[0], userLocation[1]),
+                    geohash: geofire.geohashForLocation([pingLocation[1], pingLocation[0]]),
+                    address: await reverseGeocode(pingLocation[0], pingLocation[1]),
                 };
                 try {
                     await commitPingCreate(db, {
@@ -1941,6 +1967,8 @@ export const MapView: React.FC<MapViewProps> = ({
             setSelectedItemManageMode(myPing.status !== 'interested');
         } else {
             setSelectedItem(null);
+            setSpotAddress("");
+            setPingLocationSnapshot(userLocation ? [userLocation[0], userLocation[1]] : null);
             setSpotModalOpen(true);
         }
     };
@@ -1964,6 +1992,7 @@ export const MapView: React.FC<MapViewProps> = ({
                 isOpen={isSpotModalOpen}
                 onClose={() => {
                     setSpotModalOpen(false);
+                    setPingLocationSnapshot(null);
                     setSelectedItem(null);
                     isDepartureFlowRef.current = false; // session stays alive if they back out
                 }}
