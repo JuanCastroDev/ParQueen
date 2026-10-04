@@ -12,8 +12,9 @@ import { commitClaimToHeading } from './commitToHeading';
 import { reportClaimFailure, reportClaimCancelFailure } from './claimFailureReporting';
 import { reportCriticalActionFailure } from '../../utils/errorReporting';
 import { t } from '../../i18n';
-import { completeFinderConfirmedHandoff, completeTerminalHandoff } from './completeTerminalHandoff';
-import { isHandoffFailureReason } from '../../utils/spotFeedback';
+import { completeTerminalHandoff } from './completeTerminalHandoff';
+import { attestParticipantSuccess } from './attestParticipantSuccess';
+import { ArrivalNotDurableError, isHandoffFailureReason } from '../../utils/spotFeedback';
 import {
     claimerArrivedSpotsQuery,
     claimerTerminalFeedbackQuery,
@@ -69,7 +70,9 @@ export function useInterestFlow({
     const lastWrittenEtaRef = useRef<number | null>(null);
     const etaWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const expiryWarnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const [handoffStep, setHandoffStep] = useState<'outcome' | 'celebration' | 'failure_reason' | null>(null);
+    const [handoffStep, setHandoffStep] = useState<'outcome' | 'celebration' | 'failure_reason' | 'waiting' | 'finder_attest' | null>(null);
+    const handoffStepRef = useRef(handoffStep);
+    handoffStepRef.current = handoffStep;
     const [handoffSubmitError, setHandoffSubmitError] = useState<string | null>(null);
     const [handoffSubmitting, setHandoffSubmitting] = useState(false);
     const handoffSubmitLock = useRef(false);
@@ -78,6 +81,12 @@ export function useInterestFlow({
         | { outcome: 'failed'; reason: string }
         | null
     >(null);
+    const finderAttestRef = useRef<{
+        spotId: string;
+        claimerId: string;
+        address: string;
+        claimerName: string;
+    } | null>(null);
     const [handoffFinderName, setHandoffFinderName] = useState<string | null>(null);
     const [handoffAddress, setHandoffAddress] = useState<string>('');
     const handoffSpotRef = useRef<{
@@ -89,6 +98,8 @@ export function useInterestFlow({
     const arrivedSpotsRef = useRef<ClaimerSpotRecord[]>([]);
     const terminalSpotIdsRef = useRef<Set<string>>(new Set());
     const optimisticTerminalRef = useRef<Set<string>>(new Set());
+    const awardUnsubRef = useRef<(() => void) | null>(null);
+    const awardDeliveredRef = useRef<Set<string>>(new Set());
     const resumeReadyRef = useRef({ spots: false, feedback: false });
     const resumeUserIdRef = useRef<string | undefined>(user?.id);
     resumeUserIdRef.current = user?.id;
@@ -158,6 +169,9 @@ export function useInterestFlow({
             arrivedSpotsRef.current = [];
             terminalSpotIdsRef.current = new Set();
             optimisticTerminalRef.current = new Set();
+            awardDeliveredRef.current = new Set();
+            awardUnsubRef.current?.();
+            awardUnsubRef.current = null;
             resumeReadyRef.current = { spots: false, feedback: false };
             setUnfinishedHandoff(null);
             return;
@@ -167,6 +181,9 @@ export function useInterestFlow({
         arrivedSpotsRef.current = [];
         terminalSpotIdsRef.current = new Set();
         optimisticTerminalRef.current = new Set();
+        awardDeliveredRef.current = new Set();
+        awardUnsubRef.current?.();
+        awardUnsubRef.current = null;
         resumeReadyRef.current = { spots: false, feedback: false };
 
         const publish = () => {
@@ -209,6 +226,8 @@ export function useInterestFlow({
             cancelled = true;
             unsubSpots();
             unsubFeedback();
+            awardUnsubRef.current?.();
+            awardUnsubRef.current = null;
         };
     }, [user?.id]);
 
@@ -410,27 +429,115 @@ export function useInterestFlow({
         setSelectedItem(null);
     };
 
-    // Finder confirms the claimer arrived — triggers success flow without requiring claimer's tap
-    const handleFinderConfirmsArrival = async () => {
-        if (!selectedItem || !user || !db) return;
-        const claimerId = selectedItem.interestedUserId;
-        const claimerName = selectedItem.interestedUserName || 'the driver';
-
-        if (!claimerId) throw new Error('Missing claimer for completed handoff');
-        await completeFinderConfirmedHandoff(db, {
-            spotId: selectedItem.id,
-            driverId: claimerId,
-            finderId: user.id,
-            finderName: user.username || 'The driver',
-            address: selectedItem.title || selectedItem.address || '',
-        });
-
-        setFinderToast(`Nice one! ${claimerName} is parked. +2 Crowns earned.`);
-        setFinderToastTitle('Crown earned!');
-        setFinderToastVariant('success');
-        setTimeout(() => setFinderToast(null), 6000);
-        setSelectedItem(null);
+    const showAwardedCrowns = (role: 'claimer' | 'finder', claimerName: string) => {
+        if (role === 'finder') {
+            const name = claimerName || t('handoff.other_driver');
+            setFinderToast(t('handoff.finder_award', { name }));
+            setFinderToastTitle(t('handoff.crown_earned_finder'));
+            setFinderToastVariant('success');
+            setTimeout(() => setFinderToast(null), 6000);
+            if (handoffStepRef.current === 'waiting') {
+                handoffStepRef.current = null;
+                setHandoffStep(null);
+            }
+            return;
+        }
+        // Claimer copy is +1. The finder string is never shown to the claimer.
+        if (handoffStepRef.current === 'waiting') {
+            handoffStepRef.current = 'celebration';
+            setHandoffStep('celebration');
+            return;
+        }
+        setDriverNotification(t('handoff.crown_earned'));
+        setDriverNotifTitle(t('handoff.youre_parked'));
+        setDriverNotifVariant('success');
+        setTimeout(() => { setDriverNotification(null); setDriverNotifTitle(null); }, 6000);
     };
+
+    const watchForServerAward = (spotId: string, role: 'claimer' | 'finder', claimerName: string) => {
+        awardUnsubRef.current?.();
+        awardUnsubRef.current = null;
+        if (!db) return;
+        let unsubscribe = () => {};
+        unsubscribe = onSnapshot(doc(db, 'spots', spotId), (snap) => {
+            const data = typeof snap?.data === 'function' ? snap.data() as Record<string, any> | undefined : undefined;
+            const claimState = data?.claimState;
+            if (claimState === 'unconfirmed') {
+                unsubscribe();
+                if (awardUnsubRef.current === unsubscribe) awardUnsubRef.current = null;
+                if (handoffStepRef.current === 'waiting') {
+                    handoffStepRef.current = null;
+                    setHandoffStep(null);
+                }
+                return;
+            }
+            if (claimState !== 'completed_success') return;
+            if (awardDeliveredRef.current.has(spotId)) return;
+            awardDeliveredRef.current.add(spotId);
+            showAwardedCrowns(role, claimerName);
+            unsubscribe();
+            if (awardUnsubRef.current === unsubscribe) awardUnsubRef.current = null;
+        }, () => {});
+        awardUnsubRef.current = unsubscribe;
+    };
+
+    const enterAttestationWaiting = (
+        spotId: string,
+        role: 'claimer' | 'finder',
+        claimerName: string,
+    ) => {
+        setFinderToast(null);
+        setFinderToastTitle(null);
+        handoffStepRef.current = 'waiting';
+        setHandoffStep('waiting');
+        watchForServerAward(spotId, role, claimerName);
+    };
+
+    // Finder attests only after the claimer arrival is already durable.
+    // A rejected write stays on this sheet with a retry, and Crowns copy
+    // waits for the server award.
+    const submitFinderAttestation = async () => {
+        if (!user || !db || handoffSubmitLock.current) return;
+        const fromCard = selectedItem?.interestedUserId ? {
+            spotId: selectedItem.id as string,
+            claimerId: selectedItem.interestedUserId as string,
+            address: String(selectedItem.title || selectedItem.address || ''),
+            claimerName: String(selectedItem.interestedUserName || t('handoff.other_driver')),
+        } : null;
+        const attempt = finderAttestRef.current ?? fromCard;
+        if (!attempt?.claimerId || attempt.claimerId === user.id) return;
+
+        finderAttestRef.current = attempt;
+        handoffSubmitLock.current = true;
+        setHandoffSubmitting(true);
+        setHandoffSubmitError(null);
+        try {
+            await attestParticipantSuccess(db, {
+                spotId: attempt.spotId,
+                claimerId: attempt.claimerId,
+                finderId: user.id,
+                address: attempt.address,
+                role: 'finder',
+                actorId: user.id,
+            });
+            finderAttestRef.current = null;
+            setSelectedItem(null);
+            enterAttestationWaiting(attempt.spotId, 'finder', attempt.claimerName);
+        } catch (error) {
+            if (error instanceof ArrivalNotDurableError) {
+                finderAttestRef.current = null;
+                return;
+            }
+            showTerminalSubmitFailure(error);
+            handoffStepRef.current = 'finder_attest';
+            setHandoffStep('finder_attest');
+        } finally {
+            handoffSubmitLock.current = false;
+            setHandoffSubmitting(false);
+        }
+    };
+
+    const handleFinderConfirmsArrival = () => submitFinderAttestation();
 
     // Claim identity used to detect a stale/superseded claim. claimStartedAt is
     // set once when a claim is created (handleExpressInterest / handleScheduledClaim)
@@ -559,19 +666,20 @@ export function useInterestFlow({
         setHandoffSubmitting(true);
         setHandoffSubmitError(null);
         try {
-            await completeTerminalHandoff(db, {
+            await attestParticipantSuccess(db, {
                 spotId: spotSnap.id,
-                driverId: user.id,
-                driverName: user.username || 'Someone',
+                claimerId: user.id,
                 finderId: spotSnap.finderId,
                 address: spotSnap.address || '',
-                outcome: 'success',
-                failureReason: null,
+                role: 'claimer',
+                actorId: user.id,
             });
 
-            noteTerminalHandoff(spotSnap.id);
+            // A one-sided attestation is not terminal. Leave Finish-your-handoff
+            // recoverable and wait for the server award before any Crowns copy.
             setHandoffSpotCoords({ lat: spotSnap.lat, lng: spotSnap.lng, address: spotSnap.address || '' });
-            setHandoffStep('celebration');
+            lastTerminalAttempt.current = null;
+            enterAttestationWaiting(spotSnap.id, 'claimer', user.username || t('handoff.other_driver'));
         } catch (error) {
             showTerminalSubmitFailure(error);
         } finally {
@@ -621,8 +729,10 @@ export function useInterestFlow({
     };
 
     const retryTerminalHandoff = () => {
+        if (handoffSubmitLock.current) return;
+        if (finderAttestRef.current) return submitFinderAttestation();
         const attempt = lastTerminalAttempt.current;
-        if (!attempt || handoffSubmitLock.current) return;
+        if (!attempt) return;
         if (attempt.outcome === 'success') return handleHandoffOutcome('success');
         return handleFailureReason(attempt.reason);
     };
@@ -790,11 +900,13 @@ export function useInterestFlow({
     };
 
     const handleSkipDeparture = () => {
+        handoffStepRef.current = null;
         setHandoffStep(null);
         setHandoffSubmitError(null);
         setHandoffSubmitting(false);
         handoffSubmitLock.current = false;
         lastTerminalAttempt.current = null;
+        finderAttestRef.current = null;
         setHandoffFinderName(null);
         setHandoffAddress('');
         setHandoffSpotCoords(null);

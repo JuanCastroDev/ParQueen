@@ -29,21 +29,28 @@ vi.mock('./pingCreateBounds', async () => {
 });
 
 const {
-  addDoc, getDoc, getDocs, onSnapshot, runTransaction, setDoc, updateDoc,
-} = vi.hoisted(() => ({
-  addDoc: vi.fn(async () => ({ id: 'notification' })),
-  getDoc: vi.fn(async (_ref: any): Promise<any> => ({ exists: () => false, data: () => undefined })),
-  getDocs: vi.fn(async () => ({ empty: true, docs: [] })),
-  onSnapshot: vi.fn(() => () => {}),
-  runTransaction: vi.fn(async (_db: any, callback: any): Promise<any> => callback({
-    get: async () => ({ exists: () => false, data: () => undefined }),
-    set: () => {},
-    update: () => {},
-    delete: () => {},
-  })),
-  setDoc: vi.fn(async () => {}),
-  updateDoc: vi.fn(async () => {}),
-}));
+  addDoc, getDoc, getDocs, onSnapshot, runTransaction, setDoc, updateDoc, spotListeners,
+} = vi.hoisted(() => {
+  const spotListeners = new Set<(snap: any) => void>();
+  return {
+    spotListeners,
+    addDoc: vi.fn(async () => ({ id: 'notification' })),
+    getDoc: vi.fn(async (_ref: any): Promise<any> => ({ exists: () => false, data: () => undefined })),
+    getDocs: vi.fn(async () => ({ empty: true, docs: [] })),
+    onSnapshot: vi.fn((target: { __col?: string }, onNext: (snap: any) => void) => {
+      if (target?.__col === 'spots') spotListeners.add(onNext);
+      return () => spotListeners.delete(onNext);
+    }),
+    runTransaction: vi.fn(async (_db: any, callback: any): Promise<any> => callback({
+      get: async () => ({ exists: () => false, data: () => undefined }),
+      set: () => {},
+      update: () => {},
+      delete: () => {},
+    })),
+    setDoc: vi.fn(async () => {}),
+    updateDoc: vi.fn(async () => {}),
+  };
+});
 
 vi.mock('firebase/firestore', () => ({
   addDoc,
@@ -128,11 +135,18 @@ function Harness({
 async function reachCelebration(getFlow: () => ReturnType<typeof useInterestFlow>) {
   await act(async () => { await getFlow().handleArrival(); });
   await act(async () => { await getFlow().handleHandoffOutcome('success'); });
+  expect(getFlow().handoffStep).toBe('waiting');
+  await act(async () => {
+    spotListeners.forEach((fn) => fn({
+      data: () => ({ status: 'occupied', claimState: 'completed_success' }),
+    }));
+  });
   expect(getFlow().handoffStep).toBe('celebration');
 }
 
 describe('handleDeparturePing denial UX', () => {
   beforeEach(() => {
+    spotListeners.clear();
     commitPingCreate.mockReset();
     commitPingCreate.mockResolvedValue(undefined);
     addDoc.mockClear();

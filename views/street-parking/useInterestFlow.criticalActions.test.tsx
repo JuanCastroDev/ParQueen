@@ -18,9 +18,19 @@ vi.hoisted(() => {
 vi.mock('../../firebase', () => ({ db: {} }));
 
 const {
-  getDocs, runTransaction, onSnapshot, updateDoc, deleteDoc, addDoc, setDoc,
+  getDocs, getDoc, runTransaction, onSnapshot, updateDoc, deleteDoc, addDoc, setDoc,
 } = vi.hoisted(() => ({
   getDocs: vi.fn(async () => ({ empty: true, docs: [] })),
+  getDoc: vi.fn(async () => ({
+    exists: () => true,
+    data: () => ({
+      status: 'occupied',
+      claimState: 'arrived_pending_outcome',
+      arrivedAt: { toMillis: () => Date.now() },
+      interestedUserId: 'u1',
+      finderId: 'finder1',
+    }),
+  })),
   runTransaction: vi.fn(),
   onSnapshot: vi.fn(() => () => {}),
   updateDoc: vi.fn(async () => {}),
@@ -42,6 +52,7 @@ vi.mock('firebase/firestore', () => ({
   query: vi.fn((...args) => ({ __query: args })),
   where: vi.fn(),
   getDocs,
+  getDoc,
   addDoc,
   setDoc,
   onSnapshot,
@@ -190,15 +201,15 @@ describe('useInterestFlow — critical-action failure reporting', () => {
 
   it('handleHandoffOutcome reports terminal_handoff and stays on the outcome step when the write fails', async () => {
     runTransaction.mockImplementationOnce(async (_db, cb) => cb({
-      get: async () => ({ exists: () => true, data: () => ({ status: 'interested', interestedUserId: 'u1' }) }),
+      get: async () => ({ exists: () => true, data: () => ({ status: 'interested', interestedUserId: 'u1', finderId: 'finder1' }) }),
       update: vi.fn(),
       delete: vi.fn(),
     }));
-    runTransaction.mockRejectedValueOnce(txError);
     const getFlow = mount();
 
     // Establish handoffSpotRef via handleArrival first, matching real flow.
     await act(async () => { await getFlow().handleArrival(); });
+    setDoc.mockRejectedValueOnce(txError);
 
     await act(async () => { await getFlow().handleHandoffOutcome('success'); });
     expect(reportCriticalActionFailure).toHaveBeenCalledTimes(1);

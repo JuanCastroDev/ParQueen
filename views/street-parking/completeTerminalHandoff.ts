@@ -181,30 +181,3 @@ export async function completeTerminalHandoff(
   });
 }
 
-export interface CompleteFinderConfirmedHandoffParams {
-  spotId: string;
-  driverId: string;
-  finderId: string;
-  finderName: string;
-  address: string;
-}
-
-export async function completeFinderConfirmedHandoff(
-  db: Firestore,
-  params: CompleteFinderConfirmedHandoffParams,
-): Promise<TerminalHandoffCompletion> {
-  return commitTerminalHandoff(db, {
-    ...params,
-    actorId: params.finderId,
-    driverName: params.finderName,
-    outcome: 'success',
-    failureReason: null,
-    confirmedByFinder: true,
-    markSpotOccupied: true,
-    notification: {
-      senderId: params.finderId,
-      targetUserId: params.driverId,
-      message: `${params.finderName || 'The driver'} confirmed you're parked — +1 Crown earned!`,
-    },
-  });
-}

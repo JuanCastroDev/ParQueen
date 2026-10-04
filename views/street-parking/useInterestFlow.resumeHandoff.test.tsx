@@ -38,7 +38,9 @@ const { getDocs, onSnapshot, runTransaction, setDoc, updateDoc, deleteDoc, liste
       return () => set.delete(onNext);
     }),
     runTransaction: vi.fn(),
-    setDoc: vi.fn(async () => {}),
+    setDoc: vi.fn(async (ref: { path: string }, data: Record<string, any>) => {
+      documents.set(ref.path, data);
+    }),
     updateDoc: vi.fn(async () => {}),
     deleteDoc: vi.fn(async () => {}),
   };
@@ -273,21 +275,65 @@ describe('useInterestFlow — resumable finish-your-handoff', () => {
     expect(getFlow().handoffStep).toBe('outcome');
   });
 
-  it('success completion clears the resume chip', async () => {
+  it('a one-sided participant_success leaves Finish-your-handoff recoverable', async () => {
     const { getFlow } = mount();
     await emitResume('spot-1', { ...arrivedSpot });
     clickChip();
 
     await act(async () => { await getFlow().handleHandoffOutcome('success'); });
 
-    expect(getFlow().handoffStep).toBe('celebration');
-    expect(chipCount()).toBe(0);
-    expect(documents.get('spotFeedback/spot-1_driver-1')).toMatchObject({ outcome: 'success' });
+    expect(getFlow().handoffStep).toBe('waiting');
+    expect(documents.get('spotFeedback/spot-1_driver-1')).toMatchObject({
+      outcome: 'participant_success',
+      role: 'claimer',
+      userId: user.id,
+      failureReason: null,
+    });
+    expect(documents.has('spotFeedback/spot-1_driver-1_finder')).toBe(false);
     expect(documents.get('spots/spot-1')?.claimState).toBe('arrived_pending_outcome');
 
+    await dismissSheet();
+    expect(getFlow().handoffStep).toBeNull();
+    expect(chipCount()).toBe(1);
+    expect(JSON.stringify(renderer!.toJSON())).toContain('Finish your handoff');
+
     await emit('spots', [snapDoc('spot-1', documents.get('spots/spot-1')!)]);
-    await emit('spotFeedback', [snapDoc('spot-1_driver-1', documents.get('spotFeedback/spot-1_driver-1')!)]);
+    await emit('spotFeedback', [
+      snapDoc('spot-1_driver-1', documents.get('spotFeedback/spot-1_driver-1')!),
+      snapDoc('spot-1_driver-1_finder', {
+        spotId: 'spot-1',
+        userId: user.id,
+        finderId: 'finder-1',
+        outcome: 'participant_success',
+        role: 'finder',
+      }),
+    ]);
+    expect(chipCount()).toBe(1);
+    expect(getFlow().unfinishedHandoff?.id).toBe('spot-1');
+  });
+
+  it('completed_success and unconfirmed drop the chip; failed still ends the handoff', async () => {
+    const { getFlow } = mount();
+    await emitResume('spot-1', { ...arrivedSpot });
+    expect(chipCount()).toBe(1);
+
+    await emit('spots', [snapDoc('spot-1', { ...arrivedSpot, claimState: 'completed_success' })]);
+    await emit('spotFeedback', [snapDoc('spot-1_driver-1', {
+      spotId: 'spot-1', userId: user.id, outcome: 'participant_success', role: 'claimer',
+    })]);
     expect(chipCount()).toBe(0);
+    expect(getFlow().unfinishedHandoff).toBeNull();
+
+    await emit('spots', [snapDoc('spot-1', { ...arrivedSpot, claimState: 'unconfirmed' })]);
+    await emit('spotFeedback', []);
+    expect(chipCount()).toBe(0);
+
+    await emit('spots', [snapDoc('spot-1', arrivedSpot)]);
+    await emit('spotFeedback', [snapDoc('spot-1_driver-1', {
+      spotId: 'spot-1', userId: user.id, outcome: 'failed', failureReason: 'Other',
+    })]);
+    expect(chipCount()).toBe(0);
+    expect(getFlow().unfinishedHandoff).toBeNull();
   });
 
   it('failed completion clears the resume chip', async () => {
