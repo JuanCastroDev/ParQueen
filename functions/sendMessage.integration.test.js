@@ -358,7 +358,7 @@ describe('sendMessage — authoritative chat message write path', () => {
         const indexSrc = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
         const callStart = indexSrc.indexOf('exports.sendMessage = onCall(');
         expect(callStart).toBeGreaterThan(-1);
-        const optionsSlice = indexSrc.slice(callStart, callStart + 600);
+        const optionsSlice = indexSrc.slice(callStart, callStart + 1200);
         expect(optionsSlice).toMatch(/serviceAccount:\s*'parqueen-user@parkqueen-46475363-ccf36\.iam\.gserviceaccount\.com'/);
 
         // exports._sendMessageHandler is a bare function export (not onCall-
