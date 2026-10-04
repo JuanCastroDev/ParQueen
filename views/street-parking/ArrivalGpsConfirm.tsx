@@ -2,8 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { t } from '../../i18n';
 import {
-    classifyArrivalLocation,
+    stabilizeArrivalLocation,
     type ArrivalLocationReading,
+    type ArrivalRangeMemory,
 } from './arrivalLocation';
 
 interface ArrivalGpsConfirmProps {
@@ -51,7 +52,26 @@ export const ArrivalGpsConfirm: React.FC<ArrivalGpsConfirmProps> = ({
     onRetry,
 }) => {
     const nowMs = useArrivalClock(frozenNowMs);
-    const decision = classifyArrivalLocation({ reading, spot, nowMs });
+    const [rangeMemory, setRangeMemory] = useState<{ spotId: string; value: ArrivalRangeMemory }>({
+        spotId,
+        value: 'unknown',
+    });
+    const previousRange = rangeMemory.spotId === spotId ? rangeMemory.value : 'unknown';
+    const stabilized = stabilizeArrivalLocation({
+        reading,
+        spot,
+        nowMs,
+        previousRange,
+    });
+    const decision = stabilized.decision;
+
+    useEffect(() => {
+        setRangeMemory(current => {
+            if (current.spotId === spotId && current.value === stabilized.nextRange) return current;
+            return { spotId, value: stabilized.nextRange };
+        });
+    }, [spotId, stabilized.nextRange]);
+
     const decisionToken = decision.kind === 'override'
         ? `${spotId}:override:${decision.reason}`
         : `${spotId}:${decision.kind}`;
