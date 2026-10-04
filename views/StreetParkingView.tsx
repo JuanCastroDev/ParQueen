@@ -150,6 +150,7 @@ export const MapView: React.FC<MapViewProps> = ({
     const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
     const [searchCenter, setSearchCenter] = useState<[number, number] | null>(null);
     const [mapReady, setMapReady] = useState(false);
+    const [mapLoadError, setMapLoadError] = useState(false);
     const [stackGroup, setStackGroup] = useState<MapItem[] | null>(null);
     const [spotDetailsBackStack, setSpotDetailsBackStack] = useState<MapItem[] | null>(null);
     const [mapFilterRadiusMiles, setMapFilterRadiusMiles] = useState(2.0);
@@ -1119,12 +1120,24 @@ export const MapView: React.FC<MapViewProps> = ({
         const initMap = (center: [number, number]) => {
             if (cancelled || mapRef.current) return;
             const isDark = document.documentElement.classList.contains('dark');
+            setMapLoadError(false);
             const map = new mapboxgl.Map({ container: mapContainerRef.current!, style: `mapbox://styles/mapbox/${isDark ? 'dark' : 'light'}-v11`, center, zoom: 16, attributionControl: false, interactive: true });
             mapRef.current = map;
             setSearchCenter(center);
-            setMapReady(true);
 
-            map.on('load', () => { map.resize(); });
+            let initialLoadComplete = false;
+            map.on('load', () => {
+                initialLoadComplete = true;
+                setMapLoadError(false);
+                setMapReady(true);
+                map.resize();
+            });
+            map.on('error', (event) => {
+                if (initialLoadComplete) return;
+                const message = event.error instanceof Error ? event.error.message : 'unknown';
+                console.error('Mapbox initial load failed:', message);
+                setMapLoadError(true);
+            });
 
             // The light basemap ships very pale label text (hsl(220,1%,49%)) that
             // reads as washed out over the map. Darken it in light mode only; dark
@@ -2723,8 +2736,21 @@ export const MapView: React.FC<MapViewProps> = ({
             </div>
 
             {!mapReady && (
-                <div className="absolute inset-0 z-20 bg-[var(--color-bg)] flex items-center justify-center">
-                    <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full" />
+                <div className="absolute inset-0 z-20 bg-[var(--color-bg)] flex items-center justify-center px-6">
+                    {mapLoadError ? (
+                        <div className="max-w-sm text-center">
+                            <p className="text-base font-semibold text-[var(--color-text)]">{t('map.load_failed')}</p>
+                            <button
+                                type="button"
+                                onClick={() => window.location.reload()}
+                                className="mt-4 px-5 py-2.5 rounded-2xl bg-[var(--color-brand)] text-white text-sm font-semibold"
+                            >
+                                {t('map.load_retry')}
+                            </button>
+                        </div>
+                    ) : (
+                        <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full" />
+                    )}
                 </div>
             )}
 
