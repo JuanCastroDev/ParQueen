@@ -35,6 +35,7 @@ const {
 const {
   sweepAbandonedArrivedHandoffs,
   formatAbandonedArrivalSweepLog,
+  isTimestampLike,
 } = require('./abandonedArrivalCleanup');
 const { releasedInterestPatch } = require('./activeIncomingClaimLogic');
 const { requireCurrentAdmin, requireCurrentAuthenticatedUser } = require('./adminAuth');
@@ -253,9 +254,13 @@ exports.initUserPrivateAccount = onDocumentCreated(
 
 // Occupied + arrived_pending_outcome is durable handoff state. The Ping's
 // original expiresAt must not delete it. cleanupAbandonedArrivedHandoffs
-// closes that state as unconfirmed; the closed row is kept too. This job is
-// not the close path. Legacy occupied rows that are neither of those shapes
-// are not migrated and still follow general expiry.
+// closes that state as unconfirmed and leaves the arrival timestamp in place.
+// That closed row is kept only when arrivedAt is still a real timestamp.
+// A client can write arrivedAt only through the arrival arm, which also
+// forces arrived_pending_outcome, so occupied + unconfirmed with no real
+// arrivedAt is not an abandoned arrival and still expires. This job is not
+// the close path. Legacy occupied rows that are neither of those shapes are
+// not migrated and still follow general expiry.
 function isDurableArrivedPendingOutcome(spot) {
   return !!spot
     && spot.status === "occupied"
@@ -265,7 +270,8 @@ function isDurableArrivedPendingOutcome(spot) {
 function isTerminalUnconfirmedHandoff(spot) {
   return !!spot
     && spot.status === "occupied"
-    && spot.claimState === "unconfirmed";
+    && spot.claimState === "unconfirmed"
+    && isTimestampLike(spot.arrivedAt);
 }
 
 // 1) Delete expired spots every hour

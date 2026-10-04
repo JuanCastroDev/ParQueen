@@ -5,7 +5,9 @@
  *
  * General expiry still deletes available, interested, and other non-arrival
  * Pings, including legacy occupied rows that are not arrived_pending_outcome.
- * occupied + arrived_pending_outcome is kept even after expiresAt. The page
+ * occupied + arrived_pending_outcome is kept even after expiresAt. A closed
+ * unconfirmed handoff is kept only when arrivedAt is a real timestamp.
+ * Occupied + unconfirmed with no real arrivedAt still expires. The page
  * cursor must advance past kept rows so a full page of them cannot loop.
  *
  * The cross-function trust-safety guarantee this function depends on — that
@@ -43,7 +45,14 @@ describe('cleanupExpiredSpotsHourly Function contract', () => {
         expect(fn).toMatch(/while \(true\)/);
         expect(fn).toMatch(/db\.batch\(\)/);
         expect(fn).toMatch(/isDurableArrivedPendingOutcome/);
+        expect(fn).toMatch(/isTerminalUnconfirmedHandoff/);
         expect(fn).not.toMatch(/source:\s*['"]system['"]/);
+        const helperStart = src.indexOf('function isDurableArrivedPendingOutcome');
+        const helper = src.slice(helperStart, start);
+        expect(helper).toMatch(/function isDurableArrivedPendingOutcome/);
+        expect(helper).toMatch(/claimState === "arrived_pending_outcome"/);
+        expect(helper).toMatch(/isTimestampLike\(spot\.arrivedAt\)/);
+        expect(helper).not.toMatch(/TWO_HOURS_MS/);
     });
 });
 
@@ -153,8 +162,11 @@ describe('cleanupExpiredSpotsHourly durability', () => {
         expect((await db.doc(`spots/${laterId}`).get()).exists).toBe(false);
     }, 60000);
 
-    it('CESH-5: keeps a closed unconfirmed handoff and still deletes a legacy occupied Ping', async () => {
+    it('CESH-5: keeps a real unconfirmed close and deletes occupied unconfirmed with no real arrivedAt', async () => {
         const closedId = `cesh_unconfirmed_${RUN}`;
+        const missingId = `cesh_unconfirmed_missing_${RUN}`;
+        const nulledId = `cesh_unconfirmed_null_${RUN}`;
+        const malformedId = `cesh_unconfirmed_malformed_${RUN}`;
         const legacyId = `cesh_legacy_still_${RUN}`;
         const arrivedAt = Timestamp.fromMillis(Date.now() - 3 * 60 * 60_000);
 
@@ -163,6 +175,25 @@ describe('cleanupExpiredSpotsHourly durability', () => {
             claimState: 'unconfirmed',
             arrivedAt,
             interestedUserId: 'claimer_closed',
+        }));
+        const missing = spot({
+            status: 'occupied',
+            claimState: 'unconfirmed',
+            interestedUserId: 'claimer_forged_missing',
+        });
+        delete missing.arrivedAt;
+        await db.doc(`spots/${missingId}`).set(missing);
+        await db.doc(`spots/${nulledId}`).set(spot({
+            status: 'occupied',
+            claimState: 'unconfirmed',
+            arrivedAt: null,
+            interestedUserId: 'claimer_forged_null',
+        }));
+        await db.doc(`spots/${malformedId}`).set(spot({
+            status: 'occupied',
+            claimState: 'unconfirmed',
+            arrivedAt: 'not-a-timestamp',
+            interestedUserId: 'claimer_forged_string',
         }));
         await db.doc(`spots/${legacyId}`).set(spot({
             status: 'occupied',
@@ -177,6 +208,9 @@ describe('cleanupExpiredSpotsHourly durability', () => {
         expect(closed.data().claimState).toBe('unconfirmed');
         expect(closed.data().status).toBe('occupied');
         expect(closed.data().arrivedAt.toMillis()).toBe(arrivedAt.toMillis());
+        expect((await db.doc(`spots/${missingId}`).get()).exists).toBe(false);
+        expect((await db.doc(`spots/${nulledId}`).get()).exists).toBe(false);
+        expect((await db.doc(`spots/${malformedId}`).get()).exists).toBe(false);
         expect((await db.doc(`spots/${legacyId}`).get()).exists).toBe(false);
     });
 });

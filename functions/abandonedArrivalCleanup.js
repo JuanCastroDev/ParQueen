@@ -184,6 +184,7 @@ async function sweepAbandonedArrivedHandoffs(db, nowMs, options = {}) {
 
 module.exports = {
   TWO_HOURS_MS,
+  isTimestampLike,
   isEligibleAbandonedArrival,
   isLegacyOccupiedMissingArrivedAt,
   closeAbandonedArrivedHandoff,

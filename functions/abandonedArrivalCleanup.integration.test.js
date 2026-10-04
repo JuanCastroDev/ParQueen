@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { initializeApp, getApps } = require('firebase-admin/app');
-const { getFirestore, Timestamp } = require('firebase-admin/firestore');
+const { getFirestore, Timestamp, FieldPath } = require('firebase-admin/firestore');
 const { requireEmulatorProjectId } = require('./emulatorProjectId');
 const {
   TWO_HOURS_MS,
@@ -496,6 +496,51 @@ describe('cleanupAbandonedArrivedHandoffs scheduled run', () => {
     expect(stillThere.status).toBe('occupied');
     expect((await readFeedback(oldId, claimerId)).outcome).toBe('unconfirmed');
   }, 180000);
+
+  it('orders occupied spots by document id without a composite index', async () => {
+    const indexes = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'firestore.indexes.json'), 'utf8'));
+    const spotsIndexes = (indexes.indexes || []).filter((entry) => entry.collectionGroup === 'spots');
+    const statusAndName = spotsIndexes.filter((entry) => {
+      const fields = (entry.fields || []).map((field) => field.fieldPath);
+      return fields.includes('status') && fields.includes('__name__') && !fields.includes('expiresAt');
+    });
+    expect(statusAndName).toEqual([]);
+    const statusExemption = (indexes.fieldOverrides || []).filter((entry) => (
+      entry.collectionGroup === 'spots' && entry.fieldPath === 'status'
+    ));
+    expect(statusExemption).toEqual([]);
+
+    const prefix = `b4idx${RUN}`;
+    const missingId = `${prefix}a`;
+    const stampedId = `${prefix}b`;
+    const missing = spot(missingId, { claimState: 'unconfirmed' });
+    delete missing.arrivedAt;
+    await db.doc(`spots/${missingId}`).set(missing);
+    await seed(stampedId, { claimState: 'unconfirmed' });
+
+    const seen = [];
+    let cursor = null;
+    for (let page = 0; page < 10000; page++) {
+      let query = db.collection('spots')
+        .where('status', '==', 'occupied')
+        .orderBy(FieldPath.documentId())
+        .limit(2);
+      if (cursor) query = query.startAfter(cursor);
+      const snap = await query.get();
+      if (snap.empty) break;
+      const ids = snap.docs.map((docSnap) => docSnap.id);
+      expect(ids).toEqual([...ids].sort());
+      if (seen.length > 0) expect(ids[0] > seen[seen.length - 1]).toBe(true);
+      seen.push(...ids);
+      if (seen.includes(missingId) && seen.includes(stampedId)) break;
+      if (snap.size < 2) break;
+      cursor = snap.docs[snap.docs.length - 1];
+    }
+
+    expect(seen).toContain(missingId);
+    expect(seen).toContain(stampedId);
+    expect(seen.indexOf(missingId)).toBeLessThan(seen.indexOf(stampedId));
+  });
 
   it('counts an eligible Ping with no claimer as an error and does not write', async () => {
     const id = `b4_no_claimer_${RUN}`;
