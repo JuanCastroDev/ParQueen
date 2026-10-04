@@ -4,13 +4,15 @@ import {
     ARRIVAL_DISTANCE_KM,
     ARRIVAL_EXIT_DISTANCE_KM,
     ARRIVAL_LOCATION_MAX_AGE_MS,
+    ARRIVAL_RANGE_CONFIRMATIONS,
     arrivalFixFromPosition,
     classifyArrivalLocation,
     finishArrivalLocationWait,
     nextArrivalReading,
     stabilizeArrivalLocation,
+    INITIAL_ARRIVAL_RANGE_MEMORY,
     type ArrivalLocationReading,
-    type ArrivalRangeMemory,
+    type ArrivalRangeStabilityMemory,
 } from './arrivalLocation';
 
 const NOW = 1_700_000_000_000;
@@ -154,50 +156,128 @@ describe('stabilizeArrivalLocation', () => {
         accuracyMeters,
     });
 
+    const step = (
+        memory: ArrivalRangeStabilityMemory,
+        meters: number,
+        accuracyMeters = 10,
+    ) => stabilizeArrivalLocation({
+        reading: reading({ fix: fixAtMeters(meters, accuracyMeters) }),
+        spot,
+        nowMs: NOW,
+        previous: memory,
+    });
+
     it('uses a wider exit radius than the strict arrival radius', () => {
         expect(ARRIVAL_EXIT_DISTANCE_KM).toBeGreaterThan(ARRIVAL_DISTANCE_KM);
+        expect(ARRIVAL_RANGE_CONFIRMATIONS).toBe(2);
     });
 
-    it('does not flicker out of range when GPS jitters around the 15 m boundary', () => {
-        let memory: ArrivalRangeMemory = 'unknown';
-
-        for (const meters of [12, 18, 13, 20, 11]) {
-            const stabilized = stabilizeArrivalLocation({
-                reading: reading({ fix: fixAtMeters(meters) }),
-                spot,
-                nowMs: NOW,
-                previousRange: memory,
-            });
-            expect(stabilized.decision).toEqual({ kind: 'arrive' });
-            expect(stabilized.nextRange).toBe('in_range');
-            memory = stabilized.nextRange;
-        }
-    });
-
-    it('leaves the latched in-range state once the fix is clearly far away', () => {
-        const stabilized = stabilizeArrivalLocation({
-            reading: reading({ fix: fixAtMeters(80, 10) }),
-            spot,
-            nowMs: NOW,
-            previousRange: 'in_range',
+    it('requires consecutive evidence before leaving the initial checking state', () => {
+        const firstNear = step(INITIAL_ARRIVAL_RANGE_MEMORY, 12);
+        expect(firstNear.decision).toEqual({ kind: 'pending' });
+        expect(firstNear.next).toEqual({
+            stable: 'unknown',
+            candidate: 'in_range',
+            confirmations: 1,
         });
-        expect(stabilized.decision).toEqual({ kind: 'out_of_range' });
-        expect(stabilized.nextRange).toBe('out_of_range');
+
+        const secondNear = step(firstNear.next, 11);
+        expect(secondNear.decision).toEqual({ kind: 'arrive' });
+        expect(secondNear.next).toEqual({
+            stable: 'in_range',
+            candidate: null,
+            confirmations: 0,
+        });
     });
 
-    it('does not hide stale or unavailable location behind the in-range latch', () => {
+    it('does not flicker when alternating fixes straddle the 15 m boundary', () => {
+        let memory = INITIAL_ARRIVAL_RANGE_MEMORY;
+        const decisions: string[] = [];
+
+        for (const meters of [12, 18, 13, 20, 11, 19, 12]) {
+            const stabilized = step(memory, meters, 10);
+            decisions.push(stabilized.decision.kind);
+            memory = stabilized.next;
+        }
+
+        expect(decisions).not.toContain('out_of_range');
+        expect(decisions.slice(1)).toContain('arrive');
+        expect(memory.stable).toBe('in_range');
+    });
+
+    it('holds an in-range state through one clearly far GPS outlier', () => {
+        let memory: ArrivalRangeStabilityMemory = {
+            stable: 'in_range',
+            candidate: null,
+            confirmations: 0,
+        };
+
+        const firstFar = step(memory, 80, 10);
+        expect(firstFar.decision).toEqual({ kind: 'arrive' });
+        expect(firstFar.next).toEqual({
+            stable: 'in_range',
+            candidate: 'out_of_range',
+            confirmations: 1,
+        });
+
+        const recovered = step(firstFar.next, 12, 10);
+        expect(recovered.decision).toEqual({ kind: 'arrive' });
+        expect(recovered.next).toEqual({
+            stable: 'in_range',
+            candidate: null,
+            confirmations: 0,
+        });
+    });
+
+    it('leaves the latched in-range state only after two clearly far fixes', () => {
+        const initial: ArrivalRangeStabilityMemory = {
+            stable: 'in_range',
+            candidate: null,
+            confirmations: 0,
+        };
+        const first = step(initial, 80, 10);
+        const second = step(first.next, 82, 10);
+
+        expect(first.decision).toEqual({ kind: 'arrive' });
+        expect(second.decision).toEqual({ kind: 'out_of_range' });
+        expect(second.next).toEqual({
+            stable: 'out_of_range',
+            candidate: null,
+            confirmations: 0,
+        });
+    });
+
+    it('uses reported accuracy so an uncertain fix does not eject an in-range driver', () => {
+        const initial: ArrivalRangeStabilityMemory = {
+            stable: 'in_range',
+            candidate: null,
+            confirmations: 0,
+        };
+        const uncertain = step(initial, 45, 25);
+        expect(uncertain.decision).toEqual({ kind: 'arrive' });
+        expect(uncertain.next.stable).toBe('in_range');
+        expect(uncertain.next.candidate).toBeNull();
+    });
+
+    it('does not hide stale or unavailable location behind the range memory', () => {
+        const previous: ArrivalRangeStabilityMemory = {
+            stable: 'in_range',
+            candidate: null,
+            confirmations: 0,
+        };
+
         expect(stabilizeArrivalLocation({
             reading: reading({ fix: { ...fixAtMeters(10), timestampMs: NOW - 120_001 } }),
             spot,
             nowMs: NOW,
-            previousRange: 'in_range',
+            previous,
         }).decision).toEqual({ kind: 'override', reason: 'stale' });
 
         expect(stabilizeArrivalLocation({
             reading: reading({ fix: null, fault: 'unavailable' }),
             spot,
             nowMs: NOW,
-            previousRange: 'in_range',
+            previous,
         }).decision).toEqual({ kind: 'override', reason: 'unavailable' });
     });
 });
