@@ -1,6 +1,6 @@
 import { Capacitor } from '@capacitor/core';
 
-export type AppCheckPath = 'native-android' | 'web';
+export type AppCheckPath = 'native-android' | 'native-ios' | 'web';
 
 export interface AppCheckPlatformEnv {
   isNative: boolean;
@@ -15,9 +15,14 @@ export const readAppCheckPlatformEnv = (): AppCheckPlatformEnv => ({
 /**
  * Web/PWA keep Firebase JS ReCaptchaEnterpriseProvider. Capacitor Android
  * uses the narrow native App Check bridge (Play Integrity / Debug).
- * Capacitor iOS stays on the web / reCAPTCHA path in this phase — App Attest
- * is out of scope.
+ * Capacitor iOS uses the same JS CustomProvider bridge backed by native
+ * Firebase App Check + App Attest.
  */
 export const resolveAppCheckPath = (
   env: AppCheckPlatformEnv = readAppCheckPlatformEnv(),
-): AppCheckPath => (env.isNative && env.platform === 'android' ? 'native-android' : 'web');
+): AppCheckPath => {
+  if (!env.isNative) return 'web';
+  if (env.platform === 'android') return 'native-android';
+  if (env.platform === 'ios') return 'native-ios';
+  return 'web';
+};
