@@ -8,13 +8,21 @@ import { getDistance } from './utils';
 export const ARRIVAL_LOCATION_MAX_AGE_MS = 120_000;
 /** ~50 feet. Same threshold the in-range arrive button already used. */
 export const ARRIVAL_DISTANCE_KM = 0.015;
+/**
+ * Exit hysteresis for a driver who has already reached the arrival radius.
+ * We do not flip back to "too far" on ordinary GPS drift around the 15 m edge.
+ */
+export const ARRIVAL_EXIT_DISTANCE_KM = 0.03;
 
 export type ArrivalLocationFault = 'permission_denied' | 'unavailable';
+export type ArrivalRangeMemory = 'unknown' | 'in_range' | 'out_of_range';
 
 export interface ArrivalLocationFix {
     lat: number;
     lng: number;
     timestampMs: number;
+    /** Horizontal accuracy radius reported by the platform, when available. */
+    accuracyMeters?: number | null;
 }
 
 export interface ArrivalLocationReading {
@@ -62,6 +70,51 @@ export function classifyArrivalLocation(input: {
 }
 
 /**
+ * Stabilize the binary arrival boundary across successive GPS samples.
+ *
+ * Entering the arrival radius remains strict at 15 m. Once a driver has
+ * reached it, ordinary drift does not immediately switch the UI back to the
+ * warning state. We only exit the latched in-range state when the fix is
+ * clearly beyond the 30 m exit radius after accounting for the platform's
+ * reported horizontal accuracy.
+ *
+ * Stale / unavailable / denied readings are never hidden by the latch.
+ */
+export function stabilizeArrivalLocation(input: {
+    reading: ArrivalLocationReading;
+    spot: { lat: number; lng: number };
+    nowMs: number;
+    previousRange: ArrivalRangeMemory;
+}): { decision: ArrivalLocationDecision; nextRange: ArrivalRangeMemory } {
+    const decision = classifyArrivalLocation(input);
+
+    if (decision.kind === 'arrive') {
+        return { decision, nextRange: 'in_range' };
+    }
+
+    if (decision.kind !== 'out_of_range' || !finiteFix(input.reading.fix)) {
+        return { decision, nextRange: 'unknown' };
+    }
+
+    if (input.previousRange !== 'in_range') {
+        return { decision, nextRange: 'out_of_range' };
+    }
+
+    const fix = input.reading.fix;
+    const distanceKm = getDistance(fix.lat, fix.lng, input.spot.lat, input.spot.lng);
+    const accuracyKm = Number.isFinite(fix.accuracyMeters as number) && (fix.accuracyMeters as number) > 0
+        ? (fix.accuracyMeters as number) / 1000
+        : 0;
+    const definitelyOutsideKm = Math.max(0, distanceKm - accuracyKm);
+
+    if (definitelyOutsideKm <= ARRIVAL_EXIT_DISTANCE_KM) {
+        return { decision: { kind: 'arrive' }, nextRange: 'in_range' };
+    }
+
+    return { decision, nextRange: 'out_of_range' };
+}
+
+/**
  * The map's bounded location wait. A fix or an existing fault is left
  * alone, so a fresh fix still wins and a late fix can replace this.
  * Pending, with nothing usable yet, becomes unavailable.
@@ -75,7 +128,7 @@ export function finishArrivalLocationWait(
 
 /** Prefer the platform timestamp. A missing or non-positive stamp uses receipt time. */
 export function arrivalFixFromPosition(
-    position: { coords: { latitude: number; longitude: number }; timestampMs?: number },
+    position: { coords: { latitude: number; longitude: number; accuracy?: number | null }; timestampMs?: number },
     receivedAtMs: number,
 ): ArrivalLocationFix | null {
     const lat = position.coords.latitude;
@@ -85,7 +138,10 @@ export function arrivalFixFromPosition(
     const timestampMs = typeof reported === 'number' && Number.isFinite(reported) && reported > 0
         ? reported
         : receivedAtMs;
-    return { lat, lng, timestampMs };
+    const accuracyMeters = Number.isFinite(position.coords.accuracy as number)
+        ? (position.coords.accuracy as number)
+        : null;
+    return { lat, lng, timestampMs, accuracyMeters };
 }
 
 /**
