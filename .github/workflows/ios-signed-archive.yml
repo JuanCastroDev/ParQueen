@@ -542,7 +542,7 @@ jobs:
           echo "build: ${BUILD}"
           test "${IDENT}" = "app.parqueen"
           test "${VERSION}" = "1.0"
-          test "${BUILD}" = "8"
+          test "${BUILD}" = "9"
           echo "ad-hoc archive probe: PASS"
 
   dispatch-guard:
