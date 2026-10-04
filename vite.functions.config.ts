@@ -16,6 +16,7 @@ export default defineConfig({
       'functions/scheduledClaimHeadingRace.integration.test.js',
       'functions/cleanupExpiredHolds.integration.test.js',
       'functions/cleanupExpiredSpotsHourly.integration.test.js',
+      'functions/abandonedArrivalCleanup.integration.test.js',
       'functions/rateLimiter.integration.test.js',
       'functions/moderateAvatarUpload.integration.test.js',
       'functions/rateLimitCallable.integration.test.js',

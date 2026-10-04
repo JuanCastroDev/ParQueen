@@ -23,6 +23,7 @@ import {
     getDocs,
     setDoc,
     deleteDoc,
+    updateDoc,
     addDoc,
     collection,
     query,
@@ -5095,5 +5096,111 @@ describe('B2 — claimer arrived resume query', () => {
         const snap = await assertSucceeds(getDocs(claimerTerminalFeedbackQuery(otherDb(), OTHER_UID)));
         expect(snap.docs.map((d) => d.id)).toEqual([`b2-open_${OTHER_UID}`]);
         await assertFails(getDocs(claimerTerminalFeedbackQuery(thirdDb(), OTHER_UID)));
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// B4 — client cannot write unconfirmed. The cleanup job uses the Admin SDK.
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('B4 — client cannot create unconfirmed', () => {
+    const spotId = 'b4-client-unconfirmed';
+
+    async function seedArrived() {
+        await seed('spots', spotId, {
+            finderId: OWNER_UID,
+            finderName: 'TestFinder',
+            address: '1 Unconfirmed St',
+            lat: 40.71,
+            lng: -74.01,
+            status: 'occupied',
+            claimState: 'arrived_pending_outcome',
+            interestedUserId: OTHER_UID,
+            arrivedAt: Timestamp.fromMillis(Date.now() - 3 * 60 * 60 * 1000),
+            pingMode: 'now',
+            reportedAt: Timestamp.now(),
+            expiresAt: FUTURE,
+        });
+    }
+
+    function unconfirmedFeedback(extra: Record<string, unknown> = {}) {
+        return {
+            spotId,
+            userId: OTHER_UID,
+            finderId: OWNER_UID,
+            outcome: 'unconfirmed',
+            failureReason: null,
+            address: '1 Unconfirmed St',
+            createdAt: Timestamp.now(),
+            ...extra,
+        };
+    }
+
+    async function serverFeedback() {
+        let data: Record<string, unknown> | null = null;
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            const snap = await getDoc(doc(ctx.firestore(), 'spotFeedback', `${spotId}_${OTHER_UID}`));
+            data = snap.exists() ? snap.data() : null;
+        });
+        return data;
+    }
+
+    it('B4-CLIENT: claimer, finder, and admin token cannot create outcome unconfirmed', async () => {
+        await seedArrived();
+        await assertFails(setDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`), unconfirmedFeedback()));
+        await assertFails(setDoc(doc(ownerDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`), unconfirmedFeedback({
+            confirmedByFinder: true,
+        })));
+        await assertFails(setDoc(doc(adminDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`), unconfirmedFeedback()));
+        expect(await serverFeedback()).toBeNull();
+    });
+
+    it('B4-CLIENT: claimer cannot stamp claimState unconfirmed', async () => {
+        await seedArrived();
+        await assertFails(updateDoc(doc(otherDb(), 'spots', spotId), { claimState: 'unconfirmed' }));
+        let claimState = '';
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            claimState = (await getDoc(doc(ctx.firestore(), 'spots', spotId))).data()?.claimState;
+        });
+        expect(claimState).toBe('arrived_pending_outcome');
+    });
+
+    it('B4-LATE: a success or finder confirm after unconfirmed does not overwrite feedback or notify', async () => {
+        await seedArrived();
+        await seed('spotFeedback', `${spotId}_${OTHER_UID}`, {
+            spotId,
+            userId: OTHER_UID,
+            finderId: OWNER_UID,
+            outcome: 'unconfirmed',
+            failureReason: null,
+            address: '1 Unconfirmed St',
+            createdAt: Timestamp.fromMillis(Date.now() - 60_000),
+        });
+
+        await expect(completeTerminalHandoff(otherDb(), {
+            spotId,
+            driverId: OTHER_UID,
+            driverName: 'TestDriver',
+            finderId: OWNER_UID,
+            address: '1 Unconfirmed St',
+            outcome: 'success',
+            failureReason: null,
+        })).rejects.toMatchObject({ code: 'permission-denied' });
+        await expect(completeFinderConfirmedHandoff(ownerDb(), {
+            spotId,
+            driverId: OTHER_UID,
+            finderId: OWNER_UID,
+            finderName: 'TestFinder',
+            address: '1 Unconfirmed St',
+        })).rejects.toMatchObject({ code: 'permission-denied' });
+
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            const db = ctx.firestore();
+            const feedback = await getDoc(doc(db, 'spotFeedback', `${spotId}_${OTHER_UID}`));
+            expect(feedback.data()).toMatchObject({ outcome: 'unconfirmed', failureReason: null });
+            const spot = await getDoc(doc(db, 'spots', spotId));
+            expect(spot.data()?.claimState).toBe('arrived_pending_outcome');
+            const notices = await getDocs(query(collection(db, 'spotNotifications'), where('spotId', '==', spotId)));
+            expect(notices.docs.filter((snap) => snap.data().type === 'handoff_success')).toHaveLength(0);
+        });
     });
 });

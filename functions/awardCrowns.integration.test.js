@@ -277,6 +277,25 @@ describe('awardCrowns idempotency contract', () => {
         await cleanupUsers(uid);
     });
 
+    it('AC-15: unconfirmed feedback awards zero Crowns and writes no marker', async () => {
+        const driverId = nextId('driver');
+        const finderId = nextId('finder');
+        const feedbackId = `${nextId('spot')}_${driverId}`;
+        await Promise.all([seedUser(driverId, 4), seedUser(finderId, 7)]);
+
+        await indexModule.awardCrowns.run(createdEvent(feedbackId, {
+            outcome: 'unconfirmed',
+            userId: driverId,
+            finderId,
+        }));
+
+        expect((await db.doc(`users/${driverId}`).get()).data().crowns).toBe(4);
+        expect((await db.doc(`users/${finderId}`).get()).data().crowns).toBe(7);
+        expect((await db.doc(`functionEvents/awardCrowns_${feedbackId}`).get()).exists).toBe(false);
+
+        await cleanupUsers(driverId, finderId);
+    });
+
     it('AC-9: Runtime-IAM canary config-contract — awardCrowns runs as the dedicated parqueen-system-events identity (Wave 7B-3)', () => {
         const fs = require('fs');
         const path = require('path');
