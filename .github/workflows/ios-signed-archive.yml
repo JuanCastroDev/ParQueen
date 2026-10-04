@@ -67,7 +67,7 @@ jobs:
             echo "::error::PRODUCT_BUNDLE_IDENTIFIER is not exactly app.parqueen."
             exit 1
           fi
-          for setting in "MARKETING_VERSION = 1.0;" "CURRENT_PROJECT_VERSION = 7;" "IPHONEOS_DEPLOYMENT_TARGET = 15.0;" "CODE_SIGN_STYLE = Automatic;"; do
+          for setting in "MARKETING_VERSION = 1.0;" "CURRENT_PROJECT_VERSION = 8;" "IPHONEOS_DEPLOYMENT_TARGET = 15.0;" "CODE_SIGN_STYLE = Automatic;"; do
             if ! grep -F -q "${setting}" "${PBX}"; then
               echo "::error::Missing expected project setting: ${setting}"
               exit 1
@@ -542,7 +542,7 @@ jobs:
           echo "build: ${BUILD}"
           test "${IDENT}" = "app.parqueen"
           test "${VERSION}" = "1.0"
-          test "${BUILD}" = "7"
+          test "${BUILD}" = "8"
           echo "ad-hoc archive probe: PASS"
 
   dispatch-guard:
@@ -917,7 +917,7 @@ jobs:
           expected = {
               "CFBundleIdentifier": "app.parqueen",
               "CFBundleShortVersionString": "1.0",
-              "CFBundleVersion": "7",
+              "CFBundleVersion": "8",
               "CFBundleDisplayName": "ParQueen",
           }
           failed = False
@@ -974,6 +974,10 @@ jobs:
               print("aps-environment: FAIL")
               sys.exit(1)
           print("aps-environment: production")
+          if entitlements.get("com.apple.developer.devicecheck.appattest-environment") != "production":
+              print("App Attest entitlement: FAIL")
+              sys.exit(1)
+          print("App Attest entitlement: production")
           background_modes = info.get("UIBackgroundModes")
           if (
               not isinstance(background_modes, list)
@@ -991,6 +995,7 @@ jobs:
               "beta-reports-active",
               "get-task-allow",
               "aps-environment",
+              "com.apple.developer.devicecheck.appattest-environment",
           }
           unexpected = sorted(key for key in entitlements if key not in allowed)
           if unexpected:
@@ -1066,6 +1071,11 @@ jobs:
                           else:
                               print("profile get-task-allow: INVALID — FAIL")
                               failed = True
+                      if profile_ent.get("com.apple.developer.devicecheck.appattest-environment") != "production":
+                          print("profile App Attest entitlement: FAIL")
+                          failed = True
+                      else:
+                          print("profile App Attest entitlement: production")
                       if "beta-reports-active" not in profile_ent:
                           print("profile beta-reports-active: ABSENT")
                       elif profile_ent.get("beta-reports-active") is True:
