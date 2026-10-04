@@ -50,10 +50,11 @@ export const fetchNativeAppCheckToken = async (
  * Single JS App Check initialization.
  *
  * Capacitor Android → CustomProvider wrapping the native Play Integrity /
- * Debug bridge. Web/PWA (and Capacitor iOS) → existing
- * ReCaptchaEnterpriseProvider gated on VITE_FIREBASE_APPCHECK_SITE_KEY.
+ * Debug bridge. Capacitor iOS → CustomProvider wrapping native Firebase
+ * App Check with App Attest. Web/PWA → ReCaptchaEnterpriseProvider gated on
+ * VITE_FIREBASE_APPCHECK_SITE_KEY.
  *
- * Android never falls back to WebView reCAPTCHA.
+ * Native platforms never fall back to WebView reCAPTCHA.
  */
 export const initializeParQueenAppCheck = (
   app: FirebaseApp,
@@ -73,7 +74,7 @@ export const initializeParQueenAppCheck = (
   const warn = deps.warn ?? ((message: string) => console.warn(message));
   const path = resolvePath();
 
-  if (path === 'native-android') {
+  if (path === 'native-android' || path === 'native-ios') {
     try {
       init(app, {
         provider: new Custom({
