@@ -8,6 +8,7 @@ describe('native iOS phone auth project contract', () => {
   const pbx = read('ios/App/App.xcodeproj/project.pbxproj');
   const info = read('ios/App/App/Info.plist');
   const plugin = read('ios/App/App/PhoneAuthPlugin.swift');
+  const appCheckPlugin = read('ios/App/App/AppCheckBridgePlugin.swift');
   const bridge = read('ios/App/App/ParQueenBridgeViewController.swift');
   const scene = read('ios/App/App/SceneDelegate.swift');
   const appDelegate = read('ios/App/App/AppDelegate.swift');
@@ -40,6 +41,7 @@ describe('native iOS phone auth project contract', () => {
     expect(pbx).toContain('productName = FirebaseAuth;');
     expect(pbx).toContain('productName = FirebaseCore;');
     expect(pbx).toContain('productName = FirebaseFunctions;');
+    expect(pbx).toContain('productName = FirebaseAppCheck;');
     expect(pbx).not.toMatch(/kind = branch;/);
     expect(capPackage).not.toContain('firebase-ios-sdk');
   });
@@ -50,9 +52,23 @@ describe('native iOS phone auth project contract', () => {
     expect(release).toContain('OTHER_LDFLAGS = (');
     expect(release).toContain('"$(inherited)",');
     expect(release).toContain('"-ObjC",');
-    expect(release).toContain('CURRENT_PROJECT_VERSION = 7;');
+    expect(release).toContain('CURRENT_PROJECT_VERSION = 8;');
     expect(release).toContain('MARKETING_VERSION = 1.0;');
     expect(release).toContain('CODE_SIGN_ENTITLEMENTS = App/App.entitlements;');
+  });
+
+  it('uses native Firebase App Check with App Attest on iOS', () => {
+    expect(pbx).toContain('AppCheckBridgePlugin.swift in Sources');
+    expect(pbx).toContain('FirebaseAppCheck in Frameworks');
+    expect(appCheckPlugin).toContain('jsName = "AppCheckBridge"');
+    expect(appCheckPlugin).toContain('AppCheck.appCheck().token(forcingRefresh: false)');
+    expect(bridge).toContain('registerPluginInstance(AppCheckBridgePlugin())');
+    expect(appDelegate).toContain('import FirebaseAppCheck');
+    expect(appDelegate).toContain('AppCheck.setAppCheckProviderFactory');
+    expect(appDelegate).toContain('AppAttestProvider(app: app)');
+    expect(appDelegate.indexOf('AppCheck.setAppCheckProviderFactory')).toBeLessThan(appDelegate.indexOf('FirebaseApp.configure()'));
+    expect(releaseEntitlements).toContain('<key>com.apple.developer.devicecheck.appattest-environment</key>');
+    expect(releaseEntitlements).toContain('<string>production</string>');
   });
 
   it('disables swizzling, forwards APNs manually, and declares background modes', () => {
