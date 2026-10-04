@@ -17,7 +17,7 @@ const REMINDER_OPTIONS = [
 ];
 
 interface HandoffFlowProps {
-    step: 'outcome' | 'celebration' | 'failure_reason';
+    step: 'outcome' | 'celebration' | 'failure_reason' | 'waiting';
     finderName?: string | null;
     onOutcome: (outcome: 'success' | 'failed') => void;
     onFailureReason: (reason: string) => void;
@@ -153,6 +153,21 @@ export const HandoffFlow: React.FC<HandoffFlowProps> = ({
         );
     }
 
+    if (step === 'waiting') {
+        return (
+            <div className="text-center" data-testid="handoff-waiting">
+                <div className="flex justify-center mb-5">
+                    <div className="w-20 h-20 rounded-3xl flex items-center justify-center"
+                        style={{ background: 'linear-gradient(135deg, #1e75ff22, #0ea5e922)', border: '1.5px solid #1e75ff44' }}>
+                        <Clock size={38} className="text-[var(--color-info)]" />
+                    </div>
+                </div>
+                <h3 className="font-extrabold text-xl text-[var(--color-text)] mb-1">{t('handoff.waiting_title')}</h3>
+                <p className="text-sm text-[var(--color-text-secondary)]">{t('handoff.waiting_body')}</p>
+            </div>
+        );
+    }
+
     if (step === 'celebration') {
         const hero = (
             <div className="rounded-3xl p-5 mb-6 text-center relative overflow-hidden"
@@ -174,7 +189,7 @@ export const HandoffFlow: React.FC<HandoffFlowProps> = ({
                 </p>
                 <div className="flex items-center justify-center gap-1.5 mt-2 mb-3">
                     <Crown size={13} className="text-[var(--color-warning)]" />
-                    <p className="text-[11px] font-bold text-[var(--color-warning)]">{t('handoff.crown_earned')}</p>
+                    <p data-testid="handoff-crown-copy" className="text-[11px] font-bold text-[var(--color-warning)]">{t('handoff.crown_earned')}</p>
                 </div>
                 <div className="pt-3 border-t border-white/10">
                     <div className="flex items-center justify-center gap-1.5 mb-0.5">

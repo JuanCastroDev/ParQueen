@@ -39,6 +39,10 @@ export interface UnfinishedHandoff {
     arrivedAtMs: number;
 }
 
+// success and failed end the handoff. participant_success is one side's
+// attestation and is not terminal: Finish-your-handoff stays up until the
+// claimer doc is failed, or claimState leaves arrived_pending_outcome
+// (completed_success or unconfirmed).
 const TERMINAL_OUTCOMES = new Set(['success', 'failed']);
 
 export function terminalSpotIdsFromFeedback(
