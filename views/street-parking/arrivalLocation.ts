@@ -134,6 +134,16 @@ export function stabilizeArrivalLocation(input: {
         signal = 'out_of_range';
     }
 
+    // A strict in-range fix is strong enough to enter immediately. This keeps
+    // "I've arrived" responsive while the exit path below remains deliberately
+    // resistant to one-off GPS jumps.
+    if (input.previous.stable === 'unknown' && signal === 'in_range') {
+        return {
+            decision: { kind: 'arrive' },
+            next: { stable: 'in_range', candidate: null, confirmations: 0 },
+        };
+    }
+
     // If the current fix agrees with the stable state, clear any pending
     // transition immediately.
     if (input.previous.stable === signal) {
