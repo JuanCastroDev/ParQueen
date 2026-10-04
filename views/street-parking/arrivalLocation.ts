@@ -35,7 +35,9 @@ const finiteFix = (fix: ArrivalLocationFix | null): fix is ArrivalLocationFix =>
     && Number.isFinite(fix.timestampMs);
 
 /**
- * Healthy means a usable fix that is not older than 120 seconds.
+ * Healthy means a usable fix whose timestamp is not in the future and is
+ * not older than 120 seconds. Exactly 120_000 ms old is still healthy.
+ * A future device timestamp is not rewritten to "now"; it is not fresh.
  * A fresh fix wins over a stored fault. A missing fix uses the fault.
  * No fix and no fault is still pending — not an override.
  */
@@ -47,7 +49,7 @@ export function classifyArrivalLocation(input: {
     const { reading, spot, nowMs } = input;
     if (finiteFix(reading.fix)) {
         const ageMs = nowMs - reading.fix.timestampMs;
-        if (ageMs > ARRIVAL_LOCATION_MAX_AGE_MS) {
+        if (ageMs < 0 || ageMs > ARRIVAL_LOCATION_MAX_AGE_MS) {
             return { kind: 'override', reason: 'stale' };
         }
         const distanceKm = getDistance(reading.fix.lat, reading.fix.lng, spot.lat, spot.lng);
@@ -57,6 +59,18 @@ export function classifyArrivalLocation(input: {
     if (reading.fault === 'permission_denied') return { kind: 'override', reason: 'permission_denied' };
     if (reading.fault === 'unavailable') return { kind: 'override', reason: 'unavailable' };
     return { kind: 'pending' };
+}
+
+/**
+ * The map's bounded location wait. A fix or an existing fault is left
+ * alone, so a fresh fix still wins and a late fix can replace this.
+ * Pending, with nothing usable yet, becomes unavailable.
+ */
+export function finishArrivalLocationWait(
+    current: ArrivalLocationReading,
+): ArrivalLocationReading {
+    if (finiteFix(current.fix) || current.fault) return current;
+    return { fix: null, fault: 'unavailable' };
 }
 
 /** Prefer the platform timestamp. A missing or non-positive stamp uses receipt time. */

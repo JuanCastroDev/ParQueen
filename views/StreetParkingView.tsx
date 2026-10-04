@@ -21,6 +21,7 @@ import { createUserLocationGeohashPersister } from '../utils/userLocationGeohash
 import { getCurrentPosition, isGeolocationAvailable, LocationPositionError, watchPosition, type LocationWatchHandle } from '../utils/geolocation';
 import {
     arrivalFixFromPosition,
+    finishArrivalLocationWait,
     nextArrivalReading,
     type ArrivalLocationReading,
 } from './street-parking/arrivalLocation';
@@ -1204,9 +1205,11 @@ export const MapView: React.FC<MapViewProps> = ({
             });
         };
 
-        // Try to get location first, fall back to NYC after 5s
+        // Try to get location first, fall back to NYC after 5s.
+        // The same bound ends a still-pending arrival check when no usable fix arrived.
         const fallbackTimer = setTimeout(() => {
             if (!mapRef.current) initMap(NYC_CENTER);
+            setArrivalReading(current => finishArrivalLocationWait(current));
         }, 5000);
 
         if (allowLocationTrackingRef.current && isGeolocationAvailable()) {
