@@ -72,7 +72,8 @@ export const ArrivalGpsConfirm: React.FC<ArrivalGpsConfirmProps> = ({
             const sameValue = sameSpot
                 && current.value.stable === stabilized.next.stable
                 && current.value.candidate === stabilized.next.candidate
-                && current.value.confirmations === stabilized.next.confirmations;
+                && current.value.confirmations === stabilized.next.confirmations
+                && current.value.lastSampleTimestampMs === stabilized.next.lastSampleTimestampMs;
             if (sameValue) return current;
             return { spotId, value: stabilized.next };
         });
@@ -81,6 +82,7 @@ export const ArrivalGpsConfirm: React.FC<ArrivalGpsConfirmProps> = ({
         stabilized.next.stable,
         stabilized.next.candidate,
         stabilized.next.confirmations,
+        stabilized.next.lastSampleTimestampMs,
     ]);
 
     const decisionToken = decision.kind === 'override'

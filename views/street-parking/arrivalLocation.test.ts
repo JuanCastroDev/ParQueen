@@ -149,10 +149,14 @@ describe('classifyArrivalLocation', () => {
 
 
 describe('stabilizeArrivalLocation', () => {
-    const fixAtMeters = (meters: number, accuracyMeters = 10) => ({
+    const fixAtMeters = (
+        meters: number,
+        accuracyMeters = 10,
+        timestampMs = NOW - 1_000,
+    ) => ({
         lat: spot.lat + (meters / 111_000),
         lng: spot.lng,
-        timestampMs: NOW - 1_000,
+        timestampMs,
         accuracyMeters,
     });
 
@@ -160,10 +164,12 @@ describe('stabilizeArrivalLocation', () => {
         memory: ArrivalRangeStabilityMemory,
         meters: number,
         accuracyMeters = 10,
+        timestampMs = NOW - 1_000,
+        nowMs = NOW,
     ) => stabilizeArrivalLocation({
-        reading: reading({ fix: fixAtMeters(meters, accuracyMeters) }),
+        reading: reading({ fix: fixAtMeters(meters, accuracyMeters, timestampMs) }),
         spot,
-        nowMs: NOW,
+        nowMs,
         previous: memory,
     });
 
@@ -173,87 +179,118 @@ describe('stabilizeArrivalLocation', () => {
     });
 
     it('enters immediately on a strict in-range fix', () => {
-        const firstNear = step(INITIAL_ARRIVAL_RANGE_MEMORY, 12);
+        const sampleTs = NOW - 1_000;
+        const firstNear = step(INITIAL_ARRIVAL_RANGE_MEMORY, 12, 10, sampleTs);
         expect(firstNear.decision).toEqual({ kind: 'arrive' });
         expect(firstNear.next).toEqual({
             stable: 'in_range',
             candidate: null,
             confirmations: 0,
+            lastSampleTimestampMs: sampleTs,
         });
     });
 
-    it('requires consecutive far evidence before showing the initial out-of-range warning', () => {
-        const firstFar = step(INITIAL_ARRIVAL_RANGE_MEMORY, 80, 10);
+    it('does not count the same initial far GPS sample twice across re-render or clock ticks', () => {
+        const firstTs = NOW - 3_000;
+        const firstFar = step(INITIAL_ARRIVAL_RANGE_MEMORY, 80, 10, firstTs);
         expect(firstFar.decision).toEqual({ kind: 'pending' });
         expect(firstFar.next).toEqual({
             stable: 'unknown',
             candidate: 'out_of_range',
             confirmations: 1,
+            lastSampleTimestampMs: firstTs,
         });
 
-        const secondFar = step(firstFar.next, 82, 10);
-        expect(secondFar.decision).toEqual({ kind: 'out_of_range' });
-        expect(secondFar.next).toEqual({
+        const rerender = step(firstFar.next, 80, 10, firstTs, NOW + 1_000);
+        expect(rerender.decision).toEqual({ kind: 'pending' });
+        expect(rerender.next).toEqual(firstFar.next);
+
+        const secondTs = NOW - 1_000;
+        const secondDistinctFar = step(rerender.next, 82, 10, secondTs, NOW + 1_000);
+        expect(secondDistinctFar.decision).toEqual({ kind: 'out_of_range' });
+        expect(secondDistinctFar.next).toEqual({
             stable: 'out_of_range',
             candidate: null,
             confirmations: 0,
+            lastSampleTimestampMs: secondTs,
         });
     });
 
-    it('does not flicker when alternating fixes straddle the 15 m boundary', () => {
-        let memory = INITIAL_ARRIVAL_RANGE_MEMORY;
-        const decisions: string[] = [];
-
-        for (const meters of [12, 18, 13, 20, 11, 19, 12]) {
-            const stabilized = step(memory, meters, 10);
-            decisions.push(stabilized.decision.kind);
-            memory = stabilized.next;
-        }
-
-        expect(decisions).not.toContain('out_of_range');
-        expect(decisions.slice(1)).toContain('arrive');
-        expect(memory.stable).toBe('in_range');
-    });
-
-    it('holds an in-range state through one clearly far GPS outlier', () => {
-        let memory: ArrivalRangeStabilityMemory = {
+    it('does not let one far GPS sample eject an in-range driver through repeated renders', () => {
+        const initialTs = NOW - 5_000;
+        const initial: ArrivalRangeStabilityMemory = {
             stable: 'in_range',
             candidate: null,
             confirmations: 0,
+            lastSampleTimestampMs: initialTs,
         };
 
-        const firstFar = step(memory, 80, 10);
+        const farTs = NOW - 3_000;
+        const firstFar = step(initial, 80, 10, farTs);
         expect(firstFar.decision).toEqual({ kind: 'arrive' });
         expect(firstFar.next).toEqual({
             stable: 'in_range',
             candidate: 'out_of_range',
             confirmations: 1,
+            lastSampleTimestampMs: farTs,
         });
 
-        const recovered = step(firstFar.next, 12, 10);
+        const reactRerender = step(firstFar.next, 80, 10, farTs, NOW + 500);
+        expect(reactRerender.decision).toEqual({ kind: 'arrive' });
+        expect(reactRerender.next).toEqual(firstFar.next);
+
+        const clockTick = step(reactRerender.next, 80, 10, farTs, NOW + 1_500);
+        expect(clockTick.decision).toEqual({ kind: 'arrive' });
+        expect(clockTick.next).toEqual(firstFar.next);
+
+        const secondFarTs = NOW - 1_000;
+        const secondDistinctFar = step(clockTick.next, 82, 10, secondFarTs, NOW + 1_500);
+        expect(secondDistinctFar.decision).toEqual({ kind: 'out_of_range' });
+        expect(secondDistinctFar.next).toEqual({
+            stable: 'out_of_range',
+            candidate: null,
+            confirmations: 0,
+            lastSampleTimestampMs: secondFarTs,
+        });
+    });
+
+    it('does not flicker when distinct fixes alternate around the 15 m boundary', () => {
+        let memory = INITIAL_ARRIVAL_RANGE_MEMORY;
+        const decisions: string[] = [];
+        const meters = [12, 18, 13, 20, 11, 19, 12];
+
+        meters.forEach((distanceMeters, index) => {
+            const timestampMs = NOW - 10_000 + (index * 1_000);
+            const stabilized = step(memory, distanceMeters, 10, timestampMs);
+            decisions.push(stabilized.decision.kind);
+            memory = stabilized.next;
+        });
+
+        expect(decisions).not.toContain('out_of_range');
+        expect(decisions).toContain('arrive');
+        expect(memory.stable).toBe('in_range');
+    });
+
+    it('recovers immediately when a strict in-range fix follows one far outlier', () => {
+        const initial: ArrivalRangeStabilityMemory = {
+            stable: 'in_range',
+            candidate: null,
+            confirmations: 0,
+            lastSampleTimestampMs: NOW - 5_000,
+        };
+
+        const firstFar = step(initial, 80, 10, NOW - 3_000);
+        expect(firstFar.decision).toEqual({ kind: 'arrive' });
+        expect(firstFar.next.candidate).toBe('out_of_range');
+        expect(firstFar.next.confirmations).toBe(1);
+
+        const recovered = step(firstFar.next, 12, 10, NOW - 1_000);
         expect(recovered.decision).toEqual({ kind: 'arrive' });
         expect(recovered.next).toEqual({
             stable: 'in_range',
             candidate: null,
             confirmations: 0,
-        });
-    });
-
-    it('leaves the latched in-range state only after two clearly far fixes', () => {
-        const initial: ArrivalRangeStabilityMemory = {
-            stable: 'in_range',
-            candidate: null,
-            confirmations: 0,
-        };
-        const first = step(initial, 80, 10);
-        const second = step(first.next, 82, 10);
-
-        expect(first.decision).toEqual({ kind: 'arrive' });
-        expect(second.decision).toEqual({ kind: 'out_of_range' });
-        expect(second.next).toEqual({
-            stable: 'out_of_range',
-            candidate: null,
-            confirmations: 0,
+            lastSampleTimestampMs: NOW - 1_000,
         });
     });
 
@@ -262,11 +299,13 @@ describe('stabilizeArrivalLocation', () => {
             stable: 'in_range',
             candidate: null,
             confirmations: 0,
+            lastSampleTimestampMs: NOW - 5_000,
         };
-        const uncertain = step(initial, 45, 25);
+        const uncertain = step(initial, 45, 25, NOW - 1_000);
         expect(uncertain.decision).toEqual({ kind: 'arrive' });
         expect(uncertain.next.stable).toBe('in_range');
         expect(uncertain.next.candidate).toBeNull();
+        expect(uncertain.next.lastSampleTimestampMs).toBe(NOW - 1_000);
     });
 
     it('does not hide stale or unavailable location behind the range memory', () => {
@@ -274,6 +313,7 @@ describe('stabilizeArrivalLocation', () => {
             stable: 'in_range',
             candidate: null,
             confirmations: 0,
+            lastSampleTimestampMs: NOW - 5_000,
         };
 
         expect(stabilizeArrivalLocation({

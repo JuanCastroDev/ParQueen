@@ -53,37 +53,47 @@ function mount(reading: ArrivalLocationReading, overrides: Record<string, unknow
   const onArrival = vi.fn();
   const onRetryArrivalLocation = vi.fn();
   let renderer!: TestRenderer.ReactTestRenderer;
+
+  const render = (nextReading: ArrivalLocationReading) => (
+    <SpotDetailsCard
+      selectedItem={myClaim}
+      freeSpots={[myClaim]}
+      user={{ id: 'viewer' }}
+      userLocation={[myClaim.lng, myClaim.lat]}
+      spotAddress=""
+      onHeadingThere={vi.fn()}
+      onScheduledClaim={vi.fn()}
+      onCommitToHeading={vi.fn()}
+      onEditSpot={vi.fn()}
+      onDeletePing={vi.fn()}
+      onArrival={onArrival}
+      onCancelByFinder={vi.fn()}
+      onCancelByClaimer={vi.fn()}
+      onDriverArrived={vi.fn()}
+      onMessageUser={vi.fn()}
+      interestError={null}
+      estDriveMinutes={4}
+      isWithinArrivalRange={false}
+      maxEtaMinutes={7}
+      nowMs={now}
+      arrivalNowMs={now}
+      arrivalLocation={nextReading}
+      onRetryArrivalLocation={onRetryArrivalLocation}
+      {...overrides}
+    />
+  );
+
   act(() => {
-    renderer = TestRenderer.create(
-      <SpotDetailsCard
-        selectedItem={myClaim}
-        freeSpots={[myClaim]}
-        user={{ id: 'viewer' }}
-        userLocation={[myClaim.lng, myClaim.lat]}
-        spotAddress=""
-        onHeadingThere={vi.fn()}
-        onScheduledClaim={vi.fn()}
-        onCommitToHeading={vi.fn()}
-        onEditSpot={vi.fn()}
-        onDeletePing={vi.fn()}
-        onArrival={onArrival}
-        onCancelByFinder={vi.fn()}
-        onCancelByClaimer={vi.fn()}
-        onDriverArrived={vi.fn()}
-        onMessageUser={vi.fn()}
-        interestError={null}
-        estDriveMinutes={4}
-        isWithinArrivalRange={false}
-        maxEtaMinutes={7}
-        nowMs={now}
-        arrivalNowMs={now}
-        arrivalLocation={reading}
-        onRetryArrivalLocation={onRetryArrivalLocation}
-        {...overrides}
-      />,
-    );
+    renderer = TestRenderer.create(render(reading));
   });
-  return { renderer, onArrival, onRetryArrivalLocation };
+
+  const updateReading = (nextReading: ArrivalLocationReading) => {
+    act(() => {
+      renderer.update(render(nextReading));
+    });
+  };
+
+  return { renderer, onArrival, onRetryArrivalLocation, updateReading };
 }
 
 function text(renderer: TestRenderer.ReactTestRenderer): string {
@@ -133,12 +143,24 @@ describe('SpotDetailsCard arrival GPS recovery', () => {
     act(() => renderer.unmount());
   });
 
-  it('warns and offers a location retry, and shows I\'m here anyway only after acknowledgement', () => {
-    const { renderer, onArrival, onRetryArrivalLocation } = mount({
+  it('waits for a second distinct far fix before warning, then preserves the retry and acknowledgement flow', () => {
+    const { renderer, onArrival, onRetryArrivalLocation, updateReading } = mount({
       fix: { lat: myClaim.lat + 0.01, lng: myClaim.lng, timestampMs: now - 1_000 },
       fault: null,
     });
+
     let body = text(renderer);
+    expect(body).toContain(t('claim_flow.arrival_checking'));
+    expect(body).not.toContain(t('claim_flow.arrival_far_title'));
+    expect(body).not.toContain(t('claim_flow.arrival_retry'));
+    expect(body).not.toContain(t('claim_flow.im_here_anyway'));
+
+    updateReading({
+      fix: { lat: myClaim.lat + 0.01, lng: myClaim.lng, timestampMs: now - 500 },
+      fault: null,
+    });
+
+    body = text(renderer);
     expect(body).toContain(t('claim_flow.arrival_far_title'));
     expect(body).toContain(t('claim_flow.arrival_far_body'));
     expect(body).toContain(t('claim_flow.arrival_retry'));
