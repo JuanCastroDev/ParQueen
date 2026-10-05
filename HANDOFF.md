@@ -187,7 +187,7 @@ All deployed to `us-central1`, Node.js 20, Firebase Functions v5 (v2 API):
 - User location shown as a pulsating blue GPS dot
 
 ### Geolocation
-- Shared `utils/geolocation` abstraction: browser `navigator.geolocation` on Web/PWA (and Capacitor iOS); official `@capacitor/geolocation` on Capacitor Android (foreground only)
+- Shared `utils/geolocation` abstraction: browser `navigator.geolocation` on Web/PWA; official `@capacitor/geolocation` on Capacitor Android and iOS (foreground only)
 - `watchPosition` with high accuracy where the map already watched
 - `lastGeohash` (geofire-common) written to user's Firestore document for notification targeting
 - `searchCenter` state drives the spot query radius (2 miles from map center)

@@ -277,7 +277,7 @@ describe('createParQueenGeolocation platform selection', () => {
     expect(plugin.getCurrentPosition).toHaveBeenCalled();
   });
 
-  it('uses the browser backend on web / iOS', async () => {
+  it('uses the browser backend when the resolved path is browser', async () => {
     const plugin = makeNativePlugin();
     const getCurrent = vi.fn((success: (pos: { coords: typeof sampleCoords }) => void) => {
       success({ coords: sampleCoords });

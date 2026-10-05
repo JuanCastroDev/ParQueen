@@ -61,7 +61,7 @@ export function resolveFromPermissionSnapshot(
 }
 
 /**
- * Native Android: OS permission is authoritative over stale pre-native
+ * Native Capacitor shells: OS permission is authoritative over stale
  * `locationAccessChoice` values written by older WebView/browser builds.
  *
  * `prompt` means the OS has not resolved the runtime permission. A stored
@@ -79,7 +79,7 @@ export function resolveFromNativePermissionSnapshot(
     return 'unknown';
 }
 
-/** Platform-aware mapping. Web keeps browser semantics; Android uses the native helper. */
+/** Platform-aware mapping. Web keeps browser semantics; native Capacitor shells use the native helper. */
 export function reconcileLocationAccess(
     status: LocationPermissionSnapshotStatus,
     stored: LocationAccess,
