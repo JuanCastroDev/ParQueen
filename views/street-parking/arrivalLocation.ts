@@ -22,12 +22,15 @@ export interface ArrivalRangeStabilityMemory {
     stable: ArrivalRangeMemory;
     candidate: ArrivalRangeCandidate | null;
     confirmations: number;
+    /** Last distinct platform GPS sample consumed by the range state machine. */
+    lastSampleTimestampMs: number | null;
 }
 
 export const INITIAL_ARRIVAL_RANGE_MEMORY: ArrivalRangeStabilityMemory = {
     stable: 'unknown',
     candidate: null,
     confirmations: 0,
+    lastSampleTimestampMs: null,
 };
 
 /** Two consecutive fixes are required before the handoff UI changes range state. */
@@ -134,49 +137,72 @@ export function stabilizeArrivalLocation(input: {
         signal = 'out_of_range';
     }
 
-    // A strict in-range fix is strong enough to enter immediately. This keeps
-    // "I've arrived" responsive while the exit path below remains deliberately
-    // resistant to one-off GPS jumps.
-    if (input.previous.stable === 'unknown' && signal === 'in_range') {
+    const heldDecision = (): ArrivalLocationDecision => input.previous.stable === 'in_range'
+        ? { kind: 'arrive' }
+        : input.previous.stable === 'out_of_range'
+            ? { kind: 'out_of_range' }
+            : { kind: 'pending' };
+
+    // React renders and the one-second freshness clock can re-run this function
+    // many times for the exact same GeolocationPosition. A duplicate platform
+    // timestamp is not new GPS evidence and must never advance confirmation.
+    if (input.previous.lastSampleTimestampMs === fix.timestampMs) {
+        return { decision: heldDecision(), next: input.previous };
+    }
+
+    // A strict in-range fix is strong enough to enter immediately from any
+    // previous visible state. Only the exit/far path needs temporal confirmation.
+    if (signal === 'in_range') {
         return {
             decision: { kind: 'arrive' },
-            next: { stable: 'in_range', candidate: null, confirmations: 0 },
+            next: {
+                stable: 'in_range',
+                candidate: null,
+                confirmations: 0,
+                lastSampleTimestampMs: fix.timestampMs,
+            },
         };
     }
 
-    // If the current fix agrees with the stable state, clear any pending
-    // transition immediately.
-    if (input.previous.stable === signal) {
+    // If the new distinct fix agrees with the stable out-of-range state, clear
+    // any abandoned candidate and remember that this sample was consumed.
+    if (input.previous.stable === 'out_of_range') {
         return {
-            decision: signal === 'in_range' ? { kind: 'arrive' } : { kind: 'out_of_range' },
-            next: { stable: signal, candidate: null, confirmations: 0 },
+            decision: { kind: 'out_of_range' },
+            next: {
+                stable: 'out_of_range',
+                candidate: null,
+                confirmations: 0,
+                lastSampleTimestampMs: fix.timestampMs,
+            },
         };
     }
 
-    const confirmations = input.previous.candidate === signal
+    const confirmations = input.previous.candidate === 'out_of_range'
         ? input.previous.confirmations + 1
         : 1;
 
-    // Do not change what the user sees on a single contradictory GPS sample.
+    // One distinct far reading is never enough to flash/eject the handoff UI.
     if (confirmations < ARRIVAL_RANGE_CONFIRMATIONS) {
-        const heldDecision: ArrivalLocationDecision = input.previous.stable === 'in_range'
-            ? { kind: 'arrive' }
-            : input.previous.stable === 'out_of_range'
-                ? { kind: 'out_of_range' }
-                : { kind: 'pending' };
         return {
-            decision: heldDecision,
+            decision: heldDecision(),
             next: {
                 stable: input.previous.stable,
-                candidate: signal,
+                candidate: 'out_of_range',
                 confirmations,
+                lastSampleTimestampMs: fix.timestampMs,
             },
         };
     }
 
     return {
-        decision: signal === 'in_range' ? { kind: 'arrive' } : { kind: 'out_of_range' },
-        next: { stable: signal, candidate: null, confirmations: 0 },
+        decision: { kind: 'out_of_range' },
+        next: {
+            stable: 'out_of_range',
+            candidate: null,
+            confirmations: 0,
+            lastSampleTimestampMs: fix.timestampMs,
+        },
     };
 }
 
