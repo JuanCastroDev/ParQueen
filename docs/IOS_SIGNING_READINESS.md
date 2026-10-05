@@ -24,7 +24,7 @@ Confirmed on `main` after Stage A:
 
 `CODE_SIGN_IDENTITY` at the project level remains the Capacitor default `iPhone Developer`. Stage B does not change it. Distribution re-signing belongs to the Stage C export.
 
-Native plugins linked from `ios/App/CapApp-SPM/Package.swift`: Capacitor, Cordova, App, Camera, Geolocation, Push Notifications. iOS product code still uses the browser path for camera, location, push, and App Check. No entitlement file is required for the first TestFlight.
+Native plugins linked from `ios/App/CapApp-SPM/Package.swift`: Capacitor, Cordova, App, Geolocation, Push Notifications. iOS product code uses native Geolocation for foreground location; camera and push remain on their existing non-native product paths. App Check remains on its dedicated iOS bridge. No background-location mode is enabled.
 
 ## Identifiers
 
@@ -147,7 +147,7 @@ No capability is added in Stage B.
 | --- | --- |
 | Camera | Info.plist usage string only. iOS capture stays on the browser file input. No camera entitlement. |
 | Photo library | No entitlement. No photo-library usage string. iOS gallery stays on the browser file input. |
-| Location | Info.plist when-in-use and always strings are already present because the Geolocation plugin is linked. iOS location stays on browser geolocation. No location entitlement and no background mode. |
+| Location | Info.plist when-in-use and always strings are present and the linked Capacitor Geolocation plugin is used for foreground iOS location. No location entitlement and no background mode. |
 | Push | Not required. `aps-environment` stays absent. iOS notifications stay on the browser path and are classified unavailable in the native shell. |
 | Sign in with Apple, associated domains, Keychain sharing, background modes, App Attest | Not required. |
 
