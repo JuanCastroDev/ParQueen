@@ -34,5 +34,6 @@ describe('iOS foreground location stability contract', () => {
     expect(arrivalUiSource).toContain('stabilizeArrivalLocation');
     expect(arrivalUiSource).toContain('INITIAL_ARRIVAL_RANGE_MEMORY');
     expect(arrivalUiSource).toContain('stabilized.next.confirmations');
+    expect(arrivalUiSource).toContain('stabilized.next.lastSampleTimestampMs');
   });
 });
