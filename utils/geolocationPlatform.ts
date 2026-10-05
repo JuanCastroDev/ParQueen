@@ -13,11 +13,15 @@ export const readGeolocationPlatformEnv = (): GeolocationPlatformEnv => ({
 });
 
 /**
- * Web/PWA keep `navigator.geolocation`. Capacitor Android uses the official
- * `@capacitor/geolocation` plugin (foreground only). Capacitor iOS stays on
- * the browser path in this phase so we do not broaden into iOS native
- * location validation.
+ * Web/PWA keep `navigator.geolocation`. Native Capacitor shells use the
+ * official `@capacitor/geolocation` plugin in the foreground on both
+ * Android and iOS. This avoids relying on WKWebView's browser geolocation
+ * bridge for physical-device handoff proximity checks.
  */
 export const resolveGeolocationPath = (
   env: GeolocationPlatformEnv = readGeolocationPlatformEnv(),
-): GeolocationPath => (env.isNative && env.platform === 'android' ? 'native' : 'browser');
+): GeolocationPath => (
+  env.isNative && (env.platform === 'android' || env.platform === 'ios')
+    ? 'native'
+    : 'browser'
+);
