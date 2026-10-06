@@ -561,16 +561,20 @@ html, body, #root {
   /* In-flow chip sits under the fixed primary nav because pb-0 beats the
      nav-space padding. Pin it above that nav and the locate/car stack.
      The short-landscape block below overrides the offset. */
-  .mobile-map-controls .finish-handoff-chip {
+  .mobile-map-controls .handoff-action-card {
     position: fixed;
-    bottom: calc(var(--mobile-primary-nav-space) + 136px);
+    bottom: calc(var(--mobile-primary-nav-space) + 14px);
     left: max(16px, env(safe-area-inset-left, 0px));
-    right: max(16px, env(safe-area-inset-right, 0px));
+    right: max(82px, env(safe-area-inset-right, 0px));
     z-index: 34;
     width: auto;
-    max-width: 380px;
-    margin: 0 auto;
+    max-width: 360px;
+    margin: 0;
     pointer-events: auto;
+  }
+
+  .mobile-map-controls .handoff-action-card:has(+ .map-timer-chip) {
+    bottom: calc(var(--mobile-primary-nav-space) + 68px);
   }
 
   .map-primary-cta {
@@ -855,19 +859,19 @@ html, body, #root {
     margin: 0;
   }
 
-  .mobile-map-controls .finish-handoff-chip {
+  .mobile-map-controls .handoff-action-card {
     position: fixed;
-    bottom: calc(var(--mobile-primary-nav-space) + 72px);
+    bottom: calc(var(--mobile-primary-nav-space) + 10px);
     left: max(16px, env(safe-area-inset-left, 0px));
-    right: max(16px, env(safe-area-inset-right, 0px));
+    right: max(74px, env(safe-area-inset-right, 0px));
     z-index: 34;
     width: auto;
-    max-width: 380px;
-    margin: 0 auto;
+    max-width: 360px;
+    margin: 0;
     pointer-events: auto;
   }
 
-  .mobile-map-controls .finish-handoff-chip:has(+ .map-timer-chip) {
+  .mobile-map-controls .handoff-action-card:has(+ .map-timer-chip) {
     bottom: calc(var(--mobile-primary-nav-space) + 118px);
   }
 
