@@ -43,7 +43,7 @@ export const FinishHandoffChip: React.FC<FinishHandoffChipProps> = ({
             data-testid="finish-handoff-chip"
             data-handoff-role={role}
         >
-            <div className="rounded-2xl border border-[#1e75ff]/30 bg-[var(--color-card)]/95 backdrop-blur-xl shadow-xl px-3.5 py-3">
+            <div className="rounded-2xl border border-[#1e75ff]/30 bg-[var(--color-card)] backdrop-blur-xl shadow-xl px-3.5 py-3">
                 <div className="flex items-center gap-3">
                     <div
                         className="w-10 h-10 shrink-0 rounded-xl flex items-center justify-center border border-[#1e75ff]/25"
