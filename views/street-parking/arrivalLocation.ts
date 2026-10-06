@@ -150,9 +150,12 @@ export function stabilizeArrivalLocation(input: {
         return { decision: heldDecision(), next: input.previous };
     }
 
-    // A strict in-range fix is strong enough to enter immediately from any
-    // previous visible state. Only the exit/far path needs temporal confirmation.
-    if (signal === 'in_range') {
+    // From the initial unknown state, a strict in-range fix is enough to make
+    // arrival responsive. Once the UI has committed to either visible state,
+    // however, require distinct consecutive evidence before crossing the
+    // boundary in either direction. This prevents a single near GPS spike from
+    // hiding the "not in range" warning only for it to reappear a moment later.
+    if (input.previous.stable === 'unknown' && signal === 'in_range') {
         return {
             decision: { kind: 'arrive' },
             next: {
@@ -164,13 +167,13 @@ export function stabilizeArrivalLocation(input: {
         };
     }
 
-    // If the new distinct fix agrees with the stable out-of-range state, clear
-    // any abandoned candidate and remember that this sample was consumed.
-    if (input.previous.stable === 'out_of_range') {
+    // A distinct sample that agrees with the visible state cancels any pending
+    // transition and keeps the current decision stable.
+    if (input.previous.stable === signal) {
         return {
-            decision: { kind: 'out_of_range' },
+            decision: signal === 'in_range' ? { kind: 'arrive' } : { kind: 'out_of_range' },
             next: {
-                stable: 'out_of_range',
+                stable: signal,
                 candidate: null,
                 confirmations: 0,
                 lastSampleTimestampMs: fix.timestampMs,
@@ -178,17 +181,19 @@ export function stabilizeArrivalLocation(input: {
         };
     }
 
-    const confirmations = input.previous.candidate === 'out_of_range'
+    const confirmations = input.previous.candidate === signal
         ? input.previous.confirmations + 1
         : 1;
 
-    // One distinct far reading is never enough to flash/eject the handoff UI.
+    // One contradictory GPS sample is never enough to change what the user
+    // sees. This applies both to leaving an in-range state and to clearing an
+    // already-visible out-of-range warning.
     if (confirmations < ARRIVAL_RANGE_CONFIRMATIONS) {
         return {
             decision: heldDecision(),
             next: {
                 stable: input.previous.stable,
-                candidate: 'out_of_range',
+                candidate: signal,
                 confirmations,
                 lastSampleTimestampMs: fix.timestampMs,
             },
@@ -196,9 +201,9 @@ export function stabilizeArrivalLocation(input: {
     }
 
     return {
-        decision: { kind: 'out_of_range' },
+        decision: signal === 'in_range' ? { kind: 'arrive' } : { kind: 'out_of_range' },
         next: {
-            stable: 'out_of_range',
+            stable: signal,
             candidate: null,
             confirmations: 0,
             lastSampleTimestampMs: fix.timestampMs,
