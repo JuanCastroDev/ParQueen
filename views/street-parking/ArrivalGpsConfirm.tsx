@@ -4,6 +4,7 @@ import { t } from '../../i18n';
 import {
     INITIAL_ARRIVAL_RANGE_MEMORY,
     stabilizeArrivalLocation,
+    type ArrivalLocationDecision,
     type ArrivalLocationReading,
     type ArrivalRangeStabilityMemory,
 } from './arrivalLocation';
@@ -66,6 +67,50 @@ export const ArrivalGpsConfirm: React.FC<ArrivalGpsConfirmProps> = ({
     });
     const decision = stabilized.decision;
 
+    type SettledArrivalDecision = Exclude<ArrivalLocationDecision, { kind: 'pending' }>;
+    const [settledDecision, setSettledDecision] = useState<{
+        spotId: string;
+        value: SettledArrivalDecision | null;
+    }>({ spotId, value: null });
+    const currentSettled = settledDecision.spotId === spotId ? settledDecision.value : null;
+
+    // The sensor state may briefly pass through "pending" between platform fixes,
+    // or later wobble back across the range boundary. Do not expose those raw
+    // transitions as changing copy in the handoff sheet. Once the user has a
+    // settled message, keep showing it while a new sample is being evaluated.
+    // Once arrival has been confidently reached, keep "I've arrived" available
+    // for the rest of this spot's handoff instead of revoking it on GPS drift.
+    const visibleDecision: ArrivalLocationDecision = currentSettled?.kind === 'arrive'
+        ? currentSettled
+        : decision.kind === 'pending' && currentSettled
+            ? currentSettled
+            : decision;
+
+    useEffect(() => {
+        setSettledDecision(current => {
+            const previousSettled = current.spotId === spotId ? current.value : null;
+
+            if (previousSettled?.kind === 'arrive') {
+                return current.spotId === spotId ? current : { spotId, value: previousSettled };
+            }
+
+            if (decision.kind === 'pending') {
+                return current.spotId === spotId ? current : { spotId, value: null };
+            }
+
+            const sameDecision = previousSettled?.kind === decision.kind
+                && (decision.kind !== 'override'
+                    || (previousSettled.kind === 'override' && previousSettled.reason === decision.reason));
+            if (current.spotId === spotId && sameDecision) return current;
+
+            return { spotId, value: decision };
+        });
+    }, [
+        spotId,
+        decision.kind,
+        decision.kind === 'override' ? decision.reason : null,
+    ]);
+
     useEffect(() => {
         setRangeMemory(current => {
             const sameSpot = current.spotId === spotId;
@@ -85,13 +130,13 @@ export const ArrivalGpsConfirm: React.FC<ArrivalGpsConfirmProps> = ({
         stabilized.next.lastSampleTimestampMs,
     ]);
 
-    const decisionToken = decision.kind === 'override'
-        ? `${spotId}:override:${decision.reason}`
-        : `${spotId}:${decision.kind}`;
+    const decisionToken = visibleDecision.kind === 'override'
+        ? `${spotId}:override:${visibleDecision.reason}`
+        : `${spotId}:${visibleDecision.kind}`;
     const [ackedToken, setAckedToken] = useState<string | null>(null);
     const acknowledged = ackedToken === decisionToken;
 
-    if (decision.kind === 'arrive') {
+    if (visibleDecision.kind === 'arrive') {
         return (
             <button
                 onClick={onArrival}
@@ -105,7 +150,7 @@ export const ArrivalGpsConfirm: React.FC<ArrivalGpsConfirmProps> = ({
         );
     }
 
-    if (decision.kind === 'pending') {
+    if (visibleDecision.kind === 'pending') {
         return (
             <button type="button" disabled className={primaryClass} style={primaryStyle}>
                 {t('claim_flow.arrival_checking')}
@@ -113,7 +158,7 @@ export const ArrivalGpsConfirm: React.FC<ArrivalGpsConfirmProps> = ({
         );
     }
 
-    if (decision.kind === 'out_of_range') {
+    if (visibleDecision.kind === 'out_of_range') {
         return (
             <div>
                 <div role="alert" className="mb-3 rounded-2xl border-2 border-amber-500 bg-amber-500/20 px-4 py-3.5">
@@ -158,9 +203,9 @@ export const ArrivalGpsConfirm: React.FC<ArrivalGpsConfirmProps> = ({
         );
     }
 
-    const bodyKey = decision.reason === 'permission_denied'
+    const bodyKey = visibleDecision.reason === 'permission_denied'
         ? 'claim_flow.arrival_denied_body'
-        : decision.reason === 'stale'
+        : visibleDecision.reason === 'stale'
             ? 'claim_flow.arrival_stale_body'
             : 'claim_flow.arrival_unavailable_body';
 
