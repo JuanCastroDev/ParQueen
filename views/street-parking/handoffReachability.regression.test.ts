@@ -272,14 +272,15 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
       mobile: boolean;
       ruleCount: number;
     }>(`(() => {
-      const button = document.querySelector('[data-testid=finish-handoff-chip] button');
+      const card = document.querySelector('[data-testid=finish-handoff-chip]');
+      const button = card.querySelector('button');
       const rect = button.getBoundingClientRect();
       const x = rect.left + rect.width / 2;
       const y = rect.top + rect.height / 2;
       const hit = document.elementFromPoint(x, y);
       const sheet = [...document.styleSheets].map((s) => { try { return [...s.cssRules].length; } catch { return -1; } });
       return {
-        position: getComputedStyle(button.parentElement).position,
+        position: getComputedStyle(card).position,
         self: !!(hit && (hit === button || button.contains(hit))),
         hit: (hit && (hit.className || hit.id) || '').toString().slice(0, 80),
         x, y,
