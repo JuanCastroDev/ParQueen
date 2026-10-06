@@ -216,6 +216,59 @@ describe('stabilizeArrivalLocation', () => {
         });
     });
 
+    it('does not hide an established out-of-range warning on one near GPS spike', () => {
+        const initial: ArrivalRangeStabilityMemory = {
+            stable: 'out_of_range',
+            candidate: null,
+            confirmations: 0,
+            lastSampleTimestampMs: NOW - 5_000,
+        };
+
+        const firstNearTs = NOW - 3_000;
+        const firstNear = step(initial, 12, 10, firstNearTs);
+        expect(firstNear.decision).toEqual({ kind: 'out_of_range' });
+        expect(firstNear.next).toEqual({
+            stable: 'out_of_range',
+            candidate: 'in_range',
+            confirmations: 1,
+            lastSampleTimestampMs: firstNearTs,
+        });
+
+        const sameNearRerender = step(firstNear.next, 12, 10, firstNearTs, NOW + 500);
+        expect(sameNearRerender.decision).toEqual({ kind: 'out_of_range' });
+        expect(sameNearRerender.next).toEqual(firstNear.next);
+
+        const farAgain = step(sameNearRerender.next, 80, 10, NOW - 1_000);
+        expect(farAgain.decision).toEqual({ kind: 'out_of_range' });
+        expect(farAgain.next).toEqual({
+            stable: 'out_of_range',
+            candidate: null,
+            confirmations: 0,
+            lastSampleTimestampMs: NOW - 1_000,
+        });
+    });
+
+    it('requires two distinct near fixes to clear an established out-of-range warning', () => {
+        const initial: ArrivalRangeStabilityMemory = {
+            stable: 'out_of_range',
+            candidate: null,
+            confirmations: 0,
+            lastSampleTimestampMs: NOW - 5_000,
+        };
+
+        const firstNear = step(initial, 12, 10, NOW - 3_000);
+        expect(firstNear.decision).toEqual({ kind: 'out_of_range' });
+
+        const secondNear = step(firstNear.next, 11, 10, NOW - 1_000);
+        expect(secondNear.decision).toEqual({ kind: 'arrive' });
+        expect(secondNear.next).toEqual({
+            stable: 'in_range',
+            candidate: null,
+            confirmations: 0,
+            lastSampleTimestampMs: NOW - 1_000,
+        });
+    });
+
     it('does not let one far GPS sample eject an in-range driver through repeated renders', () => {
         const initialTs = NOW - 5_000;
         const initial: ArrivalRangeStabilityMemory = {
