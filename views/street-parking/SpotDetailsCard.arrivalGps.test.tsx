@@ -183,6 +183,43 @@ describe('SpotDetailsCard arrival GPS recovery', () => {
     act(() => renderer.unmount());
   });
 
+  it('keeps the far warning visible through one near GPS spike and clears it only after a second distinct near fix', () => {
+    const { renderer, updateReading } = mount({
+      fix: { lat: myClaim.lat + 0.01, lng: myClaim.lng, timestampMs: now - 4_000 },
+      fault: null,
+    });
+
+    updateReading({
+      fix: { lat: myClaim.lat + 0.01, lng: myClaim.lng, timestampMs: now - 3_000 },
+      fault: null,
+    });
+    expect(text(renderer)).toContain(t('claim_flow.arrival_far_title'));
+
+    const nearTs = now - 2_000;
+    updateReading({
+      fix: { lat: myClaim.lat, lng: myClaim.lng, timestampMs: nearTs },
+      fault: null,
+    });
+    expect(text(renderer)).toContain(t('claim_flow.arrival_far_title'));
+    expect(text(renderer)).not.toContain(t('claim_flow.ive_arrived'));
+
+    // A React re-render of the same native GPS sample is not new evidence.
+    updateReading({
+      fix: { lat: myClaim.lat, lng: myClaim.lng, timestampMs: nearTs },
+      fault: null,
+    });
+    expect(text(renderer)).toContain(t('claim_flow.arrival_far_title'));
+
+    updateReading({
+      fix: { lat: myClaim.lat, lng: myClaim.lng, timestampMs: now - 1_000 },
+      fault: null,
+    });
+    expect(text(renderer)).not.toContain(t('claim_flow.arrival_far_title'));
+    expect(text(renderer)).toContain(t('claim_flow.ive_arrived'));
+
+    act(() => renderer.unmount());
+  });
+
   it('shows the override for a denied location only after one acknowledgement', () => {
     const { renderer, onArrival, onRetryArrivalLocation } = mount({
       fix: null,
