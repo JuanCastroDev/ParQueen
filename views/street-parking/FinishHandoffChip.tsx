@@ -62,17 +62,17 @@ export const FinishHandoffChip: React.FC<FinishHandoffChipProps> = ({
                             {body}
                         </p>
                     </div>
-
-                    <button
-                        type="button"
-                        onClick={onResume}
-                        disabled={submitting}
-                        className="shrink-0 min-h-10 inline-flex items-center gap-1 rounded-xl bg-[var(--color-brand)] px-3 py-2 text-[11px] font-bold text-white shadow-md transition-transform active:scale-95 disabled:opacity-50"
-                    >
-                        <span>{action}</span>
-                        {!submitting && <ChevronRight size={13} />}
-                    </button>
                 </div>
+
+                <button
+                    type="button"
+                    onClick={onResume}
+                    disabled={submitting}
+                    className="mt-2.5 min-h-10 w-full inline-flex items-center justify-center gap-1 rounded-xl bg-[var(--color-brand)] px-3 py-2 text-[11px] font-bold text-white shadow-md transition-transform active:scale-[0.98] disabled:opacity-50"
+                >
+                    <span>{action}</span>
+                    {!submitting && <ChevronRight size={13} />}
+                </button>
             </div>
         </div>
     );
