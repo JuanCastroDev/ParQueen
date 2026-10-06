@@ -25,10 +25,11 @@ const xvfbBin = commandExists('Xvfb');
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('handoff reachability contract', () => {
-  it('pins Finish your handoff above the nav on portrait and normal mobile, not only short landscape', () => {
+  it('anchors the handoff action card directly above the nav instead of floating mid-map', () => {
     const mobile = css.slice(css.indexOf('@media (max-width: 767px)'), css.indexOf('.mobile-primary-nav-ping {'));
-    expect(mobile).toMatch(/\.mobile-map-controls \.finish-handoff-chip\s*\{[^}]*position:\s*fixed/);
-    expect(mobile).toMatch(/bottom:\s*calc\(var\(--mobile-primary-nav-space\) \+ 136px\)/);
+    expect(mobile).toMatch(/\.mobile-map-controls \.handoff-action-card\s*\{[^}]*position:\s*fixed/);
+    expect(mobile).toMatch(/bottom:\s*calc\(var\(--mobile-primary-nav-space\) \+ 14px\)/);
+    expect(mobile).toMatch(/right:\s*max\(82px,/);
     expect(mobile).toMatch(/pointer-events:\s*auto/);
     expect(mobile).not.toMatch(/orientation:\s*landscape/);
 
@@ -36,8 +37,8 @@ describe('handoff reachability contract', () => {
       css.indexOf('@media (orientation: landscape) and (max-height: 430px) and (max-width: 767px)'),
       css.indexOf('@media (min-width: 768px)'),
     );
-    expect(landscape).toMatch(/\.mobile-map-controls \.finish-handoff-chip\s*\{[^}]*position:\s*fixed[^}]*bottom:\s*calc\(var\(--mobile-primary-nav-space\) \+ 72px\)/s);
-    expect(landscape).toMatch(/\.finish-handoff-chip:has\(\+ \.map-timer-chip\)\s*\{[^}]*\+ 118px/);
+    expect(landscape).toMatch(/\.mobile-map-controls \.handoff-action-card\s*\{[^}]*position:\s*fixed[^}]*bottom:\s*calc\(var\(--mobile-primary-nav-space\) \+ 10px\)/s);
+    expect(landscape).toMatch(/\.handoff-action-card:has\(\+ \.map-timer-chip\)\s*\{[^}]*\+ 118px/);
   });
 
   it('keeps an open sheet above fixed map controls and drops those controls from hit testing', () => {
@@ -271,14 +272,15 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
       mobile: boolean;
       ruleCount: number;
     }>(`(() => {
-      const button = document.querySelector('[data-testid=finish-handoff-chip] button');
+      const card = document.querySelector('[data-testid=finish-handoff-chip]');
+      const button = card.querySelector('button');
       const rect = button.getBoundingClientRect();
       const x = rect.left + rect.width / 2;
       const y = rect.top + rect.height / 2;
       const hit = document.elementFromPoint(x, y);
       const sheet = [...document.styleSheets].map((s) => { try { return [...s.cssRules].length; } catch { return -1; } });
       return {
-        position: getComputedStyle(button.parentElement).position,
+        position: getComputedStyle(card).position,
         self: !!(hit && (hit === button || button.contains(hit))),
         hit: (hit && (hit.className || hit.id) || '').toString().slice(0, 80),
         x, y,

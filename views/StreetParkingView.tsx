@@ -3022,9 +3022,17 @@ export const MapView: React.FC<MapViewProps> = ({
                         </button>
                     </div>
 
-                    {/* Hidden while the handoff sheet is open. Dismiss brings it back; terminal feedback removes it. */}
-                    {interestFlow.unfinishedHandoff && interestFlow.handoffStep === null && (
-                        <FinishHandoffChip onResume={interestFlow.resumeUnfinishedHandoff} />
+                    {/* Durable handoff recovery stays reachable even after occupied Pings leave the public map feed. */}
+                    {interestFlow.handoffStep === null && (interestFlow.finderPendingHandoff || interestFlow.unfinishedHandoff) && (
+                        <FinishHandoffChip
+                            role={interestFlow.finderPendingHandoff ? 'finder' : 'claimer'}
+                            address={(interestFlow.finderPendingHandoff ?? interestFlow.unfinishedHandoff)?.address || ''}
+                            driverName={interestFlow.finderPendingHandoff?.claimerName || ''}
+                            submitting={interestFlow.handoffSubmitting}
+                            onResume={interestFlow.finderPendingHandoff
+                                ? interestFlow.confirmPendingFinderHandoff
+                                : interestFlow.resumeUnfinishedHandoff}
+                        />
                     )}
 
                     {/* Timer chip — subtle indicator that a reminder is active */}

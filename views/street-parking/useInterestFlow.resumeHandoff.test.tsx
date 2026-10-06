@@ -124,36 +124,49 @@ async function emitResume(spotId: string, data: Record<string, any>, feedback: A
 
 let renderer: TestRenderer.ReactTestRenderer | undefined;
 
-function mount(initialSpot: any = null) {
+function mount(initialSpot: any = null, activeUser: any = user) {
   let flow!: ReturnType<typeof useInterestFlow>;
   act(() => {
-    renderer = TestRenderer.create(<Harness initialSpot={initialSpot} onReady={(next) => { flow = next; }} />);
+    renderer = TestRenderer.create(
+      <Harness initialSpot={initialSpot} activeUser={activeUser} onReady={(next) => { flow = next; }} />,
+    );
   });
   return { getFlow: () => flow };
 }
 
 function Harness({
   initialSpot,
+  activeUser,
   onReady,
 }: {
   initialSpot: any;
+  activeUser: any;
   onReady: (flow: ReturnType<typeof useInterestFlow>) => void;
 }) {
   const [selectedItem, setSelectedItem] = useState<any>(initialSpot);
   const flow = useInterestFlow({
     selectedItem,
     setSelectedItem,
-    user,
+    user: activeUser,
     freeSpots: initialSpot ? [initialSpot] : [],
     userLocation: null,
     mapRef: { current: null },
     activeRouteDestinationRef: { current: null },
   });
   onReady(flow);
+  const pending = flow.finderPendingHandoff ?? flow.unfinishedHandoff;
   return (
     <>
-      {flow.unfinishedHandoff && flow.handoffStep === null && (
-        <FinishHandoffChip onResume={flow.resumeUnfinishedHandoff} />
+      {pending && flow.handoffStep === null && (
+        <FinishHandoffChip
+          role={flow.finderPendingHandoff ? 'finder' : 'claimer'}
+          address={pending.address}
+          driverName={flow.finderPendingHandoff?.claimerName}
+          submitting={flow.handoffSubmitting}
+          onResume={flow.finderPendingHandoff
+            ? flow.confirmPendingFinderHandoff
+            : flow.resumeUnfinishedHandoff}
+        />
       )}
       <BottomSheet
         isOpen={flow.handoffStep !== null}
@@ -234,7 +247,7 @@ describe('useInterestFlow — resumable finish-your-handoff', () => {
     await emitResume('spot-1', arrivedSpot);
 
     expect(chipCount()).toBe(1);
-    expect(JSON.stringify(renderer!.toJSON())).toContain('Finish your handoff');
+    expect(JSON.stringify(renderer!.toJSON())).toContain('Finish your parking handoff');
     const chip = renderer!.root.findByProps({ 'data-testid': 'finish-handoff-chip' });
     expect(chip.props.role).toBeUndefined();
     expect(renderer!.root.findAllByProps({ role: 'dialog' })).toHaveLength(0);
@@ -295,7 +308,7 @@ describe('useInterestFlow — resumable finish-your-handoff', () => {
     await dismissSheet();
     expect(getFlow().handoffStep).toBeNull();
     expect(chipCount()).toBe(1);
-    expect(JSON.stringify(renderer!.toJSON())).toContain('Finish your handoff');
+    expect(JSON.stringify(renderer!.toJSON())).toContain('Finish your parking handoff');
 
     await emit('spots', [snapDoc('spot-1', documents.get('spots/spot-1')!)]);
     await emit('spotFeedback', [
@@ -310,6 +323,44 @@ describe('useInterestFlow — resumable finish-your-handoff', () => {
     ]);
     expect(chipCount()).toBe(1);
     expect(getFlow().unfinishedHandoff?.id).toBe('spot-1');
+  });
+
+  it('gives the Ping owner a durable confirmation action after the claimer arrives', async () => {
+    const finder = { id: 'finder-1', username: 'Finder', crowns: 0 };
+    const ownerSpot = {
+      ...arrivedSpot,
+      interestedUserId: user.id,
+      interestedUserName: 'Driver',
+    };
+    const { getFlow } = mount(null, finder);
+
+    await emitResume('spot-1', ownerSpot);
+
+    expect(getFlow().unfinishedHandoff).toBeNull();
+    expect(getFlow().finderPendingHandoff).toMatchObject({
+      id: 'spot-1',
+      claimerId: user.id,
+      claimerName: 'Driver',
+      address: '1 Main St',
+    });
+    expect(chipCount()).toBe(1);
+    const card = renderer!.root.findByProps({ 'data-testid': 'finish-handoff-chip' });
+    expect(card.props['data-handoff-role']).toBe('finder');
+    expect(JSON.stringify(renderer!.toJSON())).toContain('Did they get your spot?');
+
+    const button = card.findByType('button');
+    await act(async () => { await button.props.onClick(); });
+
+    expect(documents.get('spotFeedback/spot-1_driver-1_finder')).toMatchObject({
+      spotId: 'spot-1',
+      userId: user.id,
+      finderId: finder.id,
+      outcome: 'participant_success',
+      role: 'finder',
+      failureReason: null,
+    });
+    expect(getFlow().handoffStep).toBe('waiting');
+    expect(chipCount()).toBe(0);
   });
 
   it('completed_success and unconfirmed drop the chip; failed still ends the handoff', async () => {
