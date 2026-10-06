@@ -18,9 +18,12 @@ import { ArrivalNotDurableError, isHandoffFailureReason } from '../../utils/spot
 import {
     claimerArrivedSpotsQuery,
     claimerTerminalFeedbackQuery,
+    finderArrivedSpotsQuery,
+    selectFinderPendingHandoff,
     selectUnfinishedHandoff,
     terminalSpotIdsFromFeedback,
     type ClaimerSpotRecord,
+    type FinderPendingHandoff,
     type UnfinishedHandoff,
 } from './unfinishedHandoff';
 import { ARRIVAL_DISTANCE_KM } from './arrivalLocation';
@@ -95,6 +98,7 @@ export function useInterestFlow({
     } | null>(null);
     const [handoffSpotCoords, setHandoffSpotCoords] = useState<{ lat: number; lng: number; address: string } | null>(null);
     const [unfinishedHandoff, setUnfinishedHandoff] = useState<UnfinishedHandoff | null>(null);
+    const [finderPendingHandoff, setFinderPendingHandoff] = useState<FinderPendingHandoff | null>(null);
     const arrivedSpotsRef = useRef<ClaimerSpotRecord[]>([]);
     const terminalSpotIdsRef = useRef<Set<string>>(new Set());
     const optimisticTerminalRef = useRef<Set<string>>(new Set());
@@ -229,6 +233,27 @@ export function useInterestFlow({
             awardUnsubRef.current?.();
             awardUnsubRef.current = null;
         };
+    }, [user?.id]);
+
+    // Finder-side recovery. Occupied Pings disappear from the public map feed,
+    // so the owner needs an independent path back to their half of the mutual
+    // confirmation. Query only by finderId to avoid requiring a new composite
+    // index; selectFinderPendingHandoff filters the pending state client-side.
+    useEffect(() => {
+        if (!user?.id || !db) {
+            setFinderPendingHandoff(null);
+            return;
+        }
+        const uid = user.id;
+        const unsub = onSnapshot(
+            finderArrivedSpotsQuery(db, uid),
+            (snap) => {
+                const records = snap.docs.map((spotDoc) => ({ id: spotDoc.id, data: spotDoc.data() }));
+                setFinderPendingHandoff(selectFinderPendingHandoff(records, uid));
+            },
+            () => setFinderPendingHandoff(null),
+        );
+        return () => unsub();
     }, [user?.id]);
 
     const noteTerminalHandoff = useCallback((spotId: string) => {
@@ -535,6 +560,18 @@ export function useInterestFlow({
             handoffSubmitLock.current = false;
             setHandoffSubmitting(false);
         }
+    };
+
+    const confirmPendingFinderHandoff = () => {
+        const pending = finderPendingHandoff;
+        if (!pending || handoffSubmitLock.current) return;
+        finderAttestRef.current = {
+            spotId: pending.id,
+            claimerId: pending.claimerId,
+            address: pending.address,
+            claimerName: pending.claimerName || t('handoff.other_driver'),
+        };
+        return submitFinderAttestation();
     };
 
     const handleFinderConfirmsArrival = () => submitFinderAttestation();
@@ -933,6 +970,8 @@ export function useInterestFlow({
         handoffSpotCoords,
         unfinishedHandoff,
         resumeUnfinishedHandoff,
+        finderPendingHandoff,
+        confirmPendingFinderHandoff,
         finderToast,
         finderToastTitle,
         finderToastVariant,
