@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { selectUnfinishedHandoff, terminalSpotIdsFromFeedback } from './unfinishedHandoff';
+import {
+  selectFinderPendingHandoff,
+  selectUnfinishedHandoff,
+  terminalSpotIdsFromFeedback,
+} from './unfinishedHandoff';
 
 const uid = 'claimer-1';
 const arrived = {
@@ -64,5 +68,46 @@ describe('Finish-your-handoff resume invariant', () => {
       new Set(),
       uid,
     )).toBeNull();
+  });
+});
+
+
+describe('finder-side pending handoff recovery', () => {
+  const finderUid = 'finder-1';
+
+  it('surfaces the latest occupied arrived handoff owned by the finder', () => {
+    const older = {
+      ...arrived,
+      interestedUserId: 'claimer-old',
+      interestedUserName: 'Older Driver',
+      arrivedAt: { toMillis: () => 4_000 },
+    };
+    const newer = {
+      ...arrived,
+      interestedUserId: 'claimer-new',
+      interestedUserName: 'New Driver',
+      arrivedAt: { toMillis: () => 9_000 },
+    };
+
+    expect(selectFinderPendingHandoff([
+      { id: 'older', data: older },
+      { id: 'newer', data: newer },
+    ], finderUid)).toEqual({
+      id: 'newer',
+      address: '1 Main St',
+      claimerId: 'claimer-new',
+      claimerName: 'New Driver',
+      arrivedAtMs: 9_000,
+    });
+  });
+
+  it('ignores non-arrived, terminal, unrelated, and self-claim rows', () => {
+    expect(selectFinderPendingHandoff([
+      { id: 'heading', data: { ...arrived, status: 'interested', claimState: 'heading' } },
+      { id: 'done', data: { ...arrived, claimState: 'completed_success' } },
+      { id: 'timeout', data: { ...arrived, claimState: 'unconfirmed' } },
+      { id: 'other-finder', data: { ...arrived, finderId: 'finder-2' } },
+      { id: 'self', data: { ...arrived, interestedUserId: finderUid } },
+    ], finderUid)).toBeNull();
   });
 });
