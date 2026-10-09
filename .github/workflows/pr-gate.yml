@@ -97,7 +97,7 @@ jobs:
               fi
 
               # CLIENT
-              if echo "$CHANGED_FILES" | grep -qE '^(views/|components/|hooks/|services/|utils/|i18n/)|^(App\.tsx|ErrorBoundary\.tsx|index\.tsx|database\.ts|types\.ts|firebase\.ts|firebaseConfig\.ts|vite\.config\.ts|assets\.d\.ts)$'; then
+              if echo "$CHANGED_FILES" | grep -qE '^(views/|components/|hooks/|services/|utils/|i18n/|e2e/)|^(App\.tsx|ErrorBoundary\.tsx|index\.tsx|database\.ts|types\.ts|firebase\.ts|firebaseConfig\.ts|vite\.config\.ts|playwright\.config\.ts|assets\.d\.ts)$'; then
                 run_client=true
               fi
 
@@ -187,6 +187,24 @@ jobs:
         run: npm run build
         env:
           VITE_MAPBOX_TOKEN: ${{ vars.VITE_MAPBOX_TOKEN }}
+
+      - name: CLIENT — Install Playwright Chromium
+        if: steps.classify.outputs.run_client == 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: CLIENT — Run browser smoke and accessibility tests
+        if: steps.classify.outputs.run_client == 'true'
+        run: npm run test:e2e
+
+      - name: CLIENT — Upload Playwright failure artifacts
+        if: failure() && steps.classify.outputs.run_client == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pr-gate-playwright-artifacts
+          if-no-files-found: ignore
+          path: |
+            test-results/
+            playwright-report/
 
       # ── FUNCTIONS ───────────────────────────────────────────────────────
       # npm 10 for cross-platform lockfile compatibility (consistent with

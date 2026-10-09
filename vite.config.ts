@@ -77,7 +77,7 @@ export default defineConfig(({ command, mode }) => {
       test: {
         environment: 'node',
         globals: true,
-        exclude: ['**/node_modules/**', 'firestore.rules.test.ts', 'storage.rules.test.ts', 'functions/*.integration.test.*'],
+        exclude: ['**/node_modules/**', '**/e2e/**', 'firestore.rules.test.ts', 'storage.rules.test.ts', 'functions/*.integration.test.*'],
       },
     };
 });
