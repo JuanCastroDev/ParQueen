@@ -27,7 +27,9 @@
     "cap:copy": "npm run build && npx cap copy",
     "cap:open:android": "npx cap open android",
     "cap:open:ios": "npx cap open ios",
-    "release:preflight:windows": "node scripts/release-preflight/run-all.mjs"
+    "release:preflight:windows": "node scripts/release-preflight/run-all.mjs",
+    "test:e2e": "playwright test",
+    "test:a11y": "playwright test e2e/accessibility.spec.ts"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",
@@ -49,9 +51,11 @@
   },
   "devDependencies": {
     "@ast-grep/cli": "^0.45.3",
+    "@axe-core/playwright": "^4.13.0",
     "@babel/core": "^7.20.0",
     "@capacitor/cli": "^8.5.2",
     "@firebase/rules-unit-testing": "^3.0.4",
+    "@playwright/test": "^1.64.0",
     "@sentry/vite-plugin": "^5.4.0",
     "@types/mapbox-gl": "^3.4.1",
     "@types/react": "~18.2.45",

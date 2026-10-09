@@ -84,3 +84,8 @@ ios/App/App/public/
 *squarespace*export*.csv
 *waitlist*export*.csv
 functions/scripts/*.csv
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
