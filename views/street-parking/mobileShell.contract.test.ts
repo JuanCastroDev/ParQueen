@@ -17,7 +17,7 @@ const ruleBetween = (css: string, startMarker: string, endMarker: string, select
 describe('mobile shell layout contract', () => {
   it('reserves the complete safe-area-aware navigation footprint for primary content and map controls', () => {
     const css = read('index.css');
-    expect(css).toContain('--mobile-primary-nav-space: calc(104px + env(safe-area-inset-bottom, 0px))');
+    expect(css).toContain('--mobile-primary-nav-space: calc(96px + env(safe-area-inset-bottom, 0px))');
     expect(css).toMatch(/\.mobile-primary-screen\s*\{[^}]*padding-bottom:\s*var\(--mobile-primary-nav-space\)/s);
     expect(css).toMatch(/\.mobile-map-controls\s*\{[^}]*padding-bottom:\s*var\(--mobile-primary-nav-space\)/s);
     expect(css).toContain('env(safe-area-inset-top, 0px)');
@@ -27,6 +27,10 @@ describe('mobile shell layout contract', () => {
     const css = read('index.css');
     const header = read('views/street-parking/HeaderBar.tsx');
     expect(css).toMatch(/\.mobile-primary-nav-item\s*\{[^}]*min-height:\s*70px/s);
+    // Docked (not floating) bottom navigation: flush to the viewport, full width, safe-area inset inside the surface.
+    expect(css).toMatch(/\.mobile-primary-nav\s*\{[^}]*bottom:\s*0;[^}]*padding:\s*0;/s);
+    expect(css).toMatch(/\.mobile-primary-nav-surface\s*\{[^}]*width:\s*100%[^}]*padding:[^;]*calc\(8px \+ env\(safe-area-inset-bottom, 0px\)\)[^}]*border-radius:\s*22px 22px 0 0/s);
+    expect(css).not.toContain('width: min(92vw, 398px)');
     expect(css).toContain('.mobile-primary-nav-item:focus-visible');
     expect(header).toContain('hidden md:inline-flex');
   });
