@@ -7,6 +7,10 @@ type StubEl = { style: Record<string, string>; dataset: Record<string, string>; 
 let createMarkerElement: (scheduled?: boolean, reportedMs?: number) => StubEl;
 let createStackMarkerElement: (count: number, hasAvailableNow: boolean) => StubEl;
 let formatStackCount: (count: number) => string;
+let createMarkerSized: (s: boolean, r: number, o: { size?: number }) => StubEl;
+let createStackSized: (n: number, h: boolean, o: { size?: number }) => StubEl;
+let HIT_AREA_SIZE: number; let PIN_SIZE: number;
+let stackBadgeGeometry: (size: number, label: string) => { height: number; font: number; left: number; bottom: number; top: number };
 
 beforeAll(async () => {
   (globalThis as any).document ??= { createElement: (): StubEl => ({ style: {}, dataset: {}, innerHTML: '' }) };
@@ -14,6 +18,10 @@ beforeAll(async () => {
   createMarkerElement = utils.createMarkerElement as any;
   createStackMarkerElement = utils.createStackMarkerElement as any;
   formatStackCount = utils.formatStackCount;
+  createMarkerSized = utils.createMarkerElement as any;
+  createStackSized = utils.createStackMarkerElement as any;
+  stackBadgeGeometry = utils.stackBadgeGeometry;
+  HIT_AREA_SIZE = utils.HIT_AREA_SIZE; PIN_SIZE = utils.PIN_SIZE;
 });
 
 const attr = (html: string, marker: string, name: string) =>
@@ -33,7 +41,7 @@ describe('branded ping markers', () => {
       expect(mark(html)?.[1]).toBe(PARQUEEN_MARK_PATH);
       expect(mark(html)?.[2]).toBe('#ffffff');
     }
-    expect(wrapperSize(now)).toEqual(['46', String(pinHeightForWidth(46))]);
+    expect(wrapperSize(now)).toEqual(['38', String(pinHeightForWidth(38))]);
     expect(wrapperSize(later)).toEqual(wrapperSize(now));
     expect(attr(now, 'data-pin-body', 'fill')).toBe('#1e75ff');
   });
@@ -118,7 +126,7 @@ describe('branded ping markers', () => {
       const inner = (svg: string) => svg.replace(/^<svg[^>]*>/, '');
       expect(inner(b)).toBe(inner(a));
       expect(box(stack.innerHTML)).toEqual(box(single.innerHTML));
-      expect(box(single.innerHTML)).toEqual(['46', String(pinHeightForWidth(46))]);
+      expect(box(single.innerHTML)).toEqual(['38', String(pinHeightForWidth(38))]);
       // decoration (back pins) and badge live outside the foreground svg and are absolutely positioned
       expect(b).not.toContain('translate(0,-');
       // back pins are offset straight up only (x = 0), centred on the foreground pin
@@ -134,5 +142,104 @@ describe('branded ping markers', () => {
         expect(el.style.display).toBe('flex');
       }
     }
+  });
+
+  describe.each([46, 38, 34, 32])('pin size %ipx', (size) => {
+    const box = (html: string) => html.match(/data-pin-box="true" style="width:([\d.]+)px;height:([\d.]+)px;/)?.slice(1).map(Number);
+    const fgInner = (html: string) => (html.match(/<svg data-pin-fg="true"[\s\S]*?<\/svg>/)?.[0] ?? '').replace(/^<svg[^>]*>/, '');
+
+    it('scales the whole pin proportionally from one width', () => {
+      for (const el of [createMarkerSized(false, 0, { size }), createStackSized(12, true, { size })]) {
+        expect(box(el.innerHTML)).toEqual([size, (size * PIN_VIEWBOX_HEIGHT) / 40]);
+        expect(el.innerHTML).toContain(`viewBox="${PIN_VIEWBOX}"`);
+      }
+      const rings = createMarkerSized(false, 0, { size }).innerHTML.match(/map-pin-pulse" style="width:(\d+(?:\.\d+)?)px/g);
+      expect(rings).toHaveLength(2);
+      expect(rings![0]).toContain(`width:${size}px`);
+    });
+
+    it('keeps the mark transform in pin units and single/stack foregrounds identical', () => {
+      const single = createMarkerSized(true, 0, { size }).innerHTML;
+      const stack = createStackSized(150, false, { size }).innerHTML;
+      expect(single).toContain(`data-parqueen-mark="true" transform="${PARQUEEN_MARK_TRANSFORM}"`);
+      expect(fgInner(stack)).toBe(fgInner(single));
+      expect(fgInner(single)).toBe(fgInner(createMarkerSized(true, 0, {}).innerHTML));
+    });
+
+    it('keeps the badge legible, capped at 99+, and anchored by its bottom-left corner outside the mark', () => {
+      const stack = createStackSized(1500, true, { size });
+      expect(stack.innerHTML).toMatch(/data-stack-badge="true"[^>]*>99\+<\/div>/);
+      expect(stack.dataset.stackCount).toBe('1500');
+      for (const label of ['12', '99+']) {
+        const g = stackBadgeGeometry(size, label);
+        expect(g.font).toBeGreaterThanOrEqual(9);
+        expect(g.height).toBeGreaterThanOrEqual(15);
+        const u = size / 40;
+        // same anchor for every label: wider pills grow rightward, away from the mark
+        expect(g.left).toBeCloseTo(30 * u, 2);
+        expect(g.bottom).toBeCloseTo(9.5 * u, 2);
+        expect(g.top).toBeCloseTo(g.bottom - g.height, 2);
+        expect(stack.innerHTML).toContain(`left:${g.left}px;top:${g.top}px;pointer-events:auto;`);
+        expect(stack.innerHTML).not.toMatch(/data-stack-badge[^>]*translate\(-50%/);
+      }
+    });
+  });
+
+  describe('38px default with invisible tap target', () => {
+    const hit = (html: string) => html.match(/<div data-marker-hit-area="true"[^>]*style="([^"]*)"/)?.[1] ?? '';
+    const num = (style: string, prop: string) => Number(style.match(new RegExp(`(?:^|;)${prop}:(-?[\\d.]+)px`))?.[1]);
+    const all = () => [createMarkerElement(false), createMarkerElement(true), createStackMarkerElement(12, true), createStackMarkerElement(150, false)];
+
+    it('defaults every marker to a 38px pin', () => {
+      expect(PIN_SIZE).toBe(38);
+      for (const el of all()) expect(el.innerHTML).toMatch(/data-pin-box="true" style="width:38px;height:43.7px;/);
+    });
+
+    it('adds one transparent 48x48 (>=44) hit area centred on the pin head, outside the pin box', () => {
+      expect(HIT_AREA_SIZE).toBe(48);
+      for (const el of all()) {
+        const html = el.innerHTML;
+        expect(html.match(/data-marker-hit-area/g)).toHaveLength(1);
+        const s = hit(html);
+        expect(s).toContain('position:absolute');
+        expect(s).toContain('background:transparent');
+        expect(s).toContain('pointer-events:auto');
+        expect(num(s, 'width')).toBeGreaterThanOrEqual(44);
+        expect(num(s, 'width')).toBe(48);
+        expect(num(s, 'height')).toBe(48);
+        const u = 38 / 40;
+        expect(num(s, 'left') + 24).toBeCloseTo(20 * u, 2);
+        expect(num(s, 'top') + 24).toBeCloseTo(19 * u, 2);
+        // covers the whole head circle (r = 18 units)
+        expect(num(s, 'left')).toBeLessThanOrEqual(2 * u);
+        expect(num(s, 'left') + 48).toBeGreaterThanOrEqual(38 * u);
+        expect(num(s, 'top')).toBeLessThanOrEqual(1 * u);
+        // not inside the pin box, so it cannot affect the box that defines the anchor
+        const box = html.match(/<div data-pin-box="true"[\s\S]*?<\/svg>\s*(?:<div data-stack-badge[\s\S]*?<\/div>\s*)?<\/div>/)?.[0] ?? '';
+        expect(box).not.toContain('data-marker-hit-area');
+        expect(el.style.position).toBeUndefined();
+      }
+    });
+
+    it('pins the badge by its left edge so wider labels (9, 12, 99, 99+) grow away from the mark', () => {
+      // No DOM here, so width is an ESTIMATE (glyph ~0.62em + padding + border); the actual rendered widths
+      // and pixel clearances are measured in Chromium by .ui-evidence/shoot-qa.mjs (16 / 17.75 / 18.8 / 25.22px).
+      const badges = [9, 12, 99, 1500].map((n) => {
+        const html = createStackMarkerElement(n, true).innerHTML;
+        const s = html.match(/<div data-stack-badge="true" style="([^"]*)"[^>]*>([^<]*)<\/div>/)!;
+        const px = (prop: string) => Number(s[1].match(new RegExp(`(?:^|;)${prop}:(-?[\\d.]+)px`))![1]);
+        const font = Number(s[1].match(/font:900 ([\d.]+)px/)![1]);
+        const estWidth = Math.max(px('height'), s[2].length * 0.62 * font + 2 * 3 + 3);
+        expect(s[1]).not.toContain('translate(');
+        return { label: s[2], left: px('left'), top: px('top'), right: px('left') + estWidth };
+      });
+      expect(badges.map((b) => b.label)).toEqual(['9', '12', '99', '99+']);
+      for (const b of badges) {
+        expect(b.left).toBe(badges[0].left);
+        expect(b.top).toBe(badges[0].top);
+      }
+      expect(badges[3].right).toBeGreaterThan(badges[1].right);
+      expect(badges[3].right).toBeGreaterThan(badges[0].right);
+    });
   });
 });

@@ -37,9 +37,49 @@ export const formatTimeLeft = (ms: number): string => {
     return `${hours} hour${hours === 1 ? "" : "s"} and ${minutes} minute${minutes === 1 ? "" : "s"}`;
 };
 
-const PIN_SIZE = 46;
-/** Distance (pin units) of the stack badge centre from the head-circle centre along the 45 deg ray. */
-export const BADGE_RAY_UNITS = 21.7;
+/** Default rendered pin width in px. Height is width * 46 / 40; the mark lives in pin units so it scales with it. */
+export const PIN_SIZE = 38;
+export interface PinSizeOptions { size?: number }
+/** Badge pill height at the default size; never below BADGE_MIN_HEIGHT so the count stays legible. */
+const BADGE_HEIGHT_AT_DEFAULT = 19; // px at the original 46px pin; scaled from there
+const BADGE_REFERENCE_PIN = 46;
+const BADGE_MIN_HEIGHT = 15;
+const BADGE_MIN_FONT = 9;
+/**
+ * Bottom-left corner of the stack badge, in pin units. Measured on the rendered 38px marker in Chromium
+ * (alpha mask of the white mark vs the badge's pixels, border and shadow included): this corner keeps
+ * >= 2 CSS px between the badge and the mark, while the pill still overlaps the head's upper-right edge.
+ * The badge is anchored by this corner and grows right/up, so wider labels ("99+") move away from the
+ * mark instead of spreading back over it (as the old centre-on-45deg-ray placement did).
+ */
+export const BADGE_ANCHOR_UNITS = { left: 30, bottom: 9.5 } as const;
+
+/** Badge geometry (px) for a pin of the given width. Exported for tests. */
+export const stackBadgeGeometry = (size: number, label: string) => {
+    const u = size / PIN_VIEWBOX_WIDTH;
+    const height = Math.max(BADGE_MIN_HEIGHT, Math.round(BADGE_HEIGHT_AT_DEFAULT * size / BADGE_REFERENCE_PIN));
+    const font = Math.max(BADGE_MIN_FONT, Math.round((label.length >= 3 ? 9 : 10) * size / BADGE_REFERENCE_PIN));
+    const left = +(BADGE_ANCHOR_UNITS.left * u).toFixed(2);
+    const bottom = +(BADGE_ANCHOR_UNITS.bottom * u).toFixed(2);
+    return { height, font, left, bottom, top: +(bottom - height).toFixed(2) };
+};
+
+/** Invisible tap target (px). The visual pin is under 44px, so taps get a 48x48 square centred on the pin head. */
+export const HIT_AREA_SIZE = 48;
+
+/**
+ * Transparent, absolutely positioned hit area. It is positioned against the marker root, which
+ * mapbox-gl.css already makes position:absolute (.mapboxgl-marker), so it never changes the root's
+ * layout box or the bottom-centre anchor. Centred on the head circle (20, 19 in pin units) because
+ * that is where people aim; at 38px it spans the whole head and reaches within ~1.6px of the tip.
+ * Taps bubble to the root, where StreetParkingView attaches its click listener.
+ */
+export const markerHitAreaHtml = (size: number): string => {
+    const u = size / PIN_VIEWBOX_WIDTH;
+    const left = +(20 * u - HIT_AREA_SIZE / 2).toFixed(2);
+    const top = +(19 * u - HIT_AREA_SIZE / 2).toFixed(2);
+    return `<div data-marker-hit-area="true" aria-hidden="true" style="position:absolute;left:${left}px;top:${top}px;width:${HIT_AREA_SIZE}px;height:${HIT_AREA_SIZE}px;background:transparent;pointer-events:auto;z-index:3;"></div>`;
+};
 
 const applyMarkerRootStyle = (el: HTMLElement) => {
     // No inline position: mapbox-gl.css gives .mapboxgl-marker position:absolute; top:0; left:0.
@@ -63,14 +103,14 @@ export const buildPinForegroundSvg = (color: string, extraStyle = ''): string =>
     `<path data-pin-body="true" d="${PIN_PATH}" fill="${color}" stroke="rgba(255,255,255,0.25)" stroke-width="0.5"/>` +
     `${parqueenMarkSvg()}</svg>`;
 
-export const createMarkerElement = (scheduled = false, reportedMs = 0) => {
+export const createMarkerElement = (scheduled = false, reportedMs = 0, options: PinSizeOptions = {}) => {
     const el = document.createElement('div');
     applyMarkerRootStyle(el);
     el.dataset.scheduled = String(scheduled);
 
     const color = scheduled ? '#eab308' : '#1e75ff';
     // Leaving Now and Leaving Later share one silhouette, mark and size; only the colour differs.
-    const size = PIN_SIZE;
+    const size = options.size ?? PIN_SIZE;
     const height = pinHeightForWidth(size);
     const now = Date.now();
     const ageMs = reportedMs ? now - reportedMs : 0;
@@ -91,6 +131,7 @@ export const createMarkerElement = (scheduled = false, reportedMs = 0) => {
         <div data-pin-box="true" style="width:${size}px;height:${height}px;flex-shrink:0;opacity:${opacity};pointer-events:none;">
           ${buildPinForegroundSvg(color)}
         </div>
+        ${markerHitAreaHtml(size)}
     `;
     return el;
 };
@@ -98,22 +139,22 @@ export const createMarkerElement = (scheduled = false, reportedMs = 0) => {
 /** Badge label for a stack: the exact count up to 99, then "99+". The real count is kept on data-stack-count. */
 export const formatStackCount = (count: number): string => (count > 99 ? '99+' : String(count));
 
-export const createStackMarkerElement = (count: number, hasAvailableNow: boolean): HTMLElement => {
+export const createStackMarkerElement = (count: number, hasAvailableNow: boolean, options: PinSizeOptions = {}): HTMLElement => {
     const el = document.createElement('div');
     applyMarkerRootStyle(el);
     el.dataset.stackCount = String(count);
 
     const color = hasAvailableNow ? '#1e75ff' : '#eab308';
     const badgeFill = hasAvailableNow ? '#0a4fa0' : '#92400e';
-    const size = PIN_SIZE;
+    const size = options.size ?? PIN_SIZE;
     const height = pinHeightForWidth(size);
     const countLabel = formatStackCount(count);
-    const badgeFont = countLabel.length >= 3 ? 9 : 10;
-    // Badge centre sits on the 45 deg upper-right ray from the head-circle centre (20, 19), BADGE_RAY_UNITS out
-    // (head radius is 18), so it overlaps the pin edge and reads as attached while staying clear of the mark.
-    const u = size / PIN_VIEWBOX_WIDTH;
-    const badgeCx = +((20 + BADGE_RAY_UNITS * Math.SQRT1_2) * u).toFixed(2);
-    const badgeCy = +((19 - BADGE_RAY_UNITS * Math.SQRT1_2) * u).toFixed(2);
+    const badge = stackBadgeGeometry(size, countLabel);
+    const badgeFont = badge.font;
+    // Badge is pinned by its bottom-left corner just outside the mark (BADGE_ANCHOR_UNITS) and grows outward.
+    const badgeLeft = badge.left;
+    const badgeTop = badge.top;
+    const bh = badge.height;
 
     // Same box and same foreground as the single pin. The back pins and the badge are absolutely
     // positioned overlays inside the pin box (position:relative here, never on the root), so they
@@ -125,8 +166,9 @@ export const createStackMarkerElement = (count: number, hasAvailableNow: boolean
             <path transform="translate(0,-1.3)" d="${PIN_PATH}" fill="${color}" opacity="0.55"/>
           </svg>
           ${buildPinForegroundSvg(color, 'position:relative;z-index:1;')}
-          <div data-stack-badge="true" style="position:absolute;z-index:2;left:${badgeCx}px;top:${badgeCy}px;transform:translate(-50%,-50%);box-sizing:border-box;min-width:19px;height:19px;padding:0 4px;border-radius:9.5px;background:${badgeFill};border:1.5px solid rgba(255,255,255,0.85);color:#fff;font:900 ${badgeFont}px/16px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;text-align:center;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,0.35);">${countLabel}</div>
+          <div data-stack-badge="true" style="position:absolute;z-index:2;left:${badgeLeft}px;top:${badgeTop}px;pointer-events:auto;box-sizing:border-box;min-width:${bh}px;height:${bh}px;padding:0 ${bh >= 19 ? 4 : 3}px;border-radius:${bh / 2}px;background:${badgeFill};border:1.5px solid rgba(255,255,255,0.85);color:#fff;font:900 ${badgeFont}px/${bh - 3}px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;text-align:center;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,0.35);">${countLabel}</div>
         </div>
+        ${markerHitAreaHtml(size)}
     `;
     return el;
 };
