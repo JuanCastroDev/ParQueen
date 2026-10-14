@@ -68,6 +68,8 @@ import { AppTour, TOUR_KEY } from './street-parking/AppTour';
 import { resolveNotificationPing } from '../utils/notificationPing';
 import { AccessibleModal } from '../components/AccessibleModal';
 import { shouldShowMapPrimaryNavigation } from './street-parking/mobileNavigationVisibility';
+import { getMapContextChip } from './street-parking/mapContextChip';
+import { isHandoffRecoveryCardRendered } from './street-parking/handoffRecoveryCard';
 import { isLegacyNYCOpenDataSegment } from '../utils/streetIntelligenceLegacy';
 
 const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpot,
@@ -1973,6 +1975,22 @@ export const MapView: React.FC<MapViewProps> = ({
         }
     };
 
+    // Replaces the floating My Ping / My Parked Car CTA: same state, same handler, as a small status chip.
+    // My Car-linked pings must not override the parked-car state (same rule the CTA used).
+    const mapContextChip = getMapContextChip({
+        signedIn: !!user,
+        hasSavedSpot: !!savedSpot,
+        distanceLabel: myCarDistanceLabel,
+        hasActivePing: spotData.activeSpots.some(s => s.finderId === user?.id && s.id !== savedSpot?.linkedPingId),
+        labels: { parkedCar: t('my_car.parked_car_label'), arrived: t('my_car.youve_arrived'), myPing: t('common.my_ping') },
+    });
+
+    // Same boolean renders the handoff-recovery card and (short landscape only) suppresses the chip it would cover.
+    const handoffRecoveryCardRendered = isHandoffRecoveryCardRendered(interestFlow);
+    // Same condition that renders the reminder timer chip. Short-landscape priority: handoff card > timer > contextual chip
+    // (CSS-hidden via --suppressed classes, so the countdown and the elements stay mounted).
+    const timerChipRendered = !!(parkingTimer.timer && savedSpot);
+
     const mapPrimaryNavigationVisible = shouldShowMapPrimaryNavigation({
         enabled: showPrimaryNavigation,
         spotModalOpen: isSpotModalOpen,
@@ -2963,7 +2981,7 @@ export const MapView: React.FC<MapViewProps> = ({
                 />
 
                 {!search.searchOpen && (
-                    <div className="map-status-row md:w-full max-w-none md:max-w-[380px] mx-auto pointer-events-auto">
+                    <div className="map-status-row md:w-full max-w-none md:max-w-[var(--shell-content-max)] mx-auto pointer-events-auto">
                         {spotCount > 0 ? (
                             <div className="flex items-center gap-1.5 flex-wrap">
                                 <button
@@ -2982,6 +3000,19 @@ export const MapView: React.FC<MapViewProps> = ({
                                 {t('map.no_spots_nearby')}
                             </div>
                         )}
+                        {mapContextChip && (
+                            <button
+                                type="button"
+                                data-map-context-chip={mapContextChip.kind}
+                                onClick={handlePrimaryMapAction}
+                                className={`map-status-chip map-context-chip${mapContextChip.arrived ? ' is-arrived' : ''}${handoffRecoveryCardRendered || timerChipRendered ? ' map-context-chip--suppressed' : ''} mt-1.5 items-center gap-2 text-[12px] font-semibold active:scale-95 transition-transform`}
+                            >
+                                {mapContextChip.kind === 'car'
+                                    ? <Car size={14} aria-hidden="true" className="shrink-0" />
+                                    : <MapPin size={14} aria-hidden="true" className="shrink-0" />}
+                                <span className="whitespace-nowrap">{mapContextChip.text}</span>
+                            </button>
+                        )}
                         {pillToast && (
                             <div className="mt-1.5 inline-flex items-center gap-1.5 bg-[var(--color-card)] backdrop-blur-xl border border-white/10 rounded-full px-2.5 py-1 text-[10px] font-semibold text-[var(--color-text-secondary)] shadow-md">
                                 {pillToast}
@@ -2991,10 +3022,10 @@ export const MapView: React.FC<MapViewProps> = ({
                 )}
 
 
-                <div className="mobile-map-controls w-full flex flex-col gap-3 pointer-events-auto mt-auto pb-0 px-0 md:pb-16 md:px-4">
+                <div className="mobile-map-controls w-full flex flex-col gap-3 pointer-events-auto mt-auto pb-0 px-0">
 
                     {/* Car (toggle) + Locate stacked vertically on the right */}
-                    <div className="map-secondary-controls flex flex-col items-end gap-3 max-w-none md:max-w-[380px] mx-auto w-full mb-3">
+                    <div className="map-secondary-controls flex flex-col items-end gap-3 max-w-none mx-auto w-full mb-3">
                         {userLocation && (
                             <button
                                 data-tour="my-car"
@@ -3023,7 +3054,7 @@ export const MapView: React.FC<MapViewProps> = ({
                     </div>
 
                     {/* Durable handoff recovery stays reachable even after occupied Pings leave the public map feed. */}
-                    {interestFlow.handoffStep === null && (interestFlow.finderPendingHandoff || interestFlow.unfinishedHandoff) && (
+                    {handoffRecoveryCardRendered && (
                         <FinishHandoffChip
                             role={interestFlow.finderPendingHandoff ? 'finder' : 'claimer'}
                             address={(interestFlow.finderPendingHandoff ?? interestFlow.unfinishedHandoff)?.address || ''}
@@ -3036,8 +3067,8 @@ export const MapView: React.FC<MapViewProps> = ({
                     )}
 
                     {/* Timer chip — subtle indicator that a reminder is active */}
-                    {parkingTimer.timer && savedSpot && (
-                        <div className="map-timer-chip max-w-[380px] mx-auto w-full pointer-events-auto">
+                    {timerChipRendered && (
+                        <div className={`map-timer-chip${handoffRecoveryCardRendered ? ' map-timer-chip--suppressed' : ''} max-w-[380px] mx-auto w-full pointer-events-auto`}>
                             <button
                                 onClick={() => setShowSessionSheet(true)}
                                 className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-full bg-[var(--color-card)] backdrop-blur-xl border border-[#1e75ff]/20 shadow-md">
@@ -3048,49 +3079,6 @@ export const MapView: React.FC<MapViewProps> = ({
                     )}
 
 
-                    {(() => {
-                        // My Car-linked pings must not override the "My Parked Car" label.
-                        // isMyCarMode wins whenever savedSpot exists, even if the session has a linked ping.
-                        const myPing = spotData.activeSpots.find(s => s.finderId === user?.id && s.id !== savedSpot?.linkedPingId);
-                        const hasActivePing = !!myPing;
-                        const isMyCarMode = !!savedSpot;
-                        return (
-                            <button
-                                data-tour="share-spot"
-                                onClick={handlePrimaryMapAction}
-                                disabled={!user}
-                                className={`map-primary-cta${isMyCarMode ? ' is-car-mode' : ''} hidden md:inline-flex relative mx-auto active:scale-[0.98] text-white disabled:opacity-50 transition-transform duration-200`}
-                            >
-                                {isMyCarMode ? (
-                                    <div className="flex items-center justify-center gap-2.5 w-full px-8">
-                                        <VehicleIcon type={user?.vehicleType} color="White" size={22} />
-                                        <div className="text-center">
-                                            <p className="text-[17px] font-bold leading-tight whitespace-nowrap">{t('my_car.parked_car_label')}</p>
-                                            {myCarDistanceLabel && myCarDistanceLabel !== "You're here" && (
-                                                <p className="text-[10px] font-semibold text-white/70 whitespace-nowrap leading-tight">
-                                                    {myCarDistanceLabel}
-                                                </p>
-                                            )}
-                                            {myCarDistanceLabel === "You're here" && (
-                                                <p className="text-[10px] font-semibold text-[var(--color-success)] whitespace-nowrap leading-tight">
-                                                    {t('my_car.youve_arrived')}
-                                                </p>
-                                            )}
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <>
-                                        <span className="map-primary-cta-icon" aria-hidden="true">
-                                            <MapPin size={26} strokeWidth={2.15} />
-                                        </span>
-                                        <span className="map-primary-cta-label whitespace-nowrap">
-                                            {hasActivePing ? t('common.my_ping') : t('common.ping_your_spot')}
-                                        </span>
-                                    </>
-                                )}
-                            </button>
-                        );
-                    })()}
 
                 </div>
             </div>

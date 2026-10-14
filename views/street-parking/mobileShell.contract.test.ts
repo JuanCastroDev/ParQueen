@@ -32,7 +32,9 @@ describe('mobile shell layout contract', () => {
     expect(css).toMatch(/\.mobile-primary-nav-surface\s*\{[^}]*width:\s*100%[^}]*padding:[^;]*calc\(8px \+ env\(safe-area-inset-bottom, 0px\)\)[^}]*border-radius:\s*22px 22px 0 0/s);
     expect(css).not.toContain('width: min(92vw, 398px)');
     expect(css).toContain('.mobile-primary-nav-item:focus-visible');
-    expect(header).toContain('hidden md:inline-flex');
+    // Stage A: header avatar/chat/bell are replaced by the always-visible nav; kept hidden so tour targets survive.
+    expect(header).toMatch(/data-tour="profile" className="hidden /);
+    expect(header).not.toContain('hidden md:inline-flex');
   });
 
   it('suppresses the map navigation copy while the Messages overlay owns the visible primary navigation', () => {
@@ -105,7 +107,7 @@ describe('mobile shell layout contract', () => {
     expect(header).toContain('Scan');
     expect(map).toContain('map-status-chip');
     expect(map).toContain('map-control-button');
-    expect(map).toContain('map-primary-cta');
+    expect(map).not.toContain('map-primary-cta');
   });
 
   it('uses one slimmer portrait header grid while retaining touch and responsive geometry', () => {
@@ -116,8 +118,8 @@ describe('mobile shell layout contract', () => {
     expect(css).toMatch(/\.map-search-shell\s*\{[^}]*flex:\s*1 1 auto[^}]*height:\s*51px/s);
     expect(css).toMatch(/\.map-status-row\s*\{[^}]*width:\s*var\(--mobile-map-header-width\)/s);
     expect(css).toMatch(/\.map-ai-action\s*\{[^}]*height:\s*51px[^}]*min-height:\s*44px/s);
-    expect(css).toMatch(/@media \(orientation: landscape\)[\s\S]*?\.map-search-shell\s*\{[^}]*height:\s*52px/s);
-    expect(css).toMatch(/@media \(orientation: landscape\)[\s\S]*?\.map-ai-action\s*\{[^}]*height:\s*52px[^}]*min-height:\s*44px/s);
+    expect(css).toMatch(/@media \(max-height: 500px\)[\s\S]*?\.map-search-shell\s*\{[^}]*height:\s*52px/s);
+    expect(css).toMatch(/@media \(max-height: 500px\)[\s\S]*?\.map-ai-action\s*\{[^}]*height:\s*52px[^}]*min-height:\s*44px/s);
     expect(css).toMatch(/@media \(min-width: 768px\)[\s\S]*?\.map-search-shell\s*\{[^}]*height:\s*50px/s);
   });
 
@@ -188,10 +190,10 @@ describe('mobile shell layout contract', () => {
     const css = read('index.css');
     const map = read('views/StreetParkingView.tsx');
     expect(map).toContain('map-secondary-controls flex flex-col items-end');
-    expect(css).toMatch(/@media \(orientation: landscape\) and \(max-height: 430px\)/);
-    expect(css).toMatch(/@media \(orientation: landscape\)[\s\S]*?\.mobile-map-controls \.map-secondary-controls\s*\{[^}]*position:\s*fixed[^}]*right:\s*max\(16px,\s*env\(safe-area-inset-right,\s*0px\),\s*calc\(50% - 190px\)\)[^}]*bottom:\s*calc\(var\(--mobile-primary-nav-space\) \+ 10px\)[^}]*flex-direction:\s*column[^}]*gap:\s*10px/s);
+    expect(css).toMatch(/@media \(max-height: 500px\) \{/);
+    expect(css).toMatch(/@media \(max-height: 500px\)[\s\S]*?\.mobile-map-controls \.map-secondary-controls\s*\{[^}]*position:\s*fixed[^}]*right:\s*max\(16px,\s*env\(safe-area-inset-right,\s*0px\)\);[^}]*bottom:\s*calc\(var\(--mobile-primary-nav-space\) \+ 10px\)[^}]*flex-direction:\s*column[^}]*gap:\s*10px/s);
     expect(css).toMatch(/\.map-control-button\s*\{[^}]*width:\s*50px[^}]*height:\s*50px/s);
-    expect(css).toMatch(/@media \(orientation: landscape\)[\s\S]*?\.map-timer-chip\s*\{[^}]*position:\s*fixed/s);
+    expect(css).toMatch(/@media \(max-height: 500px\)[\s\S]*?\.map-timer-chip\s*\{[^}]*position:\s*fixed/s);
     expect(map).toContain('map-timer-chip');
   });
 
@@ -224,7 +226,7 @@ describe('mobile shell layout contract', () => {
   it('restores the pre-polish map-shell geometry at the desktop breakpoint', () => {
     const css = read('index.css');
     expect(css).toMatch(/@media \(min-width: 768px\)[\s\S]*?\.map-search-shell\s*\{[^}]*height:\s*50px/s);
-    expect(css).toMatch(/@media \(min-width: 768px\)[\s\S]*?\.map-control-button\s*\{[^}]*width:\s*40px[^}]*height:\s*40px/s);
+    expect(css).toMatch(/@media \(min-width: 768px\)[\s\S]*?\.map-control-button\s*\{[^}]*width:\s*44px[^}]*height:\s*44px/s);
     expect(css).toMatch(/@media \(min-width: 768px\)[\s\S]*?\.map-primary-cta\s*\{[^}]*min-height:\s*52px/s);
   });
 });
