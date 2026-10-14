@@ -34,7 +34,7 @@ describe('handoff reachability contract', () => {
     expect(mobile).not.toMatch(/orientation:\s*landscape/);
 
     const landscape = css.slice(
-      css.indexOf('@media (orientation: landscape) and (max-height: 430px) and (max-width: 767px)'),
+      css.indexOf('@media (max-height: 500px) {'),
       css.indexOf('@media (min-width: 768px)'),
     );
     expect(landscape).toMatch(/\.mobile-map-controls \.handoff-action-card\s*\{[^}]*position:\s*fixed[^}]*bottom:\s*calc\(var\(--mobile-primary-nav-space\) \+ 10px\)/s);
@@ -367,7 +367,7 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
     await page('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await new Promise((r) => setTimeout(r, 150));
     const touchResult = await ev<{ picked: string | null; prevented: string[]; viewport: string; short: boolean }>(
-      '({ picked: window.__picked, prevented: window.__pd, viewport: innerWidth + "x" + innerHeight, short: matchMedia("(orientation: landscape) and (max-height: 430px) and (max-width: 767px)").matches })',
+      '({ picked: window.__picked, prevented: window.__pd, viewport: innerWidth + "x" + innerHeight, short: matchMedia("(max-height: 500px)").matches })',
     );
     expect(touchResult.short, JSON.stringify(touchResult)).toBe(true);
     expect(touchResult.prevented, JSON.stringify(touchResult)).not.toContain('touchmove');
