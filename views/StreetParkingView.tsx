@@ -1031,7 +1031,7 @@ export const MapView: React.FC<MapViewProps> = ({
             setDoc(doc(db, 'parkingSessions', auth.currentUser.uid), { active: false }, { merge: true }).catch(() => {});
         }
         setSavedSpot(null);
-        parkingTimer.clearTimer();
+        parkingTimer.cancelCurrentReminder();
         setShowSessionSheet(false);
         setShowDepartureSheet(false);
         setShowCustomReminder(false);
