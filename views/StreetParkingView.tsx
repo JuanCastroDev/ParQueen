@@ -2987,7 +2987,7 @@ export const MapView: React.FC<MapViewProps> = ({
                                 <button
                                     onClick={handleNearbyPillClick}
                                     aria-label={spotCount === 1 ? t('map.view_nearby_spot') : t('map.view_nearby_spots')}
-                                    className="map-status-chip is-available inline-flex items-center gap-2.5 text-[12px] font-medium cursor-pointer active:scale-95 active:opacity-80 transition-transform"
+                                    className="map-status-chip is-available inline-flex items-center gap-2.5 text-[12px] font-medium cursor-pointer active:opacity-80 transition-opacity motion-reduce:transition-none [@media(max-width:767px)_and_(min-height:501px)]:relative [@media(max-width:767px)_and_(min-height:501px)]:before:absolute [@media(max-width:767px)_and_(min-height:501px)]:before:inset-x-0 [@media(max-width:767px)_and_(min-height:501px)]:before:-inset-y-[7px]"
                                 >
                                     <div className="map-status-dot bg-emerald-400 animate-pulse motion-reduce:animate-none shrink-0" />
                                     {spotCount === 1 ? t('map.free_spot_singular') : t('map.free_spots_plural', { count: spotCount })}
@@ -3005,7 +3005,7 @@ export const MapView: React.FC<MapViewProps> = ({
                                 type="button"
                                 data-map-context-chip={mapContextChip.kind}
                                 onClick={handlePrimaryMapAction}
-                                className={`map-status-chip map-context-chip${mapContextChip.arrived ? ' is-arrived' : ''}${handoffRecoveryCardRendered || timerChipRendered ? ' map-context-chip--suppressed' : ''} mt-1.5 items-center gap-2 text-[12px] font-semibold active:scale-95 transition-transform`}
+                                className={`map-status-chip map-context-chip${mapContextChip.arrived ? ' is-arrived' : ''}${handoffRecoveryCardRendered || timerChipRendered ? ' map-context-chip--suppressed' : ''} mt-1.5 items-center gap-2 text-[12px] font-semibold active:opacity-80 transition-opacity motion-reduce:transition-none`}
                             >
                                 {mapContextChip.kind === 'car'
                                     ? <Car size={14} aria-hidden="true" className="shrink-0" />
