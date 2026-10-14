@@ -10,7 +10,7 @@ const { initializeApp, getApps } = require('firebase-admin/app');
 const { getFirestore, Timestamp } = require('firebase-admin/firestore');
 
 const { requireEmulatorProjectId } = require('./emulatorProjectId');
-const { decideCommitToHeading, buildHeadingUpdate } = require('../utils/commitToHeadingDecision');
+const { decideCommitToHeading, buildHeadingUpdate } = require('../utils/commitToHeadingDecision.cjs');
 
 const PROJECT_ID = requireEmulatorProjectId();
 const APP_NAME = '__scheduled_claim_heading_race__';
