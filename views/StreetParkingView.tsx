@@ -62,6 +62,7 @@ import { NavigationBar } from './street-parking/NavigationBar';
 import { StreetIntelligenceCard, StreetIntelligenceUnavailableCard } from './street-parking/StreetIntelligenceCard';
 import { VisualCurbSelector } from './street-parking/VisualCurbSelector';
 import { useParkingTimer } from './street-parking/useParkingTimer';
+import { recordParkingAnalyticsEvent } from '../utils/parkingAnalytics';
 import { SAVED_SPOT_KEY, readSavedSpot, writeSavedSpot, type SavedSpot } from '../utils/savedSpot';
 import { usePingPhaseClock } from './street-parking/usePingPhaseClock';
 import { AppTour, TOUR_KEY } from './street-parking/AppTour';
@@ -143,6 +144,16 @@ export const MapView: React.FC<MapViewProps> = ({
     onPendingUpdatesCountChange,
 }) => {
     useLang(); // re-render on language change
+    // MapView remains mounted while Messages overlays it. Count actual returns
+    // to the visible map rather than re-renders, SDK starts, or background views.
+    const mapWasVisibleRef = useRef(false);
+    useEffect(() => {
+        const visible = Boolean(showPrimaryNavigation && user?.id);
+        if (visible && !mapWasVisibleRef.current) {
+            recordParkingAnalyticsEvent('map_opened');
+        }
+        mapWasVisibleRef.current = visible;
+    }, [showPrimaryNavigation, user?.id]);
     const mapContainerRef = useRef<HTMLDivElement>(null);
     const mapRef = useRef<mapboxgl.Map | null>(null);
     const allMarkersRef = useRef<Record<string, mapboxgl.Marker>>({});
@@ -1581,6 +1592,7 @@ export const MapView: React.FC<MapViewProps> = ({
 
         setMyCarDepartureLoading(true);
         setMyCarDepartureError(null);
+        recordParkingAnalyticsEvent('ping_creation_started');
 
         const now = Date.now();
         const reportedAt = departureTime ? Timestamp.fromDate(departureTime) : Timestamp.fromMillis(now);
@@ -1667,6 +1679,7 @@ export const MapView: React.FC<MapViewProps> = ({
                 },
             });
 
+            recordParkingAnalyticsEvent('ping_creation_succeeded');
             const mode = departureTime ? 'leaving_later' : 'leaving_now';
             setMyCarPingSuccess(mode);
             setMyCarDepartureLoading(false);
@@ -1711,6 +1724,7 @@ export const MapView: React.FC<MapViewProps> = ({
         }
 
         setIsPinging(true);
+        recordParkingAnalyticsEvent('ping_creation_started');
         setSpotModalOpen(false);
 
         const now = Date.now();
@@ -1718,6 +1732,8 @@ export const MapView: React.FC<MapViewProps> = ({
         const expiresAt = Timestamp.fromMillis(getPingExpiresAtMs(reportedAt));
 
         const onSaveSuccess = () => {
+            // Only invoked after commitPingCreate's Firestore transaction resolves.
+            recordParkingAnalyticsEvent('ping_creation_succeeded');
             setIsPinging(false);
             setPingLocationSnapshot(null);
             setSelectedItem(null);

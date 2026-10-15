@@ -449,7 +449,7 @@ service cloud.firestore {
         allow write: if signedIn() && request.auth.uid == userId
           && request.resource.data.keys().hasOnly([
                'notificationRadius', 'notificationsEnabled', 'sharePreciseLocation',
-               'lang', 'fcmToken'])
+               'lang', 'fcmToken', 'analyticsConsent'])
           && (!('notificationRadius' in request.resource.data)
                || (request.resource.data.notificationRadius is number
                    && request.resource.data.notificationRadius >= 0.1
@@ -460,6 +460,8 @@ service cloud.firestore {
                || request.resource.data.sharePreciseLocation is bool)
           && (!('lang' in request.resource.data)
                || request.resource.data.lang in ['en', 'es'])
+          && (!('analyticsConsent' in request.resource.data)
+              || request.resource.data.analyticsConsent is bool)
           && (!('fcmToken' in request.resource.data)
                || (request.resource.data.fcmToken is string
                    && request.resource.data.fcmToken.size() <= 4096));

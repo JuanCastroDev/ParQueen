@@ -3176,6 +3176,47 @@ describe('TM-04 — private user data isolation', () => {
         await assertSucceeds(getDoc(doc(ownerDb(), 'users', OWNER_UID, 'private', 'preferences')));
     });
 
+    it('AN-CONSENT-1: owner can enable and disable analytics while preserving preferences', async () => {
+        const ref = doc(ownerDb(), 'users', OWNER_UID, 'private', 'preferences');
+
+        await assertSucceeds(setDoc(ref, {
+            notificationRadius: 2,
+            notificationsEnabled: true,
+        }));
+
+        await assertSucceeds(setDoc(ref, { analyticsConsent: true }, { merge: true }));
+
+        let snap = await assertSucceeds(getDoc(ref));
+        expect(snap.data()?.analyticsConsent).toBe(true);
+        expect(snap.data()?.notificationRadius).toBe(2);
+        expect(snap.data()?.notificationsEnabled).toBe(true);
+
+        await assertSucceeds(setDoc(ref, { analyticsConsent: false }, { merge: true }));
+
+        snap = await assertSucceeds(getDoc(ref));
+        expect(snap.data()?.analyticsConsent).toBe(false);
+        expect(snap.data()?.notificationRadius).toBe(2);
+    });
+
+    it('AN-CONSENT-2: invalid analytics consent values are rejected', async () => {
+        const ref = doc(ownerDb(), 'users', OWNER_UID, 'private', 'preferences');
+
+        for (const invalid of ['yes', 1, null]) {
+            await assertFails(setDoc(ref, { analyticsConsent: invalid }));
+        }
+    });
+
+    it('AN-CONSENT-3: unauthorized analytics consent writes are rejected', async () => {
+        await assertFails(setDoc(
+            doc(otherDb(), 'users', OWNER_UID, 'private', 'preferences'),
+            { analyticsConsent: true }
+        ));
+
+        await assertFails(setDoc(
+            doc(anonDb(), 'users', OWNER_UID, 'private', 'preferences'),
+            { analyticsConsent: true }
+        ));
+    });
     it('TM04-G: other user cannot read private/preferences', async () => {
         await assertFails(getDoc(doc(otherDb(), 'users', OWNER_UID, 'private', 'preferences')));
     });

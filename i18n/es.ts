@@ -1,5 +1,12 @@
 const es: Record<string, string> = {
     // Settings
+    'settings.analytics_title': 'Análisis de uso opcional',
+    'settings.analytics_on': 'Activado — se comparte actividad limitada y anónima',
+    'settings.analytics_off': 'Desactivado — no se envían datos de uso opcionales',
+    'settings.analytics_enabling': 'Guardando tu decisión de activar el análisis…',
+    'settings.analytics_disabling': 'Desactivando el análisis y guardando tu decisión…',
+    'settings.analytics_pending_off': 'Desactivado en este dispositivo; esperando confirmación',
+    'settings.analytics_save_error': 'No se pudo guardar tu decisión. El análisis seguirá desactivado hasta confirmarlo. Intenta de nuevo.',
     'settings.section_legal': 'Legal',
     'legal.signup_prefix': 'Al continuar, aceptas nuestros',
     'legal.signup_between': 'y reconoces nuestra',
