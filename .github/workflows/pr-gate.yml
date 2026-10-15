@@ -320,6 +320,12 @@ jobs:
         env:
           FIREBASE_CLI_EXPERIMENTS: webframeworks
 
+      - name: FIRESTORE - Run analytics consent emulator tests
+        if: steps.classify.outputs.run_firestore == 'true'
+        run: firebase emulators:exec --only firestore --project demo-parkqueen-rules-test "node node_modules/vitest/vitest.mjs run utils/analyticsConsentFirestore.emulator.test.ts"
+        env:
+          FIREBASE_CLI_EXPERIMENTS: webframeworks
+
       # ── STORAGE ─────────────────────────────────────────────────────────
       - name: STORAGE — Run Storage rules tests
         if: steps.classify.outputs.run_storage == 'true'

@@ -116,13 +116,13 @@ describe('SettingsView — structure and navigation', () => {
 describe('SettingsView — preferences', () => {
     it('Dark theme is a real switch with name and state, and toggles', () => {
         const { r, spies } = render({ theme: 'dark' });
-        const sw = r.root.findByProps({ role: 'switch' });
+        const sw = r.root.findByProps({ role: 'switch', 'aria-label': 'Dark theme' });
         expect(sw.props['aria-label']).toBe('Dark theme');
         expect(sw.props['aria-checked']).toBe(true);
         act(() => sw.props.onClick());
         expect(spies.toggleTheme).toHaveBeenCalledTimes(1);
         const light = render({ theme: 'light' });
-        expect(light.r.root.findByProps({ role: 'switch' }).props['aria-checked']).toBe(false);
+        expect(light.r.root.findByProps({ role: 'switch', 'aria-label': 'Dark theme' }).props['aria-checked']).toBe(false);
     });
 
     it('Notifications shows the derived status and radius when ready', () => {
