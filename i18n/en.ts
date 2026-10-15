@@ -1,5 +1,12 @@
 const en: Record<string, string> = {
     // Settings
+    'settings.analytics_title': 'Optional product analytics',
+    'settings.analytics_on': 'On — limited anonymous app activity is shared',
+    'settings.analytics_off': 'Off — no optional usage analytics are sent',
+    'settings.analytics_enabling': 'Saving your choice to enable analytics…',
+    'settings.analytics_disabling': 'Turning analytics off and saving your choice…',
+    'settings.analytics_pending_off': 'Off on this device; waiting to confirm your choice',
+    'settings.analytics_save_error': 'Could not save your choice. Analytics remain off until confirmed. Try again.',
     'settings.section_legal': 'Legal',
     'legal.signup_prefix': 'By continuing, you agree to our',
     'legal.signup_between': 'and acknowledge our',

@@ -12,6 +12,7 @@ import { blockedUsersSummary } from '../utils/blockedUsersSummary';
 import type { LocationPermissionState } from '../utils/nearbyActivity';
 import type { NotificationRuntimeState } from '../utils/notificationRegistration';
 import { LEGAL_PATHS } from '../utils/legalRoutes';
+import { AnalyticsConsentSwitch } from './AnalyticsConsentSwitch';
 
 interface SettingsViewProps {
     user: any;
@@ -259,6 +260,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user, setView, onBac
                                 trailing={<span className={`pq-switch${isDark ? ' pq-switch--on' : ''}`} aria-hidden="true"><span className="pq-switch-thumb" /></span>}
                             />
                         </button>
+
+                        <AnalyticsConsentSwitch
+                            userId={user?.id ?? null}
+                            rowClass={rowClass}
+                        />
 
                         <button onClick={() => setView(AppView.LANGUAGE_SETTINGS)} className={rowClass}>
                             <RowBody

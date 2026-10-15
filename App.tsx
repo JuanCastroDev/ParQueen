@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
+import { beginAnalyticsConsentSession, receiveAnalyticsConsentSnapshot, invalidateAnalyticsConsent } from './utils/analyticsConsentSession';
+import { observePendingAnalyticsOptOut, reconcilePendingAnalyticsOptOut } from './utils/analyticsConsentReconciliation';
 import { LoadingScreen } from './components/LoadingScreen';
 import { AuthStartupRecovery } from './components/AuthStartupRecovery';
 import { OnboardingView } from './views/OnboardingView';
@@ -251,6 +253,7 @@ export default function App() {
       captureClientException(error, { component: 'App', route });
     };
 
+    const stopAnalyticsConsentReconciliation = observePendingAnalyticsOptOut();
     let active = true;
     let sawInitialAuthState = false;
     const initialStateTimer = setTimeout(() => {
@@ -273,6 +276,8 @@ export default function App() {
       if (!active) return;
       setAuthStartupTimedOut(false);
       const generation = bootstrapGenerations.begin();
+      beginAnalyticsConsentSession(firebaseUser?.uid ?? null);
+      if (firebaseUser) void reconcilePendingAnalyticsOptOut(firebaseUser.uid).catch(() => {});
       const deadline = createBootstrapDeadline(AUTH_BOOTSTRAP_TIMEOUT_MS);
       userProfileUnsubscribe();
       privateAccountUnsubscribe();
@@ -354,8 +359,19 @@ export default function App() {
           const privatePrefsRef = doc(db, 'users', firebaseUser.uid, 'private', 'preferences');
           privatePreferencesUnsubscribe = onSnapshot(
             privatePrefsRef,
+            { includeMetadataChanges: true },
             (snap) => {
               if (!generation.isCurrent()) return;
+              receiveAnalyticsConsentSnapshot(
+                firebaseUser.uid,
+                snap.exists() ? snap.data() : null,
+                snap.metadata,
+              );
+              // Any fresh preference event is an opportunity to reconcile a
+              // durable OFF intent after reconnect; never clear it here.
+              if (!snap.metadata.fromCache && !snap.metadata.hasPendingWrites) {
+                void reconcilePendingAnalyticsOptOut(firebaseUser.uid).catch(() => {});
+              }
               if (!snap.exists()) return;
               const prefs = snap.data();
               setUser(prev => prev ? {
@@ -365,7 +381,11 @@ export default function App() {
                 sharePreciseLocation: prefs.sharePreciseLocation,
               } : prev);
             },
-            (error) => reportBootstrapListenerError(error, 'auth_bootstrap_private_prefs_listener'),
+            (error) => {
+              if (!generation.isCurrent()) return;
+              invalidateAnalyticsConsent();
+              reportBootstrapListenerError(error, 'auth_bootstrap_private_prefs_listener');
+            },
           );
 
           // Listen for private social (blockedUsers) — owner-only
@@ -477,6 +497,8 @@ export default function App() {
       if (reauthCooldownRef.current) clearInterval(reauthCooldownRef.current);
       clearRecaptchaVerifier(reauthRecaptchaRef);
       bootstrapGenerations.begin(); // invalidate any in-flight bootstrap
+      beginAnalyticsConsentSession(null);
+      stopAnalyticsConsentReconciliation();
       authStateUnsubscribe();
       userProfileUnsubscribe();
       privateAccountUnsubscribe();
