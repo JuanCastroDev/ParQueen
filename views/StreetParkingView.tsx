@@ -63,6 +63,7 @@ import { StreetIntelligenceCard, StreetIntelligenceUnavailableCard } from './str
 import { VisualCurbSelector } from './street-parking/VisualCurbSelector';
 import { useParkingTimer } from './street-parking/useParkingTimer';
 import { recordParkingAnalyticsEvent } from '../utils/parkingAnalytics';
+import { useMapChromePadding } from './street-parking/useMapChromePadding';
 import { SAVED_SPOT_KEY, readSavedSpot, writeSavedSpot, type SavedSpot } from '../utils/savedSpot';
 import { usePingPhaseClock } from './street-parking/usePingPhaseClock';
 import { AppTour, TOUR_KEY } from './street-parking/AppTour';
@@ -252,6 +253,8 @@ export const MapView: React.FC<MapViewProps> = ({
     // --- Custom hooks ---
 
     const search = useSearch();
+    // Keep the camera centre (initial fix, Locate, flyTo) inside the map area left visible by the floating chrome.
+    useMapChromePadding(mapRef, mapContainerRef, mapReady, search.searchOpen);
     const spotData = useSpotData({
         userId: user?.id,
         blockedUsers: user?.blockedUsers,
@@ -3038,7 +3041,7 @@ export const MapView: React.FC<MapViewProps> = ({
                 )}
 
 
-                <div className="mobile-map-controls w-full flex flex-col gap-3 pointer-events-auto mt-auto pb-0 px-0">
+                <div className="mobile-map-controls w-full flex flex-col gap-3 pointer-events-auto mt-auto pb-0 px-0" style={{ pointerEvents: 'none' }}>
 
                     {/* Car (toggle) + Locate stacked vertically on the right */}
                     <div className="map-secondary-controls flex flex-col items-end gap-3 max-w-none mx-auto w-full mb-3">
@@ -3051,7 +3054,7 @@ export const MapView: React.FC<MapViewProps> = ({
                                     else setShowSessionSheet(true);
                                 }}
                                 title={t('common.my_car')}
-                                className={`map-control-button flex items-center justify-center transition-all active:scale-90 ${
+                                className={`map-control-button pointer-events-auto flex items-center justify-center transition-all active:scale-90 ${
                                     savedSpot
                                         ? 'is-active'
                                         : ''
@@ -3062,7 +3065,7 @@ export const MapView: React.FC<MapViewProps> = ({
                         )}
                         <button
                             onClick={handleLocateMe}
-                            className="map-control-button flex items-center justify-center transition-all active:scale-90"
+                            className="map-control-button pointer-events-auto flex items-center justify-center transition-all active:scale-90"
                             title="Locate Me"
                         >
                             <Locate size={22} className="text-[var(--color-accent)]" />
