@@ -23,24 +23,37 @@ function readSafeArea(): MapPadding {
 }
 
 /**
+ * True when chrome measurement must not run: search chrome is temporarily gone (`frozen`), or the map is
+ * still mounted but obscured (Messages overlay — `visible` false via `showPrimaryNavigation`).
+ * Exported for unit coverage of the hidden→visible gate without mounting React.
+ */
+export function isMapChromePaddingSuspended(frozen: boolean, visible: boolean): boolean {
+    return frozen || !visible;
+}
+
+/**
  * Keeps the Mapbox camera padding equal to the space taken by the floating map chrome, so the camera centre
  * (initial fix, Locate, flyTo/easeTo, which all inherit the map's padding) lands in the visible part of the map.
  *
  * Measures on mount, on chrome/container resize (ResizeObserver), on chrome mount/unmount and on viewport or
  * orientation changes, debounced and coalesced into one animation frame. setPadding is only called when the result
  * differs from the last applied value, so padding updates never feed back into another measurement. While `frozen`
- * (e.g. search is open and the chip row is temporarily unmounted) measurement is suspended to avoid shifting the map.
+ * (e.g. search is open and the chip row is temporarily unmounted) or while `visible` is false (Messages overlay
+ * keeps MapView mounted under `inert`), measurement is suspended and observers are not attached. Leaving either
+ * suspended state re-runs this effect so a fresh measure is scheduled through the same debounce+rAF path.
  */
 export function useMapChromePadding(
     mapRef: RefObject<mapboxgl.Map | null>,
     containerRef: RefObject<HTMLElement | null>,
     mapReady: boolean,
     frozen = false,
+    visible = true,
 ): void {
     useEffect(() => {
         const map = mapRef.current;
         const container = containerRef.current;
-        if (!mapReady || frozen || !map || !container) return;
+        // Evaluate freeze/visibility transition before attaching observers/listeners.
+        if (!mapReady || isMapChromePaddingSuspended(frozen, visible) || !map || !container) return;
         const root: ParentNode = container.closest('.sp-map')?.parentElement ?? document;
 
         let raf = 0;
@@ -101,5 +114,5 @@ export function useMapChromePadding(
             window.removeEventListener('resize', schedule);
             window.removeEventListener('orientationchange', schedule);
         };
-    }, [mapRef, containerRef, mapReady, frozen]);
+    }, [mapRef, containerRef, mapReady, frozen, visible]);
 }

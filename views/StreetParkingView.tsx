@@ -254,7 +254,8 @@ export const MapView: React.FC<MapViewProps> = ({
 
     const search = useSearch();
     // Keep the camera centre (initial fix, Locate, flyTo) inside the map area left visible by the floating chrome.
-    useMapChromePadding(mapRef, mapContainerRef, mapReady, search.searchOpen);
+    // showPrimaryNavigation is false while Messages overlays the keep-mounted map; resume measures on return.
+    useMapChromePadding(mapRef, mapContainerRef, mapReady, search.searchOpen, showPrimaryNavigation);
     const spotData = useSpotData({
         userId: user?.id,
         blockedUsers: user?.blockedUsers,
