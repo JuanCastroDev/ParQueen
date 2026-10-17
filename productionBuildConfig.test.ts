@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyProductionBuildConfigGuard,
+  assertPostHogReleaseDisabled,
   assertProductionBuildConfig,
   resolveViteEnvDir,
   validateProductionBuildConfig,
@@ -132,5 +133,31 @@ describe('resolveViteEnvDir', () => {
 
   it('falls back to the process cwd when no isolation override is set', () => {
     expect(resolveViteEnvDir({}, cwd)).toBe(cwd);
+  });
+});
+
+
+describe('PostHog release lock', () => {
+  it.each([{}, { VITE_POSTHOG_ENABLED: '' }, { VITE_POSTHOG_ENABLED: 'false' }])(
+    'accepts a disabled configuration', (env) => {
+      expect(() => assertPostHogReleaseDisabled(env)).not.toThrow();
+    },
+  );
+  it.each([
+    { VITE_POSTHOG_ENABLED: 'true' },
+    { VITE_POSTHOG_ENABLED: 'TRUE' },
+    { VITE_POSTHOG_ENABLED: '1' },
+    { VITE_POSTHOG_PROJECT_TOKEN: 'phc_fake_never_echo' },
+    { VITE_POSTHOG_ENABLED: 'false', VITE_POSTHOG_PROJECT_TOKEN: 'phc_fake_never_echo' },
+  ])('rejects an unexpected activation or token without leaking values', (input) => {
+    const env = { VITE_MAPBOX_TOKEN: 'pk.configured', ...input };
+    expect(() => applyProductionBuildConfigGuard('build', env)).toThrow(/PostHog release must remain OFF/);
+    try { applyProductionBuildConfigGuard('build', env); }
+    catch (error) { expect(String(error)).not.toContain('phc_fake_never_echo'); }
+  });
+  it('does not change development-server behavior', () => {
+    expect(() => applyProductionBuildConfigGuard('serve', {
+      VITE_POSTHOG_ENABLED: 'true', VITE_POSTHOG_PROJECT_TOKEN: 'phc_dev_only',
+    })).not.toThrow();
   });
 });

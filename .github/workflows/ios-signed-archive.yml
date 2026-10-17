@@ -645,6 +645,8 @@ jobs:
 
       - name: Build production web assets
         env:
+          VITE_POSTHOG_ENABLED: 'false'
+          VITE_POSTHOG_PROJECT_TOKEN: ''
           VITE_MAPBOX_TOKEN: ${{ secrets.VITE_MAPBOX_TOKEN }}
           VITE_MAPBOX_IOS_TOKEN: ${{ secrets.VITE_MAPBOX_IOS_TOKEN }}
           VITE_FIREBASE_APPCHECK_SITE_KEY: ${{ secrets.VITE_FIREBASE_APPCHECK_SITE_KEY }}
@@ -663,6 +665,12 @@ jobs:
           grep -l 'us.i.posthog.com/i/v0/e/' dist/assets/*.js > /dev/null || { echo '::error::PostHog transport missing from build.'; exit 1; }
           test -f dist/index.html
           echo "dist/index.html: PRESENT"
+
+      - name: Assert PostHog release disabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run verify:posthog:release
 
       - name: Assert production App Check bundle
         shell: bash
