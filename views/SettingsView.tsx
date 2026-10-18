@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { Share } from '@capacitor/share';
 import { useFocusOnMount } from '../hooks/useFocusOnMount';
 import { ChevronLeft, ChevronRight, Edit, Mail, Bell, Moon, LogOut, Trash2, Check, AlertCircle, Navigation, Play, Globe, Shield, FileText, MessageCircle, UserRoundX, Share2 } from 'lucide-react';
 import { t, useLang, getLang } from '../i18n';
@@ -12,6 +13,7 @@ import { blockedUsersSummary } from '../utils/blockedUsersSummary';
 import type { LocationPermissionState } from '../utils/nearbyActivity';
 import type { NotificationRuntimeState } from '../utils/notificationRegistration';
 import { LEGAL_PATHS } from '../utils/legalRoutes';
+import { isAndroidSharePlatform } from '../utils/sharePlatform';
 import { AnalyticsConsentSwitch } from './AnalyticsConsentSwitch';
 
 interface SettingsViewProps {
@@ -28,6 +30,9 @@ interface SettingsViewProps {
 
 const focusRing = 'focus-visible:ring-2 focus-visible:ring-[#38bdf8] focus-visible:outline-none';
 const PARQUEEN_SHARE_URL = 'https://parqueen.app/';
+const isShareCancellation = (error: unknown) => (
+    error instanceof Error && (error.name === 'AbortError' || error.message === 'Share canceled')
+);
 
 // One row language for the whole screen: icon, title, optional detail, and a
 // trailing chevron only when the row navigates somewhere.
@@ -113,7 +118,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user, setView, onBac
 
     const handleShare = async () => {
         setShareStatus(null);
-        if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+        if (isAndroidSharePlatform()) {
+            try {
+                const result = await Share.share({
+                    title: 'ParQueen',
+                    text: t('settings.share_text'),
+                    url: PARQUEEN_SHARE_URL,
+                    dialogTitle: t('settings.share_parqueen'),
+                });
+                if (!result.activityType) return;
+                setShareStatus('shared');
+                return;
+            } catch (error) {
+                if (isShareCancellation(error)) return;
+            }
+        } else if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
             try {
                 await navigator.share({
                     title: 'ParQueen',
@@ -123,12 +142,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user, setView, onBac
                 setShareStatus('shared');
                 return;
             } catch (error) {
-                if (error instanceof Error && error.name === 'AbortError') return;
+                if (isShareCancellation(error)) return;
             }
         }
 
         try {
-            if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+            if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
             await navigator.clipboard.writeText(PARQUEEN_SHARE_URL);
             setShareStatus('copied');
         } catch {
