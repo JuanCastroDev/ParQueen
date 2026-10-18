@@ -20,6 +20,10 @@ vi.mock('firebase/storage', () => ({
     uploadBytes: async () => ({}),
 }));
 
+let avatarModerationListener: ((snapshot: { data: () => any }) => void) | null = null;
+let pendingAvatarUploadId: string | null = null;
+let avatarUnsubscribeCalls = 0;
+
 let spotsDocs: Array<{ id: string; data: () => any }> = [];
 let feedbackDocs: Array<{ id: string; data: () => any }> = [];
 let spotsFoundCount: number | 'reject' | 'hang' = 0;
@@ -29,9 +33,14 @@ const countQueryLog: Array<{ name: string; constraints: any[] }> = [];
 
 vi.mock('firebase/firestore', () => ({
     doc: (..._args: any[]) => ({}),
-    setDoc: async () => { },
+    setDoc: async (_ref: any, data: any) => {
+        if (data?.pendingUploadId) pendingAvatarUploadId = data.pendingUploadId;
+    },
     serverTimestamp: () => ({}),
-    onSnapshot: () => () => { },
+    onSnapshot: (_ref: any, callback: (snapshot: { data: () => any }) => void) => {
+        avatarModerationListener = callback;
+        return () => { avatarUnsubscribeCalls += 1; avatarModerationListener = null; };
+    },
     collection: (_db: any, name: string) => ({ __name: name }),
     query: (base: any, ...constraints: any[]) => ({ __name: base.__name, __constraints: constraints }),
     where: (field: string, op: string, value: any) => ({ __kind: 'where', field, op, value }),
@@ -526,5 +535,79 @@ describe('ProfileView — revamped screen', () => {
         const classes = r.root.findAll(n => typeof n.props.className === 'string').map(n => n.props.className).join(' ');
         for (const c of ['pq-journey', 'pq-progress-track', 'pq-util-card', 'pq-avatar-ring']) expect(classes).toContain(c);
         act(() => r.unmount());
+    });
+});
+
+
+describe('ProfileView — avatar moderation timeout matches the 120-second server window', () => {
+    const validJpeg = { size: 3, type: 'image/jpeg', name: 'safe.jpg' } as File;
+    const avatarButton = (r: TestRenderer.ReactTestRenderer) =>
+        r.root.findByProps({ 'aria-label': 'Change profile photo' });
+    const visibleText = (n: any): string => typeof n === 'string' ? n
+        : Array.isArray(n) ? n.map(visibleText).join('')
+        : (n?.children ?? []).map(visibleText).join('');
+
+    beforeEach(() => {
+        avatarModerationListener = null;
+        pendingAvatarUploadId = null;
+        avatarUnsubscribeCalls = 0;
+    });
+
+    it('remains in review beyond 120 seconds and honors approval without a late timeout', async () => {
+        const r = await renderProfile({ id: 'me', username: 'tester' });
+        vi.useFakeTimers();
+        try {
+            const fileInput = r.root.findByType('input');
+            await act(async () => {
+                await fileInput.props.onChange({ target: { files: [validJpeg] } });
+            });
+            expect(pendingAvatarUploadId).toEqual(expect.any(String));
+            expect(avatarModerationListener).toBeTypeOf('function');
+            expect(avatarButton(r).props.disabled).toBe(true);
+
+            await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+            expect(avatarButton(r).props.disabled).toBe(true);
+            expect(visibleText(r.toJSON())).not.toContain('Photo check timed out');
+
+            await act(async () => {
+                avatarModerationListener!({
+                    data: () => ({ uploadId: pendingAvatarUploadId, status: 'approved' }),
+                });
+            });
+            expect(avatarUnsubscribeCalls).toBe(1);
+            expect(avatarButton(r).props.disabled).toBe(false);
+
+            await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
+            expect(visibleText(r.toJSON())).not.toContain('Photo check timed out');
+            expect(avatarUnsubscribeCalls).toBe(1);
+        } finally {
+            vi.clearAllTimers();
+            vi.useRealTimers();
+            act(() => r.unmount());
+        }
+    });
+
+    it('times out at three minutes when no terminal moderation event arrives', async () => {
+        const r = await renderProfile({ id: 'me', username: 'tester' });
+        vi.useFakeTimers();
+        try {
+            const fileInput = r.root.findByType('input');
+            await act(async () => {
+                await fileInput.props.onChange({ target: { files: [validJpeg] } });
+            });
+            expect(avatarButton(r).props.disabled).toBe(true);
+            await act(async () => { await vi.advanceTimersByTimeAsync(179_999); });
+            expect(avatarButton(r).props.disabled).toBe(true);
+            expect(visibleText(r.toJSON())).not.toContain('Photo check timed out');
+
+            await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+            expect(avatarButton(r).props.disabled).toBe(false);
+            expect(visibleText(r.toJSON())).toContain('Photo check timed out');
+            expect(avatarUnsubscribeCalls).toBe(1);
+        } finally {
+            vi.clearAllTimers();
+            vi.useRealTimers();
+            act(() => r.unmount());
+        }
     });
 });
