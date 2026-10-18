@@ -1118,6 +1118,15 @@ exports.moderateAvatarUpload = onObjectFinalized(
     const candidateFile  = bucket.file(candidatePath);
     const publishedFile  = bucket.file(`avatars/${uid}`);
 
+    // A replaced upload may still be running when a newer upload claims the slot.
+    // Never let its asynchronous error/cleanup path overwrite the newer record.
+    const updateCurrentModeration = (patch) => db.runTransaction(async (tx) => {
+      const snap = await tx.get(moderationRef);
+      if (!snap.exists || snap.data().uploadId !== uploadId) return false;
+      tx.update(moderationRef, patch);
+      return true;
+    });
+
     // ── Step 0: Generation-scoped idempotency via transaction ─────────────────
     // Also reads users/{uid}/private/avatar to enforce the pre-event newer-upload
     // race guard: if pendingUploadId is set to a different uploadId, a newer upload
@@ -1138,7 +1147,18 @@ exports.moderateAvatarUpload = onObjectFinalized(
           return { claimed: true, retryCount: 0 };
         }
         const d = moderationSnap.data();
-        if (d.uploadId !== uploadId) return { claimed: false, reason: "superseded" };
+        if (d.uploadId !== uploadId) {
+          // The latest client-requested upload may replace a prior terminal,
+          // failed, or in-flight upload. An old/stray event WITHOUT a matching
+          // pendingUploadId remains superseded (fail closed).
+          if (pendingId !== uploadId) return { claimed: false, reason: "superseded" };
+          tx.set(moderationRef, {
+            uid, uploadId, sourcePath: filePath, sourceGeneration: sourceGen,
+            status: "processing", retryCount: 0, processedPath: null,
+            failureReason: null, createdAt: Timestamp.now(), updatedAt: Timestamp.now(),
+          });
+          return { claimed: true, retryCount: 0 };
+        }
         if (d.status === "approved" || d.status === "rejected") return { claimed: false, reason: "terminal" };
         if (d.retryCount >= AVATAR_MAX_RETRIES) return { claimed: false, reason: "max_retries" };
         tx.update(moderationRef, { status: "processing", updatedAt: Timestamp.now() });
@@ -1158,7 +1178,7 @@ exports.moderateAvatarUpload = onObjectFinalized(
       } else if (reason === "max_retries") {
         // Terminal failure: record it and remove all objects for this upload.
         await Promise.all([
-          moderationRef.update({ status: "failed", failureReason: "max_retries_exhausted", updatedAt: Timestamp.now() }).catch(() => {}),
+          updateCurrentModeration({ status: "failed", failureReason: "max_retries_exhausted", updatedAt: Timestamp.now() }).catch(() => {}),
           sourceFile.delete().catch(() => {}),
           candidateFile.delete().catch(() => {}),
         ]);
@@ -1172,7 +1192,7 @@ exports.moderateAvatarUpload = onObjectFinalized(
     try {
       [rawBytes] = await sourceFile.download();
     } catch (err) {
-      await moderationRef.update({ status: "retry_pending", failureReason: "download_error", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
+      await updateCurrentModeration({ status: "retry_pending", failureReason: "download_error", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
       console.error(`Avatar download error (${maskedUid}):`, sanitizeError(err));
       throw err; // transient — let CF retry
     }
@@ -1181,7 +1201,7 @@ exports.moderateAvatarUpload = onObjectFinalized(
     if (!_isAllowedImageHeader(rawBytes)) {
       await Promise.all([
         sourceFile.delete().catch(() => {}),
-        moderationRef.update({ status: "rejected", failureReason: "invalid_format", updatedAt: Timestamp.now() }),
+        updateCurrentModeration({ status: "rejected", failureReason: "invalid_format", updatedAt: Timestamp.now() }),
       ]);
       console.log(`Avatar rejected (invalid_format) for ${maskedUid}`);
       return;
@@ -1211,12 +1231,12 @@ exports.moderateAvatarUpload = onObjectFinalized(
       if (err._perm) {
         await Promise.all([
           sourceFile.delete().catch(() => {}),
-          moderationRef.update({ status: "rejected", failureReason: err._reason || "invalid_image", updatedAt: Timestamp.now() }),
+          updateCurrentModeration({ status: "rejected", failureReason: err._reason || "invalid_image", updatedAt: Timestamp.now() }),
         ]);
         console.log(`Avatar rejected (${err._reason || "invalid_image"}) for ${maskedUid}`);
         return;
       }
-      await moderationRef.update({ status: "retry_pending", failureReason: "processing_error", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
+      await updateCurrentModeration({ status: "retry_pending", failureReason: "processing_error", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
       console.error(`Avatar processing error (${maskedUid}):`, sanitizeError(err));
       throw err; // transient — let CF retry
     }
@@ -1224,9 +1244,9 @@ exports.moderateAvatarUpload = onObjectFinalized(
     // ── Step 4: Save to candidate path (never the trigger prefix) ────────────
     try {
       await candidateFile.save(processedBuffer, { metadata: { contentType: "image/webp" }, resumable: false });
-      await moderationRef.update({ processedPath: candidatePath, updatedAt: Timestamp.now() });
+      await updateCurrentModeration({ processedPath: candidatePath, updatedAt: Timestamp.now() });
     } catch (err) {
-      await moderationRef.update({ status: "retry_pending", failureReason: "upload_error", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
+      await updateCurrentModeration({ status: "retry_pending", failureReason: "upload_error", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
       console.error(`Avatar candidate upload error (${maskedUid}):`, sanitizeError(err));
       throw err; // transient
     }
@@ -1243,14 +1263,14 @@ exports.moderateAvatarUpload = onObjectFinalized(
             return result?.safeSearchAnnotation ?? null;
           })());
     } catch (err) {
-      await moderationRef.update({ status: "retry_pending", failureReason: "vision_error", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
+      await updateCurrentModeration({ status: "retry_pending", failureReason: "vision_error", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
       console.error(`Avatar Vision error (${maskedUid}):`, sanitizeError(err));
       throw err; // transient — let CF retry
     }
 
     if (!safeSnap) {
       // Missing annotation fails closed — retry to give Vision another chance.
-      await moderationRef.update({ status: "retry_pending", failureReason: "missing_annotation", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
+      await updateCurrentModeration({ status: "retry_pending", failureReason: "missing_annotation", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
       console.error(`Avatar Vision annotation missing (${maskedUid})`);
       throw new Error("Missing Vision SafeSearch annotation");
     }
@@ -1260,19 +1280,32 @@ exports.moderateAvatarUpload = onObjectFinalized(
       await Promise.all([
         sourceFile.delete().catch(() => {}),
         candidateFile.delete().catch(() => {}),
-        moderationRef.update({ status: "rejected", failureReason: "content_policy", updatedAt: Timestamp.now() }),
+        updateCurrentModeration({ status: "rejected", failureReason: "content_policy", updatedAt: Timestamp.now() }),
       ]);
       console.log(`Avatar rejected (content_policy) for ${maskedUid}`);
       return;
     }
 
     // ── Step 6: Approve — copy to published path, update user doc atomically ──
-    // Staleness check: abort if a newer upload already claimed the moderation slot
-    // or if pendingUploadId was updated to a different uploadId after Vision ran.
+    // Avoid copying a superseded candidate into the shared published path.
+    // The final transaction below still checks again before updating avatarUrl.
+    const stillCurrent = await db.runTransaction(async (tx) => {
+      const moderationSnap = await tx.get(moderationRef);
+      const pendingSnap = await tx.get(pendingRef);
+      const pendingId = pendingSnap.exists ? pendingSnap.data().pendingUploadId : null;
+      return moderationSnap.exists
+        && moderationSnap.data().uploadId === uploadId
+        && (!pendingId || pendingId === uploadId);
+    });
+    if (!stillCurrent) {
+      await Promise.all([sourceFile.delete().catch(() => {}), candidateFile.delete().catch(() => {})]);
+      console.log(`Avatar approval skipped (superseded) for ${maskedUid}`);
+      return;
+    }
     try {
       await candidateFile.copy(publishedFile);
     } catch (err) {
-      await moderationRef.update({ status: "retry_pending", failureReason: "publish_error", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
+      await updateCurrentModeration({ status: "retry_pending", failureReason: "publish_error", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
       console.error(`Avatar publish copy error (${maskedUid}):`, sanitizeError(err));
       throw err;
     }
