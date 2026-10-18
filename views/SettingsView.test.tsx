@@ -40,7 +40,93 @@ function render(props: Partial<React.ComponentProps<typeof SettingsView>> = {}) 
     return { r, spies, rowNamed };
 }
 
-afterEach(() => setLang('en'));
+afterEach(() => {
+    setLang('en');
+    vi.unstubAllGlobals();
+});
+
+describe('SettingsView — Share ParQueen', () => {
+    it('opens the native share menu with the public ParQueen URL', async () => {
+        const share = vi.fn().mockResolvedValue(undefined);
+        vi.stubGlobal('navigator', { share });
+        const { r, rowNamed } = render();
+
+        await act(async () => rowNamed('Share ParQueen').props.onClick());
+
+        expect(share).toHaveBeenCalledWith({
+            title: 'ParQueen',
+            text: 'Street parking, figured out. See what ParQueen can do.',
+            url: 'https://parqueen.app/',
+        });
+        expect(textOf(r.toJSON())).toContain('Shared.');
+    });
+
+    it('treats closing the share menu as cancellation, not an error', async () => {
+        const writeText = vi.fn();
+        vi.stubGlobal('navigator', {
+            share: vi.fn().mockRejectedValue(Object.assign(new Error('cancelled'), { name: 'AbortError' })),
+            clipboard: { writeText },
+        });
+        const { r, rowNamed } = render();
+
+        await act(async () => rowNamed('Share ParQueen').props.onClick());
+
+        expect(writeText).not.toHaveBeenCalled();
+        expect(textOf(r.toJSON())).not.toContain("Couldn't share");
+        expect(r.root.findAllByProps({ href: 'https://parqueen.app/' })).toHaveLength(0);
+    });
+
+    it('copies the link when native sharing fails', async () => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        vi.stubGlobal('navigator', {
+            share: vi.fn().mockRejectedValue(new Error('share failed')),
+            clipboard: { writeText },
+        });
+        const { r, rowNamed } = render();
+
+        await act(async () => rowNamed('Share ParQueen').props.onClick());
+
+        expect(writeText).toHaveBeenCalledWith('https://parqueen.app/');
+        expect(textOf(r.toJSON())).toContain('Link copied.');
+    });
+
+    it('copies the link when native sharing is unavailable', async () => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        vi.stubGlobal('navigator', { clipboard: { writeText } });
+        const { r, rowNamed } = render();
+
+        await act(async () => rowNamed('Share ParQueen').props.onClick());
+
+        expect(writeText).toHaveBeenCalledWith('https://parqueen.app/');
+        expect(textOf(r.toJSON())).toContain('Link copied.');
+    });
+
+    it('offers an accessible manual link when sharing and copying fail', async () => {
+        vi.stubGlobal('navigator', {
+            share: vi.fn().mockRejectedValue(new Error('share failed')),
+            clipboard: { writeText: vi.fn().mockRejectedValue(new Error('copy failed')) },
+        });
+        const { r, rowNamed } = render();
+
+        await act(async () => rowNamed('Share ParQueen').props.onClick());
+
+        const link = r.root.findByProps({ href: 'https://parqueen.app/' });
+        expect(link.props.target).toBe('_blank');
+        expect(link.props.rel).toBe('noopener noreferrer');
+        expect(textOf(r.toJSON())).toContain("Couldn't share automatically. Open or copy this link:");
+    });
+
+    it('renders the Share ParQueen row and result copy in Spanish', async () => {
+        act(() => setLang('es'));
+        vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
+        const { r, rowNamed } = render();
+
+        await act(async () => rowNamed('Compartir ParQueen').props.onClick());
+
+        expect(textOf(r.toJSON())).toContain('Enlace copiado.');
+        expect(textOf(r.toJSON())).not.toMatch(/settings\.share_[a-z_]+/);
+    });
+});
 
 describe('SettingsView — blocked users', () => {
     it('BU-01: always displays the Blocked users row', () => {
