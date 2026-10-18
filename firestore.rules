@@ -401,19 +401,14 @@ service cloud.firestore {
       // does, so an unrestricted isAdmin() write here would let a stale
       // admin token mutate any field (including crowns/title) directly.
       //
-      // username/fullName removed from this allowlist — claimUsername and
-      // updateDisplayName are now the sole authoritative writers of those
-      // two identity fields (Admin SDK writes bypass these Rules entirely).
-      // An ordinary owner update touching either field is denied outright,
-      // even alongside otherwise-legitimate unrelated field changes.
+      // username/fullName are authoritative via claimUsername and
+      // updateDisplayName; all avatar metadata is authoritative via
+      // moderateAvatarUpload (Admin SDK bypasses these client Rules).
+      // Owners may still edit vehicle fields, but cannot set, overwrite, or
+      // delete moderation-owned avatar fields, even in a mixed update.
       allow update: if signedIn() && request.auth.uid == userId
             && request.resource.data.diff(resource.data).affectedKeys()
-                 .hasOnly([
-                   // Vehicle
-                   'vehicleType', 'vehicleBrand', 'vehicleColor',
-                   // Avatar
-                   'avatarUrl', 'avatarManifestId', 'avatarAgeGroup', 'avatarUpdatedAt',
-                 ]);
+                 .hasOnly(['vehicleType', 'vehicleBrand', 'vehicleColor']);
       allow delete: if false;
 
       match /processedTrustEvents/{eventId} {
