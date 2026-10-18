@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useFocusOnMount } from '../hooks/useFocusOnMount';
-import { ChevronLeft, ChevronRight, Edit, Mail, Bell, Moon, LogOut, Trash2, Check, AlertCircle, Navigation, Play, Globe, Shield, FileText, MessageCircle, UserRoundX } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Edit, Mail, Bell, Moon, LogOut, Trash2, Check, AlertCircle, Navigation, Play, Globe, Shield, FileText, MessageCircle, UserRoundX, Share2 } from 'lucide-react';
 import { t, useLang, getLang } from '../i18n';
 import { doc, updateDoc } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
@@ -27,6 +27,7 @@ interface SettingsViewProps {
 }
 
 const focusRing = 'focus-visible:ring-2 focus-visible:ring-[#38bdf8] focus-visible:outline-none';
+const PARQUEEN_SHARE_URL = 'https://parqueen.app/';
 
 // One row language for the whole screen: icon, title, optional detail, and a
 // trailing chevron only when the row navigates somewhere.
@@ -57,6 +58,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user, setView, onBac
     const [otpCooldown, setOtpCooldown] = useState(0);
     const [emailError, setEmailError] = useState('');
     const [emailSending, setEmailSending] = useState(false);
+    const [shareStatus, setShareStatus] = useState<'shared' | 'copied' | 'manual' | null>(null);
     const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
     const headingRef = useRef<HTMLHeadingElement>(null);
     useFocusOnMount(headingRef);
@@ -107,6 +109,31 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user, setView, onBac
 
     const handleOtpKeyDown = (index: number, e: React.KeyboardEvent) => {
         if (e.key === 'Backspace' && !otpDigits[index] && index > 0) otpRefs.current[index - 1]?.focus();
+    };
+
+    const handleShare = async () => {
+        setShareStatus(null);
+        if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+            try {
+                await navigator.share({
+                    title: 'ParQueen',
+                    text: t('settings.share_text'),
+                    url: PARQUEEN_SHARE_URL,
+                });
+                setShareStatus('shared');
+                return;
+            } catch (error) {
+                if (error instanceof Error && error.name === 'AbortError') return;
+            }
+        }
+
+        try {
+            if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+            await navigator.clipboard.writeText(PARQUEEN_SHARE_URL);
+            setShareStatus('copied');
+        } catch {
+            setShareStatus('manual');
+        }
     };
 
     const notifSummary = getNotificationsSummaryState(
@@ -290,10 +317,25 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user, setView, onBac
                         >
                             <RowBody tone="quiet" icon={<Play size={16} />} title={t('tour.replay_label')} detail={t('tour.replay_subtitle')} trailing={<Chevron />} />
                         </button>
+                        <button onClick={handleShare} className={`${rowClass} px-1`}>
+                            <RowBody tone="quiet" icon={<Share2 size={16} />} title={t('settings.share_parqueen')} detail={t('settings.share_subtitle')} />
+                        </button>
                         <button onClick={() => setView(AppView.CONTACT_US)} className={`${rowClass} px-1`}>
                             <RowBody tone="quiet" icon={<MessageCircle size={16} />} title={t('profile.contact_us')} detail={t('profile.contact_subtitle')} trailing={<Chevron />} />
                         </button>
                     </div>
+                    {shareStatus && (
+                        <div className="pq-inline-note mt-2" role="status" aria-live="polite" aria-atomic="true">
+                            {shareStatus === 'manual' ? (
+                                <>
+                                    {t('settings.share_manual')}{' '}
+                                    <a className="pq-accent-text underline" href={PARQUEEN_SHARE_URL} target="_blank" rel="noopener noreferrer">
+                                        {PARQUEEN_SHARE_URL}
+                                    </a>
+                                </>
+                            ) : t(shareStatus === 'shared' ? 'settings.share_success' : 'settings.share_copied')}
+                        </div>
+                    )}
                 </section>
 
                 {/* ── Legal — lightest weight ─────────────────────────────── */}
