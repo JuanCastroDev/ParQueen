@@ -200,12 +200,15 @@ export const ProfileView = ({ user, onBack, setView, unreadMessagesCount = 0, pe
         setUploadStatus(t('profile.reviewing_photo'));
 
         const moderationRef = doc(db, 'avatarModeration', user.id);
+        // The backend allows 120 seconds per processing attempt. Leave another
+        // 60 seconds for Eventarc delivery and Firestore listener propagation.
+        const clientModerationTimeoutMs = 180_000;
         const timeout = setTimeout(() => {
           unsub();
           setUploadError(true);
           setUploadStatus(t('profile.photo_timed_out'));
           setIsUploading(false);
-        }, 60000);
+        }, clientModerationTimeoutMs);
 
         const unsub = onSnapshot(moderationRef, (snap) => {
           const data = snap.data();
