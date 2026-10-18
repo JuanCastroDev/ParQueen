@@ -326,7 +326,7 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const mod = await getMod(uid);
         expect(mod?.status).toBe('approved');
 
-        const [pubBytes] = await manualRunBucket.file(`avatars/${uid}`).download();
+        const [pubBytes] = await manualRunBucket.file(`avatars/${uid}/${upId}.webp`).download();
         const pubMeta = await sharp(pubBytes).metadata();
         expect(pubMeta.format).toBe('webp');
         expect(pubMeta.width).toBeLessThanOrEqual(512);
