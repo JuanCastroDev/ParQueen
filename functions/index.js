@@ -1036,6 +1036,7 @@ exports.verifyEmailOTP = onCall(
 // deterministically without calling the real Vision API.
 const _hooks = {
   visionSafeSearch: null, // null → use real Vision; (gcsUri) => Promise<annotation|null>
+  beforeAvatarPublishCopy: null, // integration test race seam; null in production
 };
 exports._hooks = _hooks;
 
@@ -1091,7 +1092,8 @@ const AVATAR_MAX_DIMENSION = 4096;
 // Quarantine path design — prevents trigger recursion and pre-approval exposure:
 //   Upload (client-writable, owner-private):  avatarUploads/{uid}/{uploadId}/original
 //   Candidate (server-only, not public):      avatarCandidates/{uid}/{uploadId}.webp
-//   Published (server-written, owner-read):   avatars/{uid}
+//   Published (server-written, owner-read):   avatars/{uid}/{uploadId}.webp
+//   Legacy published avatar remains readable until replaced: avatars/{uid}
 //   Moderation state (client-readable):       avatarModeration/{uid}
 
 // 6) Moderate avatar uploads via Vision SafeSearch
@@ -1116,7 +1118,10 @@ exports.moderateAvatarUpload = onObjectFinalized(
     const sourceFile     = bucket.file(filePath);
     const candidatePath  = `avatarCandidates/${uid}/${uploadId}.webp`;
     const candidateFile  = bucket.file(candidatePath);
-    const publishedFile  = bucket.file(`avatars/${uid}`);
+    // Each upload publishes to its own image object; concurrent copies cannot
+    // overwrite another attempt's approved bytes or download token.
+    const publishedPath  = `avatars/${uid}/${uploadId}.webp`;
+    const publishedFile  = bucket.file(publishedPath);
 
     // A replaced upload may still be running when a newer upload claims the slot.
     // Never let its asynchronous error/cleanup path overwrite the newer record.
@@ -1302,6 +1307,7 @@ exports.moderateAvatarUpload = onObjectFinalized(
       console.log(`Avatar approval skipped (superseded) for ${maskedUid}`);
       return;
     }
+    if (_hooks.beforeAvatarPublishCopy) await _hooks.beforeAvatarPublishCopy({ uid, uploadId });
     try {
       await candidateFile.copy(publishedFile);
     } catch (err) {
@@ -1323,31 +1329,67 @@ exports.moderateAvatarUpload = onObjectFinalized(
       // in tests (truthy) and in production setMetadata always succeeds.
       console.warn(`Avatar metadata token error (${maskedUid}):`, sanitizeError(err));
     }
-    const encodedPath = encodeURIComponent(`avatars/${uid}`);
+    const encodedPath = encodeURIComponent(publishedPath);
     const avatarUrl = `https://firebasestorage.googleapis.com/v0/b/${event.data.bucket}/o/${encodedPath}?alt=media&token=${downloadToken}`;
 
-    const approved = await db.runTransaction(async (tx) => {
+
+    // Resolve only canonical Firebase URLs for this user's published avatars.
+    // Never derive Storage deletion paths from arbitrary profile URL contents.
+    const previousPublishedPath = (previousUrl) => {
+      if (typeof previousUrl !== "string") return null;
+      try {
+        const parsed = new URL(previousUrl);
+        const storagePrefix = `/v0/b/${event.data.bucket}/o/`;
+        if (parsed.protocol !== "https:" ||
+            parsed.hostname !== "firebasestorage.googleapis.com" ||
+            !parsed.pathname.startsWith(storagePrefix)) return null;
+        const path = decodeURIComponent(parsed.pathname.slice(storagePrefix.length));
+        const ownerPrefix = `avatars/${uid}/`;
+        const owned = path === `avatars/${uid}` ||
+          (path.startsWith(ownerPrefix) &&
+           /^[A-Za-z0-9_-]+\.webp$/.test(path.slice(ownerPrefix.length)));
+        return owned && path !== publishedPath ? path : null;
+      } catch {
+        return null;
+      }
+    };
+
+    const approval = await db.runTransaction(async (tx) => {
+      const userRef        = db.doc(`users/${uid}`);
       const moderationSnap = await tx.get(moderationRef);
       const pendingSnap    = await tx.get(pendingRef);
-      const d = moderationSnap.data();
+      const userSnap       = await tx.get(userRef);
+      const d = moderationSnap.exists ? moderationSnap.data() : null;
       const pendingId = pendingSnap.exists ? pendingSnap.data().pendingUploadId : null;
-      // Abort if moderation slot was taken by a newer upload, or if client
-      // registered a newer upload (pendingUploadId mismatch) after Vision ran.
-      if (!d || d.uploadId !== uploadId) return false;
-      if (pendingId && pendingId !== uploadId) return false;
+      // Old attempts must not update users/{uid} once another upload is current.
+      if (!d || d.uploadId !== uploadId) return { approved: false };
+      if (pendingId && pendingId !== uploadId) return { approved: false };
+      const previousPath = previousPublishedPath(userSnap.exists ? userSnap.data().avatarUrl : null);
       tx.update(moderationRef, { status: "approved", failureReason: null, updatedAt: Timestamp.now() });
-      tx.update(db.doc(`users/${uid}`), { avatarUrl });
-      // Clear the pending record now that this upload is published.
+      tx.update(userRef, { avatarUrl });
       if (pendingSnap.exists && pendingId === uploadId) tx.delete(pendingRef);
-      return true;
+      return { approved: true, previousPath };
     });
 
-    if (approved) {
-      await Promise.all([sourceFile.delete().catch(() => {}), candidateFile.delete().catch(() => {})]);
+    if (approval.approved) {
+      // Commit the new URL before removing any previously approved picture.
+      // Rejected or superseded replacements never delete that old picture.
+      const oldPublishedFile = approval.previousPath ? bucket.file(approval.previousPath) : null;
+      await Promise.all([
+        sourceFile.delete().catch(() => {}),
+        candidateFile.delete().catch(() => {}),
+        oldPublishedFile?.delete().catch((err) =>
+          console.warn(`Avatar previous published cleanup failed (${maskedUid}):`, sanitizeError(err))),
+      ]);
       console.log(`Avatar approved for ${maskedUid}`);
     } else {
-      // Superseded mid-flight — remove both objects to prevent orphan accumulation.
-      await Promise.all([sourceFile.delete().catch(() => {}), candidateFile.delete().catch(() => {})]);
+      // A superseded copy cannot overwrite the winner: its unique published
+      // object is removed alongside only its own temporary objects.
+      await Promise.all([
+        sourceFile.delete().catch(() => {}),
+        candidateFile.delete().catch(() => {}),
+        publishedFile.delete().catch(() => {}),
+      ]);
       console.log(`Avatar approval skipped (superseded) for ${maskedUid}`);
     }
   }
