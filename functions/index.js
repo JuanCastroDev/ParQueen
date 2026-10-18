@@ -1096,7 +1096,7 @@ const AVATAR_MAX_DIMENSION = 4096;
 
 // 6) Moderate avatar uploads via Vision SafeSearch
 exports.moderateAvatarUpload = onObjectFinalized(
-  { region: "us-central1", memory: "512MiB", retry: true, serviceAccount: 'parqueen-avatar-moderator@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
+  { region: "us-central1", memory: "512MiB", retry: true, preserveExternalChanges: true, serviceAccount: 'parqueen-avatar-moderator@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
   async (event) => {
     const filePath = event.data.name;
 
