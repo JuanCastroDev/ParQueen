@@ -188,6 +188,10 @@ jobs:
         env:
           VITE_MAPBOX_TOKEN: ${{ vars.VITE_MAPBOX_TOKEN }}
 
+      - name: CLIENT — Assert PostHog release disabled
+        if: steps.classify.outputs.run_client == 'true'
+        run: npm run verify:posthog:release
+
       - name: CLIENT — Install Playwright Chromium
         if: steps.classify.outputs.run_client == 'true'
         run: npx playwright install --with-deps chromium

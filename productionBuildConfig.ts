@@ -31,9 +31,20 @@ export function assertProductionBuildConfig(env: ProductionBuildEnv): void {
  * `vite build --mode staging` is still a distributable build.
  * `vite` / `command === 'serve'` is the dev server and is not blocked here.
  */
+export function assertPostHogReleaseDisabled(env: ProductionBuildEnv): void {
+  const enabled = env.VITE_POSTHOG_ENABLED?.trim();
+  const token = env.VITE_POSTHOG_PROJECT_TOKEN?.trim();
+  // Until a separately approved rollout, all distributable builds must be OFF.
+  // Reject even a token alongside an explicit false flag.
+  if ((enabled !== undefined && enabled !== '' && enabled !== 'false') || !!token) {
+    throw new Error('[configuration] PostHog release must remain OFF: unset VITE_POSTHOG_PROJECT_TOKEN and set VITE_POSTHOG_ENABLED=false (or leave unset).');
+  }
+}
+
 export function applyProductionBuildConfigGuard(command: string, env: ProductionBuildEnv): void {
   if (command !== 'build') return;
   assertProductionBuildConfig(env);
+  assertPostHogReleaseDisabled(env);
 }
 
 export function resolveViteEnvDir(

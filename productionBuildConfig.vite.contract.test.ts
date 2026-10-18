@@ -23,6 +23,8 @@ afterEach(() => {
 const childEnvWithoutMapbox = (extra: Record<string, string>): NodeJS.ProcessEnv => {
   const env = { ...process.env, ...extra };
   delete env.VITE_MAPBOX_TOKEN;
+  delete env.VITE_POSTHOG_ENABLED;
+  delete env.VITE_POSTHOG_PROJECT_TOKEN;
   return env;
 };
 
@@ -106,5 +108,41 @@ describe('production Vite build configuration contract', () => {
     expect(source).toContain('applyProductionBuildConfigGuard(command, env)');
     expect(source).toContain('loadEnv(mode, envDir,');
     expect(source).not.toContain('applyProductionBuildConfigGuard(mode, env)');
+  });
+});
+
+
+describe('PostHog release Vite contract', () => {
+  it('rejects token contamination even when enabled flag is false', { timeout: 180_000 }, () => {
+    const envDir = makeTempDir('pq-posthog-token-env-');
+    const outDir = makeTempDir('pq-posthog-token-out-');
+    writeFileSync(join(envDir, '.env.production'),
+      'VITE_MAPBOX_TOKEN=pk.configured\nVITE_POSTHOG_ENABLED=false\nVITE_POSTHOG_PROJECT_TOKEN=phc_fake_token_here\n');
+    const result = runViteBuild(envDir, outDir);
+    const output = combinedOutput(result);
+    expect(result.status, output).not.toBe(0);
+    expect(output).toContain('PostHog release must remain OFF');
+    expect(output).not.toContain('phc_fake_token_here');
+    expect(existsSync(join(outDir, 'index.html'))).toBe(false);
+  });
+  it('rejects an enabled flag in staging mode', { timeout: 180_000 }, () => {
+    const envDir = makeTempDir('pq-posthog-enabled-env-');
+    const outDir = makeTempDir('pq-posthog-enabled-out-');
+    writeFileSync(join(envDir, '.env.staging'),
+      'VITE_MAPBOX_TOKEN=pk.configured\nVITE_POSTHOG_ENABLED=true\n');
+    const result = runViteBuild(envDir, outDir, ['--mode', 'staging']);
+    expect(result.status, combinedOutput(result)).not.toBe(0);
+    expect(combinedOutput(result)).toContain('PostHog release must remain OFF');
+    expect(existsSync(join(outDir, 'index.html'))).toBe(false);
+  });
+  it('adds a verifiable OFF marker to a clean built artifact', { timeout: 180_000 }, () => {
+    const envDir = makeTempDir('pq-posthog-off-env-');
+    const outDir = makeTempDir('pq-posthog-off-out-');
+    writeFileSync(join(envDir, '.env.production'),
+      'VITE_MAPBOX_TOKEN=pk.configured\nVITE_POSTHOG_ENABLED=false\n');
+    const result = runViteBuild(envDir, outDir);
+    expect(result.status, combinedOutput(result)).toBe(0);
+    expect(readFileSync(join(outDir, 'index.html'), 'utf8'))
+      .toContain('<meta name="parqueen-posthog-release" content="off" />');
   });
 });
