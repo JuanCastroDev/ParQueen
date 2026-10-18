@@ -1395,6 +1395,19 @@ exports.moderateAvatarUpload = onObjectFinalized(
   }
 );
 
+
+ // Published avatar cleanup must be scoped to the exact UID. Using the prefix
+ // "avatars/${uid}" without the trailing slash would also match other users
+ // whose UID starts with the same characters (e.g. abc and abcd).
+async function _deletePublishedAvatarsForUser(storageBucket, uid) {
+  await storageBucket.deleteFiles({ prefix: `avatars/${uid}/` });
+  await storageBucket.file(`avatars/${uid}`).delete().catch((err) => {
+    // Legacy avatars/{uid} may not exist for newer users; absence is success.
+    if (err?.code !== 404) throw err;
+  });
+}
+exports._deletePublishedAvatarsForUser = _deletePublishedAvatarsForUser;
+
 // ── Orphan cleanup helper ─────────────────────────────────────────────────────
 // Deletes avatarUploads/ and avatarCandidates/ objects older than cutoffMs
 // (default 24 h ago) AND whose moderation status is terminal or absent.
@@ -3393,7 +3406,8 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
         // Storage — clean up all three path families; absence is success (idempotent).
         await step('storageUploads',   () => getStorage().bucket().deleteFiles({ prefix: `avatarUploads/${uid}/`   }).catch(() => {}));
         await step('storageCandidates',() => getStorage().bucket().deleteFiles({ prefix: `avatarCandidates/${uid}/` }).catch(() => {}));
-        await step('storagePublished', () => getStorage().bucket().deleteFiles({ prefix: `avatars/${uid}`           }).catch(() => {}));
+        await step('storagePublished', () =>
+            _deletePublishedAvatarsForUser(getStorage().bucket(), uid).catch(() => {}));
 
         // ── Auth deletion — only reached after every required step passes ───────
         // Revalidate lock ownership immediately before the one irreversible step,
