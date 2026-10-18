@@ -3431,8 +3431,9 @@ describe('TM-04 — private user data isolation', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// §4 — User schema: vehicle and avatar fields in create/update allowlists.
+// §4 — User schema: client-writable vehicle fields; server-owned avatar fields.
 //
+// Avatar fields are published by the moderation Function (Admin SDK) only.
 // vehicleBrand and vehicleColor are intentionally public: spot finders post
 // their vehicle so claimers know which car is pulling out. Product decision;
 // not a privacy gap. Documented here so future reviewers don't re-open it.
@@ -3467,16 +3468,51 @@ describe('§4 — users/{uid} vehicle and avatar allowlists', () => {
         await assertSucceeds(upd(doc(ownerDb(), 'users', OWNER_UID), { vehicleColor: 'silver' }));
     });
 
-    // ── update allowlist: avatar fields ───────────────────────────────────────
+    // ── moderation-owned avatar metadata: no direct client writes ────────────
 
-    it('SC-4: owner can update avatarUrl (in update allowlist)', async () => {
+    it('SC-4: owner cannot bypass moderation by setting an external avatarUrl', async () => {
         const { updateDoc: upd } = await import('firebase/firestore');
-        await assertSucceeds(upd(doc(ownerDb(), 'users', OWNER_UID), { avatarUrl: 'https://example.com/a.jpg' }));
+        await assertFails(upd(doc(ownerDb(), 'users', OWNER_UID), { avatarUrl: 'https://example.com/a.jpg' }));
     });
 
-    it('SC-5: owner can update avatarManifestId (in update allowlist)', async () => {
+    it('SC-5: owner cannot set avatarManifestId', async () => {
         const { updateDoc: upd } = await import('firebase/firestore');
-        await assertSucceeds(upd(doc(ownerDb(), 'users', OWNER_UID), { avatarManifestId: 'manifest_abc' }));
+        await assertFails(upd(doc(ownerDb(), 'users', OWNER_UID), { avatarManifestId: 'manifest_abc' }));
+    });
+
+    it('SC-5a: owner cannot set avatarAgeGroup', async () => {
+        const { updateDoc: upd } = await import('firebase/firestore');
+        await assertFails(upd(doc(ownerDb(), 'users', OWNER_UID), { avatarAgeGroup: 'adult' }));
+    });
+
+    it('SC-5b: owner cannot set avatarUpdatedAt', async () => {
+        const { updateDoc: upd } = await import('firebase/firestore');
+        await assertFails(upd(doc(ownerDb(), 'users', OWNER_UID), { avatarUpdatedAt: Timestamp.now() }));
+    });
+
+    it('SC-5c: owner cannot remove an existing approved avatarUrl', async () => {
+        const { updateDoc: upd, deleteField } = await import('firebase/firestore');
+        await seed('users', OWNER_UID, { ...baseDoc, avatarUrl: 'https://example.com/approved.jpg' });
+        await assertFails(upd(doc(ownerDb(), 'users', OWNER_UID), { avatarUrl: deleteField() }));
+    });
+
+    it('SC-5d: owner cannot combine an allowed vehicle change with a forged avatarUrl', async () => {
+        const { updateDoc: upd } = await import('firebase/firestore');
+        await assertFails(upd(doc(ownerDb(), 'users', OWNER_UID), {
+            vehicleType: 'sedan',
+            avatarUrl: 'https://example.com/unmoderated.jpg',
+        }));
+        const snap = await getDoc(doc(ownerDb(), 'users', OWNER_UID));
+        expect(snap.data()?.vehicleType).toBeUndefined();
+    });
+
+    it('SC-5e: owner can still update a vehicle field when a server-approved avatar exists', async () => {
+        const { updateDoc: upd } = await import('firebase/firestore');
+        const serverAvatarUrl = 'https://example.com/approved.jpg';
+        await seed('users', OWNER_UID, { ...baseDoc, avatarUrl: serverAvatarUrl });
+        await assertSucceeds(upd(doc(ownerDb(), 'users', OWNER_UID), { vehicleColor: 'blue' }));
+        const snap = await getDoc(doc(ownerDb(), 'users', OWNER_UID));
+        expect(snap.data()?.avatarUrl).toBe(serverAvatarUrl);
     });
 
     // ── update denylist: immutable fields ─────────────────────────────────────
