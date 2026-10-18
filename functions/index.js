@@ -1085,6 +1085,9 @@ function _isAllowedImageHeader(buf) {
 //   candidate objects are deleted. Permanent failures (invalid format,
 //   content policy) are acknowledged immediately regardless of retryCount.
 const AVATAR_MAX_RETRIES = 3;
+// A lease must outlive the explicitly bounded 120-second invocation runtime.
+// Eventarc retries active duplicates; only abandoned attempts are reclaimed.
+const AVATAR_PROCESSING_LEASE_MS = 3 * 60 * 1000;
 // 4096 × 4096 — well above 512 × 512 output; 64× below Sharp's 268 M default.
 const AVATAR_MAX_PIXELS    = 16_777_216;
 const AVATAR_MAX_DIMENSION = 4096;
@@ -1098,7 +1101,7 @@ const AVATAR_MAX_DIMENSION = 4096;
 
 // 6) Moderate avatar uploads via Vision SafeSearch
 exports.moderateAvatarUpload = onObjectFinalized(
-  { region: "us-central1", memory: "512MiB", retry: true, preserveExternalChanges: true, serviceAccount: 'parqueen-avatar-moderator@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
+  { region: "us-central1", memory: "512MiB", timeoutSeconds: 120, retry: true, preserveExternalChanges: true, serviceAccount: 'parqueen-avatar-moderator@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
   async (event) => {
     const filePath = event.data.name;
 
@@ -1111,6 +1114,7 @@ exports.moderateAvatarUpload = onObjectFinalized(
     const uid            = parts[1];
     const uploadId       = parts[2];
     const sourceGen      = String(event.data.generation || "");
+    const processingAttemptId = randomUUID();
     const maskedUid      = uid.slice(0, 4) + "***";
     const moderationRef  = db.collection("avatarModeration").doc(uid);
     const pendingRef     = db.doc(`users/${uid}/private/avatar`);
@@ -1127,7 +1131,9 @@ exports.moderateAvatarUpload = onObjectFinalized(
     // Never let its asynchronous error/cleanup path overwrite the newer record.
     const updateCurrentModeration = (patch) => db.runTransaction(async (tx) => {
       const snap = await tx.get(moderationRef);
-      if (!snap.exists || snap.data().uploadId !== uploadId) return false;
+      if (!snap.exists || snap.data().uploadId !== uploadId ||
+          snap.data().processingAttemptId !== processingAttemptId ||
+          snap.data().status !== "processing") return false;
       tx.update(moderationRef, patch);
       return true;
     });
@@ -1147,6 +1153,7 @@ exports.moderateAvatarUpload = onObjectFinalized(
           tx.set(moderationRef, {
             uid, uploadId, sourcePath: filePath, sourceGeneration: sourceGen,
             status: "processing", retryCount: 0, processedPath: null,
+            processingAttemptId, processingStartedAt: Timestamp.now(),
             failureReason: null, createdAt: Timestamp.now(), updatedAt: Timestamp.now(),
           });
           return { claimed: true, retryCount: 0 };
@@ -1160,13 +1167,24 @@ exports.moderateAvatarUpload = onObjectFinalized(
           tx.set(moderationRef, {
             uid, uploadId, sourcePath: filePath, sourceGeneration: sourceGen,
             status: "processing", retryCount: 0, processedPath: null,
+            processingAttemptId, processingStartedAt: Timestamp.now(),
             failureReason: null, createdAt: Timestamp.now(), updatedAt: Timestamp.now(),
           });
           return { claimed: true, retryCount: 0 };
         }
-        if (d.status === "approved" || d.status === "rejected") return { claimed: false, reason: "terminal" };
+        if (d.status === "approved" || d.status === "rejected" || d.status === "failed")
+          return { claimed: false, reason: "terminal" };
+        if (d.status === "processing") {
+          const startedAt = d.processingStartedAt?.toMillis?.()
+            ?? d.updatedAt?.toMillis?.() ?? 0;
+          if (Date.now() - startedAt < AVATAR_PROCESSING_LEASE_MS)
+            return { claimed: false, reason: "already_processing" };
+        }
         if (d.retryCount >= AVATAR_MAX_RETRIES) return { claimed: false, reason: "max_retries" };
-        tx.update(moderationRef, { status: "processing", updatedAt: Timestamp.now() });
+        tx.update(moderationRef, {
+          status: "processing", processingAttemptId,
+          processingStartedAt: Timestamp.now(), updatedAt: Timestamp.now(),
+        });
         return { claimed: true, retryCount: d.retryCount };
       });
     } catch (err) {
@@ -1180,10 +1198,25 @@ exports.moderateAvatarUpload = onObjectFinalized(
       if (reason === "superseded" || reason === "superseded_by_pending") {
         // Source has no active processor — delete immediately to prevent orphan accumulation.
         await sourceFile.delete().catch(() => {});
+      } else if (reason === "already_processing") {
+        // Retriable: do NOT acknowledge a concurrent Eventarc delivery while an
+        // owner may still be running. After terminal state it will exit cleanly;
+        // after lease expiry the retried event can recover a crashed attempt.
+        throw new Error("Avatar already processing; retry later");
       } else if (reason === "max_retries") {
-        // Terminal failure: record it and remove all objects for this upload.
+        // No owner claimed this invocation; only mark failure if the same upload
+        // still owns a terminal-retry slot. Never overwrite another upload.
+        await db.runTransaction(async (tx) => {
+          const snap = await tx.get(moderationRef);
+          const d = snap.exists ? snap.data() : null;
+          if (d?.uploadId === uploadId && d.retryCount >= AVATAR_MAX_RETRIES &&
+              (d.status === "retry_pending" || d.status === "processing"))
+            tx.update(moderationRef, {
+              status: "failed", failureReason: "max_retries_exhausted",
+              updatedAt: Timestamp.now(),
+            });
+        }).catch(() => {});
         await Promise.all([
-          updateCurrentModeration({ status: "failed", failureReason: "max_retries_exhausted", updatedAt: Timestamp.now() }).catch(() => {}),
           sourceFile.delete().catch(() => {}),
           candidateFile.delete().catch(() => {}),
         ]);
@@ -1300,6 +1333,8 @@ exports.moderateAvatarUpload = onObjectFinalized(
       const pendingId = pendingSnap.exists ? pendingSnap.data().pendingUploadId : null;
       return moderationSnap.exists
         && moderationSnap.data().uploadId === uploadId
+        && moderationSnap.data().processingAttemptId === processingAttemptId
+        && moderationSnap.data().status === "processing"
         && (!pendingId || pendingId === uploadId);
     });
     if (!stillCurrent) {
@@ -1320,7 +1355,6 @@ exports.moderateAvatarUpload = onObjectFinalized(
     // Copied files don't inherit download tokens, so we generate one explicitly
     // and attach it via setMetadata. getDownloadURL is not used because it
     // requires a pre-existing token (which only client-SDK uploads produce).
-    const { randomUUID } = require("crypto");
     const downloadToken = randomUUID();
     try {
       await publishedFile.setMetadata({ metadata: { firebaseStorageDownloadTokens: downloadToken } });
@@ -1362,7 +1396,9 @@ exports.moderateAvatarUpload = onObjectFinalized(
       const d = moderationSnap.exists ? moderationSnap.data() : null;
       const pendingId = pendingSnap.exists ? pendingSnap.data().pendingUploadId : null;
       // Old attempts must not update users/{uid} once another upload is current.
-      if (!d || d.uploadId !== uploadId) return { approved: false };
+      if (!d || d.uploadId !== uploadId ||
+          d.processingAttemptId !== processingAttemptId ||
+          d.status !== "processing") return { approved: false };
       if (pendingId && pendingId !== uploadId) return { approved: false };
       const previousPath = previousPublishedPath(userSnap.exists ? userSnap.data().avatarUrl : null);
       tx.update(moderationRef, { status: "approved", failureReason: null, updatedAt: Timestamp.now() });
