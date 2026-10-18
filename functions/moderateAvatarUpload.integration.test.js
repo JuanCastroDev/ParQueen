@@ -1249,6 +1249,48 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         }
     });
 
+
+    // MOD-67: after an abandoned processing lease is reclaimed, the older
+    // instance must not delete the active SAME upload ID's source/candidate.
+    it('MOD-67: stale same-upload attempt preserves successor working files', async () => {
+        const uid = freshUid(), upId = freshUploadId();
+        await nuke(uid);
+        await db.doc(`users/${uid}`).set({ id: uid });
+        await uploadOriginalForManualRun(uid, upId, JPEG_1x1, 'image/jpeg');
+        const event = await buildEvent(uid, upId);
+        const firstVision = pendingVisionHook();
+        hooks.visionSafeSearch = firstVision.hook;
+        const firstRun = runFn(event);
+        let secondRun;
+        let secondVision;
+        try {
+            await firstVision.entered;
+            const oldAttempt = (await getMod(uid))?.processingAttemptId;
+            await db.doc(`avatarModeration/${uid}`).update({
+                processingStartedAt: Timestamp.fromMillis(Date.now() - 10 * 60 * 1000),
+            });
+            secondVision = pendingVisionHook();
+            hooks.visionSafeSearch = secondVision.hook;
+            secondRun = runFn(event);
+            await secondVision.entered;
+            expect((await getMod(uid))?.processingAttemptId).not.toBe(oldAttempt);
+
+            firstVision.resolve();
+            await firstRun;
+            expect((await manualRunBucket.file(`avatarUploads/${uid}/${upId}/original`).exists())[0]).toBe(true);
+            expect((await manualRunBucket.file(`avatarCandidates/${uid}/${upId}.webp`).exists())[0]).toBe(true);
+
+            secondVision.resolve();
+            await secondRun;
+            expect(await getMod(uid)).toMatchObject({ uploadId: upId, status: 'approved' });
+        } finally {
+            firstVision.resolve();
+            secondVision?.resolve();
+            await Promise.allSettled([firstRun, secondRun].filter(Boolean));
+            await nuke(uid);
+        }
+    });
+
     // MOD-38: avatarUrl format is a Firebase download token URL (not a signed URL)
     it('MOD-38: avatarUrl is a Firebase download token URL, not a signed URL', async () => {
         const uid = freshUid(); const upId = freshUploadId();
