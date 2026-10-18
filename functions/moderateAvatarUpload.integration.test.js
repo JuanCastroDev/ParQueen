@@ -200,10 +200,12 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
     // makes a failure in one case cascade into unrelated ones.
     afterEach(() => {
         hooks.visionSafeSearch = null;
+        hooks.beforeAvatarPublishCopy = null;
     });
 
     afterAll(async () => {
         hooks.visionSafeSearch = null;
+        hooks.beforeAvatarPublishCopy = null;
     });
 
     // MOD-01: JPEG approved end-to-end
@@ -902,8 +904,12 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const url2 = (await db.doc(`users/${uid}`).get()).data()?.avatarUrl;
         expect(url2).toMatch(/\?alt=media&token=[0-9a-f-]{36}/);
 
-        // Tokens must differ — randomUUID() produces a unique value each time.
+        // New approval uses a distinct immutable object and revokes the previous file.
         expect(url2).not.toBe(url1);
+        expect(decodeURIComponent(new URL(url1).pathname)).toContain(`avatars/${uid}/${upId1}.webp`);
+        expect(decodeURIComponent(new URL(url2).pathname)).toContain(`avatars/${uid}/${upId2}.webp`);
+        await expectObjectGone(`avatars/${uid}/${upId1}.webp`, 'MOD-37 prior approved image', manualRunBucket);
+        expect((await manualRunBucket.file(`avatars/${uid}/${upId2}.webp`).exists())[0]).toBe(true);
         await nuke(uid);
     });
 
@@ -1015,6 +1021,94 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
             uploadId: b, status: 'approved', retryCount: 0, failureReason: null,
         });
         await nuke(uid);
+    });
+
+
+    // MOD-60: Pre-copy handoff race — the old upload resumes AFTER the new one is published.
+    // Neither the newer image's bytes nor its download token may change.
+    it('MOD-60: late old publish cannot overwrite a newer approved image or token', async () => {
+        const uid = freshUid(); const a = freshUploadId(); const b = freshUploadId();
+        await nuke(uid);
+        await db.doc(`users/${uid}`).set({ id: uid });
+        const blue = await sharp({ create: { width: 4, height: 4, channels: 3, background: { r: 10, g: 30, b: 240 } } })
+            .jpeg({ quality: 80 }).toBuffer();
+        await setPending(uid, a);
+        await uploadOriginalForManualRun(uid, a, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, b, blue, 'image/jpeg');
+        let unblockA, notifyA;
+        const aReachedPreCopy = new Promise(resolve => { notifyA = resolve; });
+        const aMayResume = new Promise(resolve => { unblockA = resolve; });
+        hooks.beforeAvatarPublishCopy = async ({ uploadId }) => {
+            if (uploadId !== a) return;
+            notifyA();
+            await aMayResume;
+        };
+        hooks.visionSafeSearch = safeMock();
+        const aRun = runFn(await buildEvent(uid, a));
+        try {
+            await aReachedPreCopy;
+            await setPending(uid, b);
+            await runFn(await buildEvent(uid, b));
+            const urlB = (await db.doc(`users/${uid}`).get()).data()?.avatarUrl;
+            const bPath = `avatars/${uid}/${b}.webp`;
+            expect(decodeURIComponent(new URL(urlB).pathname)).toContain(bPath);
+            const [bytesB] = await manualRunBucket.file(bPath).download();
+            const [metadataB] = await manualRunBucket.file(bPath).getMetadata();
+            expect(bytesB.length).toBeGreaterThan(0);
+            unblockA();
+            await aRun;
+            expect((await db.doc(`users/${uid}`).get()).data()?.avatarUrl).toBe(urlB);
+            expect(await getMod(uid)).toMatchObject({ uploadId: b, status: 'approved' });
+            const [bytesAfter] = await manualRunBucket.file(bPath).download();
+            const [metadataAfter] = await manualRunBucket.file(bPath).getMetadata();
+            expect(bytesAfter.equals(bytesB)).toBe(true);
+            expect(metadataAfter.metadata?.firebaseStorageDownloadTokens).toBe(metadataB.metadata?.firebaseStorageDownloadTokens);
+            await expectObjectGone(`avatars/${uid}/${a}.webp`, 'MOD-60 stale published file', manualRunBucket);
+            expect((await manualRunBucket.file(bPath).exists())[0]).toBe(true);
+        } finally {
+            unblockA?.();
+            await aRun.catch(() => {});
+            await nuke(uid);
+        }
+    });
+
+    // MOD-61: Existing production users may have a legacy avatars/{uid} file.
+    it('MOD-61: approved replacement cleans legacy avatar object without deleting the new image', async () => {
+        const uid = freshUid(), priorId = freshUploadId(), nextId = freshUploadId();
+        await nuke(uid);
+        const legacyPath = `avatars/${uid}`;
+        const legacyUrl = `https://firebasestorage.googleapis.com/v0/b/${MANUAL_RUN_BUCKET}/o/${encodeURIComponent(legacyPath)}?alt=media&token=old-token`;
+        await manualRunBucket.file(legacyPath).save(JPEG_1x1, { metadata: { contentType: 'image/jpeg' }, resumable: false });
+        await db.doc(`users/${uid}`).set({ id: uid, avatarUrl: legacyUrl });
+        await db.doc(`avatarModeration/${uid}`).set({
+            uid, uploadId: priorId, status: 'approved', retryCount: 0,
+            sourceGeneration: '1', sourcePath: `avatarUploads/${uid}/${priorId}/original`,
+            createdAt: Timestamp.now(), updatedAt: Timestamp.now(),
+        });
+        await setPending(uid, nextId);
+        await uploadOriginalForManualRun(uid, nextId, JPEG_1x1, 'image/jpeg');
+        hooks.visionSafeSearch = safeMock();
+        await runFn(await buildEvent(uid, nextId));
+        expect((await db.doc(`users/${uid}`).get()).data()?.avatarUrl).toContain(encodeURIComponent(`avatars/${uid}/${nextId}.webp`));
+        await expectObjectGone(legacyPath, 'MOD-61 previous legacy image', manualRunBucket);
+        expect((await manualRunBucket.file(`avatars/${uid}/${nextId}.webp`).exists())[0]).toBe(true);
+        await nuke(uid);
+    });
+
+    // MOD-62: Invalid/unrelated prior avatar URLs must not direct server-side deletion.
+    it('MOD-62: replacement cleanup will not delete another user avatar', async () => {
+        const uid = freshUid(), otherUid = freshUid(), nextId = freshUploadId();
+        await Promise.all([nuke(uid), nuke(otherUid)]);
+        const otherPath = `avatars/${otherUid}`;
+        const wrongUrl = `https://firebasestorage.googleapis.com/v0/b/${MANUAL_RUN_BUCKET}/o/${encodeURIComponent(otherPath)}?alt=media&token=bad`;
+        await manualRunBucket.file(otherPath).save(JPEG_1x1, { metadata: { contentType: 'image/jpeg' }, resumable: false });
+        await db.doc(`users/${uid}`).set({ id: uid, avatarUrl: wrongUrl });
+        await setPending(uid, nextId);
+        await uploadOriginalForManualRun(uid, nextId, JPEG_1x1, 'image/jpeg');
+        hooks.visionSafeSearch = safeMock();
+        await runFn(await buildEvent(uid, nextId));
+        expect((await manualRunBucket.file(otherPath).exists())[0]).toBe(true);
+        await Promise.all([nuke(uid), nuke(otherUid)]);
     });
 
     // MOD-38: avatarUrl format is a Firebase download token URL (not a signed URL)
