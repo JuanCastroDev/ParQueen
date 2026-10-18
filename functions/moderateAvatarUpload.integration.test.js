@@ -1111,6 +1111,28 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         await Promise.all([nuke(uid), nuke(otherUid)]);
     });
 
+
+    // MOD-63: account-deletion cleanup must not delete similarly prefixed UIDs.
+    it('MOD-63: published-avatar cleanup targets exact user only (legacy and nested paths)', async () => {
+        const uid = freshUid(), neighbor = uid + '_neighbor';
+        await Promise.all([nuke(uid), nuke(neighbor)]);
+        const owned = [`avatars/${uid}`, `avatars/${uid}/old-photo.webp`];
+        const neighbors = [`avatars/${neighbor}`, `avatars/${neighbor}/still-here.webp`];
+        for (const objectPath of [...owned, ...neighbors]) {
+            await manualRunBucket.file(objectPath).save(JPEG_1x1, {
+                metadata: { contentType: 'image/jpeg' }, resumable: false,
+            });
+        }
+        await fnModule._deletePublishedAvatarsForUser(manualRunBucket, uid);
+        for (const objectPath of owned) {
+            await expectObjectGone(objectPath, 'MOD-63 owned ' + objectPath, manualRunBucket);
+        }
+        for (const objectPath of neighbors) {
+            expect((await manualRunBucket.file(objectPath).exists())[0]).toBe(true);
+        }
+        await Promise.all([nuke(uid), nuke(neighbor)]);
+    });
+
     // MOD-38: avatarUrl format is a Firebase download token URL (not a signed URL)
     it('MOD-38: avatarUrl is a Firebase download token URL, not a signed URL', async () => {
         const uid = freshUid(); const upId = freshUploadId();
