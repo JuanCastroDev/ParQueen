@@ -1138,6 +1138,25 @@ exports.moderateAvatarUpload = onObjectFinalized(
       return true;
     });
 
+    // When a processing lease has been reclaimed for the SAME upload ID, old
+    // work must not delete the new owner's identical source/candidate paths.
+    // Different upload IDs have distinct paths and may clean their own files.
+    const cleanupSuperseded = async (includePublished = false) => {
+      let current;
+      try {
+        const snap = await moderationRef.get();
+        current = snap.exists ? snap.data() : null;
+      } catch (err) {
+        console.warn(`Avatar stale cleanup deferred (${maskedUid}):`, sanitizeError(err));
+        return;
+      }
+      if (current?.uploadId === uploadId &&
+          current.processingAttemptId !== processingAttemptId) return;
+      const files = [sourceFile, candidateFile];
+      if (includePublished) files.push(publishedFile);
+      await Promise.all(files.map(file => file.delete().catch(() => {})));
+    };
+
     // ── Step 0: Generation-scoped idempotency via transaction ─────────────────
     // Also reads users/{uid}/private/avatar to enforce the pre-event newer-upload
     // race guard: if pendingUploadId is set to a different uploadId, a newer upload
@@ -1338,7 +1357,7 @@ exports.moderateAvatarUpload = onObjectFinalized(
         && (!pendingId || pendingId === uploadId);
     });
     if (!stillCurrent) {
-      await Promise.all([sourceFile.delete().catch(() => {}), candidateFile.delete().catch(() => {})]);
+      await cleanupSuperseded();
       console.log(`Avatar approval skipped (superseded) for ${maskedUid}`);
       return;
     }
@@ -1419,13 +1438,8 @@ exports.moderateAvatarUpload = onObjectFinalized(
       ]);
       console.log(`Avatar approved for ${maskedUid}`);
     } else {
-      // A superseded copy cannot overwrite the winner: its unique published
-      // object is removed alongside only its own temporary objects.
-      await Promise.all([
-        sourceFile.delete().catch(() => {}),
-        candidateFile.delete().catch(() => {}),
-        publishedFile.delete().catch(() => {}),
-      ]);
+      // Never delete an active successor's files on same-upload lease reclaim.
+      await cleanupSuperseded(true);
       console.log(`Avatar approval skipped (superseded) for ${maskedUid}`);
     }
   }
