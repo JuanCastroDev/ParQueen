@@ -1133,6 +1133,122 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         await Promise.all([nuke(uid), nuke(neighbor)]);
     });
 
+
+    // MOD-64: Eventarc may concurrently redeliver the SAME Storage event.
+    // Only one execution may own the active moderation attempt.
+    it('MOD-64: a simultaneous duplicate waits for active processing and cannot publish twice', async () => {
+        const uid = freshUid(), upId = freshUploadId();
+        await nuke(uid);
+        await db.doc(`users/${uid}`).set({ id: uid });
+        await uploadOriginalForManualRun(uid, upId, JPEG_1x1, 'image/jpeg');
+        const event = await buildEvent(uid, upId);
+        const slow = pendingVisionHook();
+        hooks.visionSafeSearch = slow.hook;
+        const firstRun = runFn(event);
+        try {
+            await slow.entered;
+            const inProgress = await getMod(uid);
+            expect(inProgress?.status).toBe('processing');
+            expect(inProgress?.processingAttemptId).toEqual(expect.any(String));
+
+            // The duplicate must request an Eventarc retry, not run Vision or
+            // mark this upload terminal while the first owner is working.
+            await expect(runFn(event)).rejects.toThrow(/already processing/i);
+            expect((await getMod(uid))?.processingAttemptId).toBe(inProgress.processingAttemptId);
+
+            slow.resolve();
+            await firstRun;
+            const final = await getMod(uid);
+            expect(final).toMatchObject({
+                uploadId: upId, status: 'approved',
+                processingAttemptId: inProgress.processingAttemptId,
+            });
+            const published = (await db.doc(`users/${uid}`).get()).data()?.avatarUrl;
+            expect(published).toContain(encodeURIComponent(`avatars/${uid}/${upId}.webp`));
+
+            // Eventarc's eventual retry observes the terminal document and
+            // exits without running Vision or changing the download token.
+            let duplicateVisionCalled = false;
+            hooks.visionSafeSearch = async () => {
+                duplicateVisionCalled = true;
+                return safeMock()();
+            };
+            await runFn(event);
+            expect(duplicateVisionCalled).toBe(false);
+            expect((await getMod(uid))?.status).toBe('approved');
+            expect((await db.doc(`users/${uid}`).get()).data()?.avatarUrl).toBe(published);
+        } finally {
+            slow.resolve();
+            await firstRun.catch(() => {});
+            await nuke(uid);
+        }
+    });
+
+    // MOD-65: a crashed function must not strand processing permanently.
+    it('MOD-65: expired processing lease can be reclaimed by a retry', async () => {
+        const uid = freshUid(), upId = freshUploadId();
+        await nuke(uid);
+        await db.doc(`users/${uid}`).set({ id: uid });
+        await uploadOriginalForManualRun(uid, upId, JPEG_1x1, 'image/jpeg');
+        await db.doc(`avatarModeration/${uid}`).set({
+            uid, uploadId: upId, sourcePath: `avatarUploads/${uid}/${upId}/original`,
+            sourceGeneration: '1', status: 'processing', retryCount: 1,
+            processingAttemptId: 'stale-attempt',
+            processingStartedAt: Timestamp.fromMillis(Date.now() - 10 * 60 * 1000),
+            updatedAt: Timestamp.fromMillis(Date.now() - 10 * 60 * 1000),
+        });
+        hooks.visionSafeSearch = safeMock();
+        await runFn(await buildEvent(uid, upId));
+        expect(await getMod(uid)).toMatchObject({
+            uploadId: upId, status: 'approved', retryCount: 1,
+        });
+        expect((await getMod(uid))?.processingAttemptId).not.toBe('stale-attempt');
+        await nuke(uid);
+    });
+
+    // MOD-66: if a stale lease is reclaimed, old work may finish later, but
+    // its error path must not overwrite the new attempt's approved status.
+    it('MOD-66: abandoned attempt cannot poison a newer same-upload lease owner', async () => {
+        const uid = freshUid(), upId = freshUploadId();
+        await nuke(uid);
+        await db.doc(`users/${uid}`).set({ id: uid });
+        await uploadOriginalForManualRun(uid, upId, JPEG_1x1, 'image/jpeg');
+        const event = await buildEvent(uid, upId);
+        let rejectOld, notifyOld;
+        const entered = new Promise(resolve => { notifyOld = resolve; });
+        hooks.visionSafeSearch = () => new Promise((_resolve, reject) => {
+            rejectOld = reject;
+            notifyOld();
+        });
+        const oldRun = runFn(event);
+        try {
+            await entered;
+            const oldId = (await getMod(uid))?.processingAttemptId;
+            expect(oldId).toEqual(expect.any(String));
+            await db.doc(`avatarModeration/${uid}`).update({
+                processingStartedAt: Timestamp.fromMillis(Date.now() - 10 * 60 * 1000),
+            });
+            hooks.visionSafeSearch = safeMock();
+            await runFn(event);
+            const newState = await getMod(uid);
+            expect(newState).toMatchObject({ uploadId: upId, status: 'approved' });
+            expect(newState.processingAttemptId).not.toBe(oldId);
+
+            rejectOld(new Error('simulated stale Vision error'));
+            await expect(oldRun).rejects.toThrow();
+            expect(await getMod(uid)).toMatchObject({
+                uploadId: upId, status: 'approved',
+                processingAttemptId: newState.processingAttemptId,
+                retryCount: newState.retryCount,
+                failureReason: null,
+            });
+        } finally {
+            rejectOld?.(new Error('teardown'));
+            await oldRun.catch(() => {});
+            await nuke(uid);
+        }
+    });
+
     // MOD-38: avatarUrl format is a Firebase download token URL (not a signed URL)
     it('MOD-38: avatarUrl is a Firebase download token URL, not a signed URL', async () => {
         const uid = freshUid(); const upId = freshUploadId();
