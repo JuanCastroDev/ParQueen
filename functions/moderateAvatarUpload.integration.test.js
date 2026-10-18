@@ -869,8 +869,8 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const urlBefore = (await db.doc(`users/${uid}`).get()).data()?.avatarUrl;
         expect(urlBefore).toBeTruthy();
 
-        // Second upload: reset moderation slot then reject via content_policy.
-        await db.doc(`avatarModeration/${uid}`).delete();
+        // Replacement without privileged moderation-record deletion.
+        await setPending(uid, upId2);
         await uploadOriginalForManualRun(uid, upId2, JPEG_1x1, 'image/jpeg');
         hooks.visionSafeSearch = safeMock('VERY_LIKELY', 'VERY_UNLIKELY');
         await runFn(await buildEvent(uid, upId2));
@@ -894,8 +894,8 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
         const url1 = (await db.doc(`users/${uid}`).get()).data()?.avatarUrl;
         expect(url1).toMatch(/\?alt=media&token=[0-9a-f-]{36}/);
 
-        // Second approval — reset slot, upload again.
-        await db.doc(`avatarModeration/${uid}`).delete();
+        // Second approval — existing moderation record must transition safely.
+        await setPending(uid, upId2);
         await uploadOriginalForManualRun(uid, upId2, JPEG_1x1, 'image/jpeg');
         hooks.visionSafeSearch = safeMock();
         await runFn(await buildEvent(uid, upId2));
@@ -904,6 +904,116 @@ describe('§MOD — moderateAvatarUpload integration tests', () => {
 
         // Tokens must differ — randomUUID() produces a unique value each time.
         expect(url2).not.toBe(url1);
+        await nuke(uid);
+    });
+
+
+    // MOD-55: a user can retry after a rejected photo without privileged cleanup
+    it('MOD-55: new pending upload replaces a rejected moderation record', async () => {
+        const uid = freshUid(); const a = freshUploadId(); const b = freshUploadId();
+        await nuke(uid);
+        await db.doc(`users/${uid}`).set({ id: uid });
+        await uploadOriginalForManualRun(uid, a, JPEG_1x1, 'image/jpeg');
+        hooks.visionSafeSearch = safeMock('VERY_LIKELY');
+        await runFn(await buildEvent(uid, a));
+        expect((await getMod(uid))?.status).toBe('rejected');
+        await setPending(uid, b);
+        await uploadOriginalForManualRun(uid, b, JPEG_1x1, 'image/jpeg');
+        hooks.visionSafeSearch = safeMock();
+        await runFn(await buildEvent(uid, b));
+        expect(await getMod(uid)).toMatchObject({ uploadId: b, status: 'approved', retryCount: 0, failureReason: null });
+        expect((await db.doc(`users/${uid}/private/avatar`).get()).exists).toBe(false);
+        await nuke(uid);
+    });
+
+    // MOD-56: old or forged event without a matching pending intent must remain blocked
+    it('MOD-56: unmatched event cannot replace existing approved moderation', async () => {
+        const uid = freshUid(); const a = freshUploadId(); const stray = freshUploadId();
+        await nuke(uid);
+        await db.doc(`users/${uid}`).set({ id: uid });
+        await uploadOriginalForManualRun(uid, a, JPEG_1x1, 'image/jpeg');
+        hooks.visionSafeSearch = safeMock();
+        await runFn(await buildEvent(uid, a));
+        const originalUrl = (await db.doc(`users/${uid}`).get()).data()?.avatarUrl;
+        await uploadOriginalForManualRun(uid, stray, JPEG_1x1, 'image/jpeg');
+        let called = false;
+        hooks.visionSafeSearch = async () => { called = true; return safeMock()(); };
+        await runFn(await buildEvent(uid, stray));
+        expect(called).toBe(false);
+        expect((await getMod(uid))?.uploadId).toBe(a);
+        expect((await db.doc(`users/${uid}`).get()).data()?.avatarUrl).toBe(originalUrl);
+        await expectObjectGone(`avatarUploads/${uid}/${stray}/original`, 'MOD-56 rejected stray', manualRunBucket);
+        await nuke(uid);
+    });
+
+    // MOD-57: real overlap — A already in Vision, B becomes latest, A resumes afterward
+    it('MOD-57: older in-flight approval cannot change the newer upload result', async () => {
+        const uid = freshUid(); const a = freshUploadId(); const b = freshUploadId();
+        await nuke(uid);
+        await db.doc(`users/${uid}`).set({ id: uid });
+        await setPending(uid, a);
+        await uploadOriginalForManualRun(uid, a, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, b, JPEG_1x1, 'image/jpeg');
+        const slow = pendingVisionHook();
+        hooks.visionSafeSearch = slow.hook;
+        const oldRun = runFn(await buildEvent(uid, a));
+        await slow.entered;
+        await setPending(uid, b);
+        hooks.visionSafeSearch = safeMock();
+        await runFn(await buildEvent(uid, b));
+        const urlB = (await db.doc(`users/${uid}`).get()).data()?.avatarUrl;
+        expect(urlB).toBeTruthy();
+        slow.resolve();
+        await oldRun;
+        expect(await getMod(uid)).toMatchObject({ uploadId: b, status: 'approved' });
+        expect((await db.doc(`users/${uid}`).get()).data()?.avatarUrl).toBe(urlB);
+        await expectObjectGone(`avatarUploads/${uid}/${a}/original`, 'MOD-57 stale source', manualRunBucket);
+        await nuke(uid);
+    });
+
+    // MOD-58: A's delayed Vision error must not set B's status to retry_pending
+    it('MOD-58: stale in-flight error cannot poison new moderation state', async () => {
+        const uid = freshUid(); const a = freshUploadId(); const b = freshUploadId();
+        await nuke(uid);
+        await db.doc(`users/${uid}`).set({ id: uid });
+        await setPending(uid, a);
+        await uploadOriginalForManualRun(uid, a, JPEG_1x1, 'image/jpeg');
+        await uploadOriginalForManualRun(uid, b, JPEG_1x1, 'image/jpeg');
+        let rejectOld, signalEntered;
+        const entered = new Promise(resolve => { signalEntered = resolve; });
+        hooks.visionSafeSearch = () => new Promise((_resolve, reject) => {
+            rejectOld = reject;
+            signalEntered();
+        });
+        const oldRun = runFn(await buildEvent(uid, a));
+        await entered;
+        await setPending(uid, b);
+        hooks.visionSafeSearch = safeMock();
+        await runFn(await buildEvent(uid, b));
+        rejectOld(new Error('simulated stale Vision error'));
+        await expect(oldRun).rejects.toThrow();
+        expect(await getMod(uid)).toMatchObject({
+            uploadId: b, status: 'approved', retryCount: 0, failureReason: null,
+        });
+        await nuke(uid);
+    });
+
+    // MOD-59: retry-pending A must not trap the next fresh upload
+    it('MOD-59: new pending upload resets a previous retry-pending record', async () => {
+        const uid = freshUid(); const a = freshUploadId(); const b = freshUploadId();
+        await nuke(uid);
+        await db.doc(`users/${uid}`).set({ id: uid });
+        await uploadOriginalForManualRun(uid, a, JPEG_1x1, 'image/jpeg');
+        hooks.visionSafeSearch = async () => { throw new Error('transient Vision error'); };
+        await expect(runFn(await buildEvent(uid, a))).rejects.toThrow();
+        expect((await getMod(uid))?.status).toBe('retry_pending');
+        await setPending(uid, b);
+        await uploadOriginalForManualRun(uid, b, JPEG_1x1, 'image/jpeg');
+        hooks.visionSafeSearch = safeMock();
+        await runFn(await buildEvent(uid, b));
+        expect(await getMod(uid)).toMatchObject({
+            uploadId: b, status: 'approved', retryCount: 0, failureReason: null,
+        });
         await nuke(uid);
     });
 
