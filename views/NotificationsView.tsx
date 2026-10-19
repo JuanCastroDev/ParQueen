@@ -109,11 +109,13 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
     const radiusDialogRef = useRef<HTMLDivElement>(null);
     useModalAccessibility({ isOpen: radiusSheetOpen, dialogRef: radiusDialogRef, onEscape: () => setRadiusSheetOpen(false) });
     const [radiusSaving, setRadiusSaving] = useState(false);
+    const [radiusSaveError, setRadiusSaveError] = useState(false);
 
     const setRadius = useCallback(async (miles: number) => {
         setRadiusSheetOpen(false);
         if (!user?.id || miles === radiusMiles) return;
         setRadiusSaving(true);
+        setRadiusSaveError(false);
         try {
             // The existing preference write path — the same document
             // NotificationsSettingsView writes, so alerts and feed cannot drift.
@@ -121,8 +123,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
                 notificationRadius: miles,
             });
         } catch {
-            // The live snapshot is authoritative; a failed write simply leaves
-            // the previous radius in place rather than desyncing the UI.
+            setRadiusSaveError(true);
         } finally {
             setRadiusSaving(false);
         }
@@ -317,6 +318,11 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
                         <ChevronRight size={12} aria-hidden="true" className="rotate-90" />
                     </button>
                 </div>
+                {radiusSaveError && (
+                    <p role="alert" className="mt-2 text-[12px] font-medium text-[var(--color-danger)]">
+                        {t('nearby_activity.radius_save_error')}
+                    </p>
+                )}
             </div>
 
             {/* Body */}

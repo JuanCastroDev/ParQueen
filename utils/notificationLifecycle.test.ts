@@ -8,9 +8,43 @@ const runtime = {
 };
 
 describe('notification lifecycle ownership', () => {
+  it('only inspects runtime state while the product preference is unresolved', async () => {
+    const service = {
+      inspect: vi.fn().mockResolvedValue(runtime),
+      refreshGranted: vi.fn().mockResolvedValue(runtime),
+      subscribeForeground: vi.fn().mockResolvedValue(vi.fn()),
+    };
+    const onState = vi.fn();
+    const lifecycle = createNotificationLifecycle(service, { onState, onPayload: vi.fn() });
+
+    await lifecycle.setUser({ uid: 'user-a', productPreferenceEnabled: null });
+
+    expect(service.inspect).toHaveBeenCalledTimes(1);
+    expect(service.refreshGranted).not.toHaveBeenCalled();
+    expect(service.subscribeForeground).not.toHaveBeenCalled();
+    expect(onState).toHaveBeenLastCalledWith(runtime);
+  });
+
+  it('inspects without registering or subscribing when the product preference is disabled', async () => {
+    const service = {
+      inspect: vi.fn().mockResolvedValue(runtime),
+      refreshGranted: vi.fn().mockResolvedValue(runtime),
+      subscribeForeground: vi.fn().mockResolvedValue(vi.fn()),
+    };
+    const onState = vi.fn();
+    const lifecycle = createNotificationLifecycle(service, { onState, onPayload: vi.fn() });
+
+    await lifecycle.setUser({ uid: 'user-a', productPreferenceEnabled: false });
+
+    expect(service.refreshGranted).toHaveBeenCalledWith('user-a', false);
+    expect(service.subscribeForeground).not.toHaveBeenCalled();
+    expect(onState).toHaveBeenLastCalledWith(runtime);
+  });
+
   it('authentication uses silent refresh and installs exactly one foreground listener', async () => {
     const unsubscribe = vi.fn();
     const service = {
+      inspect: vi.fn().mockResolvedValue(runtime),
       refreshGranted: vi.fn().mockResolvedValue(runtime),
       subscribeForeground: vi.fn().mockResolvedValue(unsubscribe),
     };
@@ -29,6 +63,7 @@ describe('notification lifecycle ownership', () => {
     const unsubscribeA = vi.fn();
     const unsubscribeB = vi.fn();
     const service = {
+      inspect: vi.fn().mockResolvedValue(runtime),
       refreshGranted: vi.fn().mockResolvedValue(runtime),
       subscribeForeground: vi.fn()
         .mockResolvedValueOnce(unsubscribeA)
@@ -50,6 +85,7 @@ describe('notification lifecycle ownership', () => {
     const unsubscribeA = vi.fn();
     const unsubscribeB = vi.fn();
     const service = {
+      inspect: vi.fn().mockResolvedValue(runtime),
       refreshGranted: vi.fn().mockResolvedValue(runtime),
       subscribeForeground: vi.fn()
         .mockImplementationOnce(() => new Promise<() => void>(resolve => { resolveA = resolve; }))
@@ -73,6 +109,7 @@ describe('notification lifecycle ownership', () => {
     const unsubscribe = vi.fn();
     const onState = vi.fn();
     const service = {
+      inspect: vi.fn().mockResolvedValue(runtime),
       refreshGranted: vi.fn().mockResolvedValue(runtime),
       subscribeForeground: vi.fn().mockResolvedValue(unsubscribe),
     };

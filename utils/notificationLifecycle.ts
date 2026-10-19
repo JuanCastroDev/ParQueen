@@ -1,6 +1,7 @@
 import type { NotificationRuntimeState } from './notificationRegistration';
 
 interface NotificationLifecycleService {
+  inspect: () => Promise<NotificationRuntimeState>;
   refreshGranted: (uid: string, productPreferenceEnabled: boolean) => Promise<NotificationRuntimeState>;
   subscribeForeground: (uid: string, handler: (payload: unknown) => void) => Promise<() => void>;
 }
@@ -12,7 +13,7 @@ interface NotificationLifecycleCallbacks {
 
 interface NotificationLifecycleUser {
   uid: string;
-  productPreferenceEnabled: boolean;
+  productPreferenceEnabled: boolean | null;
 }
 
 export function createNotificationLifecycle(
@@ -34,10 +35,13 @@ export function createNotificationLifecycle(
       callbacks.onState(null);
       return;
     }
-
-    const state = await service.refreshGranted(user.uid, user.productPreferenceEnabled);
+    const state = user.productPreferenceEnabled === null
+      ? await service.inspect()
+      : await service.refreshGranted(user.uid, user.productPreferenceEnabled);
     if (ownGeneration !== generation) return;
     callbacks.onState(state);
+
+    if (user.productPreferenceEnabled !== true) return;
 
     const unsubscribe = await service.subscribeForeground(user.uid, callbacks.onPayload);
     if (ownGeneration !== generation) {
