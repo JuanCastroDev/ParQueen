@@ -387,6 +387,7 @@ const es: Record<string, string> = {
     'nearby_activity.radius_aria': 'Radio de búsqueda: {radius}. Toca para cambiarlo.',
     'nearby_activity.radius_sheet_title': 'Radio de búsqueda',
     'nearby_activity.radius_sheet_body': 'Los Pings cercanos y las alertas de parqueo usan este radio.',
+    'nearby_activity.radius_save_error': 'No se pudo guardar el radio de búsqueda. Inténtalo de nuevo.',
     'nearby_activity.live_nearby': 'EN VIVO CERCA DE TI',
     'nearby_activity.count_one': '{count} Ping en {radius}',
     'nearby_activity.count_many': '{count} Pings en {radius}',

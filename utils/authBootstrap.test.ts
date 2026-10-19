@@ -11,6 +11,8 @@ import {
   decideLoggedOutStartupView,
   isExpectedBootstrapUnavailable,
   lookupProfileBootstrapStatus,
+  projectPrivatePreferencesSnapshot,
+  projectPublicProfileSnapshot,
 } from './authBootstrap';
 import { TimeoutError, withTimeout } from './withTimeout';
 
@@ -240,5 +242,235 @@ describe('lookupProfileBootstrapStatus', () => {
       ),
     ).resolves.toBe('unavailable');
     expect(isExpectedBootstrapUnavailable(new TimeoutError('x'))).toBe(true);
+  });
+});
+
+describe('App user snapshot projection', () => {
+  const acceptedUser = {
+    id: 'user-a',
+    displayName: 'Alex',
+    notificationRadius: 1,
+    notificationsEnabled: true,
+    sharePreciseLocation: true,
+  };
+
+  const preferences = (notificationRadius: number, notificationsEnabled = true) => ({
+    notificationRadius,
+    notificationsEnabled,
+    sharePreciseLocation: true,
+  });
+
+  it('requires trusted explicit notification consent before enabling automatic lifecycle work', () => {
+    const cachedEnabled = projectPrivatePreferencesSnapshot(
+      null,
+      'user-a',
+      preferences(3, true),
+      { fromCache: true, hasPendingWrites: false },
+    );
+    const pendingEnabled = projectPrivatePreferencesSnapshot(
+      cachedEnabled,
+      'user-a',
+      preferences(3, true),
+      { fromCache: true, hasPendingWrites: true },
+    );
+    const confirmedEnabled = projectPrivatePreferencesSnapshot(
+      pendingEnabled,
+      'user-a',
+      preferences(3, true),
+      { fromCache: false, hasPendingWrites: false },
+    );
+    const cachedDisabled = projectPrivatePreferencesSnapshot(
+      null,
+      'user-b',
+      preferences(2, false),
+      { fromCache: true, hasPendingWrites: false },
+    );
+
+    expect(cachedEnabled.notificationPreferenceStatus).toBeUndefined();
+    expect(pendingEnabled.notificationPreferenceStatus).toBeUndefined();
+    expect(confirmedEnabled.notificationPreferenceStatus).toBe('enabled');
+    expect(cachedDisabled.notificationPreferenceStatus).toBe('disabled');
+  });
+
+  it('keeps a missing notification preference unresolved', () => {
+    const projected = projectPrivatePreferencesSnapshot(
+      null,
+      'user-a',
+      { notificationRadius: 2, sharePreciseLocation: false },
+      { fromCache: false, hasPendingWrites: false },
+    );
+
+    expect(projected.notificationPreferenceStatus).toBeUndefined();
+  });
+
+  it('returns to unresolved when trusted preferences remove notification consent', () => {
+    const enabled = projectPrivatePreferencesSnapshot(
+      null,
+      'user-a',
+      { notificationsEnabled: true },
+      { fromCache: false, hasPendingWrites: false },
+    );
+    const missing = projectPrivatePreferencesSnapshot(
+      enabled,
+      'user-a',
+      { notificationRadius: 2 },
+      { fromCache: false, hasPendingWrites: false },
+    );
+
+    expect(enabled.notificationPreferenceStatus).toBe('enabled');
+    expect(missing.notificationPreferenceStatus).toBeUndefined();
+  });
+
+  it('keeps the accepted radius through a pending write and rejected-write rollback', () => {
+    const pending = projectPrivatePreferencesSnapshot(
+      acceptedUser,
+      'user-a',
+      preferences(5),
+      { fromCache: true, hasPendingWrites: true },
+    );
+    const rolledBack = projectPrivatePreferencesSnapshot(
+      pending,
+      'user-a',
+      preferences(1),
+      { fromCache: false, hasPendingWrites: false },
+    );
+
+    expect(pending.notificationRadius).toBe(1);
+    expect(rolledBack.notificationRadius).toBe(1);
+  });
+
+  it('applies an acknowledged radius and a separate non-pending change', () => {
+    const pending = projectPrivatePreferencesSnapshot(
+      acceptedUser,
+      'user-a',
+      preferences(5),
+      { fromCache: true, hasPendingWrites: true },
+    );
+    const acknowledged = projectPrivatePreferencesSnapshot(
+      pending,
+      'user-a',
+      preferences(5),
+      { fromCache: false, hasPendingWrites: false },
+    );
+    const otherDevice = projectPrivatePreferencesSnapshot(
+      acknowledged,
+      'user-a',
+      preferences(3),
+      { fromCache: false, hasPendingWrites: false },
+    );
+
+    expect(acknowledged.notificationRadius).toBe(5);
+    expect(otherDevice.notificationRadius).toBe(3);
+  });
+
+  it('does not create a transient radius transition that could rebuild Nearby subscriptions', () => {
+    const observedRadii: unknown[] = [acceptedUser.notificationRadius];
+    let state = acceptedUser;
+    for (const snapshot of [
+      { data: preferences(5), metadata: { fromCache: true, hasPendingWrites: true } },
+      { data: preferences(1), metadata: { fromCache: false, hasPendingWrites: false } },
+    ]) {
+      const next = projectPrivatePreferencesSnapshot(state, 'user-a', snapshot.data, snapshot.metadata);
+      if (next.notificationRadius !== state.notificationRadius) {
+        observedRadii.push(next.notificationRadius);
+      }
+      state = next as typeof acceptedUser;
+    }
+
+    expect(observedRadii).toEqual([1]);
+  });
+
+  it('continues projecting other preference fields while a radius write is pending', () => {
+    const pending = projectPrivatePreferencesSnapshot(
+      acceptedUser,
+      'user-a',
+      preferences(5, false),
+      { fromCache: true, hasPendingWrites: true },
+    );
+
+    expect(pending).toMatchObject({
+      notificationRadius: 1,
+      notificationsEnabled: false,
+      sharePreciseLocation: true,
+    });
+  });
+
+  it('accepts non-pending cached data but not an initial pending radius', () => {
+    const cached = projectPrivatePreferencesSnapshot(
+      null,
+      'user-a',
+      preferences(3),
+      { fromCache: true, hasPendingWrites: false },
+    );
+    const initialPending = projectPrivatePreferencesSnapshot(
+      null,
+      'user-a',
+      preferences(5),
+      { fromCache: true, hasPendingWrites: true },
+    );
+
+    expect(cached.notificationRadius).toBe(3);
+    expect(initialPending.notificationRadius).toBeUndefined();
+  });
+
+  it('keeps an accepted radius across same-account profile refreshes without crossing accounts', () => {
+    const privateOptOuts = {
+      ...acceptedUser,
+      notificationRadius: 2,
+      notificationsEnabled: false,
+      notificationPreferenceStatus: 'disabled' as const,
+      sharePreciseLocation: false,
+    };
+    const refreshed = projectPublicProfileSnapshot(
+      privateOptOuts,
+      'user-a',
+      {
+        displayName: 'Alex Updated',
+        notificationRadius: 5,
+        notificationsEnabled: true,
+        sharePreciseLocation: true,
+      },
+      { email: 'alex@example.com' },
+    );
+    const refreshedAgain = projectPublicProfileSnapshot(
+      refreshed,
+      'user-a',
+      { displayName: 'Alex Final' },
+      { email: 'alex@example.com' },
+    );
+    const switched = projectPublicProfileSnapshot(
+      refreshedAgain,
+      'user-b',
+      { displayName: 'Blair' },
+      {},
+    );
+    const newAccountPending = projectPrivatePreferencesSnapshot(
+      switched,
+      'user-b',
+      preferences(5),
+      { fromCache: true, hasPendingWrites: true },
+    );
+
+    expect(refreshed).toMatchObject({
+      id: 'user-a',
+      displayName: 'Alex Updated',
+      notificationRadius: 2,
+      notificationsEnabled: false,
+      notificationPreferenceStatus: 'disabled',
+      sharePreciseLocation: false,
+    });
+    expect(refreshedAgain).toMatchObject({
+      id: 'user-a',
+      displayName: 'Alex Final',
+      notificationRadius: 2,
+      notificationsEnabled: false,
+      notificationPreferenceStatus: 'disabled',
+      sharePreciseLocation: false,
+    });
+    expect(switched.notificationRadius).toBeUndefined();
+    expect(switched.notificationsEnabled).toBeUndefined();
+    expect(switched.notificationPreferenceStatus).toBeUndefined();
+    expect(switched.sharePreciseLocation).toBeUndefined();
+    expect(newAccountPending.notificationRadius).toBeUndefined();
   });
 });

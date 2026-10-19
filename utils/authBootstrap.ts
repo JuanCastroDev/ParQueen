@@ -120,6 +120,73 @@ export function classifyProfileSnapshot(exists: boolean): Exclude<ProfileBootstr
   return exists ? 'exists' : 'missing';
 }
 
+type AppUserSnapshot = Record<string, any> & {
+  id: string;
+  notificationRadius?: unknown;
+  notificationPreferenceStatus?: 'enabled' | 'disabled';
+};
+type FirestoreSnapshotMetadata = { fromCache: boolean; hasPendingWrites: boolean };
+
+/**
+ * Project private preferences into App user state without exposing an optimistic radius.
+ * A non-pending cached value is accepted cached state, not proof of server confirmation;
+ * a pending document cannot safely identify whether notificationRadius itself is pending.
+ */
+export function projectPrivatePreferencesSnapshot(
+  previous: AppUserSnapshot | null,
+  userId: string,
+  preferences: Record<string, any>,
+  metadata: FirestoreSnapshotMetadata,
+): AppUserSnapshot {
+  const current = previous?.id === userId ? previous : { id: userId };
+  let notificationPreferenceStatus = current.notificationPreferenceStatus;
+  if (preferences.notificationsEnabled === false) {
+    notificationPreferenceStatus = 'disabled';
+  } else if (!metadata.fromCache && !metadata.hasPendingWrites) {
+    notificationPreferenceStatus = preferences.notificationsEnabled === true ? 'enabled' : undefined;
+  }
+  return {
+    ...current,
+    notificationsEnabled: preferences.notificationsEnabled,
+    ...(notificationPreferenceStatus
+      ? { notificationPreferenceStatus }
+      : { notificationPreferenceStatus: undefined }),
+    ...(!metadata.hasPendingWrites ? { notificationRadius: preferences.notificationRadius } : {}),
+    sharePreciseLocation: preferences.sharePreciseLocation,
+  };
+}
+
+/** Preserve the same account's accepted private preferences across public-profile refreshes. */
+export function projectPublicProfileSnapshot(
+  previous: AppUserSnapshot | null,
+  userId: string,
+  profile: Record<string, any>,
+  emailOverride: Record<string, any>,
+): AppUserSnapshot {
+  const {
+    notificationRadius: _legacyPublicRadius,
+    notificationsEnabled: _legacyPublicNotifications,
+    sharePreciseLocation: _legacyPublicLocation,
+    notificationPreferenceStatus: _internalNotificationPreferenceStatus,
+    ...publicProfile
+  } = profile;
+  const acceptedPreferences = previous?.id === userId ? {
+    ...(previous.notificationRadius !== undefined
+      ? { notificationRadius: previous.notificationRadius }
+      : {}),
+    ...(previous.notificationsEnabled !== undefined
+      ? { notificationsEnabled: previous.notificationsEnabled }
+      : {}),
+    ...(previous.sharePreciseLocation !== undefined
+      ? { sharePreciseLocation: previous.sharePreciseLocation }
+      : {}),
+    ...(previous.notificationPreferenceStatus !== undefined
+      ? { notificationPreferenceStatus: previous.notificationPreferenceStatus }
+      : {}),
+  } : {};
+  return { id: userId, ...publicProfile, ...acceptedPreferences, ...emailOverride };
+}
+
 /**
  * Bound a profile getDoc to the caller's remaining deadline budget.
  * Settled missing/exists are authoritative; timeout/unavailable/error become `unavailable`.

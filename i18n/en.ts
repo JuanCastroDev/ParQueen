@@ -387,6 +387,7 @@ const en: Record<string, string> = {
     'nearby_activity.radius_aria': 'Search radius: {radius}. Tap to change.',
     'nearby_activity.radius_sheet_title': 'Search radius',
     'nearby_activity.radius_sheet_body': 'Nearby Pings and parking alerts use this radius.',
+    'nearby_activity.radius_save_error': "Couldn't save your radius. Please try again.",
     'nearby_activity.live_nearby': 'LIVE NEARBY',
     'nearby_activity.count_one': '{count} Ping within {radius}',
     'nearby_activity.count_many': '{count} Pings within {radius}',
