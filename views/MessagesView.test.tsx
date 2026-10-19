@@ -75,7 +75,7 @@ let chatSetDocCalls: ChatSetDocCall[] = [];
 let chatSetDocAuto: 'succeed' | 'permission-denied' | 'pending' = 'succeed';
 // 'missing' matches Rules for a parent that was not created (including a
 // mutual-block denial). 'exists' is an already-created shell.
-let chatGetDocAuto: 'missing' | 'exists' = 'missing';
+let chatGetDocAuto: 'missing' | 'exists' | 'squatted' = 'missing';
 
 vi.mock('firebase/firestore', () => ({
     collection: (_db: any, ...path: string[]) => ({ __col: path }),
@@ -104,8 +104,11 @@ vi.mock('firebase/firestore', () => ({
             // permission-denied. initChat probes only after a create
             // collision, to tell "already exists" from a real denial.
             chatGetDocCalls.push(path);
-            if (chatGetDocAuto === 'exists') {
-                resolve({ exists: () => true, data: () => ({}) });
+            if (chatGetDocAuto === 'exists' || chatGetDocAuto === 'squatted') {
+                // 'squatted' models X-1: a readable shell at the canonical
+                // ID whose stored participants are not this pair.
+                const participants = chatGetDocAuto === 'squatted' ? ['mallory', 'me'] : ['me', 'alice'];
+                resolve({ exists: () => true, data: () => ({ participants }) });
                 return;
             }
             reject(Object.assign(new Error('Missing or insufficient permissions'), { code: 'permission-denied' }));
@@ -1410,6 +1413,48 @@ describe('MessagesView — Ping chat-shell init (no read-before-create)', () => 
         expect(reportCriticalActionFailure).toHaveBeenCalledTimes(1);
         expect(reportCriticalActionFailure.mock.calls[0][0]).toBe('chat_init');
         expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === t('messages.toast_open_failed')).length).toBe(1);
+        act(() => renderer.unmount());
+    });
+
+    it('X-1: a readable shell at the canonical ID holding another user ([mallory, me]) is NOT opened', async () => {
+        chatSetDocAuto = 'permission-denied';
+        chatGetDocAuto = 'squatted';
+        const renderer = await renderMessages({ activeChatContext: pingContext });
+        await act(async () => { await flush(); });
+
+        expect(chatGetDocCalls).toEqual([['chats', pingChatId]]);
+        expect(messagesSnapshotCalls).toHaveLength(0);
+        expect(isInConversationDetail(renderer)).toBe(false);
+        expect(reportCriticalActionFailure).toHaveBeenCalledTimes(1);
+        expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === t('messages.toast_open_failed')).length).toBe(1);
+        act(() => renderer.unmount());
+    });
+
+    it('X-1: an inbox-listed shell at the canonical ID with mismatched participants is NOT opened from a Ping', async () => {
+        const renderer = await renderMessages();
+        emitChats([chatDoc(pingChatId, ['mallory', 'me'])]);
+        await act(async () => { await flush(); });
+        act(() => renderer.update(React.createElement(MessagesView, {
+            user: { id: 'me', blockedUsers: [] },
+            activeChatContext: pingContext,
+            onBack: () => {},
+        })));
+        await act(async () => { await flush(); });
+
+        expect(chatSetDocCalls).toHaveLength(0);
+        expect(messagesSnapshotCalls).toHaveLength(0);
+        expect(isInConversationDetail(renderer)).toBe(false);
+        expect(reportCriticalActionFailure).toHaveBeenCalledTimes(1);
+        act(() => renderer.unmount());
+    });
+
+    it('X-1: a self-chat Ping context never writes a shell or opens a thread', async () => {
+        const renderer = await renderMessages({ activeChatContext: { userId: 'me', context: 'Self' } });
+        await act(async () => { await flush(); });
+        expect(chatSetDocCalls).toHaveLength(0);
+        expect(chatGetDocCalls).toEqual([]);
+        expect(isInConversationDetail(renderer)).toBe(false);
+        expect(reportCriticalActionFailure).toHaveBeenCalledTimes(1);
         act(() => renderer.unmount());
     });
 
