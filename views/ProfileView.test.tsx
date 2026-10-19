@@ -61,6 +61,7 @@ vi.mock('firebase/firestore', () => ({
 
 import { ProfileView, describeJourney } from './ProfileView';
 import { AppView } from '../types';
+import { setLang } from '../i18n';
 
 function spotDoc(id: string, ts: number, overrides: any = {}) {
     return { id, data: () => ({ finderId: 'me', status: 'available', address: `spot-${id}`, reportedAt: { toMillis: () => ts }, ...overrides }) };
@@ -98,6 +99,17 @@ function activityAddresses(renderer: TestRenderer.ReactTestRenderer): string[] {
     )
         .map(n => (Array.isArray(n.props.children) ? n.props.children.join('') : String(n.props.children)))
         .filter(s => s.includes('spot-') || s.includes('fb-'));
+}
+
+function activityRows(renderer: TestRenderer.ReactTestRenderer) {
+    return renderer.root.findAll(
+        node => node.type === 'li' && typeof node.props.className === 'string' && node.props.className.includes('pq-activity-row'),
+    );
+}
+
+function nodeText(node: any): string {
+    if (typeof node === 'string' || typeof node === 'number') return String(node);
+    return (node?.children ?? []).map(nodeText).join('');
 }
 
 function queryFor(name: string) {
@@ -201,6 +213,7 @@ describe('ProfileView — impact card sourcing', () => {
 
 describe('ProfileView — RecentActivity bounded queries', () => {
     beforeEach(() => {
+        setLang('en');
         getDocsCalls.length = 0;
         queryLog.length = 0;
         countQueryLog.length = 0;
@@ -325,6 +338,85 @@ describe('ProfileView — RecentActivity bounded queries', () => {
         const renderer = await renderProfile({ id: 'me' });
         expect(activityAddresses(renderer)).toEqual(['spot-a']);
         act(() => renderer.unmount());
+    });
+
+    it('shows Parked and +1 Crown only for successful parking feedback', async () => {
+        feedbackDocs = [feedbackDoc('success', Date.now(), 'success')];
+        const renderer = await renderProfile({ id: 'me' });
+        const [row] = activityRows(renderer);
+
+        expect(nodeText(row)).toContain('Parked');
+        expect(row.findAll(node => typeof node.props.className === 'string' && node.props.className.includes('pq-reward'))).toHaveLength(1);
+        expect(nodeText(row)).toContain('+1');
+        act(() => renderer.unmount());
+    });
+
+    it('shows an unsuccessful parking label and no Crown reward for failed feedback', async () => {
+        feedbackDocs = [feedbackDoc('failed', Date.now(), 'failed')];
+        const renderer = await renderProfile({ id: 'me' });
+        const [row] = activityRows(renderer);
+
+        expect(nodeText(row)).toContain('Parking unsuccessful');
+        expect(nodeText(row)).not.toContain('Parked');
+        expect(row.findAll(node => typeof node.props.className === 'string' && node.props.className.includes('pq-reward'))).toHaveLength(0);
+        act(() => renderer.unmount());
+    });
+
+    it.each([undefined, 'participant_success', 'unexpected'])('shows neutral completed copy and no reward for outcome %s', async outcome => {
+        feedbackDocs = [{
+            id: 'unknown',
+            data: () => ({ userId: 'me', ...(outcome === undefined ? {} : { outcome }), address: 'fb-unknown', createdAt: { toMillis: () => Date.now() } }),
+        }];
+        const renderer = await renderProfile({ id: 'me' });
+        const [row] = activityRows(renderer);
+
+        expect(nodeText(row)).toContain('Parking completed');
+        expect(nodeText(row)).not.toContain('Parked');
+        expect(row.findAll(node => typeof node.props.className === 'string' && node.props.className.includes('pq-reward'))).toHaveLength(0);
+        act(() => renderer.unmount());
+    });
+
+    it('preserves mixed-source ordering while applying outcome-specific display', async () => {
+        const now = Date.now();
+        spotsDocs = [spotDoc('middle', now - 2000)];
+        feedbackDocs = [
+            feedbackDoc('newest-failed', now - 1000, 'failed'),
+            feedbackDoc('oldest-success', now - 3000, 'success'),
+        ];
+        const renderer = await renderProfile({ id: 'me' });
+
+        expect(activityAddresses(renderer)).toEqual(['fb-newest-failed', 'spot-middle', 'fb-oldest-success']);
+        const rows = activityRows(renderer);
+        expect(nodeText(rows[0])).toContain('Parking unsuccessful');
+        expect(nodeText(rows[2])).toContain('+1');
+        act(() => renderer.unmount());
+    });
+
+    it('keeps successful, failed, and neutral feedback labels in English/Spanish parity', async () => {
+        const now = Date.now();
+        feedbackDocs = [
+            feedbackDoc('success', now, 'success'),
+            feedbackDoc('failed', now - 1000, 'failed'),
+            feedbackDoc('unknown', now - 2000, 'unexpected'),
+        ];
+
+        const english = await renderProfile({ id: 'me' });
+        expect(activityRows(english).map(nodeText)).toEqual(expect.arrayContaining([
+            expect.stringContaining('Parked'),
+            expect.stringContaining('Parking unsuccessful'),
+            expect.stringContaining('Parking completed'),
+        ]));
+        act(() => english.unmount());
+
+        setLang('es');
+        const spanish = await renderProfile({ id: 'me' });
+        expect(activityRows(spanish).map(nodeText)).toEqual(expect.arrayContaining([
+            expect.stringContaining('Estacionado'),
+            expect.stringContaining('Estacionamiento sin éxito'),
+            expect.stringContaining('Estacionamiento completado'),
+        ]));
+        act(() => spanish.unmount());
+        setLang('en');
     });
 
     it('15/16/17: a rejected count aggregation does not show a fake zero, does not fall back to the recent-feedback success count, and reaches the existing Profile error state', async () => {

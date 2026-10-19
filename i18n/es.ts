@@ -725,6 +725,8 @@ const es: Record<string, string> = {
     'profile.activity_scheduled': 'Salida programada',
     'profile.activity_pinged': 'Hice ping a un lugar',
     'profile.activity_parked': 'Estacionado',
+    'profile.activity_parking_unsuccessful': 'Estacionamiento sin éxito',
+    'profile.activity_parking_completed': 'Estacionamiento completado',
     'profile.time_just_now': 'Justo ahora',
     'profile.time_min_ago': 'hace {min} min',
     'profile.time_hr_ago': 'hace {hr} hr',
