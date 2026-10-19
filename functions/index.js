@@ -2978,17 +2978,69 @@ exports.setStaffRole = onCall(
   }
 );
 
-// 16) Admin suspend user — writes user doc + standardized audit log entry
+// 16) Admin suspend user — server-authoritative suspension.
+//
+// Order (fail closed, retry-safe; every step is idempotent):
+//   1. Auth: updateUser({disabled:true}) — blocks new sign-ins and every
+//      refresh-token exchange.
+//   2. Auth: revokeRefreshTokens — invalidates refresh tokens so sessions
+//      that are already open cannot mint a new ID token.
+//   3. Firestore (one atomic batch): public users/{uid} keeps ONLY
+//      status:'Suspended'; who/why/when goes to the admin-only
+//      users/{uid}/private/moderation doc (no client rule matches it →
+//      default deny for every client, including the user); legacy public
+//      suspension fields are deleted; adminAuditLog entry.
+// A failure in 1/2 throws before any Firestore write (nothing claims the
+// user is suspended while Auth still lets them in). A failure in 3 leaves
+// Auth disabled with the old public status; the admin retries and the
+// call converges. Residual: already-issued ID tokens stay
+// cryptographically valid until expiry (≤1h) and no callable or rule
+// re-checks suspension in this change (a callable-side gate is deferred);
+// see PR body.
+//
+// Runtime identity: parqueen-admin-auth — the existing SA that setStaffRole
+// already uses for setCustomUserClaims + revokeRefreshTokens. It needs
+// Firebase Auth user update (firebaseauth.users.update) and Firestore
+// write; verify those grants read-only before deploy (see PR body).
+const SUSPENSION_PUBLIC_LEGACY_FIELDS = [
+  'suspendedAt', 'suspendedBy', 'suspensionReason', 'unsuspendedAt', 'unsuspendedBy',
+];
+function legacySuspensionFieldDeletes() {
+  const out = {};
+  for (const f of SUSPENSION_PUBLIC_LEGACY_FIELDS) out[f] = FieldValue.delete();
+  return out;
+}
+function mapSuspensionAuthError(err) {
+  if (err && err.code === 'auth/user-not-found') {
+    return new HttpsError('not-found', 'User not found.');
+  }
+  return new HttpsError('internal', 'Could not update the account sign-in state. Nothing was changed; please retry.');
+}
+
 exports.adminSuspendUser = onCall(
-  { region: 'us-central1', serviceAccount: 'parqueen-admin-write@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
+  { region: 'us-central1', serviceAccount: 'parqueen-admin-auth@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
   async (request) => {
     await requireCurrentAdmin(request);
     const { userId, reason } = request.data || {};
     if (!userId || typeof userId !== 'string') throw new HttpsError('invalid-argument', 'userId required.');
     if (!reason || typeof reason !== 'string' || !reason.trim()) throw new HttpsError('invalid-argument', 'reason required.');
+    if (userId === request.auth.uid) throw new HttpsError('failed-precondition', 'You cannot suspend your own account.');
+
+    const userRef = db.doc(`users/${userId}`);
+    if (!(await userRef.get()).exists) throw new HttpsError('not-found', 'User not found.');
+
+    try {
+      await getAuth().updateUser(userId, { disabled: true });
+      await getAuth().revokeRefreshTokens(userId);
+    } catch (err) {
+      console.error('adminSuspendUser: auth step failed', { code: err && err.code ? String(err.code) : 'unknown' });
+      throw mapSuspensionAuthError(err);
+    }
 
     const now = Timestamp.now();
-    await db.doc(`users/${userId}`).update({
+    const batch = db.batch();
+    batch.update(userRef, { status: 'Suspended', updatedAt: now, ...legacySuspensionFieldDeletes() });
+    batch.set(db.doc(`users/${userId}/private/moderation`), {
       status: 'Suspended',
       suspendedAt: now,
       suspendedBy: request.auth.uid,
@@ -2996,9 +3048,8 @@ exports.adminSuspendUser = onCall(
       unsuspendedAt: null,
       unsuspendedBy: null,
       updatedAt: now,
-    });
-
-    await db.collection('adminAuditLog').add({
+    }, { merge: true });
+    batch.set(db.collection('adminAuditLog').doc(), {
       action: 'user.suspend',
       targetType: 'user',
       targetId: userId,
@@ -3007,21 +3058,38 @@ exports.adminSuspendUser = onCall(
       reason: reason.trim(),
       createdAt: now,
     });
+    await batch.commit();
 
     return { success: true };
   }
 );
 
-// 17) Admin unsuspend user — clears suspension + standardized audit log entry
+// 17) Admin unsuspend user — re-enables Auth, then restores status.
+// Auth first: if re-enable fails nothing changes (retry). If the Firestore
+// batch fails afterwards, the user can sign in while the public status
+// still reads Suspended until the admin retries. Refresh tokens revoked
+// at suspension stay revoked: the user signs in again.
 exports.adminUnsuspendUser = onCall(
-  { region: 'us-central1', serviceAccount: 'parqueen-admin-write@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
+  { region: 'us-central1', serviceAccount: 'parqueen-admin-auth@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
   async (request) => {
     await requireCurrentAdmin(request);
     const { userId } = request.data || {};
     if (!userId || typeof userId !== 'string') throw new HttpsError('invalid-argument', 'userId required.');
 
+    const userRef = db.doc(`users/${userId}`);
+    if (!(await userRef.get()).exists) throw new HttpsError('not-found', 'User not found.');
+
+    try {
+      await getAuth().updateUser(userId, { disabled: false });
+    } catch (err) {
+      console.error('adminUnsuspendUser: auth step failed', { code: err && err.code ? String(err.code) : 'unknown' });
+      throw mapSuspensionAuthError(err);
+    }
+
     const now = Timestamp.now();
-    await db.doc(`users/${userId}`).update({
+    const batch = db.batch();
+    batch.update(userRef, { status: 'Active', updatedAt: now, ...legacySuspensionFieldDeletes() });
+    batch.set(db.doc(`users/${userId}/private/moderation`), {
       status: 'Active',
       unsuspendedAt: now,
       unsuspendedBy: request.auth.uid,
@@ -3029,9 +3097,8 @@ exports.adminUnsuspendUser = onCall(
       suspendedBy: null,
       suspensionReason: null,
       updatedAt: now,
-    });
-
-    await db.collection('adminAuditLog').add({
+    }, { merge: true });
+    batch.set(db.collection('adminAuditLog').doc(), {
       action: 'user.unsuspend',
       targetType: 'user',
       targetId: userId,
@@ -3039,6 +3106,7 @@ exports.adminUnsuspendUser = onCall(
       adminId: request.auth.uid,
       createdAt: now,
     });
+    await batch.commit();
 
     return { success: true };
   }

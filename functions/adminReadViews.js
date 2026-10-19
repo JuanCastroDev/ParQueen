@@ -62,7 +62,21 @@ async function paginateQuery(db, collectionName, baseQuery, params, defaultLimit
   return { snap, nextCursor: done ? null : snap.docs[snap.docs.length - 1].id, done };
 }
 
-function pickUserListFields(id, data) {
+// F3: who/why/when of a suspension lives in the admin-only
+// users/{uid}/private/moderation doc. Legacy users suspended before that
+// move still carry the fields on the public doc, so fall back to them.
+function pickSuspensionFields(data, mod) {
+  const src = mod || data;
+  return {
+    suspendedAt: src.suspendedAt ?? null,
+    suspendedBy: src.suspendedBy ?? null,
+    suspensionReason: src.suspensionReason ?? null,
+    unsuspendedAt: src.unsuspendedAt ?? null,
+    unsuspendedBy: src.unsuspendedBy ?? null,
+  };
+}
+
+function pickUserListFields(id, data, mod = null) {
   return {
     id,
     fullName: data.fullName ?? null,
@@ -75,11 +89,7 @@ function pickUserListFields(id, data) {
     trustScore: data.trustScore ?? null,
     trustStats: data.trustStats ?? null,
     createdAt: data.createdAt ?? null,
-    suspendedAt: data.suspendedAt ?? null,
-    suspendedBy: data.suspendedBy ?? null,
-    suspensionReason: data.suspensionReason ?? null,
-    unsuspendedAt: data.unsuspendedAt ?? null,
-    unsuspendedBy: data.unsuspendedBy ?? null,
+    ...pickSuspensionFields(data, mod),
   };
 }
 
@@ -159,7 +169,12 @@ async function usersList(db, params) {
   const { snap, nextCursor, done } = await paginateQuery(
     db, 'users', db.collection('users').orderBy('__name__'), params, LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT,
   );
-  const users = snap.docs.map(d => pickUserListFields(d.id, d.data()));
+  const modSnaps = snap.empty
+    ? []
+    : await db.getAll(...snap.docs.map(d => d.ref.collection('private').doc('moderation')));
+  const users = snap.docs.map((d, i) => pickUserListFields(
+    d.id, d.data(), modSnaps[i] && modSnaps[i].exists ? modSnaps[i].data() : null,
+  ));
   return { users, nextCursor, done };
 }
 
