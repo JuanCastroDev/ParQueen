@@ -3579,6 +3579,57 @@ describe('users/{uid} directory — Phase A list deny / get-by-id', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// F8 — usernames/{normalized} registry: exact-doc get only, list/query denied.
+// Availability checks (NameEntryView, EditProfileView) are single-doc getDoc;
+// claimUsername (Admin SDK) writes the registry and is unaffected by rules.
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('F8 — usernames registry get-only (list/query denied)', () => {
+    beforeEach(async () => {
+        // Seed exactly the shape claimUsername writes: { uid, claimedAt }.
+        await seed('usernames', 'alice', { uid: OWNER_UID, claimedAt: Timestamp.now() });
+        await seed('usernames', 'bob', { uid: OTHER_UID, claimedAt: Timestamp.now() });
+    });
+
+    it('F8-01: signed-in user can get a taken username doc (availability = taken)', async () => {
+        const snap = await assertSucceeds(getDoc(doc(otherDb(), 'usernames', 'alice')));
+        expect(snap.exists()).toBe(true);
+    });
+
+    it('F8-02: signed-in user can get a free username doc (availability = available)', async () => {
+        const snap = await assertSucceeds(getDoc(doc(thirdDb(), 'usernames', 'free_name')));
+        expect(snap.exists()).toBe(false);
+    });
+
+    it('F8-03: signed-in user cannot list the usernames collection', async () => {
+        await assertFails(getDocs(collection(ownerDb(), 'usernames')));
+        await assertFails(getDocs(collection(thirdDb(), 'usernames')));
+    });
+
+    it('F8-04: signed-in user cannot query usernames by uid (reverse lookup)', async () => {
+        await assertFails(getDocs(query(collection(thirdDb(), 'usernames'), where('uid', '==', OWNER_UID))));
+    });
+
+    it('F8-05: unauthenticated get and list remain denied', async () => {
+        await assertFails(getDoc(doc(anonDb(), 'usernames', 'alice')));
+        await assertFails(getDocs(collection(anonDb(), 'usernames')));
+    });
+
+    it('F8-06: client writes to the registry remain denied (create, update, delete)', async () => {
+        await assertFails(setDoc(doc(thirdDb(), 'usernames', 'newname'), { uid: THIRD_UID, claimedAt: Timestamp.now() }));
+        await assertFails(updateDoc(doc(ownerDb(), 'usernames', 'alice'), { uid: THIRD_UID }));
+        await assertFails(deleteDoc(doc(ownerDb(), 'usernames', 'alice')));
+    });
+
+    it('F8-07: a doc written by the server (rules disabled, as claimUsername does) is immediately get-able by its owner', async () => {
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            await setDoc(doc(ctx.firestore(), 'usernames', 'third_new'), { uid: THIRD_UID, claimedAt: Timestamp.now() });
+        });
+        const snap = await assertSucceeds(getDoc(doc(thirdDb(), 'usernames', 'third_new')));
+        expect(snap.data()?.uid).toBe(THIRD_UID);
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // PROFILE IDENTITY HARDENING — username/fullName authoritative write paths.
 // claimUsername/updateDisplayName (Admin SDK) are now the sole writers of
 // these two fields; direct client mutation is denied. See
