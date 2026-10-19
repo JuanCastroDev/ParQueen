@@ -1544,6 +1544,9 @@ describe('spots — claimer cancellation', () => {
         claimReminderSentAt: null,
         claimAutoReleaseAt: null,
         claimAutoReleasedAt: null,
+        // S-SPOT-1: the shipped client (cancelClaimTransaction.ts) also
+        // nulls claimStartedAt; rules now require the complete cleanup.
+        claimStartedAt: null,
     };
 
     it('CC1: current claimant can cancel a non-expired claim — Ping returns to available', async () => {
@@ -1643,6 +1646,145 @@ describe('spots — claimer cancellation', () => {
         });
         expect(stored?.claimStartedAt?.isEqual(claimedAt)).toBe(true);
         expect(stored?.claimStartedAt?.isEqual(CLAIM_STARTED_AT)).toBe(false);
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// S-SPOT-1 — a claimer cancel must clear ALL claimer metadata (== null)
+// A cancel that reopened the Ping but kept interestedUserId (or any other
+// claimer field) froze it: isAvailableForClaim() refused every other claimer.
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('S-SPOT-1 — claimer cancel requires complete claimer-metadata cleanup', () => {
+    const fullClear = {
+        claimState: null, ownerLeavingNow: null, ownerLeavingNowAt: null,
+        interestedUserId: null, interestedUserName: null,
+        interestedUserVehicleColor: null, interestedUserVehicleType: null,
+        interestedUserVehicleBrand: null, interestedUserTitle: null,
+        etaMinutes: null, interestExpiresAt: null, claimStartedAt: null,
+        claimReminderAt: null, claimReminderSentAt: null,
+        claimAutoReleaseAt: null, claimAutoReleasedAt: null,
+    };
+    const headingSpot = {
+        ...committedScheduledSpot,
+        pingMode: 'now',
+        reportedAt: PAST,
+        expiresAt: FUTURE,
+        claimState: 'heading',
+        interestedUserName: 'bob',
+        interestedUserVehicleType: 'sedan',
+        etaMinutes: 5,
+        interestExpiresAt: FUTURE,
+    };
+
+    async function readSpot(id: string) {
+        let data: any;
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            data = (await getDoc(doc(ctx.firestore(), 'spots', id))).data();
+        });
+        return data;
+    }
+
+    async function thirdClaims(spotId: string) {
+        const db = thirdDb();
+        const claimedAt = Timestamp.now();
+        return runTransaction(db, async (tx) => {
+            tx.update(doc(db, 'spots', spotId), {
+                status: 'interested', claimState: 'heading', interestedUserId: THIRD_UID,
+                // A canceled Ping keeps the claimer identity keys as explicit
+                // nulls, so the next claim must carry its own (profile-bound)
+                // identity values, exactly as the real claim client does.
+                interestedUserName: 'carol', interestedUserTitle: getTitleForCrowns(0),
+                interestExpiresAt: FUTURE, claimStartedAt: claimedAt,
+            });
+            tx.set(doc(db, 'users', THIRD_UID, 'activeIncomingClaims', 'current'), {
+                spotId, claimStartedAt: claimedAt, claimState: 'heading', updatedAt: claimedAt,
+            });
+        });
+    }
+
+    it('SS1-01 (exploit, negative): cancel to available that RETAINS interestedUserId is denied', async () => {
+        await seed('spots', 'ss1', headingSpot);
+        await assertFails(updateDoc(doc(otherDb(), 'spots', 'ss1'), { status: 'available' }));
+        await assertFails(updateDoc(doc(otherDb(), 'spots', 'ss1'), { ...fullClear, interestedUserId: OTHER_UID, status: 'available' }));
+        expect((await readSpot('ss1')).status).toBe('interested');
+    });
+
+    it('SS1-02 (negative): retaining ANY single claimer field on cancel is denied', async () => {
+        await seed('spots', 'ss2', headingSpot);
+        for (const [k, v] of Object.entries({
+            interestedUserName: 'bob', interestedUserVehicleType: 'sedan', claimState: 'heading',
+            etaMinutes: 5, interestExpiresAt: FUTURE, claimStartedAt: CLAIM_STARTED_AT,
+            claimAutoReleaseAt: FUTURE, ownerLeavingNow: true,
+        })) {
+            await assertFails(updateDoc(doc(otherDb(), 'spots', 'ss2'), { ...fullClear, [k]: v, status: 'available' }));
+        }
+    });
+
+    it('SS1-03 (positive): full null cleanup reopens the Ping, and a third user can then claim it', async () => {
+        await seed('users', THIRD_UID, { username: 'carol', crowns: 0 });
+        await seed('spots', 'ss3', headingSpot);
+        await assertSucceeds(updateDoc(doc(otherDb(), 'spots', 'ss3'), { ...fullClear, status: 'available' }));
+        const after = await readSpot('ss3');
+        expect(after.status).toBe('available');
+        expect(after.interestedUserId).toBeNull();
+        await assertSucceeds(thirdClaims('ss3'));
+    });
+
+    it('SS1-04 (exploit chain, negative): a phantom-available Ping (seeded) cannot be claimed by others — the state the sweep repairs', async () => {
+        await seed('users', THIRD_UID, { username: 'carol', crowns: 0 });
+        await seed('spots', 'ss4', { ...headingSpot, status: 'available' });
+        await assertFails(thirdClaims('ss4'));
+    });
+
+    it('SS1-05 (positive): the real cancelClaimTransaction client write passes the stricter rule', async () => {
+        await seed('spots', 'ss5', headingSpot);
+        const outcome = await cancelClaimTransaction(otherDb(), {
+            spotId: 'ss5', claimantId: OTHER_UID, finderId: OWNER_UID,
+            fingerprint: CLAIM_STARTED_AT.toMillis(), message: 'cancelled',
+        } as any);
+        expect(outcome).toBe('cancelled');
+        const after = await readSpot('ss5');
+        expect(after.status).toBe('available');
+        expect(after.interestedUserId).toBeNull();
+        expect(after.claimStartedAt).toBeNull();
+    });
+
+    it('SS1-06 (scheduled, positive+negative): a committed scheduled claim cancels only with full cleanup', async () => {
+        await seed('spots', 'ss6', committedScheduledSpot);
+        await assertFails(updateDoc(doc(otherDb(), 'spots', 'ss6'), { status: 'available', claimState: null }));
+        await assertSucceeds(updateDoc(doc(otherDb(), 'spots', 'ss6'), { ...fullClear, status: 'available' }));
+    });
+
+    it('SS1-07 (expired Ping, Arm 3b): full cleanup without reopening succeeds; partial cleanup or reopening fails', async () => {
+        const expired = { ...headingSpot, reportedAt: PAST, expiresAt: PAST };
+        await seed('spots', 'ss7', expired);
+        await assertFails(updateDoc(doc(otherDb(), 'spots', 'ss7'), { ...fullClear, interestedUserId: OTHER_UID }));
+        await assertFails(updateDoc(doc(otherDb(), 'spots', 'ss7'), { ...fullClear, status: 'available' }));
+        await assertSucceeds(updateDoc(doc(otherDb(), 'spots', 'ss7'), fullClear));
+        const after = await readSpot('ss7');
+        expect(after.status).toBe('interested');
+        expect(after.interestedUserId).toBeNull();
+    });
+
+    it('SS1-08 (arrived handoff preserved): an arrived_pending_outcome / occupied claim cannot be cancelled even with full cleanup', async () => {
+        await seed('spots', 'ss8a', { ...headingSpot, claimState: 'arrived_pending_outcome' });
+        await seed('spots', 'ss8b', { ...headingSpot, status: 'occupied', claimState: 'arrived_pending_outcome', arrivedAt: Timestamp.now() });
+        await assertFails(updateDoc(doc(otherDb(), 'spots', 'ss8a'), { ...fullClear, status: 'available' }));
+        await assertFails(updateDoc(doc(otherDb(), 'spots', 'ss8a'), fullClear));
+        await assertFails(updateDoc(doc(otherDb(), 'spots', 'ss8b'), { ...fullClear, status: 'available' }));
+    });
+
+    it('SS1-09 (authorization, negative): finder and unrelated users still cannot perform the cancel', async () => {
+        await seed('spots', 'ss9', headingSpot);
+        await assertFails(updateDoc(doc(ownerDb(), 'spots', 'ss9'), { ...fullClear, status: 'available' }));
+        await assertFails(updateDoc(doc(thirdDb(), 'spots', 'ss9'), { ...fullClear, status: 'available' }));
+    });
+
+    it('SS1-10 (invalid transition, negative): cancel cannot move the Ping to any status other than available', async () => {
+        await seed('spots', 'ss10', headingSpot);
+        for (const status of ['occupied', 'completed', 'expired']) {
+            await assertFails(updateDoc(doc(otherDb(), 'spots', 'ss10'), { ...fullClear, status }));
+        }
     });
 });
 
@@ -2120,6 +2262,8 @@ describe('spotNotifications — participant-bound creation', () => {
                 claimReminderSentAt: null,
                 claimAutoReleaseAt: null,
                 claimAutoReleasedAt: null,
+                // S-SPOT-1: complete cleanup, exactly as cancelClaimTransaction.ts writes.
+                claimStartedAt: null,
             })
         );
     });
@@ -2817,6 +2961,11 @@ describe('spots — identity-display authority (SP)', () => {
                     interestedUserVehicleType: null,
                     interestedUserVehicleBrand: null,
                     interestedUserTitle: null,
+                    // S-SPOT-1: a legitimate cancel clears every claimer field
+                    // (cancelClaimTransaction.ts). Leaving claimState/
+                    // claimStartedAt behind is now denied (SS1-02).
+                    claimState: null,
+                    claimStartedAt: null,
                 });
                 tx.delete(lockRef);
             }));

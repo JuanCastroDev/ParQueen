@@ -35,6 +35,29 @@ service cloud.firestore {
         && resource.data.get('holdRequestedBy', null) == null;
     }
 
+    // S-SPOT-1: a claimer cancel (Arms 3/3b) must leave EVERY claimer field
+    // null in the result. The shipped client (cancelClaimTransaction.ts)
+    // writes explicit nulls, and absent fields read as null via get(), so
+    // both "set to null" and "never present" pass; any retained value fails.
+    // Without this, {status:'available'} alone kept interestedUserId and
+    // froze the Ping (isAvailableForClaim() refuses every other claimer).
+    function claimerMetadataClearedAfter() {
+      // MapDiff against an all-null map: changedKeys() = claimer fields that
+      // are PRESENT in the result with a non-null value. Fields that are
+      // absent are removedKeys(), which is fine. Single diff keeps this arm
+      // well under the 1000-expression evaluation limit of the spot update
+      // OR-chain (16 separate get() checks exceeded it).
+      return request.resource.data.diff({
+        'interestedUserId': null, 'interestedUserName': null,
+        'interestedUserVehicleColor': null, 'interestedUserVehicleType': null,
+        'interestedUserVehicleBrand': null, 'interestedUserTitle': null,
+        'claimState': null, 'claimStartedAt': null, 'etaMinutes': null,
+        'interestExpiresAt': null, 'ownerLeavingNow': null, 'ownerLeavingNowAt': null,
+        'claimReminderAt': null, 'claimReminderSentAt': null,
+        'claimAutoReleaseAt': null, 'claimAutoReleasedAt': null
+      }).changedKeys().size() == 0;
+    }
+
     // One active incoming claim per user. The lock lives at
     // users/{uid}/activeIncomingClaims/current and must be written in the
     // same commit as the Ping claim. get()/exists() see pre-commit state;
@@ -664,6 +687,7 @@ service cloud.firestore {
           && (resource.data.get('expiresAt', null) == null
               || resource.data.expiresAt > request.time)
           && matchingActiveClaimLockReleased(spotId)
+          && claimerMetadataClearedAfter()
           && onlyChanges(['status', 'claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
                           'interestedUserId', 'interestedUserName',
                           'interestedUserVehicleColor', 'interestedUserVehicleType',
@@ -682,6 +706,7 @@ service cloud.firestore {
           && resource.data.get('expiresAt', null) != null
           && resource.data.expiresAt <= request.time
           && matchingActiveClaimLockReleased(spotId)
+          && claimerMetadataClearedAfter()
           && onlyChanges(['claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
                           'interestedUserId', 'interestedUserName',
                           'interestedUserVehicleColor', 'interestedUserVehicleType',

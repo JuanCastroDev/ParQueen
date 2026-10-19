@@ -238,3 +238,147 @@ describe('cleanupExpiredInterests Function contract', () => {
         expect(fn).toMatch(/serviceAccount:\s*'parqueen-cleanup@parkqueen-46475363-ccf36\.iam\.gserviceaccount\.com'/);
     });
 });
+
+// ─── S-SPOT-1: phantom-claim sweep (status available + retained claimer) ───
+describe('S-SPOT-1 phantomClaimSweep (runs inside cleanupExpiredInterests)', () => {
+    const SUMMARY_RE = /^phantomClaimSweep: examined=\d+ cleared=\d+ errors=\d+$/;
+
+    function phantomSpot(overrides = {}) {
+        return headingSpot({
+            status: 'available',
+            claimState: 'heading',
+            interestExpiresAt: FUTURE,
+            interestedUserVehicleType: 'sedan',
+            etaMinutes: 5,
+            claimStartedAt: PAST,
+            ...overrides,
+        });
+    }
+
+    async function captureLogs(fn) {
+        const lines = [];
+        const orig = console.log;
+        console.log = (...args) => { lines.push(args.map(String).join(' ')); };
+        try { await fn(); } finally { console.log = orig; }
+        return lines;
+    }
+
+    it('PCS-1: a phantom-available Ping is fully cleared and the matching lock is released', async () => {
+        const id = nextId('phantom');
+        const holder = nextId('holder');
+        await db.doc(`spots/${id}`).set(phantomSpot({ interestedUserId: holder }));
+        await db.doc(`users/${holder}/activeIncomingClaims/current`).set({ spotId: id, claimState: 'heading', claimStartedAt: PAST, updatedAt: PAST });
+
+        await indexModule.cleanupExpiredInterests.run();
+
+        const spot = await getSpot(id);
+        expect(spot.status).toBe('available');
+        for (const f of ['interestedUserId', 'interestedUserName', 'interestedUserVehicleType', 'claimState',
+            'claimStartedAt', 'etaMinutes', 'interestExpiresAt']) {
+            expect(spot[f]).toBeNull();
+        }
+        expect(spot.finderId).toBe('finder_x');
+        expect((await db.doc(`users/${holder}/activeIncomingClaims/current`).get()).exists).toBe(false);
+    });
+
+    it('PCS-2: a lock naming a DIFFERENT Ping is preserved while the phantom is cleared', async () => {
+        const id = nextId('phantom2');
+        const holder = nextId('holder2');
+        await db.doc(`spots/${id}`).set(phantomSpot({ interestedUserId: holder }));
+        await db.doc(`users/${holder}/activeIncomingClaims/current`).set({ spotId: 'some_other_spot', claimState: 'heading', claimStartedAt: PAST, updatedAt: PAST });
+        await indexModule.cleanupExpiredInterests.run();
+        expect((await getSpot(id)).interestedUserId).toBeNull();
+        expect((await db.doc(`users/${holder}/activeIncomingClaims/current`).get()).data().spotId).toBe('some_other_spot');
+    });
+
+    it('PCS-3: healthy states are untouched — clean available, live interested claim, occupied/arrived handoff', async () => {
+        const clean = nextId('clean');
+        const live = nextId('live');
+        const arrived = nextId('arrived');
+        await db.doc(`spots/${clean}`).set(headingSpot({ status: 'available', interestedUserId: null, claimState: null, interestExpiresAt: null }));
+        await db.doc(`spots/${live}`).set(headingSpot({ interestExpiresAt: FUTURE }));
+        await db.doc(`spots/${arrived}`).set(headingSpot({ status: 'occupied', claimState: 'arrived_pending_outcome', interestExpiresAt: FUTURE }));
+        await indexModule.cleanupExpiredInterests.run();
+        expect((await getSpot(live)).interestedUserId).toBe('claimant_x');
+        expect((await getSpot(live)).status).toBe('interested');
+        expect((await getSpot(arrived)).interestedUserId).toBe('claimant_x');
+        expect((await getSpot(arrived)).claimState).toBe('arrived_pending_outcome');
+        expect((await getSpot(clean)).status).toBe('available');
+    });
+
+    it('PCS-4: exactly one value-free summary line per run (counts only, no IDs)', async () => {
+        const id = nextId('phantom4');
+        const holder = nextId('holder4');
+        await db.doc(`spots/${id}`).set(phantomSpot({ interestedUserId: holder }));
+        const lines = await captureLogs(() => indexModule.cleanupExpiredInterests.run());
+        const summaries = lines.filter((l) => l.startsWith('phantomClaimSweep'));
+        expect(summaries).toHaveLength(1);
+        expect(summaries[0]).toMatch(SUMMARY_RE);
+        expect(Number(/cleared=(\d+)/.exec(summaries[0])[1])).toBeGreaterThanOrEqual(1);
+        for (const l of lines.filter((x) => x.startsWith('phantomClaimSweep'))) {
+            expect(l).not.toContain(id);
+            expect(l).not.toContain(holder);
+            expect(l).not.toContain('finder_x');
+        }
+    });
+
+    it('PCS-5: one failing candidate is isolated (errors=1) and the others are still cleared', async () => {
+        const bad = nextId('phantomBad');
+        const good = nextId('phantomGood');
+        await db.doc(`spots/${bad}`).set(phantomSpot({ interestedUserId: nextId('hb') }));
+        await db.doc(`spots/${good}`).set(phantomSpot({ interestedUserId: nextId('hg') }));
+        const realTx = db.runTransaction.bind(db);
+        const fakeDb = new Proxy(db, {
+            get(target, prop) {
+                if (prop === 'runTransaction') {
+                    return (fn) => realTx(async (tx) => {
+                        const wrapped = new Proxy(tx, {
+                            get(t, p) {
+                                if (p === 'update') {
+                                    return (ref, data) => {
+                                        if (ref.id === bad) throw new Error('injected');
+                                        return t.update(ref, data);
+                                    };
+                                }
+                                const v = t[p];
+                                return typeof v === 'function' ? v.bind(t) : v;
+                            },
+                        });
+                        return fn(wrapped);
+                    });
+                }
+                const v = target[prop];
+                return typeof v === 'function' ? v.bind(target) : v;
+            },
+        });
+        let result;
+        const lines = await captureLogs(async () => {
+            result = await indexModule._sweepPhantomClaims(fakeDb, Timestamp.now());
+        });
+        expect(result.errors).toBe(1);
+        expect(result.cleared).toBeGreaterThanOrEqual(1);
+        expect((await getSpot(good)).interestedUserId).toBeNull();
+        expect((await getSpot(bad)).interestedUserId).not.toBeNull();
+        expect(lines.filter((l) => l.startsWith('phantomClaimSweep'))).toHaveLength(1);
+        expect(lines.join('\n')).not.toContain(bad);
+        await db.doc(`spots/${bad}`).delete();
+    });
+
+    it('PCS-6: a query failure still emits one summary with errors=1 and never throws', async () => {
+        const brokenDb = { collection: () => { throw new Error('query down'); } };
+        let result;
+        const lines = await captureLogs(async () => {
+            result = await indexModule._sweepPhantomClaims(brokenDb, Timestamp.now());
+        });
+        expect(result).toEqual({ examined: 0, cleared: 0, errors: 1 });
+        expect(lines).toEqual(['phantomClaimSweep: examined=0 cleared=0 errors=1']);
+    });
+
+    it('PCS-7: an expired phantom Ping is outside the sweep (not claimable; deleted hourly)', async () => {
+        const id = nextId('phantomExpired');
+        await db.doc(`spots/${id}`).set(phantomSpot({ expiresAt: PAST }));
+        await indexModule.cleanupExpiredInterests.run();
+        expect((await getSpot(id)).interestedUserId).toBe('claimant_x');
+        await db.doc(`spots/${id}`).delete();
+    });
+});

@@ -336,6 +336,85 @@ exports.cleanupExpiredSpotsHourly = onSchedule(
   }
 );
 
+// S-SPOT-1: phantom-claim sweep. A modified client could cancel a claim by
+// writing only {status:'available'} (+ lock release) while keeping
+// interestedUserId and the other claimer fields. isAvailableForClaim() then
+// refuses every other claimer, freezing the Ping until it expires; the
+// finder cannot clear claimer fields, and cleanupExpiredInterests only
+// selects status=='interested'. Rules Arms 3/3b now require full cleanup
+// (null), but docs written before that rule ships must still be repaired.
+//
+// Query uses the existing spots(status ASC, expiresAt ASC) composite index
+// (firestore.indexes.json) — no new index. Only live available Pings are
+// examined (expired ones are not claimable and are deleted hourly by
+// cleanupExpiredSpotsHourly). Each candidate is re-verified in its own
+// transaction; one failure never stops the others. Emits exactly one
+// value-free summary line per run (counts only — no spot IDs, UIDs or
+// locations): `phantomClaimSweep: examined=N cleared=N errors=N`.
+const PHANTOM_CLAIM_SWEEP_LIMIT = 200;
+const PHANTOM_CLAIM_CLEAR_FIELDS = Object.freeze({
+  interestedUserId: null,
+  interestedUserName: null,
+  interestedUserVehicleColor: null,
+  interestedUserVehicleType: null,
+  interestedUserVehicleBrand: null,
+  interestedUserTitle: null,
+  etaMinutes: null,
+  interestExpiresAt: null,
+  claimState: null,
+  claimStartedAt: null,
+  ownerLeavingNow: null,
+  ownerLeavingNowAt: null,
+  claimReminderAt: null,
+  claimReminderSentAt: null,
+  claimAutoReleaseAt: null,
+  claimAutoReleasedAt: null,
+});
+
+function isPhantomClaim(spot) {
+  return !!spot && spot.status === 'available'
+    && spot.interestedUserId !== undefined && spot.interestedUserId !== null;
+}
+
+async function sweepPhantomClaims(firestoreDb, now) {
+  let examined = 0;
+  let cleared = 0;
+  let errors = 0;
+  try {
+    const snap = await firestoreDb
+      .collection('spots')
+      .where('status', '==', 'available')
+      .where('expiresAt', '>', now)
+      .limit(PHANTOM_CLAIM_SWEEP_LIMIT)
+      .get();
+    examined = snap.size;
+    for (const d of snap.docs) {
+      if (!isPhantomClaim(d.data())) continue;
+      try {
+        const didClear = await firestoreDb.runTransaction(async (tx) => {
+          const fresh = await tx.get(d.ref);
+          if (!fresh.exists || !isPhantomClaim(fresh.data())) return false;
+          const holder = fresh.data().interestedUserId;
+          const lockSnap = typeof holder === 'string' && holder.length > 0 && !holder.includes('/')
+            ? await readActiveIncomingClaim(tx, firestoreDb, holder)
+            : null;
+          tx.update(d.ref, { ...PHANTOM_CLAIM_CLEAR_FIELDS });
+          if (lockSnap) deleteMatchingActiveIncomingClaim(tx, lockSnap, d.id);
+          return true;
+        });
+        if (didClear) cleared++;
+      } catch (e) {
+        errors++;
+      }
+    }
+  } catch (e) {
+    errors++;
+  }
+  console.log(`phantomClaimSweep: examined=${examined} cleared=${cleared} errors=${errors}`);
+  return { examined, cleared, errors };
+}
+exports._sweepPhantomClaims = sweepPhantomClaims;
+
 // 1b) Revert expired interest reservations every minute
 exports.cleanupExpiredInterests = onSchedule(
   {
@@ -424,6 +503,8 @@ exports.cleanupExpiredInterests = onSchedule(
       `✅ cleanupExpiredInterests: examined ${snap.size}, released ${released}, skipped ${skipped} (already stale/renewed), errors ${errors}`
     );
     }
+    // S-SPOT-1: independent of the expired-interest pass above; never throws.
+    await sweepPhantomClaims(db, now);
     try {
       const repair = await repairActiveIncomingClaims(db, now);
       console.log(
