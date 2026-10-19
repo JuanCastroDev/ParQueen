@@ -1153,7 +1153,7 @@ describe('chats and messages — participant isolation', () => {
     });
 
     it('CM-33: a signed-in stranger cannot create a chat they are not a participant of', async () => {
-        const strangerChatId = `${OWNER_UID}_${OTHER_UID}_stranger`;
+        const strangerChatId = [OWNER_UID, OTHER_UID].sort().join('_');
         await assertFails(
             setDoc(doc(thirdDb(), 'chats', strangerChatId), {
                 id: strangerChatId,
@@ -1164,7 +1164,7 @@ describe('chats and messages — participant isolation', () => {
     });
 
     it('CM-34: an unauthenticated client cannot create a chat', async () => {
-        const anonChatId = `${OWNER_UID}_${OTHER_UID}_anon`;
+        const anonChatId = [OWNER_UID, OTHER_UID].sort().join('_');
         await assertFails(
             setDoc(doc(anonDb(), 'chats', anonChatId), {
                 id: anonChatId,
@@ -1186,7 +1186,7 @@ describe('chats and messages — participant isolation', () => {
     });
 
     it('CM-16c: after creating a new shell, only participants can read it — signed-in strangers remain denied (no read widening)', async () => {
-        const newChatId = `${OWNER_UID}_${THIRD_UID}_postcreate`;
+        const newChatId = [OWNER_UID, THIRD_UID].sort().join('_');
         await assertSucceeds(
             setDoc(doc(ownerDb(), 'chats', newChatId), {
                 id: newChatId,
@@ -1201,7 +1201,7 @@ describe('chats and messages — participant isolation', () => {
     });
 
     it('CM-16b: creating a new chat with a participantNames field included is denied (removed from schema)', async () => {
-        const newChatId = `${OWNER_UID}_${THIRD_UID}_pn`;
+        const newChatId = [OWNER_UID, THIRD_UID].sort().join('_');
         await assertFails(
             setDoc(doc(ownerDb(), 'chats', newChatId), {
                 id: newChatId,
@@ -1212,7 +1212,7 @@ describe('chats and messages — participant isolation', () => {
     });
 
     it('CM-17: creating a new chat with a lastMessage field included is denied (legacy shape no longer accepted)', async () => {
-        const newChatId = `${OWNER_UID}_${THIRD_UID}_legacy`;
+        const newChatId = [OWNER_UID, THIRD_UID].sort().join('_');
         await assertFails(
             setDoc(doc(ownerDb(), 'chats', newChatId), {
                 id: newChatId,
@@ -1342,51 +1342,58 @@ describe('chats — mutual user block on conversation create', () => {
         ));
     }
 
+    // X-1: chat IDs must be the canonical sorted pair, so each pair has
+    // exactly one creatable ID. Tests that previously used per-creator IDs
+    // now remove the shell (rules disabled) between creators.
+    const pairId = (a: string, b: string) => [a, b].sort().join('_');
+    async function removeShell(id: string) {
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            await deleteDoc(doc(ctx.firestore(), 'chats', id));
+        });
+    }
+
     it('HB-01: with no block relationship, either participant can create the direct chat', async () => {
-        const createdByA = `hb01-a-${OWNER_UID}`;
-        const createdByB = `hb01-b-${OTHER_UID}`;
-        await assertSucceeds(setDoc(doc(ownerDb(), 'chats', createdByA), shell(createdByA, [OWNER_UID, OTHER_UID])));
-        await assertSucceeds(setDoc(doc(otherDb(), 'chats', createdByB), shell(createdByB, [OTHER_UID, OWNER_UID])));
+        const id = pairId(OWNER_UID, OTHER_UID);
+        await assertSucceeds(setDoc(doc(ownerDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
+        await removeShell(id);
+        await assertSucceeds(setDoc(doc(otherDb(), 'chats', id), shell(id, [OTHER_UID, OWNER_UID])));
     });
 
     it('HB-02: when A blocks B, A cannot create a new chat with B in either participant order', async () => {
         await writeBlock(OWNER_UID, OTHER_UID);
-        const id1 = `hb02-a-${OWNER_UID}`;
-        const id2 = `hb02-b-${OWNER_UID}`;
-        await assertFails(setDoc(doc(ownerDb(), 'chats', id1), shell(id1, [OWNER_UID, OTHER_UID])));
-        await assertFails(setDoc(doc(ownerDb(), 'chats', id2), shell(id2, [OTHER_UID, OWNER_UID])));
+        const id = pairId(OWNER_UID, OTHER_UID);
+        await assertFails(setDoc(doc(ownerDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
+        await assertFails(setDoc(doc(ownerDb(), 'chats', id), shell(id, [OTHER_UID, OWNER_UID])));
     });
 
     it('HB-03: when A blocks B, B cannot create a new chat with A in either participant order', async () => {
         await writeBlock(OWNER_UID, OTHER_UID);
-        const id1 = `hb03-a-${OTHER_UID}`;
-        const id2 = `hb03-b-${OTHER_UID}`;
-        await assertFails(setDoc(doc(otherDb(), 'chats', id1), shell(id1, [OTHER_UID, OWNER_UID])));
-        await assertFails(setDoc(doc(otherDb(), 'chats', id2), shell(id2, [OWNER_UID, OTHER_UID])));
+        const id = pairId(OWNER_UID, OTHER_UID);
+        await assertFails(setDoc(doc(otherDb(), 'chats', id), shell(id, [OTHER_UID, OWNER_UID])));
+        await assertFails(setDoc(doc(otherDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
         await assertFails(getDoc(doc(otherDb(), 'users', OWNER_UID, 'private', 'social')));
     });
 
     it('HB-04: when B blocks A, neither A nor B can create a new chat with the other', async () => {
         await writeBlock(OTHER_UID, OWNER_UID);
-        const byA = `hb04-a-${OWNER_UID}`;
-        const byB = `hb04-b-${OTHER_UID}`;
-        await assertFails(setDoc(doc(ownerDb(), 'chats', byA), shell(byA, [OWNER_UID, OTHER_UID])));
-        await assertFails(setDoc(doc(otherDb(), 'chats', byB), shell(byB, [OTHER_UID, OWNER_UID])));
+        const id = pairId(OWNER_UID, OTHER_UID);
+        await assertFails(setDoc(doc(ownerDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
+        await assertFails(setDoc(doc(otherDb(), 'chats', id), shell(id, [OTHER_UID, OWNER_UID])));
     });
 
     it('HB-05: a block between A and B does not stop either of them from starting a chat with C', async () => {
         await writeBlock(OWNER_UID, OTHER_UID);
-        const aWithC = `hb05-ac-${OWNER_UID}`;
-        const bWithC = `hb05-bc-${OTHER_UID}`;
-        const cWithA = `hb05-ca-${THIRD_UID}`;
+        const aWithC = pairId(OWNER_UID, THIRD_UID);
+        const bWithC = pairId(OTHER_UID, THIRD_UID);
         await assertSucceeds(setDoc(doc(ownerDb(), 'chats', aWithC), shell(aWithC, [OWNER_UID, THIRD_UID])));
         await assertSucceeds(setDoc(doc(otherDb(), 'chats', bWithC), shell(bWithC, [OTHER_UID, THIRD_UID])));
-        await assertSucceeds(setDoc(doc(thirdDb(), 'chats', cWithA), shell(cWithA, [THIRD_UID, OWNER_UID])));
+        await removeShell(aWithC);
+        await assertSucceeds(setDoc(doc(thirdDb(), 'chats', aWithC), shell(aWithC, [THIRD_UID, OWNER_UID])));
     });
 
     it('HB-06: clearing blockedUsers restores create with no other backend cleanup', async () => {
         await writeBlock(OWNER_UID, OTHER_UID);
-        const id = `hb06-${OWNER_UID}`;
+        const id = pairId(OWNER_UID, OTHER_UID);
         await assertFails(setDoc(doc(ownerDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
         await assertFails(setDoc(doc(otherDb(), 'chats', id), shell(id, [OTHER_UID, OWNER_UID])));
         await assertSucceeds(setDoc(
@@ -1394,8 +1401,8 @@ describe('chats — mutual user block on conversation create', () => {
             { blockedUsers: [] },
         ));
         await assertSucceeds(setDoc(doc(ownerDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
-        const otherId = `hb06b-${OTHER_UID}`;
-        await assertSucceeds(setDoc(doc(otherDb(), 'chats', otherId), shell(otherId, [OTHER_UID, OWNER_UID])));
+        await removeShell(id);
+        await assertSucceeds(setDoc(doc(otherDb(), 'chats', id), shell(id, [OTHER_UID, OWNER_UID])));
     });
 
     it('HB-07: an existing chat and its historical message stay readable and are not deleted when a block is added', async () => {
@@ -1451,6 +1458,69 @@ describe('chats — mutual user block on conversation create', () => {
         ));
         const id = `hb08-${OTHER_UID}`;
         await assertFails(setDoc(doc(otherDb(), 'chats', id), shell(id, [OTHER_UID, OWNER_UID])));
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// X-1 — canonical sorted-pair chat IDs (no squatting, no self-chats)
+// A new chats/{chatId} shell is creatable only when chatId equals the sorted
+// '_' join of its two DISTINCT participants. Existing (legacy/forged) shells
+// stay readable to their stored participants; sendMessage refuses to deliver
+// into them (functions/sendMessage.integration.test.js X1-SM-*).
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('X-1 — chats create requires canonical sorted-pair ID', () => {
+    const pairId = (a: string, b: string) => [a, b].sort().join('_');
+    const shell = (id: string, participants: string[]) => ({ id, participants, relatedSpotTitle: 'Street Spot' });
+
+    it('X1-01: attacker M cannot squat chats/{sorted(A,B)} with participants [M, A] (or [A, M], [M, B])', async () => {
+        const squat = pairId(OWNER_UID, OTHER_UID);
+        await assertFails(setDoc(doc(thirdDb(), 'chats', squat), shell(squat, [THIRD_UID, OWNER_UID])));
+        await assertFails(setDoc(doc(thirdDb(), 'chats', squat), shell(squat, [OWNER_UID, THIRD_UID])));
+        await assertFails(setDoc(doc(thirdDb(), 'chats', squat), shell(squat, [THIRD_UID, OTHER_UID])));
+    });
+
+    it('X1-02: either real participant can create the canonical pair ID, participants in either order (positive)', async () => {
+        const id = pairId(OWNER_UID, OTHER_UID);
+        await assertSucceeds(setDoc(doc(ownerDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
+        await testEnv.withSecurityRulesDisabled(async (ctx) => { await deleteDoc(doc(ctx.firestore(), 'chats', id)); });
+        await assertSucceeds(setDoc(doc(otherDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
+    });
+
+    it('X1-03: reversed (unsorted) pair ID is rejected even for the real pair', async () => {
+        const reversed = [OWNER_UID, OTHER_UID].sort().reverse().join('_');
+        await assertFails(setDoc(doc(ownerDb(), 'chats', reversed), shell(reversed, [OWNER_UID, OTHER_UID])));
+    });
+
+    it('X1-04: self-chat [A, A] is rejected', async () => {
+        const self = `${OWNER_UID}_${OWNER_UID}`;
+        await assertFails(setDoc(doc(ownerDb(), 'chats', self), shell(self, [OWNER_UID, OWNER_UID])));
+    });
+
+    it('X1-05: arbitrary / suffixed / random chat IDs are rejected for new creates', async () => {
+        for (const id of [`${pairId(OWNER_UID, OTHER_UID)}_x`, 'randomAutoId12345678', `x_${pairId(OWNER_UID, OTHER_UID)}`]) {
+            await assertFails(setDoc(doc(ownerDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
+        }
+    });
+
+    it('X1-06: legacy-compat — an existing non-canonical shell stays readable by its stored participants only', async () => {
+        const legacy = 'legacyChatId0000001';
+        await seed('chats', legacy, shell(legacy, [OWNER_UID, OTHER_UID]));
+        await assertSucceeds(getDoc(doc(ownerDb(), 'chats', legacy)));
+        await assertSucceeds(getDoc(doc(otherDb(), 'chats', legacy)));
+        await assertFails(getDoc(doc(thirdDb(), 'chats', legacy)));
+    });
+
+    it('X1-07: a pre-existing squatted shell is unreadable to the excluded real participant B (client must treat as open-failed)', async () => {
+        const squat = pairId(OWNER_UID, OTHER_UID);
+        await seed('chats', squat, shell(squat, [THIRD_UID, OWNER_UID]));
+        await assertFails(getDoc(doc(otherDb(), 'chats', squat)));
+        await assertFails(setDoc(doc(otherDb(), 'chats', squat), shell(squat, [OWNER_UID, OTHER_UID])));
+    });
+
+    it('X1-08: the existing mutual-block check still applies to canonical IDs', async () => {
+        await assertSucceeds(setDoc(doc(ownerDb(), 'users', OWNER_UID, 'private', 'social'), { blockedUsers: [OTHER_UID] }));
+        const id = pairId(OWNER_UID, OTHER_UID);
+        await assertFails(setDoc(doc(otherDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
     });
 });
 

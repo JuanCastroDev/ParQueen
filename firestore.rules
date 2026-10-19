@@ -1173,6 +1173,15 @@ service cloud.firestore {
         && request.resource.data.participants[0] is string
         && request.resource.data.participants[1] is string
         && request.auth.uid in request.resource.data.participants
+        // X-1: the ID must be the canonical sorted '_' join of two DISTINCT
+        // participants (utils/chatShell.ts chatIdForPair). Without this a
+        // third user could pre-create chats/A_B holding [M, A] and intercept
+        // A's messages meant for B while locking B out (create-once).
+        // Participants may be stored in either order.
+        && request.resource.data.participants[0] != request.resource.data.participants[1]
+        && chatId == (request.resource.data.participants[0] < request.resource.data.participants[1]
+             ? request.resource.data.participants[0] + '_' + request.resource.data.participants[1]
+             : request.resource.data.participants[1] + '_' + request.resource.data.participants[0])
         && !directChatIsBlocked(request.resource.data.participants);
       allow update: if false;
       // Direct client deletion disabled — deleteChat (functions/index.js) is

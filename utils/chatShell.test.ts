@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   chatIdForPair,
+  chatShellMatchesPair,
   chatShellCreatePayload,
   ensureChatShell,
   isExistingChatCreateCollision,
@@ -112,5 +113,23 @@ describe('ensureChatShell', () => {
       throw Object.assign(new Error('Missing or insufficient permissions'), { code: 'permission-denied' });
     });
     await expect(ensureChatShell(create, payload, shellExists)).rejects.toBe(err);
+  });
+});
+
+describe('chatShellMatchesPair (X-1)', () => {
+  it('accepts the canonical ID with the exact pair in either order', () => {
+    expect(chatShellMatchesPair('alice_me', ['me', 'alice'], 'me', 'alice')).toBe(true);
+    expect(chatShellMatchesPair('alice_me', ['alice', 'me'], 'me', 'alice')).toBe(true);
+  });
+  it('rejects a squatted shell at the canonical ID holding a third user', () => {
+    expect(chatShellMatchesPair('alice_me', ['mallory', 'me'], 'me', 'alice')).toBe(false);
+    expect(chatShellMatchesPair('alice_me', ['alice', 'mallory'], 'me', 'alice')).toBe(false);
+  });
+  it('rejects non-canonical IDs, self-pairs and malformed participants', () => {
+    expect(chatShellMatchesPair('me_alice', ['me', 'alice'], 'me', 'alice')).toBe(false);
+    expect(chatShellMatchesPair('me_me', ['me', 'me'], 'me', 'me')).toBe(false);
+    expect(chatShellMatchesPair('alice_me', ['me'], 'me', 'alice')).toBe(false);
+    expect(chatShellMatchesPair('alice_me', undefined, 'me', 'alice')).toBe(false);
+    expect(chatShellMatchesPair('alice_me', ['me', 'alice', 'x'], 'me', 'alice')).toBe(false);
   });
 });

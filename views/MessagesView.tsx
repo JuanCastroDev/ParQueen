@@ -9,7 +9,7 @@ import { getApp } from 'firebase/app';
 import { db } from '../firebase';
 import { moderateMessage } from '../utils/moderation';
 import { reportCriticalActionFailure } from '../utils/errorReporting';
-import { chatShellCreatePayload, ensureChatShell } from '../utils/chatShell';
+import { chatShellCreatePayload, chatShellMatchesPair, ensureChatShell } from '../utils/chatShell';
 import { filterVisibleConversations } from '../utils/filterVisibleConversations';
 import { t, useLang } from '../i18n';
 import { AppView } from '../types';
@@ -420,9 +420,30 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
       activeChatContext.context || 'Street Spot',
     );
     const chatId = payload.id;
+    const otherUid = activeChatContext.userId;
+
+    const failOpen = (e: any) => {
+      const code: string = e?.code ?? '';
+      console.error('Error initializing chat:', e);
+      reportCriticalActionFailure('chat_init', e, code ? { errorCode: code } : undefined);
+      showToast(t('messages.toast_open_failed'), true);
+    };
 
     const initChat = async () => {
-      const alreadyListed = conversationsRef.current.some(c => c.id === chatId);
+      // X-1: never open a self-chat, and never open a listed shell at the
+      // canonical ID unless its stored participants are exactly this pair
+      // (a pre-created chats/A_B holding [M, A] would otherwise route A's
+      // messages to M).
+      if (!otherUid || otherUid === user.id) {
+        if (!cancelled) failOpen(Object.assign(new Error('Invalid chat pair'), { code: 'invalid-argument' }));
+        return;
+      }
+      const listed = conversationsRef.current.find(c => c.id === chatId);
+      if (listed && !chatShellMatchesPair(chatId, (listed as any).participants, user.id, otherUid)) {
+        if (!cancelled) failOpen(Object.assign(new Error('Chat participants mismatch'), { code: 'failed-precondition' }));
+        return;
+      }
+      const alreadyListed = !!listed;
       if (!alreadyListed) {
         try {
           await ensureChatShell(
@@ -434,15 +455,15 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
               // rather than a phantom thread (mutual block, or any
               // other create denial).
               const snap = await getDoc(doc(db, 'chats', chatId));
-              return snap.exists();
+              // X-1: readable is not enough — the existing shell must hold
+              // exactly this pair, else surface open-failed.
+              return snap.exists()
+                && chatShellMatchesPair(chatId, snap.data()?.participants, user.id, otherUid);
             },
           );
         } catch (e: any) {
           if (cancelled) return;
-          const code: string = e?.code ?? '';
-          console.error('Error initializing chat:', e);
-          reportCriticalActionFailure('chat_init', e, code ? { errorCode: code } : undefined);
-          showToast(t('messages.toast_open_failed'), true);
+          failOpen(e);
           return;
         }
       }
