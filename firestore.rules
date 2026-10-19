@@ -1098,7 +1098,38 @@ service cloud.firestore {
       // requireCurrentAdmin-gated adminReadView callable. Owner self-read
       // preserved.
       allow read: if signedIn() && request.auth.uid == userId;
-      allow write: if signedIn() && request.auth.uid == userId;
+      // F7: strict owner-only schema. Accepts exactly the shipped client
+      // shapes (StreetParkingView.tsx writeCleaningReminder full setDoc,
+      // byte-identical since 2bd192a/c640477, and the merges
+      // {reminderEnabled:false,nextCleaningAt:null,reminderAt:null},
+      // {active:false}, {reminderEnabled:<bool>}). fcmToken stays ALLOWED
+      // (type/size-checked) for legacy native bundles that still write it;
+      // scheduleCleaningReminders ignores it and reads the owner's
+      // users/{uid}/private/preferences token instead. reminderAt must be a
+      // timestamp or null (R3 poison-doc fix, defense in depth).
+      allow create, update: if signedIn() && request.auth.uid == userId
+        && validParkingSession(request.resource.data, userId);
+      allow delete: if signedIn() && request.auth.uid == userId;
+    }
+
+    function validParkingSession(d, userId) {
+      return d.keys().hasOnly(['userId', 'fcmToken', 'streetName', 'nextCleaningAt',
+                               'reminderAt', 'reminderMinutesBefore', 'reminderEnabled',
+                               'reminderSent', 'active', 'savedAt'])
+        && (!('userId' in d) || d.userId == userId)
+        && (!('fcmToken' in d) || d.fcmToken == null
+            || (d.fcmToken is string && d.fcmToken.size() <= 4096))
+        && (!('streetName' in d) || d.streetName == null
+            || (d.streetName is string && d.streetName.size() <= 200))
+        && (!('nextCleaningAt' in d) || d.nextCleaningAt == null || d.nextCleaningAt is timestamp)
+        && (!('reminderAt' in d) || d.reminderAt == null || d.reminderAt is timestamp)
+        && (!('reminderMinutesBefore' in d)
+            || (d.reminderMinutesBefore is int
+                && d.reminderMinutesBefore >= 0 && d.reminderMinutesBefore <= 1440))
+        && (!('reminderEnabled' in d) || d.reminderEnabled is bool)
+        && (!('reminderSent' in d) || d.reminderSent is bool)
+        && (!('active' in d) || d.active is bool)
+        && (!('savedAt' in d) || d.savedAt is timestamp);
     }
 
     match /parseFailures/{failureId} {
