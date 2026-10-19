@@ -2751,6 +2751,57 @@ describe('users — update allowlist (TM-11)', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// F3 — suspension who/why/when is admin-only (users/{uid}/private/moderation)
+// adminSuspendUser/adminUnsuspendUser (Admin SDK) write it; no client rule
+// matches the path, so every client — the user, peers, a stale admin token —
+// is denied by default. The public users/{uid} doc keeps only `status`.
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('F3 — users/{uid}/private/moderation is admin-only', () => {
+    const modDoc = {
+        status: 'Suspended', suspendedAt: new Date('2026-10-01T00:00:00Z'), suspendedBy: ADMIN_UID,
+        suspensionReason: 'spam', unsuspendedAt: null, unsuspendedBy: null,
+    };
+
+    beforeEach(async () => {
+        await testEnv.withSecurityRulesDisabled(async ctx => {
+            const fs = ctx.firestore();
+            await setDoc(doc(fs, 'users', OWNER_UID), { username: 'alice99', status: 'Suspended' });
+            await setDoc(doc(fs, 'users', OWNER_UID, 'private', 'moderation'), modDoc);
+        });
+    });
+
+    it('F3-R-01: a peer cannot read another user\'s moderation record', async () => {
+        await assertFails(getDoc(doc(otherDb(), 'users', OWNER_UID, 'private', 'moderation')));
+    });
+
+    it('F3-R-02: the suspended user cannot read their own moderation record (admin uid stays private)', async () => {
+        await assertFails(getDoc(doc(ownerDb(), 'users', OWNER_UID, 'private', 'moderation')));
+    });
+
+    it('F3-R-03: an admin-claim token cannot read it directly either (admin UI uses adminReadView)', async () => {
+        await assertFails(getDoc(doc(adminDb(), 'users', OWNER_UID, 'private', 'moderation')));
+    });
+
+    it('F3-R-04: nobody can write it from a client (create / overwrite / delete)', async () => {
+        const { deleteDoc: del } = await import('firebase/firestore');
+        await assertFails(setDoc(doc(ownerDb(), 'users', OWNER_UID, 'private', 'moderation'), { status: 'Active' }));
+        await assertFails(setDoc(doc(adminDb(), 'users', OTHER_UID, 'private', 'moderation'), modDoc));
+        await assertFails(del(doc(ownerDb(), 'users', OWNER_UID, 'private', 'moderation')));
+    });
+
+    it('F3-R-05: the suspended user cannot clear their own public status', async () => {
+        const { updateDoc: upd } = await import('firebase/firestore');
+        await assertFails(upd(doc(ownerDb(), 'users', OWNER_UID), { status: 'Active' }));
+    });
+
+    it('F3-R-06: peers can still get the public doc (status only) — positive control', async () => {
+        const snap = await assertSucceeds(getDoc(doc(otherDb(), 'users', OWNER_UID)));
+        expect(snap.data()?.status).toBe('Suspended');
+        expect(snap.data()).not.toHaveProperty('suspendedBy');
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // TM-10 — spots create schema validation
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('spots — create schema (TM-10)', () => {
