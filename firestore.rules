@@ -798,7 +798,13 @@ service cloud.firestore {
     }
 
     match /usernames/{usernameId} {
-      allow read: if signedIn();
+      // F8: exact-doc get only. Clients check availability with
+      // getDoc(usernames/{normalized}) (NameEntryView, EditProfileView);
+      // nothing lists or queries this registry. Denying list stops a
+      // signed-in client from enumerating every username -> uid pair.
+      // claimUsername (Admin SDK) remains the sole writer.
+      allow get: if signedIn();
+      allow list: if false;
       allow write: if false;
     }
 
