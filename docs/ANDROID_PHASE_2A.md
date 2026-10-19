@@ -55,7 +55,7 @@ keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -sto
 On Windows the default debug keystore is `%USERPROFILE%\.android\debug.keystore`.
 
 3. Place `google-services.json` at `android/app/google-services.json` (**do not commit**; root and `android/` gitignores already exclude it).
-4. Rebuild: `npx cap sync` then Android Studio / `./gradlew :app:assembleDebug`.
+4. Rebuild: `npm run cap:sync:android` then Android Studio / `./gradlew :app:assembleDebug`.
 5. Keep Phone sign-in enabled. Do **not** disable app verification. Do **not** use `VITE_QA_AUTH=true` as a workaround.
 
 ## Android release signing (upload key)

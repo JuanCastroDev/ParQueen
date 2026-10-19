@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 const root = process.cwd();
 const viteBin = resolve(root, 'node_modules/vite/bin/vite.js');
+const androidBuildScript = resolve(root, 'scripts/build-android.mjs');
 const tempDirs: string[] = [];
 
 const makeTempDir = (prefix: string): string => {
@@ -23,6 +24,7 @@ afterEach(() => {
 const childEnvWithoutMapbox = (extra: Record<string, string>): NodeJS.ProcessEnv => {
   const env = { ...process.env, ...extra };
   delete env.VITE_MAPBOX_TOKEN;
+  delete env.VITE_MAPBOX_ANDROID_TOKEN;
   return env;
 };
 
@@ -45,6 +47,16 @@ const runViteBuild = (
     env: isolatedContractEnv(envDir, extraEnv),
     timeout: 120_000,
   });
+
+const runAndroidBuild = (
+  envDir: string,
+  outDir: string,
+) => spawnSync(process.execPath, [androidBuildScript, '--outDir', outDir, '--emptyOutDir'], {
+  cwd: root,
+  encoding: 'utf8',
+  env: isolatedContractEnv(envDir),
+  timeout: 120_000,
+});
 
 const combinedOutput = (result: ReturnType<typeof spawnSync>): string =>
   `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
@@ -89,6 +101,49 @@ describe('production Vite build configuration contract', () => {
     expect(result.status, output).not.toBe(0);
     expect(output).toContain('VITE_MAPBOX_TOKEN');
     expect(existsSync(join(outDir, 'index.html'))).toBe(false);
+  });
+
+  it('keeps ordinary Web/PWA builds compatible without an Android token', { timeout: 180_000 }, () => {
+    const envDir = makeTempDir('parqueen-vite-env-web-only-');
+    const outDir = makeTempDir('parqueen-vite-out-web-only-');
+    writeFileSync(join(envDir, '.env.production'), 'VITE_MAPBOX_TOKEN=pk.web-configured\n', 'utf8');
+
+    const result = runViteBuild(envDir, outDir);
+
+    expect(result.status, combinedOutput(result)).toBe(0);
+    expect(existsSync(join(outDir, 'index.html'))).toBe(true);
+  });
+
+  it('fails an Android asset build when its dedicated token is absent', { timeout: 180_000 }, () => {
+    const envDir = makeTempDir('parqueen-vite-env-android-missing-');
+    const outDir = makeTempDir('parqueen-vite-out-android-missing-');
+    writeFileSync(join(envDir, '.env.production'), 'VITE_MAPBOX_TOKEN=pk.web-configured\n', 'utf8');
+
+    const result = runAndroidBuild(envDir, outDir);
+    const output = combinedOutput(result);
+
+    expect(result.status, output).not.toBe(0);
+    expect(output).toContain('[configuration] Production build requires VITE_MAPBOX_ANDROID_TOKEN.');
+    expect(output).not.toContain('pk.web-configured');
+    expect(existsSync(join(outDir, 'index.html'))).toBe(false);
+  });
+
+  it('builds Android assets when both required public tokens are configured', { timeout: 180_000 }, () => {
+    const envDir = makeTempDir('parqueen-vite-env-android-configured-');
+    const outDir = makeTempDir('parqueen-vite-out-android-configured-');
+    writeFileSync(
+      join(envDir, '.env.production'),
+      'VITE_MAPBOX_TOKEN=pk.web-configured\nVITE_MAPBOX_ANDROID_TOKEN=pk.android-configured\n',
+      'utf8',
+    );
+
+    const result = runAndroidBuild(envDir, outDir);
+    const output = combinedOutput(result);
+
+    expect(result.status, output).toBe(0);
+    expect(output).not.toContain('pk.web-configured');
+    expect(output).not.toContain('pk.android-configured');
+    expect(existsSync(join(outDir, 'index.html'))).toBe(true);
   });
 
   it('does not honor PARQUEEN_VITE_ENV_DIR without the contract-test marker', { timeout: 180_000 }, () => {
