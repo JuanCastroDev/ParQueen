@@ -1531,13 +1531,48 @@ exports.moderateAvatarUpload = onObjectFinalized(
  // "avatars/${uid}" without the trailing slash would also match other users
  // whose UID starts with the same characters (e.g. abc and abcd).
 async function _deletePublishedAvatarsForUser(storageBucket, uid) {
-  await storageBucket.deleteFiles({ prefix: `avatars/${uid}/` });
+  await _deleteStoragePrefixStrict(storageBucket, `avatars/${uid}/`);
   await storageBucket.file(`avatars/${uid}`).delete().catch((err) => {
     // Legacy avatars/{uid} may not exist for newer users; absence is success.
-    if (err?.code !== 404) throw err;
+    if (!_isStorageNotFound(err)) throw err;
   });
 }
 exports._deletePublishedAvatarsForUser = _deletePublishedAvatarsForUser;
+
+// deleteAccount Storage integrity: only "object not found" counts as success.
+// Any other failure (permission, transient 5xx, listing failure, missing
+// bucket config) propagates, so the deleteAccount step fails, the job is
+// marked 'failed' (retryable), and Auth deletion is NOT reached — no Auth
+// account is ever removed while the user's Storage objects remain.
+function _isStorageNotFound(err) {
+  const code = err?.code ?? err?.response?.statusCode;
+  return code === 404 || code === '404';
+}
+exports._isStorageNotFound = _isStorageNotFound;
+
+// Deletes every object under an exact, slash-terminated prefix and PROVES
+// the prefix is empty afterwards. Uses the SDK's bucket.deleteFiles with
+// force:true (keeps going past per-object errors and reports them all)
+// instead of the previous `.catch(() => {})`. Per-object 404s (already gone /
+// raced) are success; any other error — listing failure, 403, 5xx — throws.
+// Idempotent and retry-safe: a re-run only sees what is still present. The
+// final re-list catches anything left behind (incl. a concurrent write), so
+// the step fails and a retry picks it up.
+async function _deleteStoragePrefixStrict(storageBucket, prefix) {
+  if (typeof prefix !== 'string' || !prefix.endsWith('/') || prefix.length < 3) {
+    throw new Error('storage cleanup: refusing non-exact prefix');
+  }
+  try {
+    await storageBucket.deleteFiles({ prefix, force: true });
+  } catch (err) {
+    const errs = Array.isArray(err) ? err : [err];
+    const real = errs.filter((e) => !_isStorageNotFound(e));
+    if (real.length > 0) throw new Error(`storage cleanup incomplete: ${real.length} error(s)`);
+  }
+  const [remaining] = await storageBucket.getFiles({ prefix, maxResults: 1, autoPaginate: false });
+  if (remaining.length > 0) throw new Error('storage cleanup incomplete: objects remain');
+}
+exports._deleteStoragePrefixStrict = _deleteStoragePrefixStrict;
 
 // ── Orphan cleanup helper ─────────────────────────────────────────────────────
 // Deletes avatarUploads/ and avatarCandidates/ objects older than cutoffMs
@@ -3385,6 +3420,52 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
         }
 
         // ── True cursor-based paginated update ────────────────────────────────
+        async function releaseClaimsOfDeletedUser(claimerUid) {
+            const identity = {
+                interestedUserId: FieldValue.delete(),
+                interestedUserName: FieldValue.delete(),
+                interestedUserVehicleColor: FieldValue.delete(),
+                interestedUserVehicleType: FieldValue.delete(),
+                interestedUserVehicleBrand: FieldValue.delete(),
+                interestedUserTitle: FieldValue.delete(),
+            };
+            const activeClaimClear = {
+                claimState: null,
+                claimStartedAt: null,
+                etaMinutes: null,
+                interestExpiresAt: null,
+                ownerLeavingNow: null,
+                ownerLeavingNowAt: null,
+                claimReminderAt: null,
+                claimReminderSentAt: null,
+                claimAutoReleaseAt: null,
+                claimAutoReleasedAt: null,
+            };
+            for (let guard = 0; guard < 1000; guard++) {
+                const snap = await db.collection('spots')
+                    .where('interestedUserId', '==', claimerUid).limit(499).get();
+                if (snap.empty) return;
+                const nowMs = Date.now();
+                const batch = db.batch();
+                for (const d of snap.docs) {
+                    const spot = d.data();
+                    const active = spot.status === 'interested'
+                        && spot.claimState !== 'arrived_pending_outcome';
+                    if (!active) {
+                        batch.update(d.ref, identity);
+                        continue;
+                    }
+                    const expired = spot.expiresAt && typeof spot.expiresAt.toMillis === 'function'
+                        && spot.expiresAt.toMillis() <= nowMs;
+                    batch.update(d.ref, expired
+                        ? { ...identity, ...activeClaimClear }
+                        : { ...identity, ...activeClaimClear, status: 'available' });
+                }
+                await batch.commit();
+            }
+            throw new Error('spotsAsClaimer: release did not converge');
+        }
+
         async function paginatedUpdate(baseQuery, updateData) {
             let cursor = null;
             while (true) {
@@ -3478,21 +3559,18 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
             paginatedDelete(db.collection('spots').where('finderId', '==', uid))
         );
 
-        // Active Pings being claimed — release back to available
-        await step('spotsAsClaimer', () =>
-            paginatedUpdate(
-                db.collection('spots').where('interestedUserId', '==', uid),
-                {
-                    interestedUserId: FieldValue.delete(),
-                    interestedUserName: FieldValue.delete(),
-                    interestedUserVehicleColor: FieldValue.delete(),
-                    interestedUserVehicleType: FieldValue.delete(),
-                    interestedUserVehicleBrand: FieldValue.delete(),
-                    interestedUserTitle: FieldValue.delete(),
-                    status: 'available',
-                }
-            )
-        );
+        // Pings this user claimed. Every one loses the claimer identity (PII).
+        // Only an ACTIVE claim (status 'interested', not arrived) is released:
+        // all claimer metadata is cleared and the Ping reopens to 'available'
+        // unless the Ping itself has already expired (never reopen an expired
+        // Ping — same rule as cancelClaimTransaction / cleanupExpiredInterests).
+        // Terminal/handoff history (occupied, arrived_pending_outcome,
+        // completed, expired, ...) keeps its status and claimState; previously
+        // every such Ping was flipped back to 'available', briefly
+        // re-publishing the finder's private history and breaking the durable
+        // handoff state. Updated docs drop out of the query (interestedUserId
+        // deleted), so the loop drains without a cursor; bounded per batch.
+        await step('spotsAsClaimer', () => releaseClaimsOfDeletedUser(uid));
 
         // Chats — paginated to avoid loading all IDs into memory. Uses the
         // same markChatDeletingAndRecursiveDelete helper deleteChat uses —
@@ -3534,11 +3612,17 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
             )
         );
 
-        // Storage — clean up all three path families; absence is success (idempotent).
-        await step('storageUploads',   () => getStorage().bucket().deleteFiles({ prefix: `avatarUploads/${uid}/`   }).catch(() => {}));
-        await step('storageCandidates',() => getStorage().bucket().deleteFiles({ prefix: `avatarCandidates/${uid}/` }).catch(() => {}));
-        await step('storagePublished', () =>
-            _deletePublishedAvatarsForUser(getStorage().bucket(), uid).catch(() => {}));
+        // Storage — clean up all three user-owned path families BEFORE Auth
+        // deletion. Fail closed: only object-not-found (404) is success; any
+        // other Storage error fails this step, marks the job 'failed'
+        // (retryable, already-done steps are skipped on retry) and leaves the
+        // Auth account in place so the user/support can retry. Previously each
+        // step ended in .catch(() => {}), so a Storage outage or permission
+        // error silently orphaned the user's avatar images while Auth was
+        // deleted anyway.
+        await step('storageUploads',   () => _deleteStoragePrefixStrict(getStorage().bucket(), `avatarUploads/${uid}/`));
+        await step('storageCandidates',() => _deleteStoragePrefixStrict(getStorage().bucket(), `avatarCandidates/${uid}/`));
+        await step('storagePublished', () => _deletePublishedAvatarsForUser(getStorage().bucket(), uid));
 
         // ── Auth deletion — only reached after every required step passes ───────
         // Revalidate lock ownership immediately before the one irreversible step,
