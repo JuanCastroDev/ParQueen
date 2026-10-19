@@ -1,4 +1,5 @@
 export const PRODUCTION_REQUIRED_CLIENT_VARS = ['VITE_MAPBOX_TOKEN'] as const;
+export const ANDROID_BUILD_MARKER = 'PARQUEEN_ANDROID_BUILD';
 
 export const VITE_ENV_DIR_OVERRIDE = 'PARQUEEN_VITE_ENV_DIR';
 export const CONFIG_CONTRACT_TEST_MARKER = 'PARQUEEN_CONFIG_CONTRACT_TEST';
@@ -12,7 +13,10 @@ export type ProductionBuildConfigResult =
 const isBlank = (value: string | undefined): boolean => !value?.trim();
 
 export function missingProductionBuildConfig(env: ProductionBuildEnv): string[] {
-  return PRODUCTION_REQUIRED_CLIENT_VARS.filter((name) => isBlank(env[name]));
+  const required = env[ANDROID_BUILD_MARKER]?.trim() === '1'
+    ? [...PRODUCTION_REQUIRED_CLIENT_VARS, 'VITE_MAPBOX_ANDROID_TOKEN']
+    : PRODUCTION_REQUIRED_CLIENT_VARS;
+  return required.filter((name) => isBlank(env[name]));
 }
 
 export function validateProductionBuildConfig(env: ProductionBuildEnv): ProductionBuildConfigResult {

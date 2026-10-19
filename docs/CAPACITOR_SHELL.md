@@ -22,6 +22,7 @@ Phase 1 adds a Capacitor iOS/Android shell around the existing Vite/React web ap
 npm ci
 npm run build          # production Vite build; requires VITE_MAPBOX_TOKEN
 npm run cap:sync       # build + copy web assets into ios/ and android/
+npm run cap:sync:android # Android build + sync; also requires VITE_MAPBOX_ANDROID_TOKEN
 npm run cap:copy       # build + copy only
 npm run cap:open:android
 npm run cap:open:ios   # macOS only
@@ -31,6 +32,8 @@ npm run cap:open:ios   # macOS only
 
 - `webDir` is `dist` — shell loads the same Vite output Hosting uses.
 - Production `npm run build` (including `cap:copy` / `cap:sync`) fails closed without `VITE_MAPBOX_TOKEN`. Android packaging must not proceed from a token-less `dist/`.
+- Android packaging must use `npm run cap:sync:android`; its Android-only build guard additionally fails closed without `VITE_MAPBOX_ANDROID_TOKEN`.
+- Treat the `dist/` produced by `build:android` as native-only input; do not deploy it to Web/PWA hosting.
 - `VITE_FIREBASE_APPCHECK_SITE_KEY` is not required to build Android web assets; native App Check uses Play Integrity / Debug.
 - Do **not** set `server.url` in `capacitor.config.ts`.
 - Do **not** set `VITE_QA_AUTH=true` for store/native release builds.

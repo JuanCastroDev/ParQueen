@@ -17,21 +17,23 @@ describe('requiredBrowserCredential', () => {
 
 
 describe('resolveMapboxToken', () => {
-  it('keeps the web token for browser/PWA', () => {
+  it('uses the web token for browsers', () => {
     expect(resolveMapboxToken({
       isNative: false,
       platform: 'web',
       webToken: 'web-token',
       iosToken: 'ios-token',
+      androidToken: 'android-token',
     })).toBe('web-token');
   });
 
-  it('keeps the web token for Capacitor Android', () => {
+  it('uses the web token for installed PWAs', () => {
     expect(resolveMapboxToken({
-      isNative: true,
-      platform: 'android',
+      isNative: false,
+      platform: 'web',
       webToken: 'web-token',
       iosToken: 'ios-token',
+      androidToken: 'android-token',
     })).toBe('web-token');
   });
 
@@ -41,8 +43,32 @@ describe('resolveMapboxToken', () => {
       platform: 'ios',
       webToken: 'web-token',
       iosToken: '  ios-token  ',
+      androidToken: 'android-token',
     })).toBe('ios-token');
   });
+
+  it('uses the dedicated token for Capacitor Android', () => {
+    expect(resolveMapboxToken({
+      isNative: true,
+      platform: 'android',
+      webToken: 'web-token',
+      iosToken: 'ios-token',
+      androidToken: '  android-token  ',
+    })).toBe('android-token');
+  });
+
+  it.each([undefined, '', '   '])(
+    'fails closed instead of falling back to the web token when the Android token is %j',
+    androidToken => {
+      expect(() => resolveMapboxToken({
+        isNative: true,
+        platform: 'android',
+        webToken: 'web-token',
+        iosToken: 'ios-token',
+        androidToken,
+      })).toThrow('VITE_MAPBOX_ANDROID_TOKEN is required');
+    },
+  );
 
   it('fails closed when the dedicated iOS token is missing', () => {
     expect(() => resolveMapboxToken({
@@ -50,6 +76,7 @@ describe('resolveMapboxToken', () => {
       platform: 'ios',
       webToken: 'web-token',
       iosToken: '',
+      androidToken: 'android-token',
     })).toThrow('VITE_MAPBOX_IOS_TOKEN is required');
   });
 });
