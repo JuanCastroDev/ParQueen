@@ -3615,48 +3615,131 @@ exports.updateTrustOnFeedback = onDocumentCreated(
 // 12) Trust: record finder-cancelled-after-interest when a spot is deleted while claimed.
 // Only penalizes if status === 'interested' at deletion time — not for normal spot removal.
 // eventId: spotId + ':finder-cancel' is deterministic and unique for this transition.
-exports.scheduleCleaningReminders = onSchedule(
-  { schedule: 'every 15 minutes', region: 'us-central1', serviceAccount: 'parqueen-messaging@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
-  async () => {
+// F7 / R3: street-cleaning reminders.
+// - Recipient is ALWAYS the session owner (parkingSessions/{uid} doc id): the
+//   FCM token is read from users/{uid}/private/preferences.fcmToken at send
+//   time. The session doc's own fcmToken (legacy client shape, still written
+//   by shipped clients) is ignored, so a caller can no longer pick the
+//   recipient device.
+// - streetName is attacker-influenced display text: bounded and sanitized.
+//   reminderMinutesBefore is coerced to a sane integer.
+// - Poison-doc isolation: reminderAt is type-guarded; a truthy non-Timestamp
+//   reminderAt (which previously made filter() throw and aborted the whole
+//   run for every user) is quarantined by the server with
+//   reminderEnabled:false so it stops matching the query. Every doc is
+//   processed in its own try/catch (Promise.allSettled), including the
+//   reminderSent update, so one bad doc never blocks the others.
+// - Exactly one value-free summary line per run (counts only):
+//   `cleaningReminders: due=N sent=N failed=N skippedNoToken=N invalid=N`.
+const CLEANING_REMINDER_STREET_MAX = 80;
+const CLEANING_REMINDER_DEFAULT_MINUTES = 60;
+
+function isFirestoreTimestamp(v) {
+  return v instanceof Timestamp
+    || (!!v && typeof v === 'object' && typeof v.toMillis === 'function' && typeof v.toDate === 'function');
+}
+
+function sanitizeReminderStreetName(v) {
+  if (typeof v !== 'string') return null;
+  // eslint-disable-next-line no-control-regex
+  const cleaned = v.replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return null;
+  return cleaned.length > CLEANING_REMINDER_STREET_MAX
+    ? cleaned.slice(0, CLEANING_REMINDER_STREET_MAX - 1).trimEnd() + '\u2026'
+    : cleaned;
+}
+
+function coerceReminderMinutes(v) {
+  return Number.isInteger(v) && v > 0 && v <= 1440 ? v : CLEANING_REMINDER_DEFAULT_MINUTES;
+}
+
+async function readOwnerFcmToken(uid) {
+  if (typeof uid !== 'string' || uid.length === 0 || uid.includes('/')) return null;
+  const prefs = await db.doc(`users/${uid}/private/preferences`).get();
+  const token = prefs.exists ? prefs.get('fcmToken') : null;
+  return typeof token === 'string' && token.length > 0 && token.length <= 4096 ? token : null;
+}
+
+async function runCleaningReminders(nowMs = Date.now()) {
+  const counts = { due: 0, sent: 0, failed: 0, skippedNoToken: 0, invalid: 0 };
+  try {
     const snap = await db.collection('parkingSessions')
       .where('active', '==', true)
       .where('reminderEnabled', '==', true)
       .where('reminderSent', '==', false)
       .get();
 
-    const now = new Date();
-    const due = snap.docs.filter(d => {
-      const ra = d.data().reminderAt;
-      return ra && ra.toDate() <= now;
-    });
-
-    await Promise.all(due.map(async d => {
-      const { fcmToken, streetName, reminderMinutesBefore, reminderAt, savedAt } = d.data();
-      const savedAtGeneration = savedAt && typeof savedAt.toMillis === 'function'
-        ? savedAt.toMillis()
-        : 'legacy';
-      const deliveryId = `cleaning_${stableId(d.id, savedAtGeneration, reminderAt.toMillis())}`;
+    await Promise.allSettled(snap.docs.map(async (d) => {
       try {
-        const push = {
-          token: fcmToken,
-          notification: {
-            title: 'Move Your Car',
-            body: `Street cleaning on ${streetName} starts in ${reminderMinutesBefore} minutes`,
-          },
-          data: {
-            navigationVersion: '1',
-            navigationType: 'my_car',
-            deliveryId,
-          },
-          android: { priority: 'high' },
-          apns: { payload: { aps: { sound: 'default', badge: 1 } } },
-        };
-        await (_pingNotificationHooks.send?.(push) ?? getMessaging().send(push));
+        const data = d.data() || {};
+        const ra = data.reminderAt;
+        if (ra === null || ra === undefined) return; // legit "no reminder" merge shape
+        if (!isFirestoreTimestamp(ra)) {
+          counts.invalid++;
+          // Quarantine: stop matching the query, and null the poison value
+          // so the doc satisfies the parkingSessions rules schema again (the
+          // owner's later merges, e.g. endSession {active:false}, would
+          // otherwise be denied). The owner's next full write (setDoc
+          // without merge) re-enables a valid reminder.
+          await d.ref.update({ reminderEnabled: false, reminderAt: null });
+          return;
+        }
+        if (ra.toMillis() > nowMs) return; // not due yet
+        counts.due++;
+
+        const savedAtGeneration = isFirestoreTimestamp(data.savedAt) ? data.savedAt.toMillis() : 'legacy';
+        const deliveryId = `cleaning_${stableId(d.id, savedAtGeneration, ra.toMillis())}`;
+        const token = await readOwnerFcmToken(d.id);
+        if (!token) {
+          counts.skippedNoToken++;
+        } else {
+          const street = sanitizeReminderStreetName(data.streetName);
+          const minutes = coerceReminderMinutes(data.reminderMinutesBefore);
+          const push = {
+            token,
+            notification: {
+              title: 'Move Your Car',
+              body: street
+                ? `Street cleaning on ${street} starts in ${minutes} minutes`
+                : `Street cleaning starts in ${minutes} minutes`,
+            },
+            data: {
+              navigationVersion: '1',
+              navigationType: 'my_car',
+              deliveryId,
+            },
+            android: { priority: 'high' },
+            apns: { payload: { aps: { sound: 'default', badge: 1 } } },
+          };
+          try {
+            await (_pingNotificationHooks.send?.(push) ?? getMessaging().send(push));
+            counts.sent++;
+          } catch (e) {
+            counts.failed++;
+            console.error('FCM send failed for session', d.id.slice(0, 8) + '***', sanitizeError(e));
+          }
+        }
+        // One attempt per reminder generation (unchanged semantics).
+        await d.ref.update({ reminderSent: true });
       } catch (e) {
-        console.error('FCM send failed for session', d.id.slice(0, 8) + '***', sanitizeError(e));
+        counts.failed++;
+        console.error('cleaningReminders: session processing failed', d.id.slice(0, 8) + '***', sanitizeError(e));
       }
-      await d.ref.update({ reminderSent: true });
     }));
+  } finally {
+    console.log(
+      `cleaningReminders: due=${counts.due} sent=${counts.sent} failed=${counts.failed} skippedNoToken=${counts.skippedNoToken} invalid=${counts.invalid}`
+    );
+  }
+  return counts;
+}
+exports._runCleaningReminders = runCleaningReminders;
+exports._sanitizeReminderStreetName = sanitizeReminderStreetName;
+
+exports.scheduleCleaningReminders = onSchedule(
+  { schedule: 'every 15 minutes', region: 'us-central1', serviceAccount: 'parqueen-messaging@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
+  async () => {
+    await runCleaningReminders();
   }
 );
 

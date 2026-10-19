@@ -33,6 +33,7 @@ export default defineConfig({
       'functions/eventarcRetryHardening.integration.test.js',
       'functions/incrementTotalSpotsPinged.impactStats.integration.test.js',
       'functions/waitlist.integration.test.js',
+      'functions/scheduleCleaningReminders.integration.test.js',
     ],
     testTimeout: 120000,
     hookTimeout: 120000,

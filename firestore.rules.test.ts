@@ -2297,12 +2297,20 @@ describe('spotNotifications — participant-bound creation', () => {
 // PARKING SESSIONS — path-keyed owner-only
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('parkingSessions', () => {
+    // F7: fixture is now the real shipped client shape (StreetParkingView
+    // writeCleaningReminder). The previous lat/lng/address/startedAt fixture
+    // was never written by any client and is rejected by the strict schema.
     const sessionData = {
-        active:    true,
-        lat:       40.71,
-        lng:       -74.0,
-        address:   '42 Session St',
-        startedAt: Timestamp.now(),
+        userId:                OWNER_UID,
+        fcmToken:              'legacy-client-token',
+        streetName:            'W 42 St',
+        nextCleaningAt:        Timestamp.fromMillis(Date.now() + 7_200_000),
+        reminderAt:            Timestamp.fromMillis(Date.now() + 3_600_000),
+        reminderMinutesBefore: 60,
+        reminderEnabled:       true,
+        reminderSent:          false,
+        active:                true,
+        savedAt:               Timestamp.now(),
     };
 
     beforeEach(async () => {
@@ -2339,6 +2347,101 @@ describe('parkingSessions', () => {
 
     it('P6: admin token can no longer directly read another user\'s session (coordinated remediation — moved to adminReadView userDetail/dashboardCounts callable)', async () => {
         await assertFails(getDoc(doc(adminDb(), 'parkingSessions', OWNER_UID)));
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// F7 / R3 — parkingSessions strict schema. Compatibility proof: every shape
+// the shipped client writes (StreetParkingView.tsx writeCleaningReminder full
+// setDoc incl. legacy fcmToken; deactivate merge; endSession merge; the older
+// c640477 reminderEnabled toggle merge) is accepted; poison/oversized/foreign
+// shapes are denied.
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('F7 — parkingSessions schema (client-compatible, poison-proof)', () => {
+    const clientFullWrite = () => ({
+        userId: OWNER_UID,
+        fcmToken: 'legacy-client-token',
+        streetName: 'Broadway',
+        nextCleaningAt: Timestamp.fromMillis(Date.now() + 7_200_000),
+        reminderAt: Timestamp.fromMillis(Date.now() + 3_600_000),
+        reminderMinutesBefore: 60,
+        reminderEnabled: true,
+        reminderSent: false,
+        active: true,
+        savedAt: Timestamp.now(),
+    });
+    const ref = () => doc(ownerDb(), 'parkingSessions', OWNER_UID);
+
+    it('F7-C1 (compat): the exact writeCleaningReminder full setDoc (with legacy fcmToken) is accepted on create and overwrite', async () => {
+        await assertSucceeds(setDoc(ref(), clientFullWrite()));
+        await assertSucceeds(setDoc(ref(), clientFullWrite()));
+    });
+
+    it('F7-C2 (compat): the same full write WITHOUT fcmToken (future client) is accepted', async () => {
+        const { fcmToken, ...rest } = clientFullWrite();
+        void fcmToken;
+        await assertSucceeds(setDoc(ref(), rest));
+    });
+
+    it('F7-C3 (compat): deactivateCleaningReminder merge {reminderEnabled:false, nextCleaningAt:null, reminderAt:null} is accepted (with and without an existing doc)', async () => {
+        await assertSucceeds(setDoc(ref(), { reminderEnabled: false, nextCleaningAt: null, reminderAt: null }, { merge: true }));
+        await assertSucceeds(setDoc(ref(), clientFullWrite()));
+        await assertSucceeds(setDoc(ref(), { reminderEnabled: false, nextCleaningAt: null, reminderAt: null }, { merge: true }));
+    });
+
+    it('F7-C4 (compat): endSession merge {active:false} and legacy toggle merge {reminderEnabled:<bool>} are accepted', async () => {
+        await assertSucceeds(setDoc(ref(), clientFullWrite()));
+        await assertSucceeds(setDoc(ref(), { active: false }, { merge: true }));
+        await assertSucceeds(setDoc(ref(), { reminderEnabled: true }, { merge: true }));
+    });
+
+    it('F7-C5 (compat): a doc already marked reminderSent:true / quarantined reminderEnabled:false by the server still accepts client merges', async () => {
+        await seed('parkingSessions', OWNER_UID, { ...clientFullWrite(), reminderSent: true, reminderEnabled: false });
+        await assertSucceeds(setDoc(ref(), { active: false }, { merge: true }));
+    });
+
+    it('F7-N1 (R3 poison): non-timestamp reminderAt is denied (string, number, map, bool)', async () => {
+        for (const bad of ['not-a-timestamp', 12345, { seconds: 1 }, true]) {
+            await assertFails(setDoc(ref(), { ...clientFullWrite(), reminderAt: bad }));
+        }
+        await assertFails(setDoc(ref(), { reminderAt: 'x' }, { merge: true }));
+    });
+
+    it('F7-N2: unknown keys are denied (hasOnly)', async () => {
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), recipientUid: OTHER_UID }));
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), lat: 40.7 }));
+    });
+
+    it('F7-N3: streetName must be a string of at most 200 chars', async () => {
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), streetName: 'x'.repeat(201) }));
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), streetName: 42 }));
+        await assertSucceeds(setDoc(ref(), { ...clientFullWrite(), streetName: 'x'.repeat(200) }));
+    });
+
+    it('F7-N4: fcmToken, when present, must be a string of at most 4096 chars', async () => {
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), fcmToken: 'x'.repeat(4097) }));
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), fcmToken: { token: 'x' } }));
+    });
+
+    it('F7-N5: wrong types for flags / minutes / savedAt are denied', async () => {
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), reminderSent: 'false' }));
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), active: 1 }));
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), reminderMinutesBefore: '60' }));
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), reminderMinutesBefore: 100000 }));
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), savedAt: 'now' }));
+    });
+
+    it('F7-N6: userId field, when present, must equal the path owner', async () => {
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), userId: OTHER_UID }));
+    });
+
+    it('F7-A1 (authorization): another user cannot create/update/delete the owner session; owner can delete', async () => {
+        await assertFails(setDoc(doc(otherDb(), 'parkingSessions', OWNER_UID), { ...clientFullWrite() }));
+        await seed('parkingSessions', OWNER_UID, clientFullWrite());
+        await assertFails(setDoc(doc(otherDb(), 'parkingSessions', OWNER_UID), { active: false }, { merge: true }));
+        await assertFails(deleteDoc(doc(otherDb(), 'parkingSessions', OWNER_UID)));
+        await assertFails(setDoc(doc(anonDb(), 'parkingSessions', OWNER_UID), { active: false }, { merge: true }));
+        await assertSucceeds(deleteDoc(ref()));
     });
 });
 
