@@ -122,13 +122,18 @@ export const ProfileView = ({ user, onBack, setView, unreadMessagesCount = 0, pe
           }
         });
 
-        // Every returned feedback doc becomes a "Parked" activity item
-        // regardless of outcome (success or failure) — this source exists
-        // only for RecentActivity display, never for the Spots found count.
+        // Keep all feedback outcomes visible in RecentActivity, but only a
+        // successful parking outcome represents the driver's earned Crown.
         const recentFeedback = feedbackSnap.docs.map(d => ({ id: d.id, ...d.data() } as any));
         recentFeedback.forEach(f => {
           const ts = f.createdAt?.toMillis?.() || 0;
-          items.push({ id: `d-${f.id}`, icon: 'parking', actionKey: 'profile.activity_parked', address: f.address || '', reward: '+1', ts });
+          const successful = f.outcome === 'success';
+          const actionKey = successful
+            ? 'profile.activity_parked'
+            : f.outcome === 'failed'
+              ? 'profile.activity_parking_unsuccessful'
+              : 'profile.activity_parking_completed';
+          items.push({ id: `d-${f.id}`, icon: 'parking', actionKey, address: f.address || '', reward: successful ? '+1' : null, ts });
         });
 
         // successfulHandoffs and pingsShared come from durable users/{uid}

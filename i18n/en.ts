@@ -725,6 +725,8 @@ const en: Record<string, string> = {
     'profile.activity_scheduled': 'Scheduled departure',
     'profile.activity_pinged': 'Pinged a spot',
     'profile.activity_parked': 'Parked',
+    'profile.activity_parking_unsuccessful': 'Parking unsuccessful',
+    'profile.activity_parking_completed': 'Parking completed',
     'profile.time_just_now': 'Just now',
     'profile.time_min_ago': '{min} min ago',
     'profile.time_hr_ago': '{hr} hr ago',
