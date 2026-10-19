@@ -1136,6 +1136,19 @@ describe('deleteAccount — Storage cleanup integrity', () => {
             const real = origDefaultBucket(name ?? STORAGE_BUCKET);
             return new Proxy(real, {
                 get(target, prop) {
+                    if (prop === 'deleteFiles') {
+                        // Same contract as the SDK with force:true: delete what
+                        // can be deleted, then reject with the per-object errors.
+                        return async (q) => {
+                            const [files] = await target.getFiles({ prefix: q.prefix });
+                            const errors = [];
+                            for (const f of files) {
+                                if (shouldFail(f.name)) errors.push(Object.assign(new Error('injected storage 403'), { code: 403 }));
+                                else await f.delete().catch((e) => errors.push(e));
+                            }
+                            if (errors.length) throw errors;
+                        };
+                    }
                     if (prop === 'getFiles') {
                         return async (opts) => {
                             const [files] = await target.getFiles(opts);
@@ -1226,6 +1239,7 @@ describe('deleteAccount — Storage cleanup integrity', () => {
 
     it('DAS-05 (fail closed): a listing failure (e.g. missing permission) blocks Auth deletion', async () => {
         defaultStorage.bucket = () => ({
+            deleteFiles: async () => { throw Object.assign(new Error('injected list 403'), { code: 403 }); },
             getFiles: async () => { throw Object.assign(new Error('injected list 403'), { code: 403 }); },
             file: (n) => origDefaultBucket(STORAGE_BUCKET).file(n),
         });

@@ -1550,21 +1550,25 @@ function _isStorageNotFound(err) {
 }
 exports._isStorageNotFound = _isStorageNotFound;
 
-// Lists then deletes every object under an exact, slash-terminated prefix.
-// Idempotent and retry-safe: re-running after a partial failure only sees the
-// objects that are still present, and already-gone objects (404) are success.
-// After deletion the prefix is re-listed; anything still present (including
-// an object written concurrently) fails the step so a retry picks it up.
+// Deletes every object under an exact, slash-terminated prefix and PROVES
+// the prefix is empty afterwards. Uses the SDK's bucket.deleteFiles with
+// force:true (keeps going past per-object errors and reports them all)
+// instead of the previous `.catch(() => {})`. Per-object 404s (already gone /
+// raced) are success; any other error — listing failure, 403, 5xx — throws.
+// Idempotent and retry-safe: a re-run only sees what is still present. The
+// final re-list catches anything left behind (incl. a concurrent write), so
+// the step fails and a retry picks it up.
 async function _deleteStoragePrefixStrict(storageBucket, prefix) {
   if (typeof prefix !== 'string' || !prefix.endsWith('/') || prefix.length < 3) {
     throw new Error('storage cleanup: refusing non-exact prefix');
   }
-  const [files] = await storageBucket.getFiles({ prefix, autoPaginate: true });
-  let failed = 0;
-  await Promise.all(files.map((f) => f.delete().catch((err) => {
-    if (!_isStorageNotFound(err)) failed++;
-  })));
-  if (failed > 0) throw new Error(`storage cleanup incomplete: ${failed} object(s) not deleted`);
+  try {
+    await storageBucket.deleteFiles({ prefix, force: true });
+  } catch (err) {
+    const errs = Array.isArray(err) ? err : [err];
+    const real = errs.filter((e) => !_isStorageNotFound(e));
+    if (real.length > 0) throw new Error(`storage cleanup incomplete: ${real.length} error(s)`);
+  }
   const [remaining] = await storageBucket.getFiles({ prefix, maxResults: 1, autoPaginate: false });
   if (remaining.length > 0) throw new Error('storage cleanup incomplete: objects remain');
 }
