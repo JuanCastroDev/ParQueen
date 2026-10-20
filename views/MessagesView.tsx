@@ -15,6 +15,7 @@ import { t, useLang } from '../i18n';
 import { AppView } from '../types';
 import { NavigationBar } from './street-parking/NavigationBar';
 import { notifyChatRead } from './street-parking/useUnreadMessages';
+import { chatReadMarkerKey } from '../utils/chatReadMarker';
 
 export type MessagesAndroidBackHandle = {
   handleAndroidBack: () => void;
@@ -150,6 +151,16 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
   }, [androidBackRef, activeConversationId, activeChatContext, onBack]);
 
   const [messages, setMessages] = useState<any[]>([]);
+  const accountSessionRef = useRef({ userId: user?.id ?? null, token: Symbol('account-session') });
+  useLayoutEffect(() => {
+    const nextUserId = user?.id ?? null;
+    if (accountSessionRef.current.userId !== nextUserId) {
+      accountSessionRef.current = { userId: nextUserId, token: Symbol('account-session') };
+    }
+    return () => {
+      accountSessionRef.current = { userId: null, token: Symbol('account-session') };
+    };
+  }, [user?.id]);
   const [drafts, setDrafts] = useState<Record<string, ConversationDraft>>({});
   const draftRevisionRef = useRef(0);
   const activeDraftKey = user?.id && activeConversationId
@@ -161,7 +172,7 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
   const [moderationError, setModerationError] = useState('');
   const moderationErrorContextRef = useRef<string | null>(null);
   const moderationErrorGenerationRef = useRef(0);
-  const pendingSendKeysRef = useRef<Set<string>>(new Set());
+  const pendingSendOwnersRef = useRef<Map<string, symbol>>(new Map());
   const [pendingSendKeys, setPendingSendKeys] = useState<Set<string>>(() => new Set());
   const sending = activeDraftKey ? pendingSendKeys.has(activeDraftKey) : false;
   const [smartReplies, setSmartReplies] = useState<string[]>([]);
@@ -185,10 +196,17 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
     });
   };
 
-  const setSendPending = (key: string, pending: boolean) => {
-    if (pending) pendingSendKeysRef.current.add(key);
-    else pendingSendKeysRef.current.delete(key);
-    setPendingSendKeys(new Set(pendingSendKeysRef.current));
+  const startSendPending = (key: string) => {
+    const owner = Symbol(key);
+    pendingSendOwnersRef.current.set(key, owner);
+    setPendingSendKeys(new Set(pendingSendOwnersRef.current.keys()));
+    return owner;
+  };
+
+  const finishSendPending = (key: string, owner: symbol) => {
+    if (pendingSendOwnersRef.current.get(key) !== owner) return;
+    pendingSendOwnersRef.current.delete(key);
+    setPendingSendKeys(new Set(pendingSendOwnersRef.current.keys()));
   };
 
   const showModerationError = (message: string, contextKey: string) => {
@@ -208,7 +226,7 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
     if (draftOwnerRef.current === nextOwner) return;
     draftOwnerRef.current = nextOwner;
     setDrafts({});
-    pendingSendKeysRef.current.clear();
+    pendingSendOwnersRef.current.clear();
     setPendingSendKeys(new Set());
     moderationErrorGenerationRef.current++;
     moderationErrorContextRef.current = null;
@@ -709,12 +727,12 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
 
   // Update last read timestamp in localStorage when active chat receives messages
   useEffect(() => {
-    if (activeConversationId) {
-      localStorage.setItem(`lastReadChat_${activeConversationId}`, Date.now().toString());
+    if (activeConversationId && user?.id) {
+      localStorage.setItem(chatReadMarkerKey(user.id, activeConversationId), Date.now().toString());
       notifyChatRead();
     }
     setIsMenuOpen(false);
-  }, [activeConversationId, messages.length]);
+  }, [activeConversationId, messages.length, user?.id]);
 
   // 4. Auto-scroll to bottom on initial open / a new live message — NOT on
   // a loadOlderMessages() prepend (suppressed above via suppressAutoScrollRef).
@@ -758,9 +776,11 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
 
   // 5. Send message
   const handleSend = async (text: string) => {
-    if (!text.trim() || !activeConversationId || !user || !db || !activeDraftKey || pendingSendKeysRef.current.has(activeDraftKey)) return;
+    if (!text.trim() || !activeConversationId || !user || !db || !activeDraftKey || pendingSendOwnersRef.current.has(activeDraftKey)) return;
     const sendConversationId = activeConversationId;
+    const sendUserId = user.id;
     const sendKey = activeDraftKey;
+    const sendSessionToken = accountSessionRef.current.token;
     const submittedDraft = drafts[sendKey];
     const submittedRevision = submittedDraft?.text === text ? submittedDraft.revision : null;
     moderationErrorGenerationRef.current++;
@@ -777,7 +797,7 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
     }
 
     const trimmed = text.trim();
-    setSendPending(sendKey, true);
+    const pendingOwner = startSendPending(sendKey);
     try {
         const functions = getFunctions(getApp(), 'us-central1');
         const clientRequestId =
@@ -789,7 +809,8 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
             clientRequestId,
             text: trimmed,
         });
-        localStorage.setItem(`lastReadChat_${sendConversationId}`, Date.now().toString());
+        if (accountSessionRef.current.token !== sendSessionToken) return;
+        localStorage.setItem(chatReadMarkerKey(sendUserId, sendConversationId), Date.now().toString());
         if (submittedRevision !== null) {
           setDrafts(prev => {
             const current = prev[sendKey];
@@ -801,6 +822,7 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
         }
         if (activeDraftKeyRef.current === sendKey) setSmartReplies([]);
     } catch (e: any) {
+        if (accountSessionRef.current.token !== sendSessionToken) return;
         const code: string = e?.code ?? '';
         if (code !== 'functions/invalid-argument' && code !== 'functions/resource-exhausted') {
             // Genuinely unexpected — the moderation/rate-limit branches below are
@@ -821,7 +843,7 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
             showToast(t('messages.toast_send_failed'), true, sendKey);
         }
     } finally {
-        setSendPending(sendKey, false);
+        finishSendPending(sendKey, pendingOwner);
     }
   };
 
@@ -1053,7 +1075,7 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
   }
 
   const unreadThreads = conversations.filter(conv => {
-    const lastRead = parseInt(localStorage.getItem(`lastReadChat_${conv.id}`) || '0', 10);
+    const lastRead = parseInt(localStorage.getItem(chatReadMarkerKey(user.id, conv.id)) || '0', 10);
     return conv.lastMessageTimestamp.getTime() > lastRead && conv.lastSenderId !== user.id;
   });
   const now = new Date();
