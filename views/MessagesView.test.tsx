@@ -345,6 +345,10 @@ describe('MessagesView — chat draft isolation and async send safety', () => {
         resetScrollMock();
     });
 
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     async function renderTwoConversations() {
         const renderer = await renderMessages();
         emitChats([
@@ -654,6 +658,91 @@ describe('MessagesView — chat draft isolation and async send safety', () => {
         });
         expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === t('messages.rate_limited'))).toHaveLength(1);
         expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === 'old moderation message')).toHaveLength(0);
+        act(() => renderer.unmount());
+    });
+
+    it('does not restore a failed-send toast after an account-session round trip reopens the same chat', async () => {
+        vi.useFakeTimers();
+        callableImpl = async () => { throw Object.assign(new Error('internal'), { code: 'functions/internal' }); };
+        const renderer = await renderMessages();
+        emitChats([chatDoc('chat-x', ['me', 'alice'])]);
+        await act(async () => { await flush(); });
+        openFirstConversation(renderer);
+        await typeAndSend(renderer, 'retry me');
+        expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === t('messages.toast_send_failed'))).toHaveLength(1);
+
+        await act(async () => {
+            renderer.update(React.createElement(MessagesView, {
+                user: { id: 'account-b', blockedUsers: [] }, activeChatContext: null, onBack: () => {},
+            }));
+            await flush();
+        });
+        await act(async () => {
+            renderer.update(React.createElement(MessagesView, {
+                user: { id: 'me', blockedUsers: [] }, activeChatContext: null, onBack: () => {},
+            }));
+            await flush();
+        });
+        emitChats([chatDoc('chat-x', ['me', 'alice'])]);
+        await act(async () => { await flush(); });
+        openFirstConversation(renderer);
+
+        expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === t('messages.toast_send_failed'))).toHaveLength(0);
+        act(() => renderer.unmount());
+    });
+
+    it('clears a context-free block toast when the authenticated account changes', async () => {
+        vi.useFakeTimers();
+        const renderer = await renderMessages();
+        emitChats([chatDoc('chat-x', ['me', 'alice'])]);
+        await act(async () => { await flush(); });
+        openFirstConversation(renderer);
+        clickButtonWithAriaLabel(renderer, t('messages.menu_aria'));
+        await act(async () => {
+            clickButtonWithText(renderer, t('messages.block_user'));
+            await flush();
+        });
+        expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === t('messages.toast_blocked'))).toHaveLength(1);
+
+        await act(async () => {
+            renderer.update(React.createElement(MessagesView, {
+                user: { id: 'account-b', blockedUsers: [] }, activeChatContext: null, onBack: () => {},
+            }));
+            await flush();
+        });
+
+        expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === t('messages.toast_blocked'))).toHaveLength(0);
+        act(() => renderer.unmount());
+    });
+
+    it('does not let a prior-account toast timeout clear newer account feedback', async () => {
+        vi.useFakeTimers();
+        callableImpl = async () => { throw Object.assign(new Error('internal'), { code: 'functions/internal' }); };
+        const renderer = await renderMessages();
+        emitChats([chatDoc('chat-x', ['me', 'alice'])]);
+        await act(async () => { await flush(); });
+        openFirstConversation(renderer);
+        await typeAndSend(renderer, 'old failure');
+
+        act(() => { vi.advanceTimersByTime(1000); });
+        await act(async () => {
+            renderer.update(React.createElement(MessagesView, {
+                user: { id: 'account-b', blockedUsers: [] }, activeChatContext: null, onBack: () => {},
+            }));
+            await flush();
+        });
+        emitChats([chatDoc('chat-b', ['account-b', 'bob'])]);
+        await act(async () => { await flush(); });
+        openFirstConversation(renderer);
+        clickButtonWithAriaLabel(renderer, t('messages.menu_aria'));
+        await act(async () => {
+            clickButtonWithText(renderer, t('messages.block_user'));
+            await flush();
+        });
+        expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === t('messages.toast_blocked'))).toHaveLength(1);
+
+        act(() => { vi.advanceTimersByTime(2000); });
+        expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === t('messages.toast_blocked'))).toHaveLength(1);
         act(() => renderer.unmount());
     });
 

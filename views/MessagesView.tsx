@@ -231,6 +231,10 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
     moderationErrorGenerationRef.current++;
     moderationErrorContextRef.current = null;
     setModerationError('');
+    actionToastGenerationRef.current++;
+    actionToastContextRef.current = null;
+    setActionToast('');
+    setToastIsError(false);
     setSmartReplies([]);
     setActiveConversationId(null);
   }, [user?.id]);
