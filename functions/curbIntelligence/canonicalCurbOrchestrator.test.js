@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { runCanonicalCurbOrchestrator, OVERALL_DEADLINE_MS } = require('./canonicalCurbOrchestrator');
+const { runCanonicalCurbOrchestrator, OVERALL_DEADLINE_MS, mapCanonicalAuthorityFailure } = require('./canonicalCurbOrchestrator');
 const { publicCurbKey, toPublicCurb } = require('./canonicalCurbIdentity');
+const { resolveCanonicalCurb } = require('./canonicalCurbResolver');
+const { createPrivateBlockfaceResolver } = require('./privateBlockfaceResolver');
 
 const identity = Object.freeze({
   schemaVersion: 2,
@@ -40,8 +42,60 @@ const selectedRules = Object.freeze({
   cleaning: { category: 'cleaning', source: 'dot', schedules: [] },
   restrictions: [], timeLimits: [], meter: null, admin: [], conflicts: [],
 });
+const metadata = { id: 'inkn-q76z', rowsUpdatedAt: 1767225600, viewLastModified: 1767225660 };
+const raw = (id, name, geometry, left = '1000000001', right = '1000000002') => ({
+  globalid: id, physicalid: `${id}-physical`, b5sc: `${id}-b5sc`,
+  l_blockfaceid: left, r_blockfaceid: right, boroughcode: '2', rw_type: '1',
+  full_street_name: name, street_name: name, stname_label: name, streetwidth: '34',
+  from_level_code: '13', to_level_code: '13', status: '2', nonped: '', accessible: '',
+  from_street: 'WHITE PLAINS ROAD', to_street: 'LURTING AVENUE', the_geom: geometry,
+});
+const fetchFor = rows => vi.fn(async url => ({ ok: true, json: async () => (
+  String(url).includes('/api/views/') ? metadata : rows
+) }));
+const function3cSuccess = officialBlockFaceId => ({
+  ok: true,
+  officialBlockFaceId,
+  normalizedStreetNames: {
+    onStreet: 'MARAN PLACE',
+    crossStreetOne: 'WHITE PLAINS ROAD',
+    crossStreetTwo: 'LURTING AVENUE',
+  },
+  returnCode: '00', reasonCode: ' ',
+  sourceVersion: { geosupportRelease: '26C', geosupportVersion: '26.3' },
+});
+function function3c(officialBlockFaceId = '1000000001') {
+  const transport = vi.fn(async () => ({
+    status: 200, text: async () => JSON.stringify(function3cSuccess(officialBlockFaceId)),
+  }));
+  return {
+    blockfaceResolver: createPrivateBlockfaceResolver({
+      mode: 'shadow', serviceUrl: 'https://parqueen-test-resolver-uc.a.run.app',
+      getIdToken: vi.fn(async () => 'synthetic-token'), transport,
+    }),
+    transport,
+  };
+}
+let authenticPrimary;
+let authenticAmbiguous;
+beforeAll(async () => {
+  authenticPrimary = await resolveCanonicalCurb(location, {
+    fetchFn: fetchFor([raw('private-global', 'MARAN PLACE', {
+      type: 'MultiLineString', coordinates: [[[-74.001, 40.69992], [-73.999, 40.69992]]],
+    })]), requestNonce: 'server-nonce',
+  });
+  authenticAmbiguous = await resolveCanonicalCurb({
+    ...location, lat: 40.700035, lng: -73.999965, accuracyMeters: 3, consistencyMeters: 3,
+  }, {
+    fetchFn: fetchFor([
+      raw('horizontal', 'MARAN PLACE', { type: 'MultiLineString', coordinates: [[[-74, 40.7], [-73.999, 40.7]]] }),
+      raw('vertical', 'WHITE PLAINS ROAD', { type: 'MultiLineString', coordinates: [[[-74, 40.7], [-74, 40.701]]] }, '2000000001', '2000000002'),
+    ]), requestNonce: 'server-nonce',
+  });
+});
 
 function dependencies(overrides = {}) {
+  const proof = function3c();
   return {
     resolveCanonicalCurb: vi.fn(async () => supported()),
     applyVisualCurbSelection: vi.fn(async () => supported()),
@@ -51,19 +105,51 @@ function dependencies(overrides = {}) {
     requestNonceFactory: () => 'server-nonce',
     inFlight: new Map(),
     telemetry: { emit: vi.fn() },
+    blockfaceResolver: proof.blockfaceResolver,
     ...overrides,
   };
 }
 
 describe('runCanonicalCurbOrchestrator', () => {
-  it('resolves, loads one source fan-out, persists, and returns a public high-confidence response', async () => {
+  it('maps every closed authority reason without exposing private evidence', () => {
+    const cases = [
+      [['invalid_reported_accuracy', 'unsupported_off_network_location'], 'location_quality'],
+      [['intersection_complex', 'candidates_not_distinguishable'], 'intersection_complex'],
+      [['candidate_coverage_incomplete', 'candidate_incomplete', 'candidate_selection_stale',
+        'candidate_token_invalid', 'candidate_token_unavailable', 'canonical_candidate_missing',
+        'official_face_missing', 'ambiguity_unresolved', 'duplicate_candidate_identity',
+        'source_query_truncated', 'invalid_candidate_row', 'authority_population_mismatch',
+        'authority_envelope_mismatch', 'authority_attestation_invalid'], 'candidate_incomplete'],
+      [['request_aborted', 'source_unavailable', 'invalid_source_version',
+        'source_changed_during_read', 'source_response_malformed', 'source_version_problem',
+        'unsupported_roadway_status', 'implausible_geometry', 'invalid_query', 'invalid_envelope',
+        'topology_primary_required', 'function3c_unavailable', 'function3c_contract_invalid',
+        'function3c_bfi_blank', 'function3c_bfi_malformed', 'function3c_source_version_invalid',
+        'function3c_bfi_mismatch', 'function3c_context_invalid',
+        'unexpected_identity_proof_failure'], 'source_unavailable'],
+    ];
+    for (const [reasons, expected] of cases) {
+      for (const reason of reasons) expect(mapCanonicalAuthorityFailure({ reasons: [reason] })).toBe(expected);
+    }
+    expect(mapCanonicalAuthorityFailure({ reasons: ['unknown-private-state'], coordinates: [1, 2] }))
+      .toBe('source_unavailable');
+  });
+  it('rejects a perfectly shaped caller-created primary before any side effect', async () => {
     const deps = dependencies();
+    const result = await runCanonicalCurbOrchestrator(request(), deps);
+    expect(result).toEqual({ protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' });
+    expect(deps.readCanonicalCache).not.toHaveBeenCalled();
+    expect(deps.loadCanonicalRules).not.toHaveBeenCalled();
+    expect(deps.persistCanonicalCurb).not.toHaveBeenCalled();
+  });
+  it('resolves, loads one source fan-out, persists, and returns a public high-confidence response', async () => {
+    const deps = dependencies({ resolveCanonicalCurb: vi.fn(async () => authenticPrimary) });
     const result = await runCanonicalCurbOrchestrator(request(), deps);
 
     expect(result).toEqual({
       protocolVersion: 2,
       status: 'high_confidence',
-      segmentId: publicCurbKey(identity),
+      segmentId: publicCurbKey(authenticPrimary.identity),
       streetName: 'MARAN PLACE',
       sideLabel: 'North',
       ruleSummary: { cleaningAvailable: true },
@@ -74,17 +160,66 @@ describe('runCanonicalCurbOrchestrator', () => {
     expect(JSON.stringify(result)).not.toMatch(/1000000001|global|physical|b5sc/);
   });
 
-  it('returns exactly two public candidates without starting rules or persistence', async () => {
-    const candidates = [0, 1].map(rank => ({
-      token: `candidate2_${'a'.repeat(16)}_${String(rank).repeat(32)}`,
-      streetName: rank ? 'WHITE PLAINS ROAD' : 'MARAN PLACE',
-      stroke: { type: 'MultiLineString', coordinates: [[[-74, 40.7], [-73.999 + rank * 0.0001, 40.7]]] },
-    }));
+  it('requires canonical Function 3C identity proof before an authentic primary can reach cache', async () => {
     const deps = dependencies({
-      resolveCanonicalCurb: vi.fn(async () => ({
-        state: 'AMBIGUOUS', reasons: ['competing_roadways_overlap'],
-        center: { lat: location.lat, lng: location.lng }, candidates,
-      })),
+      resolveCanonicalCurb: vi.fn(async () => authenticPrimary),
+      blockfaceResolver: undefined,
+    });
+
+    await expect(runCanonicalCurbOrchestrator(request(), deps)).resolves.toEqual({
+      protocolVersion: 2,
+      status: 'unsupported',
+      reason: 'source_unavailable',
+    });
+    expect(deps.readCanonicalCache).not.toHaveBeenCalled();
+    expect(deps.loadCanonicalRules).not.toHaveBeenCalled();
+    expect(deps.persistCanonicalCurb).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on valid opposite-side Function 3C BFI before every downstream side effect', async () => {
+    const proof = function3c('1000000002');
+    const deps = dependencies({
+      resolveCanonicalCurb: vi.fn(async () => authenticPrimary),
+      blockfaceResolver: proof.blockfaceResolver,
+    });
+
+    await expect(runCanonicalCurbOrchestrator(request(), deps)).resolves.toEqual({
+      protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable',
+    });
+    expect(proof.transport).toHaveBeenCalledOnce();
+    expect(deps.readCanonicalCache).not.toHaveBeenCalled();
+    expect(deps.loadCanonicalRules).not.toHaveBeenCalled();
+    expect(deps.persistCanonicalCurb).not.toHaveBeenCalled();
+    expect(deps.telemetry.emit).not.toHaveBeenCalledWith('curb_resolution_high', expect.anything());
+  });
+
+  it('maps malformed Function 3C evidence to the coarse public contract without leaking it', async () => {
+    const privateBody = {
+      ...function3cSuccess('1000000001'),
+      providerMessage: 'private native error for 1000000001',
+    };
+    const blockfaceResolver = createPrivateBlockfaceResolver({
+      mode: 'shadow', serviceUrl: 'https://parqueen-test-resolver-uc.a.run.app',
+      getIdToken: vi.fn(async () => 'synthetic-token'),
+      transport: vi.fn(async () => ({ status: 200, text: async () => JSON.stringify(privateBody) })),
+    });
+    const deps = dependencies({
+      resolveCanonicalCurb: vi.fn(async () => authenticPrimary), blockfaceResolver,
+    });
+
+    const result = await runCanonicalCurbOrchestrator(request(), deps);
+
+    expect(result).toEqual({ protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' });
+    const emitted = JSON.stringify(deps.telemetry.emit.mock.calls);
+    expect(emitted).not.toMatch(/1000000001|private native error|officialBlockFaceId|geosupport/i);
+    expect(deps.readCanonicalCache).not.toHaveBeenCalled();
+    expect(deps.persistCanonicalCurb).not.toHaveBeenCalled();
+  });
+
+  it('returns exactly two public candidates without starting rules or persistence', async () => {
+    const candidates = authenticAmbiguous.candidates;
+    const deps = dependencies({
+      resolveCanonicalCurb: vi.fn(async () => authenticAmbiguous),
     });
 
     const result = await runCanonicalCurbOrchestrator(request(), deps);
@@ -92,7 +227,7 @@ describe('runCanonicalCurbOrchestrator', () => {
     expect(result).toEqual({
       protocolVersion: 2,
       status: 'ambiguous',
-      selector: { center: { lat: location.lat, lng: location.lng }, candidates },
+      selector: { center: authenticAmbiguous.center, candidates },
     });
     expect(deps.loadCanonicalRules).not.toHaveBeenCalled();
     expect(deps.persistCanonicalCurb).not.toHaveBeenCalled();
@@ -119,14 +254,13 @@ describe('runCanonicalCurbOrchestrator', () => {
     }));
     expect(deps.telemetry.emit).toHaveBeenCalledWith('curb_resolution_unsupported', expect.objectContaining({
       reason: 'candidate_incomplete',
-      failureDetail: 'candidate_coverage_incomplete',
       candidateCount: 2,
       sourceCategory: 'cscl',
     }));
   });
 
   it('routes candidate tokens through fresh visual selection and rejects invalid selection before sources', async () => {
-    const valid = dependencies();
+    const valid = dependencies({ applyVisualCurbSelection: vi.fn(async () => authenticPrimary) });
     const invalid = dependencies({
       applyVisualCurbSelection: vi.fn(async () => ({
         state: 'UNSUPPORTED', reasons: ['candidate_selection_stale'],
@@ -148,9 +282,29 @@ describe('runCanonicalCurbOrchestrator', () => {
     }));
   });
 
-  it('reuses an exact canonical cache hit and never queries a radius cache or sources', async () => {
-    const key = publicCurbKey(identity);
+  it('does not let visual selection override Function 3C disagreement', async () => {
+    const proof = function3c('1000000002');
     const deps = dependencies({
+      applyVisualCurbSelection: vi.fn(async () => authenticPrimary),
+      blockfaceResolver: proof.blockfaceResolver,
+    });
+    const candidateToken = `candidate2_${'a'.repeat(16)}_${'b'.repeat(32)}`;
+
+    await expect(runCanonicalCurbOrchestrator(request({ candidateToken }), deps)).resolves.toEqual({
+      protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable',
+    });
+    expect(proof.transport).toHaveBeenCalledOnce();
+    expect(deps.readCanonicalCache).not.toHaveBeenCalled();
+    expect(deps.loadCanonicalRules).not.toHaveBeenCalled();
+    expect(deps.persistCanonicalCurb).not.toHaveBeenCalled();
+  });
+
+  it('reuses an exact canonical cache hit and never queries a radius cache or sources', async () => {
+    const key = publicCurbKey(authenticPrimary.identity);
+    const proof = function3c();
+    const deps = dependencies({
+      resolveCanonicalCurb: vi.fn(async () => authenticPrimary),
+      blockfaceResolver: proof.blockfaceResolver,
       readCanonicalCache: vi.fn(async () => ({
         hit: true,
         identity,
@@ -164,7 +318,12 @@ describe('runCanonicalCurbOrchestrator', () => {
     const result = await runCanonicalCurbOrchestrator(request(), deps);
 
     expect(result).toMatchObject({ status: 'high_confidence', segmentId: key, ruleSummary: { cleaningAvailable: false } });
-    expect(deps.readCanonicalCache).toHaveBeenCalledWith(expect.objectContaining({ publicCurbKey: key }));
+    expect(proof.transport).toHaveBeenCalledOnce();
+    expect(deps.readCanonicalCache).toHaveBeenCalledWith({
+      db: undefined,
+      topologyResult: authenticPrimary,
+      identityProof: expect.objectContaining({ state: 'IDENTITY_PROVEN' }),
+    });
     expect(deps.loadCanonicalRules).not.toHaveBeenCalled();
     expect(deps.persistCanonicalCurb).not.toHaveBeenCalled();
   });
@@ -177,7 +336,7 @@ describe('runCanonicalCurbOrchestrator', () => {
     const first = runCanonicalCurbOrchestrator(request(), deps);
     const second = runCanonicalCurbOrchestrator(request(), deps);
     expect(deps.resolveCanonicalCurb).toHaveBeenCalledOnce();
-    release(supported());
+    release(authenticPrimary);
 
     await expect(Promise.all([first, second])).resolves.toEqual([
       expect.objectContaining({ status: 'high_confidence' }),

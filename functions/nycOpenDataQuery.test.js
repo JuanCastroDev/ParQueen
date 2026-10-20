@@ -227,12 +227,10 @@ describe('NYC Open Data fallback — when Socrata is reached at all', () => {
   it('8. a successful SweepNYC lookup bypasses the Socrata fallback', () => {
     const start = INDEX_SRC.indexOf('exports.createSegmentFromSweepNYC');
     const seg = INDEX_SRC.slice(start, INDEX_SRC.indexOf('function _existingNYCOpenDataResult', start));
-    const successGate = seg.indexOf('if (sweepResult.success || !_SWEEPNYC_FALLBACK_REASONS.has(sweepResult.reason))');
-    const reasonGate = seg.indexOf('_SWEEPNYC_FALLBACK_REASONS.has(sweepResult.reason)');
-    const fallbackCall = seg.search(/_fallbackToNYCOpenData\(\s*lat,\s*lng/);
-    expect(successGate).toBeGreaterThan(-1);
-    expect(reasonGate).toBeGreaterThanOrEqual(successGate);
-    expect(fallbackCall).toBeGreaterThan(reasonGate);
+    expect(seg).toContain('request.data?.protocolVersion !== 2');
+    expect(seg).toContain("status: 'unsupported'");
+    expect(seg).not.toContain('_fallbackToNYCOpenData');
+    expect(seg).not.toMatch(/success:\s*true/);
   });
 
   it('8b. only the four documented reasons fall through to Socrata', () => {

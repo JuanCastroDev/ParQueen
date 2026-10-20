@@ -3,9 +3,11 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const { resolveCanonicalCurb } = require('./canonicalCurbResolver');
+const { hasPrimaryTopologyAuthority } = require('./canonicalCurbResolver');
 const { applyVisualCurbSelection } = require('./visualCurbSelection');
 
 const VERSION = Object.freeze({ resourceId: 'inkn-q76z', version: 'selection-v1' });
+const METADATA = Object.freeze({ id: 'inkn-q76z', rowsUpdatedAt: 1767225600, viewLastModified: 1767225660 });
 const HORIZONTAL = [[[-74.001, 40.7], [-73.999, 40.7]]];
 const VERTICAL = [[[-74, 40.699], [-74, 40.701]]];
 
@@ -65,19 +67,22 @@ const emptyPlan = {
   },
 };
 
-function mutableStore(initial) {
+const rawRow = value => ({ ...value.sourceNative, globalid: value.globalId,
+  l_blockfaceid: value.leftBlockFaceId, r_blockfaceid: value.rightBlockFaceId, the_geom: value.geometry });
+
+function mutableTransport(initial) {
   let candidates = initial;
   return {
     set(next) { candidates = next; },
-    async queryCandidates() {
-      return { candidates, completeness: { state: 'COMPLETE', reason: null } };
-    },
+    fetchFn: vi.fn(async url => ({ ok: true, json: async () => (
+      String(url).includes('/api/views/') ? METADATA : candidates.map(rawRow)
+    ) })),
   };
 }
 
-async function initialSelection(candidateStore) {
+async function initialSelection(transport) {
   return resolveCanonicalCurb(location, {
-    candidateStore,
+    fetchFn: transport.fetchFn,
     planimetricStore: emptyPlan,
     requestNonce: 'server-generated-nonce',
   });
@@ -85,14 +90,14 @@ async function initialSelection(candidateStore) {
 
 describe('applyVisualCurbSelection', () => {
   it('re-resolves and selects the current private identity for a valid token', async () => {
-    const candidateStore = mutableStore([record(), whitePlains()]);
-    const initial = await initialSelection(candidateStore);
+    const transport = mutableTransport([record(), whitePlains()]);
+    const initial = await initialSelection(transport);
     const selectedPublic = initial.candidates.find(value => value.streetName === 'MARAN PLACE');
 
     const result = await applyVisualCurbSelection({
       location,
       candidateToken: selectedPublic.token,
-    }, { candidateStore, planimetricStore: emptyPlan });
+    }, { fetchFn: transport.fetchFn, planimetricStore: emptyPlan });
 
     expect(result).toMatchObject({
       state: 'SUPPORTED',
@@ -102,6 +107,7 @@ describe('applyVisualCurbSelection', () => {
       },
       publicCurb: { streetName: 'MARAN PLACE' },
     });
+    expect(hasPrimaryTopologyAuthority(result)).toBe(true);
   });
 
   it.each([
@@ -111,7 +117,7 @@ describe('applyVisualCurbSelection', () => {
     const persist = vi.fn();
     const loadSources = vi.fn();
     const result = await applyVisualCurbSelection({ location, candidateToken }, {
-      candidateStore: mutableStore([record(), whitePlains()]),
+      fetchFn: mutableTransport([record(), whitePlains()]).fetchFn,
       planimetricStore: emptyPlan,
       persist,
       loadSources,
@@ -123,16 +129,16 @@ describe('applyVisualCurbSelection', () => {
   });
 
   it('rejects a token when candidate rank changes on fresh resolution', async () => {
-    const candidateStore = mutableStore([record(), whitePlains()]);
-    const initial = await initialSelection(candidateStore);
+    const transport = mutableTransport([record(), whitePlains()]);
+    const initial = await initialSelection(transport);
     const token = initial.candidates.find(value => value.streetName === 'MARAN PLACE').token;
-    candidateStore.set([
+    transport.set([
       record({ coordinates: [[[-74.001, 40.7002], [-73.999, 40.7002]]] }),
       whitePlains(),
     ]);
 
     const result = await applyVisualCurbSelection({ location, candidateToken: token }, {
-      candidateStore,
+      fetchFn: transport.fetchFn,
       planimetricStore: emptyPlan,
     });
 
@@ -140,14 +146,35 @@ describe('applyVisualCurbSelection', () => {
   });
 
   it('rejects a stale token after the candidate set changes', async () => {
-    const candidateStore = mutableStore([record(), whitePlains()]);
-    const initial = await initialSelection(candidateStore);
-    candidateStore.set([record()]);
+    const transport = mutableTransport([record(), whitePlains()]);
+    const initial = await initialSelection(transport);
+    transport.set([record()]);
 
     const result = await applyVisualCurbSelection({
       location,
       candidateToken: initial.candidates[0].token,
-    }, { candidateStore, planimetricStore: emptyPlan });
+    }, { fetchFn: transport.fetchFn, planimetricStore: emptyPlan });
+
+    expect(result).toEqual({ state: 'UNSUPPORTED', reasons: ['candidate_selection_stale'] });
+  });
+
+  it('rejects an old selection when the same selected row gains a new competitor', async () => {
+    const transport = mutableTransport([record(), whitePlains()]);
+    const initial = await initialSelection(transport);
+    const token = initial.candidates.find(value => value.streetName === 'MARAN PLACE').token;
+    transport.set([
+      record(),
+      whitePlains(),
+      record({
+        globalId: 'diagonal', streetName: 'DIAGONAL STREET',
+        coordinates: [[[-74.0004, 40.6996], [-73.9996, 40.7004]]],
+        leftBlockFaceId: '3000000001', rightBlockFaceId: '3000000002',
+      }),
+    ]);
+
+    const result = await applyVisualCurbSelection({ location, candidateToken: token }, {
+      fetchFn: transport.fetchFn, planimetricStore: emptyPlan,
+    });
 
     expect(result).toEqual({ state: 'UNSUPPORTED', reasons: ['candidate_selection_stale'] });
   });

@@ -1,8 +1,8 @@
 'use strict';
 
-const { candidateTokenNonceDigest, toPublicCurb } = require('./canonicalCurbIdentity');
+const { candidateTokenNonceDigest } = require('./canonicalCurbIdentity');
 const {
-  getPrivateCanonicalCandidateSet,
+  promoteAttestedVisualSelection,
   resolveCanonicalCurb,
 } = require('./canonicalCurbResolver');
 
@@ -19,23 +19,7 @@ async function applyVisualCurbSelection(input, options = {}) {
     requestNonceDigest: nonceDigest,
   });
   if (current?.state !== 'AMBIGUOUS') return unsupported('candidate_selection_stale');
-  const candidates = getPrivateCanonicalCandidateSet(current);
-  const selected = candidates.find(candidate => candidate.token === input.candidateToken);
-  if (!selected) return unsupported('candidate_selection_stale');
-
-  const identity = {
-    ...selected.identity,
-    resolution: {
-      ...selected.identity.resolution,
-      method: 'visual_selection',
-    },
-  };
-  return {
-    state: 'SUPPORTED',
-    reasons: [],
-    identity,
-    publicCurb: toPublicCurb(identity),
-  };
+  return promoteAttestedVisualSelection(current, input.candidateToken);
 }
 
 module.exports = { applyVisualCurbSelection };
