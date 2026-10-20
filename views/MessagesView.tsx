@@ -38,6 +38,14 @@ interface MessagesViewProps {
 // conversations age. Not user-configurable.
 const MESSAGE_PAGE_SIZE = 30;
 
+type ConversationDraft = {
+  text: string;
+  revision: number;
+};
+
+const conversationDraftKey = (userId: string, conversationId: string) =>
+  JSON.stringify([userId, conversationId]);
+
 // Prepending older history must not visually yank the viewport — restoring
 // scrollTop to the same point in the (now taller) content preserves the
 // reader's position. Exported as a pure function so the formula itself can
@@ -142,15 +150,72 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
   }, [androidBackRef, activeConversationId, activeChatContext, onBack]);
 
   const [messages, setMessages] = useState<any[]>([]);
-  const [inputText, setInputText] = useState('');
+  const [drafts, setDrafts] = useState<Record<string, ConversationDraft>>({});
+  const draftRevisionRef = useRef(0);
+  const activeDraftKey = user?.id && activeConversationId
+    ? conversationDraftKey(user.id, activeConversationId)
+    : null;
+  const activeDraftKeyRef = useRef<string | null>(activeDraftKey);
+  activeDraftKeyRef.current = activeDraftKey;
+  const inputText = activeDraftKey ? drafts[activeDraftKey]?.text || '' : '';
   const [moderationError, setModerationError] = useState('');
-  const [sending, setSending] = useState(false);
+  const moderationErrorContextRef = useRef<string | null>(null);
+  const moderationErrorGenerationRef = useRef(0);
+  const pendingSendKeysRef = useRef<Set<string>>(new Set());
+  const [pendingSendKeys, setPendingSendKeys] = useState<Set<string>>(() => new Set());
+  const sending = activeDraftKey ? pendingSendKeys.has(activeDraftKey) : false;
   const [smartReplies, setSmartReplies] = useState<string[]>([]);
   // False until the open conversation's first messages snapshot lands, so an
   // empty thread is never shown as "no messages" while it is still loading.
   const [messagesReady, setMessagesReady] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const lastSmartReplyKey = useRef<string | null>(null);
+
+  const setDraftText = (text: string) => {
+    if (!activeDraftKey) return;
+    const revision = ++draftRevisionRef.current;
+    setDrafts(prev => {
+      if (!text) {
+        if (!prev[activeDraftKey]) return prev;
+        const next = { ...prev };
+        delete next[activeDraftKey];
+        return next;
+      }
+      return { ...prev, [activeDraftKey]: { text, revision } };
+    });
+  };
+
+  const setSendPending = (key: string, pending: boolean) => {
+    if (pending) pendingSendKeysRef.current.add(key);
+    else pendingSendKeysRef.current.delete(key);
+    setPendingSendKeys(new Set(pendingSendKeysRef.current));
+  };
+
+  const showModerationError = (message: string, contextKey: string) => {
+    const generation = ++moderationErrorGenerationRef.current;
+    moderationErrorContextRef.current = contextKey;
+    setModerationError(message);
+    setTimeout(() => {
+      if (moderationErrorGenerationRef.current !== generation) return;
+      moderationErrorContextRef.current = null;
+      setModerationError('');
+    }, 4000);
+  };
+
+  const draftOwnerRef = useRef(user?.id ?? null);
+  useEffect(() => {
+    const nextOwner = user?.id ?? null;
+    if (draftOwnerRef.current === nextOwner) return;
+    draftOwnerRef.current = nextOwner;
+    setDrafts({});
+    pendingSendKeysRef.current.clear();
+    setPendingSendKeys(new Set());
+    moderationErrorGenerationRef.current++;
+    moderationErrorContextRef.current = null;
+    setModerationError('');
+    setSmartReplies([]);
+    setActiveConversationId(null);
+  }, [user?.id]);
 
   // ── Bounded message history pagination ──────────────────────────────
   // retainedMessagesRef accumulates every message this session has loaded
@@ -259,8 +324,20 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
   // Failures and confirmations share one slot; the tone keeps a failure from
   // reading as a success.
   const [toastIsError, setToastIsError] = useState(false);
+  const actionToastContextRef = useRef<string | null>(null);
+  const actionToastGenerationRef = useRef(0);
 
-  const showToast = (msg: string, isError = false) => { setActionToast(msg); setToastIsError(isError); setTimeout(() => setActionToast(''), 3000); };
+  const showToast = (msg: string, isError = false, contextKey: string | null = null) => {
+    const generation = ++actionToastGenerationRef.current;
+    actionToastContextRef.current = contextKey;
+    setActionToast(msg);
+    setToastIsError(isError);
+    setTimeout(() => {
+      if (actionToastGenerationRef.current !== generation) return;
+      actionToastContextRef.current = null;
+      setActionToast('');
+    }, 3000);
+  };
 
   // Report reasons: value written to Firestore (English stays), label is translated display
   const reportReasons = [
@@ -681,7 +758,13 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
 
   // 5. Send message
   const handleSend = async (text: string) => {
-    if (!text.trim() || !activeConversationId || !user || !db || sending) return;
+    if (!text.trim() || !activeConversationId || !user || !db || !activeDraftKey || pendingSendKeysRef.current.has(activeDraftKey)) return;
+    const sendConversationId = activeConversationId;
+    const sendKey = activeDraftKey;
+    const submittedDraft = drafts[sendKey];
+    const submittedRevision = submittedDraft?.text === text ? submittedDraft.revision : null;
+    moderationErrorGenerationRef.current++;
+    moderationErrorContextRef.current = null;
     setModerationError('');
 
     // UX-only pre-check for instant feedback — NOT a security boundary.
@@ -689,13 +772,12 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
     // a client that skipped this call entirely would gain no bypass.
     const blocked = moderateMessage(text.trim());
     if (blocked) {
-        setModerationError(blocked);
-        setTimeout(() => setModerationError(''), 4000);
+        showModerationError(blocked, sendKey);
         return;
     }
 
     const trimmed = text.trim();
-    setSending(true);
+    setSendPending(sendKey, true);
     try {
         const functions = getFunctions(getApp(), 'us-central1');
         const clientRequestId =
@@ -703,36 +785,50 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
                 ? crypto.randomUUID()
                 : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
         await httpsCallable(functions, 'sendMessage')({
-            chatId: activeConversationId,
+            chatId: sendConversationId,
             clientRequestId,
             text: trimmed,
         });
-        localStorage.setItem(`lastReadChat_${activeConversationId}`, Date.now().toString());
-        setInputText('');
-        setSmartReplies([]);
+        localStorage.setItem(`lastReadChat_${sendConversationId}`, Date.now().toString());
+        if (submittedRevision !== null) {
+          setDrafts(prev => {
+            const current = prev[sendKey];
+            if (!current || current.revision !== submittedRevision || current.text !== text) return prev;
+            const next = { ...prev };
+            delete next[sendKey];
+            return next;
+          });
+        }
+        if (activeDraftKeyRef.current === sendKey) setSmartReplies([]);
     } catch (e: any) {
         const code: string = e?.code ?? '';
-        if (code === 'functions/invalid-argument') {
-            // Server-side moderation rejection — same banner UX as the
-            // client-side pre-check above, same non-localized copy for parity.
-            setModerationError(e?.message || "This message couldn't be sent. Please revise and try again.");
-            setTimeout(() => setModerationError(''), 4000);
-        } else if (code === 'functions/resource-exhausted') {
-            setModerationError(t('messages.rate_limited'));
-            setTimeout(() => setModerationError(''), 4000);
-        } else {
-            // Genuinely unexpected — the moderation/rate-limit branches above are
+        if (code !== 'functions/invalid-argument' && code !== 'functions/resource-exhausted') {
+            // Genuinely unexpected — the moderation/rate-limit branches below are
             // expected, well-understood outcomes with their own server-side
             // trail; this catch-all is the only class of failure (network,
             // App Check, internal) with no guaranteed diagnostic trail.
             console.error("Error sending message", e);
             reportCriticalActionFailure('message_send', e, code ? { errorCode: code } : undefined);
-            showToast(t('messages.toast_send_failed'), true);
+        }
+        if (activeDraftKeyRef.current !== sendKey) return;
+        if (code === 'functions/invalid-argument') {
+            // Server-side moderation rejection — same banner UX as the
+            // client-side pre-check above, same non-localized copy for parity.
+            showModerationError(e?.message || "This message couldn't be sent. Please revise and try again.", sendKey);
+        } else if (code === 'functions/resource-exhausted') {
+            showModerationError(t('messages.rate_limited'), sendKey);
+        } else {
+            showToast(t('messages.toast_send_failed'), true, sendKey);
         }
     } finally {
-        setSending(false);
+        setSendPending(sendKey, false);
     }
   };
+
+  const visibleActionToast = actionToastContextRef.current === null || actionToastContextRef.current === activeDraftKey
+    ? actionToast
+    : '';
+  const visibleModerationError = moderationErrorContextRef.current === activeDraftKey ? moderationError : '';
 
   if (activeConversationId) {
     const displayName = userProfilesCache[threadOtherUserId]?.name
@@ -861,9 +957,9 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
           </div>
         )}
 
-        {actionToast && (
+        {visibleActionToast && (
           <div role={toastIsError ? 'alert' : 'status'} className="shrink-0 px-4 pb-2">
-            <p className={`pq-inline-note${toastIsError ? ' pq-inline-note--error' : ''}`}>{actionToast}</p>
+            <p className={`pq-inline-note${toastIsError ? ' pq-inline-note--error' : ''}`}>{visibleActionToast}</p>
           </div>
         )}
 
@@ -915,9 +1011,9 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
           </AccessibleModal>
         )}
 
-        {moderationError && (
+        {visibleModerationError && (
           <div role="alert" className="shrink-0 px-4 pb-2">
-            <p className="pq-inline-note pq-inline-note--error">{moderationError}</p>
+            <p className="pq-inline-note pq-inline-note--error">{visibleModerationError}</p>
           </div>
         )}
 
@@ -929,7 +1025,7 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
               type="text"
               key={activeConversationId}
               value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
+              onChange={(e) => setDraftText(e.target.value)}
               onFocus={() => { composerFocusedRef.current = true; }}
               onBlur={() => { composerFocusedRef.current = false; }}
               placeholder={t('messages.type_placeholder')}
@@ -1068,9 +1164,9 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
           </>
         )}
       </div>
-      {actionToast && (
+      {visibleActionToast && (
         <div role={toastIsError ? 'alert' : 'status'} className="shrink-0 px-4 pb-2">
-          <p className={`pq-inline-note${toastIsError ? ' pq-inline-note--error' : ''}`}>{actionToast}</p>
+          <p className={`pq-inline-note${toastIsError ? ' pq-inline-note--error' : ''}`}>{visibleActionToast}</p>
         </div>
       )}
       {setView && (
