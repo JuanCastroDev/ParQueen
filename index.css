@@ -310,7 +310,13 @@ html, body, #root {
 }
 
 .map-status-chip.is-available {
+  min-height: 44px;
   border-color: rgba(52, 211, 153, 0.24);
+}
+
+.map-status-chip.is-available:focus-visible {
+  outline: 2px solid var(--mobile-shell-focus);
+  outline-offset: 3px;
 }
 
 .map-status-chip.is-empty {
