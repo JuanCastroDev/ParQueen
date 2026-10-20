@@ -13,6 +13,7 @@ const VERSION_FIELDS = new Set(['geosupportRelease', 'geosupportVersion']);
 const BFI = /^\d{10}$/;
 const RETURN_CODE = /^[A-Z0-9 ]{2}$/;
 const REASON_CODE = /^[A-Z0-9 ]$/;
+const validatedSuccesses = new WeakMap();
 
 const failure = failureClass => ({ ok: false, failureClass });
 
@@ -58,21 +59,39 @@ function validNames(value) {
     && STREET_FIELDS.every(field => validPrintableAscii(value[field]));
 }
 
+function deepFreeze(value) {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) deepFreeze(child);
+  return Object.freeze(value);
+}
+
 function parseSuccess(value) {
-  if (!sameFields(value, SUCCESS_FIELDS) || value.ok !== true || value.returnCode !== '00') return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || Object.keys(value).some(key => !SUCCESS_FIELDS.has(key))
+    || value.ok !== true || value.returnCode !== '00') {
+    return { failureClass: 'INVALID_RESPONSE' };
+  }
+  if (!Object.hasOwn(value, 'officialBlockFaceId')
+    || value.officialBlockFaceId === undefined || value.officialBlockFaceId === null
+    || value.officialBlockFaceId === '') return { failureClass: 'BFI_BLANK' };
   if (typeof value.officialBlockFaceId !== 'string'
     || !BFI.test(value.officialBlockFaceId)
-    || value.officialBlockFaceId === '0000000000') return null;
-  if (!REASON_CODE.test(value.reasonCode) || !validNames(value.normalizedStreetNames)
-    || !validVersion(value.sourceVersion)) return null;
-  return {
+    || value.officialBlockFaceId === '0000000000') return { failureClass: 'BFI_MALFORMED' };
+  if (!Object.hasOwn(value, 'sourceVersion') || !validVersion(value.sourceVersion)) {
+    return { failureClass: 'SOURCE_VERSION_INVALID' };
+  }
+  if (!sameFields(value, SUCCESS_FIELDS)
+    || !REASON_CODE.test(value.reasonCode) || !validNames(value.normalizedStreetNames)) {
+    return { failureClass: 'INVALID_RESPONSE' };
+  }
+  return { success: deepFreeze({
     ok: true,
     officialBlockFaceId: value.officialBlockFaceId,
     normalizedStreetNames: { ...value.normalizedStreetNames },
     returnCode: value.returnCode,
     reasonCode: value.reasonCode,
     sourceVersion: { ...value.sourceVersion },
-  };
+  }) };
 }
 
 function parseSafeRejection(value) {
@@ -115,6 +134,18 @@ function normalizeServiceUrl(value) {
   }
 }
 
+function tupleKey(payload) {
+  return JSON.stringify(REQUIRED_FIELDS.map(field => payload[field]));
+}
+
+function hasValidatedPrivateBlockfaceResult(result, tuple, resolver) {
+  const parsed = parseTuple(tuple);
+  const binding = result && validatedSuccesses.get(result);
+  return Boolean(parsed && binding
+    && binding.tupleKey === tupleKey(parsed.payload)
+    && binding.resolver === resolver);
+}
+
 async function defaultGetIdToken(audience) {
   const { GoogleAuth } = require('google-auth-library');
   const client = await new GoogleAuth().getIdTokenClient(audience);
@@ -143,6 +174,7 @@ function createPrivateBlockfaceResolver(options = {}) {
   const getIdToken = options.getIdToken || defaultGetIdToken;
   const transport = options.transport || defaultTransport;
   const requests = new Map();
+  let resolver;
 
   async function attempt(parsed) {
     if (parsed.signal?.aborted) return failure('ABORTED');
@@ -176,20 +208,27 @@ function createPrivateBlockfaceResolver(options = {}) {
       return failure('INVALID_RESPONSE');
     }
     if (value?.ok === false) return parseSafeRejection(value) || failure('INVALID_RESPONSE');
-    return parseSuccess(value) || failure('INVALID_RESPONSE');
+    const parsedSuccess = parseSuccess(value);
+    if (!parsedSuccess.success) return failure(parsedSuccess.failureClass);
+    validatedSuccesses.set(parsedSuccess.success, {
+      tupleKey: tupleKey(parsed.payload),
+      resolver,
+    });
+    return parsedSuccess.success;
   }
 
-  return Object.freeze({
+  resolver = Object.freeze({
     resolve(value) {
       if (!enabled) return Promise.resolve(failure('DISABLED'));
       if (!serviceUrl) return Promise.resolve(failure('CONFIGURATION_FAILURE'));
       const parsed = parseTuple(value);
       if (!parsed) return Promise.resolve(failure('INVALID_REQUEST'));
-      const key = REQUIRED_FIELDS.map(field => parsed.payload[field]).join(' | ');
+      const key = tupleKey(parsed.payload);
       if (!requests.has(key)) requests.set(key, attempt(parsed));
       return requests.get(key);
     },
   });
+  return resolver;
 }
 
-module.exports = { createPrivateBlockfaceResolver };
+module.exports = { createPrivateBlockfaceResolver, hasValidatedPrivateBlockfaceResult };

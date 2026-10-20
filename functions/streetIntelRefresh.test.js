@@ -102,8 +102,8 @@ describe('E-F refresh continues into fallback and Curb observation', () => {
       INDEX_SRC.indexOf('exports.createSegmentFromSweepNYC = onCall('),
       INDEX_SRC.indexOf('function _existingNYCOpenDataResult'),
     );
-    expect(callable).toContain("logStreetIntelEvent('fallback_attempted'");
-    expect(callable).toMatch(/_fallbackToNYCOpenData\(\s*lat,\s*lng/);
+    expect(callable).not.toContain('_fallbackToNYCOpenData');
+    expect(callable).toContain("status: 'unsupported'");
     expect(INDEX_SRC).toContain("logStreetIntelEvent('parser_attempted'");
     expect(INDEX_SRC).toMatch(/_SWEEPNYC_FALLBACK_REASONS = new Set\(\[[\s\S]*'parse_failed'/);
   });
@@ -113,7 +113,8 @@ describe('E-F refresh continues into fallback and Curb observation', () => {
       INDEX_SRC.indexOf('exports.createSegmentFromSweepNYC = onCall('),
       INDEX_SRC.indexOf('function _existingNYCOpenDataResult'),
     );
-    expect(callable).toContain('_observeCurbIntelligenceShadow(productionResult, lat, lng, accuracyMeters, shadowEvidence)');
+    expect(callable).not.toContain('_observeCurbIntelligenceShadow');
+    expect(callable).toContain('return canonicalV2Handler(request.data)');
     expect(INDEX_SRC).toContain('_attachSweepnycProductEvidence(refreshExistingId, d, captureProductEvidence, ruleWrite)');
   });
 });
@@ -202,7 +203,8 @@ describe('J existing 100‰ shadow behavior unchanged', () => {
       INDEX_SRC.indexOf('exports.createSegmentFromSweepNYC = onCall('),
       INDEX_SRC.indexOf('function _existingNYCOpenDataResult'),
     );
-    expect(INDEX_SRC).toContain('_observeCurbIntelligenceShadow(productionResult, lat, lng, accuracyMeters, shadowEvidence)');
+    expect(callable).not.toContain('_observeCurbIntelligenceShadow');
+    expect(INDEX_SRC).toContain('async function _observeCurbIntelligenceShadow');
     expect(INDEX_SRC).toContain('productMeterLookup');
     expect(INDEX_SRC).toContain('productRestrictionLookup');
     expect(INDEX_SRC).not.toMatch(/CURB_SHADOW_SAMPLE_PERMILLE\s*=/);

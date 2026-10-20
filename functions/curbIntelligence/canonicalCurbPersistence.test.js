@@ -6,8 +6,12 @@ const {
   readCanonicalCache,
   persistCanonicalCurb,
   migrateCompatibleLegacyRules,
+  canonicalGeometry,
 } = require('./canonicalCurbPersistence');
 const { publicCurbKey } = require('./canonicalCurbIdentity');
+const { resolveCanonicalCurb } = require('./canonicalCurbResolver');
+const { createPrivateBlockfaceResolver } = require('./privateBlockfaceResolver');
+const { proveCanonicalCurbIdentity } = require('./canonicalCurbIdentityProof');
 
 const identity = (overrides = {}) => ({
   schemaVersion: 2,
@@ -66,10 +70,76 @@ function memoryDb(seed = {}) {
 }
 
 const Timestamp = { now: () => 'timestamp-now' };
+const metadata = { id: 'inkn-q76z', rowsUpdatedAt: 1767225600, viewLastModified: 1767225660 };
+async function topology(lat = 40.70005) {
+  const row = {
+    globalid: 'private-global', physicalid: 'private-physical', b5sc: 'private-b5sc',
+    l_blockfaceid: '1000000001', r_blockfaceid: '1000000002', boroughcode: '2', rw_type: '1',
+    full_street_name: 'MARAN PLACE', street_name: 'MARAN PLACE', stname_label: 'MARAN PL',
+    streetwidth: '34', from_level_code: '13', to_level_code: '13', status: '2', nonped: '', accessible: '',
+    from_street: 'WHITE PLAINS ROAD', to_street: 'LURTING AVENUE',
+    the_geom: { type: 'MultiLineString', coordinates: [[[-74, 40.7], [-73.999, 40.7]]] },
+  };
+  const fetchFn = vi.fn(async url => ({ ok: true, json: async () => (
+    String(url).includes('/api/views/') ? metadata : [row]
+  ) }));
+  return resolveCanonicalCurb({ lat, lng: -73.9999, accuracyMeters: 1, sampleCount: 3, consistencyMeters: 1 }, {
+    fetchFn, requestNonce: 'persistence-authority',
+  });
+}
+
+async function proofFor(topologyResult, officialBlockFaceId = topologyResult.identity.officialBlockFaceId) {
+  const body = {
+    ok: true,
+    officialBlockFaceId,
+    normalizedStreetNames: {
+      onStreet: 'MARAN PLACE', crossStreetOne: 'WHITE PLAINS ROAD', crossStreetTwo: 'LURTING AVENUE',
+    },
+    returnCode: '00', reasonCode: ' ',
+    sourceVersion: { geosupportRelease: '26C', geosupportVersion: '26.3' },
+  };
+  const blockfaceResolver = createPrivateBlockfaceResolver({
+    mode: 'shadow', serviceUrl: 'https://parqueen-test-resolver-uc.a.run.app',
+    getIdToken: vi.fn(async () => 'synthetic-token'),
+    transport: vi.fn(async () => ({ status: 200, text: async () => JSON.stringify(body) })),
+  });
+  return proveCanonicalCurbIdentity(topologyResult, { blockfaceResolver });
+}
 
 describe('canonical curb persistence', () => {
+  it('rejects copied or caller-created topology before batch construction', async () => {
+    const genuine = await topology();
+    const identityProof = await proofFor(genuine);
+    const db = memoryDb();
+    db.batch = vi.fn(db.batch);
+    await expect(persistCanonicalCurb({
+      db, Timestamp, topologyResult: { ...genuine }, identityProof, selectedRules: { rules: [] },
+    })).resolves.toEqual({ success: false, reason: 'authority_invalid' });
+    expect(db.batch).not.toHaveBeenCalled();
+  });
+  it('rejects copied or reconstructed identity proof before batch construction', async () => {
+    const topologyResult = await topology();
+    const identityProof = await proofFor(topologyResult);
+    const db = memoryDb();
+    db.batch = vi.fn(db.batch);
+
+    await expect(persistCanonicalCurb({
+      db, Timestamp, topologyResult, identityProof: { ...identityProof }, selectedRules: { rules: [] },
+    })).resolves.toEqual({ success: false, reason: 'identity_proof_invalid' });
+    expect(db.batch).not.toHaveBeenCalled();
+  });
+  it('canonicalizes semantically equal geometry while preserving meaningful order', () => {
+    const base = { type: 'MultiLineString', coordinates: [[[0, 40.7], [1, 40.8]]] };
+    const negativeZero = { type: 'MultiLineString', coordinates: [[[-0, 40.7], [1, 40.8]]] };
+    const reversed = { type: 'MultiLineString', coordinates: [[[1, 40.8], [0, 40.7]]] };
+    expect(canonicalGeometry(base)).toBe(canonicalGeometry(negativeZero));
+    expect(canonicalGeometry(base)).not.toBe(canonicalGeometry(reversed));
+    expect(canonicalGeometry(base)).toMatch(/^[a-f0-9]{64}$/);
+  });
   it('writes private identity only to curbIdentities and sanitized public segment/rules', async () => {
     const db = memoryDb();
+    const topologyResult = await topology();
+    const identityProof = await proofFor(topologyResult);
     const selectedRules = { rules: [{
       category: 'cleaning',
       source: 'dot',
@@ -78,8 +148,8 @@ describe('canonical curb persistence', () => {
       diagnostics: { globalId: 'forbidden-global' },
     }] };
 
-    const result = await persistCanonicalCurb({ db, Timestamp, identity: identity(), selectedRules });
-    const key = publicCurbKey(identity());
+    const result = await persistCanonicalCurb({ db, Timestamp, topologyResult, identityProof, selectedRules });
+    const key = publicCurbKey(topologyResult.identity);
 
     expect(result).toEqual({ success: true, publicCurbKey: key, ruleCount: 1 });
     expect(db.docs.get(`curbIdentities/${key}`)).toMatchObject({
@@ -108,10 +178,12 @@ describe('canonical curb persistence', () => {
 
   it('publishes a new active generation so removed rules cannot remain active', async () => {
     const db = memoryDb();
-    const curb = identity();
+    const topologyResult = await topology();
+    const identityProof = await proofFor(topologyResult);
+    const curb = topologyResult.identity;
     const key = publicCurbKey(curb);
     await persistCanonicalCurb({
-      db, Timestamp, identity: curb,
+      db, Timestamp, topologyResult, identityProof,
       selectedRules: { rules: [
         { category: 'cleaning', source: 'dot', schedules: [{ side: 'North', days: ['Mon'], startTime: '08:00', endTime: '09:00' }] },
         { category: 'restriction', type: 'noParking', source: 'dot', schedules: [{ side: 'North', days: ['Mon'], anytime: true }] },
@@ -120,7 +192,7 @@ describe('canonical curb persistence', () => {
     const firstVersion = db.docs.get(`streetSegments/${key}`).activeRuleSetVersion;
 
     await persistCanonicalCurb({
-      db, Timestamp, identity: curb,
+      db, Timestamp, topologyResult, identityProof,
       selectedRules: { rules: [{ category: 'cleaning', source: 'dot', schedules: [{ side: 'North', days: ['Tue'], startTime: '10:00', endTime: '11:00' }] }] },
     });
     const secondVersion = db.docs.get(`streetSegments/${key}`).activeRuleSetVersion;
@@ -134,10 +206,12 @@ describe('canonical curb persistence', () => {
 
   it('normalizes ParkNYC meter windows into the schedules consumed by the card', async () => {
     const db = memoryDb();
-    const curb = identity();
+    const topologyResult = await topology();
+    const identityProof = await proofFor(topologyResult);
+    const curb = topologyResult.identity;
     const key = publicCurbKey(curb);
     await persistCanonicalCurb({
-      db, Timestamp, identity: curb,
+      db, Timestamp, topologyResult, identityProof,
       selectedRules: { rules: [{
         category: 'meter',
         source: 'park_nyc',
@@ -159,20 +233,106 @@ describe('canonical curb persistence', () => {
   });
 
   it('reuses only the exact public key and separates opposite/crossing identities', async () => {
-    const north = identity();
+    const topologyResult = await topology();
+    const identityProof = await proofFor(topologyResult);
+    const north = topologyResult.identity;
     const south = identity({ officialBlockFaceId: '1000000002', csclSide: 'RIGHT', side: { cardinal: 'South' } });
     const northKey = publicCurbKey(north);
     const southKey = publicCurbKey(south);
     const db = memoryDb({
-      [`curbIdentities/${northKey}`]: { identity: north },
-      [`streetSegments/${northKey}`]: { segmentId: northKey, streetName: 'MARAN PLACE' },
+      [`curbIdentities/${northKey}`]: {
+        schemaVersion: 2,
+        cacheCompatibilityVersion: 'canonical-curb-cache-compatibility-1',
+        publicCurbKey: northKey,
+        identity: north,
+      },
+      [`streetSegments/${northKey}`]: {
+        ...topologyResult.publicCurb,
+        protocolVersion: 2,
+        cacheCompatibilityVersion: 'canonical-curb-cache-compatibility-1',
+        activeRuleSetVersion: 'curbrules2_0123456789abcdef0123',
+      },
     });
 
-    await expect(readCanonicalCache({ db, publicCurbKey: northKey }))
+    await expect(readCanonicalCache({ db, topologyResult, identityProof }))
       .resolves.toMatchObject({ hit: true, identity: north });
-    await expect(readCanonicalCache({ db, publicCurbKey: southKey }))
-      .resolves.toEqual({ hit: false, reason: 'exact_identity_missing' });
+    await expect(readCanonicalCache({ db, topologyResult: { ...topologyResult, identity: south }, identityProof }))
+      .resolves.toEqual({ hit: false, reason: 'authority_invalid' });
     expect(northKey).not.toBe(southKey);
+  });
+
+  it('does not allow an otherwise compatible cache hit without the exact current proof', async () => {
+    const topologyResult = await topology();
+    const identityProof = await proofFor(topologyResult);
+    const key = publicCurbKey(topologyResult.identity);
+    const db = memoryDb({
+      [`curbIdentities/${key}`]: {
+        schemaVersion: 2,
+        cacheCompatibilityVersion: 'canonical-curb-cache-compatibility-1',
+        publicCurbKey: key,
+        identity: topologyResult.identity,
+      },
+      [`streetSegments/${key}`]: {
+        ...topologyResult.publicCurb,
+        protocolVersion: 2,
+        cacheCompatibilityVersion: 'canonical-curb-cache-compatibility-1',
+        activeRuleSetVersion: 'curbrules2_0123456789abcdef0123',
+      },
+    });
+
+    await expect(readCanonicalCache({ db, topologyResult }))
+      .resolves.toEqual({ hit: false, reason: 'identity_proof_invalid' });
+    await expect(readCanonicalCache({ db, topologyResult, identityProof: { ...identityProof } }))
+      .resolves.toEqual({ hit: false, reason: 'identity_proof_invalid' });
+  });
+
+  it('treats a matching-BFI mixed or partial cache generation as a miss', async () => {
+    const topologyResult = await topology();
+    const identityProof = await proofFor(topologyResult);
+    const key = publicCurbKey(topologyResult.identity);
+    const db = memoryDb({
+      [`curbIdentities/${key}`]: { schemaVersion: 2, identity: topologyResult.identity },
+      [`streetSegments/${key}`]: { ...topologyResult.publicCurb, protocolVersion: 1 },
+    });
+    await expect(readCanonicalCache({ db, topologyResult, identityProof }))
+      .resolves.toEqual({ hit: false, reason: 'cache_curb_mismatch' });
+  });
+
+  it('rejects missing rule-generation provenance and cross-document public-key mismatch', async () => {
+    const topologyResult = await topology();
+    const identityProof = await proofFor(topologyResult);
+    const key = publicCurbKey(topologyResult.identity);
+    const privateDocument = {
+      schemaVersion: 2,
+      cacheCompatibilityVersion: 'canonical-curb-cache-compatibility-1',
+      publicCurbKey: key,
+      identity: topologyResult.identity,
+    };
+    const publicDocument = {
+      ...topologyResult.publicCurb,
+      protocolVersion: 2,
+      cacheCompatibilityVersion: 'canonical-curb-cache-compatibility-1',
+      activeRuleSetVersion: 'curbrules2_0123456789abcdef0123',
+    };
+    const missingGeneration = memoryDb({
+      [`curbIdentities/${key}`]: privateDocument,
+      [`streetSegments/${key}`]: { ...publicDocument, activeRuleSetVersion: undefined },
+    });
+    const wrongBinding = memoryDb({
+      [`curbIdentities/${key}`]: { ...privateDocument, publicCurbKey: 'curb2_00000000000000000000000000000000' },
+      [`streetSegments/${key}`]: publicDocument,
+    });
+    const incompatiblePublicSchema = memoryDb({
+      [`curbIdentities/${key}`]: privateDocument,
+      [`streetSegments/${key}`]: { ...publicDocument, schemaVersion: 1 },
+    });
+
+    await expect(readCanonicalCache({ db: missingGeneration, topologyResult, identityProof }))
+      .resolves.toEqual({ hit: false, reason: 'cache_curb_mismatch' });
+    await expect(readCanonicalCache({ db: wrongBinding, topologyResult, identityProof }))
+      .resolves.toEqual({ hit: false, reason: 'cache_curb_mismatch' });
+    await expect(readCanonicalCache({ db: incompatiblePublicSchema, topologyResult, identityProof }))
+      .resolves.toEqual({ hit: false, reason: 'cache_curb_mismatch' });
   });
 
   it('does not copy incompatible legacy radius-cache rules and emits mismatch', async () => {

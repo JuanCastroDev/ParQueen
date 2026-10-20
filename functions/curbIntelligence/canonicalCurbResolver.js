@@ -1,5 +1,6 @@
 'use strict';
 
+const { createHash } = require('node:crypto');
 const { classifyCanonicalCurb, CURB_RESOLUTION_POLICY } = require('./curbResolutionPolicy');
 const {
   createCanonicalCurbIdentity,
@@ -10,12 +11,19 @@ const {
 const { projectPointToMultiLineString, rankRoadwayCandidates } = require('./geometry');
 const { groupRoadwayCandidates } = require('./roadwayGrouping');
 const { resolveOfficialCurbRuntime } = require('./runtimeCurbResolution');
+const { searchPolicy } = require('./curbResolver');
+const { createCsclCandidateStore } = require('./csclSocrataAdapter');
+const { buildCanonicalCsclPopulation } = require('./csclPopulationIdentity');
+const { deepFreeze } = require('./canonicalSearchEnvelope');
 
 const NYC = Object.freeze({ minLat: 40.4, maxLat: 40.95, minLng: -74.3, maxLng: -73.65 });
 const BOROUGHS = Object.freeze({
   1: 'Manhattan', 2: 'Bronx', 3: 'Brooklyn', 4: 'Queens', 5: 'Staten Island',
 });
 const privateCandidateSets = new WeakMap();
+const authoritativeRetrievals = new WeakSet();
+const primaryTopologyResults = new WeakSet();
+const ambiguousTopologyResults = new WeakSet();
 
 const unsupported = (reasons, diagnostics = {}) => ({
   state: 'UNSUPPORTED',
@@ -167,10 +175,10 @@ function visuallyDistinct(left, right) {
     || JSON.stringify(left.stroke) !== JSON.stringify(right.stroke);
 }
 
-function publicCandidate(candidate, tokenContext, rank) {
+function publicCandidate(candidate, tokenContext, rank, authorityContextDigest) {
   const key = publicCurbKey(candidate.identity);
   return {
-    token: createCandidateToken({ publicCurbKey: key, ...tokenContext, rank }),
+    token: createCandidateToken({ publicCurbKey: key, ...tokenContext, rank, authorityContextDigest }),
     streetName: candidate.streetName,
     stroke: candidate.stroke,
   };
@@ -180,16 +188,47 @@ async function resolveCanonicalCurb(location, options = {}) {
   if (!validLocation(location)) return unsupported(['unsupported_off_network_location']);
   const quality = locationQuality(location);
   if (quality.state !== 'SUPPORTED') return unsupported(quality.reasons);
-  if (!options.candidateStore || typeof options.candidateStore.queryCandidates !== 'function') {
+  const productionStore = typeof options.fetchFn === 'function'
+    ? createCsclCandidateStore({ fetchFn: options.fetchFn, getSocrataToken: options.getSocrataToken })
+    : null;
+  const sourceStore = productionStore || options.candidateStore;
+  if (!sourceStore || typeof sourceStore.queryCandidates !== 'function') {
     return unsupported(['candidate_coverage_incomplete']);
   }
-
-  let retrieved = null;
+  const policy = searchPolicy(location, {
+    modelErrorMeters: CURB_RESOLUTION_POLICY.modelErrorMeters,
+    maxSearchRadiusMeters: 500,
+  });
+  let retrieved = await sourceStore.queryCandidates({
+    lat: location.lat,
+    lng: location.lng,
+    ...policy,
+    signal: options.signal,
+  });
+  if (productionStore && retrieved?.completeness?.state === 'COMPLETE'
+    && retrieved.envelope === policy.canonicalEnvelope
+    && retrieved.envelopeDigest === policy.canonicalEnvelope.digest
+    && retrieved.retrievalContractVersion === 'canonical-cscl-intersects-1') {
+    const population = buildCanonicalCsclPopulation(retrieved.candidates);
+    if (!population.ok) return unsupported([population.reason]);
+    retrieved = deepFreeze({
+      ...retrieved,
+      candidates: population.candidates,
+      populationIdentity: population.populationIdentity,
+      populationSchema: population.schema,
+    });
+    authoritativeRetrievals.add(retrieved);
+  }
+  if (!authoritativeRetrievals.has(retrieved)) {
+    const retrievalReason = productionStore
+      ? retrieved?.completeness?.reason || 'authority_attestation_invalid'
+      : 'authority_attestation_invalid';
+    return unsupported([retrievalReason], {
+      candidateCount: Array.isArray(retrieved?.candidates) ? retrieved.candidates.length : 0,
+    });
+  }
   const candidateStore = {
-    async queryCandidates(query) {
-      retrieved = await options.candidateStore.queryCandidates({ ...query, signal: options.signal });
-      return retrieved;
-    },
+    async queryCandidates() { return retrieved; },
   };
   const planimetricPromise = options.planimetricStore?.queryCurbs
     ? options.planimetricStore.queryCurbs({
@@ -203,6 +242,7 @@ async function resolveCanonicalCurb(location, options = {}) {
     resolveOfficialCurbRuntime(location, {
       candidateStore,
       signal: options.signal,
+      precomputedSearchPolicy: policy,
       modelErrorMeters: CURB_RESOLUTION_POLICY.modelErrorMeters,
       maxCandidates: CURB_RESOLUTION_POLICY.maximumCsclCandidates,
     }),
@@ -212,7 +252,8 @@ async function resolveCanonicalCurb(location, options = {}) {
   const rawRecords = Array.isArray(retrieved?.candidates) ? retrieved.candidates : [];
   const records = rawRecords.slice(0, CURB_RESOLUTION_POLICY.maximumCsclCandidates);
   const sourceCandidateSetComplete = retrieved?.completeness?.state === 'COMPLETE'
-    && rawRecords.length <= CURB_RESOLUTION_POLICY.maximumCsclCandidates;
+    && rawRecords.length <= CURB_RESOLUTION_POLICY.maximumCsclCandidates
+    && authoritativeRetrievals.has(retrieved);
   if (!sourceCandidateSetComplete) {
     return unsupported(['candidate_coverage_incomplete'], { candidateCount: rawRecords.length });
   }
@@ -252,13 +293,19 @@ async function resolveCanonicalCurb(location, options = {}) {
   ))).size > 1 || materialRanked.some(value => value.group.reasonCodes.length > 0);
   const planChoice = candidates.length > 1
     ? planimetricChoice(location, candidates, planimetricEvidence) : null;
-  const considered = planChoice ? [planChoice] : candidates;
+  const considered = candidates;
   const selected = considered[0];
+  const topologySelectable = candidate => {
+    const halfWidthMeters = Number(candidate.record.sourceNative?.streetwidth) * 0.3048 / 2;
+    return Number.isFinite(halfWidthMeters) && halfWidthMeters > 0
+      && candidate.projection.distanceMeters <= halfWidthMeters + uncertainty
+      && candidate.projection.segmentFraction >= 0
+      && candidate.projection.segmentFraction <= 1;
+  };
   const endpointDistance = Math.min(
     selected.projection.distanceToComponentStartMeters,
     selected.projection.distanceToComponentEndMeters,
   );
-  const widthMeters = Number(selected.record.sourceNative?.streetwidth) * 0.3048 / 2;
   const pairDistinct = considered.length === 2 && visuallyDistinct(considered[0], considered[1]);
   const policyCandidates = considered.map((candidate, index) => ({
     rank: index,
@@ -272,25 +319,26 @@ async function resolveCanonicalCurb(location, options = {}) {
     candidateSetComplete,
     sourceVersionConsistent,
     roadwaySupported: true,
-    geometryPlausible: selected.projection.distanceMeters <= widthMeters + uncertainty,
+    geometryPlausible: topologySelectable(selected),
     projectedWithinBounds: selected.projection.segmentFraction >= 0
       && selected.projection.segmentFraction <= 1,
     levelOrRoadbedAmbiguous,
     streetIdentityConflict: false,
-    sideCrossesCenterline: !planChoice
-      && Math.abs(selected.projection.signedOffsetMeters) <= uncertainty,
-    roadwayIntervalsOverlap: !planChoice && considered.length > 1,
-    endpointAmbiguous: !planChoice && endpointDistance <= uncertainty,
+    sideCrossesCenterline: Math.abs(selected.projection.signedOffsetMeters) <= uncertainty,
+    roadwayIntervalsOverlap: considered.length > 1,
+    endpointAmbiguous: endpointDistance <= uncertainty,
     actionableCandidates: policyCandidates,
   });
 
   if (decision.state === 'SUPPORTED') {
-    return {
+    const result = deepFreeze({
       state: 'SUPPORTED',
       reasons: [],
       identity: selected.identity,
       publicCurb: toPublicCurb(selected.identity),
-    };
+    });
+    primaryTopologyResults.add(result);
+    return result;
   }
   if (decision.state !== 'AMBIGUOUS') {
     return unsupported(decision.reasons, { candidateCount: considered.length });
@@ -298,28 +346,64 @@ async function resolveCanonicalCurb(location, options = {}) {
   const tokenContext = typeof options.requestNonceDigest === 'string'
     ? { requestNonceDigest: options.requestNonceDigest }
     : { requestNonce: options.requestNonce };
+  const authorityContextDigest = createHash('sha256').update(JSON.stringify({
+    envelopeDigest: retrieved.envelopeDigest,
+    populationIdentity: retrieved.populationIdentity,
+    sourceVersion: retrieved.sourceVersion,
+  })).digest('hex');
   const publicCandidates = considered.map((candidate, index) => (
-    publicCandidate(candidate, tokenContext, index)
+    publicCandidate(candidate, tokenContext, index, authorityContextDigest)
   ));
   if (publicCandidates.some(candidate => !candidate.token)) {
     return unsupported(['candidate_token_unavailable'], { candidateCount: considered.length });
   }
-  const result = {
+  const result = deepFreeze({
     state: 'AMBIGUOUS',
     reasons: decision.reasons,
     center: { lat: location.lat, lng: location.lng },
     candidates: publicCandidates,
-  };
-  privateCandidateSets.set(result, considered.map((candidate, index) => ({
+  });
+  ambiguousTopologyResults.add(result);
+  const privateCandidates = deepFreeze(considered.map((candidate, index) => ({
     token: publicCandidates[index].token,
     identity: candidate.identity,
+    topologySelectable: topologySelectable(candidate),
   })));
+  privateCandidateSets.set(result, privateCandidates);
   return result;
 }
 
-function getPrivateCanonicalCandidateSet(resolution) {
-  const candidates = privateCandidateSets.get(resolution);
-  return candidates ? [...candidates] : [];
+function hasPrimaryTopologyAuthority(result) {
+  return Boolean(result && primaryTopologyResults.has(result));
 }
 
-module.exports = { resolveCanonicalCurb, getPrivateCanonicalCandidateSet };
+function hasAmbiguousTopologyAuthority(result) {
+  return Boolean(result && ambiguousTopologyResults.has(result));
+}
+
+function promoteAttestedVisualSelection(resolution, candidateToken) {
+  if (!hasAmbiguousTopologyAuthority(resolution) || typeof candidateToken !== 'string') {
+    return unsupported(['candidate_selection_stale']);
+  }
+  const privateSet = privateCandidateSets.get(resolution);
+  const selected = privateSet?.find(candidate => candidate.token === candidateToken);
+  if (!selected || selected.topologySelectable !== true) {
+    return unsupported(['candidate_selection_stale']);
+  }
+  const identity = deepFreeze({
+    ...selected.identity,
+    resolution: { ...selected.identity.resolution, method: 'visual_selection' },
+  });
+  const result = deepFreeze({
+    state: 'SUPPORTED', reasons: [], identity, publicCurb: toPublicCurb(identity),
+  });
+  primaryTopologyResults.add(result);
+  return result;
+}
+
+module.exports = {
+  resolveCanonicalCurb,
+  hasPrimaryTopologyAuthority,
+  hasAmbiguousTopologyAuthority,
+  promoteAttestedVisualSelection,
+};

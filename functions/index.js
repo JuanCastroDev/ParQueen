@@ -5014,7 +5014,6 @@ async function _queryCanonicalSweepEvidence({ identity, signal }) {
 async function _runCanonicalCurbV2(requestData) {
   const {
     runCanonicalCurbOrchestrator,
-    createCsclCandidateStore,
     createPlanimetricCurbStore,
     createParkNycCandidateStore,
     createPrivateBlockfaceResolver,
@@ -5039,11 +5038,6 @@ async function _runCanonicalCurbV2(requestData) {
   return runCanonicalCurbOrchestrator(requestData, {
     db,
     Timestamp,
-    candidateStore: createCsclCandidateStore({
-      fetchFn: fetch,
-      getSocrataToken,
-      candidateLimit: 100,
-    }),
     planimetricStore: createPlanimetricCurbStore({ fetchFn: fetch }),
     parkNycStore: createParkNycCandidateStore({
       fetchFn: fetch,
@@ -5220,57 +5214,19 @@ exports.createSegmentFromSweepNYC = onCall(
     const uid = request.auth.uid;
     await checkRateLimit(uid, 'createSegmentFromSweepNYC', { limit: 30, windowSec: 3600 });
 
+    if (request.data?.protocolVersion !== 2) {
+      return { protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' };
+    }
+
     const canonicalV2Handler = selectCanonicalV2Handler(
       request.data,
       _callableHooks.canonicalCurbOrchestrator,
       _runCanonicalCurbV2,
     );
-    if (canonicalV2Handler) return canonicalV2Handler(request.data);
-
-    const { lat, lng, accuracyMeters, revalidateSegmentId } = request.data || {};
-    if (typeof lat !== 'number' || typeof lng !== 'number')
-      throw new HttpsError('invalid-argument', 'lat and lng must be numbers.');
-    if (lat < 40.4 || lat > 40.95 || lng < -74.3 || lng > -73.65)
-      throw new HttpsError('invalid-argument', 'Coordinates outside NYC bounds.');
-    if (revalidateSegmentId !== undefined
-      && (typeof revalidateSegmentId !== 'string'
-        || revalidateSegmentId.length === 0
-        || revalidateSegmentId.length > 500
-        || revalidateSegmentId.includes('/'))) {
-      throw new HttpsError('invalid-argument', 'Invalid segment ID.');
+    if (typeof canonicalV2Handler !== 'function') {
+      return { protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' };
     }
-
-    let productionResult;
-    let shadowEvidence = null;
-    try {
-      if (revalidateSegmentId) {
-        productionResult = await _revalidateLegacyNYCOpenDataSegment(revalidateSegmentId, lat, lng);
-      } else if (_callableHooks.sweepNYCResult) {
-        productionResult = await _callableHooks.sweepNYCResult(lat, lng);
-      } else {
-        const sweepResult = await _tryCreateFromSweepNYC(
-          lat,
-          lng,
-          evidence => { shadowEvidence = evidence; },
-        );
-        if (sweepResult.success || !_SWEEPNYC_FALLBACK_REASONS.has(sweepResult.reason)) {
-          productionResult = sweepResult;
-        } else {
-          logStreetIntelEvent('fallback_attempted', { sweepReason: sweepResult.reason });
-          console.log('[SweepNYC→NYCOpenData] falling back, sweepReason:', sweepResult.reason);
-          productionResult = await _fallbackToNYCOpenData(
-            lat,
-            lng,
-            null,
-            evidence => { shadowEvidence = evidence; },
-          );
-        }
-      }
-    } catch (err) {
-      console.error('[createSegmentFromSweepNYC] top-level error:', sanitizeError(err));
-      productionResult = { success: false, reason: 'unknown_error', _diag: { error: sanitizeError(err) } };
-    }
-    return _observeCurbIntelligenceShadow(productionResult, lat, lng, accuracyMeters, shadowEvidence);
+    return canonicalV2Handler(request.data);
   }
 );
 

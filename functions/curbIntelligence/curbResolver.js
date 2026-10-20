@@ -3,6 +3,7 @@
 const { rankRoadwayCandidates } = require('./geometry');
 const { classifyCurbResolution } = require('./confidence');
 const { groupRoadwayCandidates } = require('./roadwayGrouping');
+const { buildCanonicalSearchEnvelope } = require('./canonicalSearchEnvelope');
 
 const NYC = Object.freeze({ minLat: 40.4, maxLat: 40.95, minLng: -74.3, maxLng: -73.65 });
 
@@ -43,6 +44,7 @@ function searchPolicy(input, options) {
     searchRadiusMeters: radius,
     complete: radius >= desired,
     envelope: { minLat: input.lat - latDelta, maxLat: input.lat + latDelta, minLng: input.lng - lngDelta, maxLng: input.lng + lngDelta },
+    canonicalEnvelope: buildCanonicalSearchEnvelope(input, radius),
   };
 }
 
@@ -93,7 +95,7 @@ async function resolveOfficialCurb(input, options = {}) {
   if (!options.candidateStore || typeof options.candidateStore.queryCandidates !== 'function') {
     return unknown(['evidence_insufficient']);
   }
-  const query = searchPolicy(input, options);
+  const query = options.precomputedSearchPolicy || searchPolicy(input, options);
   const retrieved = await options.candidateStore.queryCandidates({ lat: input.lat, lng: input.lng, ...query });
   const candidates = Array.isArray(retrieved?.candidates) ? retrieved.candidates : [];
   const complete = retrieved?.completeness?.state === 'COMPLETE';

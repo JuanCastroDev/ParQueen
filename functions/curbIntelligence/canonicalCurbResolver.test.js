@@ -5,6 +5,7 @@ const require = createRequire(import.meta.url);
 const { resolveCanonicalCurb } = require('./canonicalCurbResolver');
 
 const VERSION = Object.freeze({ resourceId: 'inkn-q76z', version: 'fixture-v2' });
+const METADATA = Object.freeze({ id: 'inkn-q76z', rowsUpdatedAt: 1767225600, viewLastModified: 1767225660 });
 const HORIZONTAL = [[[-74.001, 40.7], [-73.999, 40.7]]];
 const VERTICAL = [[[-74, 40.699], [-74, 40.701]]];
 
@@ -54,6 +55,17 @@ const planimetric = geometries => ({
     sourceVersion: { resourceId: '5xvt-8cbk', version: 'fixture-plan-v1' },
   })),
 });
+const rawRow = value => ({
+  ...value.sourceNative,
+  globalid: value.globalId,
+  l_blockfaceid: value.leftBlockFaceId,
+  r_blockfaceid: value.rightBlockFaceId,
+  the_geom: value.geometry,
+});
+const fetchFor = candidates => vi.fn(async url => ({
+  ok: true,
+  json: async () => String(url).includes('/api/views/') ? METADATA : candidates.map(rawRow),
+}));
 const location = (overrides = {}) => ({
   lat: 40.70005,
   lng: -74,
@@ -63,10 +75,8 @@ const location = (overrides = {}) => ({
   ...overrides,
 });
 const options = (candidates, extra = {}) => ({
-  candidateStore: store(candidates),
-  planimetricStore: noPlanimetric(),
-  requestNonce: 'request-nonce',
-  ...extra,
+  ...(extra.candidateStore ? {} : { fetchFn: fetchFor(candidates), getSocrataToken: () => '' }),
+  planimetricStore: noPlanimetric(), requestNonce: 'request-nonce', ...extra,
 });
 
 describe('resolveCanonicalCurb', () => {
@@ -86,7 +96,7 @@ describe('resolveCanonicalCurb', () => {
     });
     expect(incomplete).toEqual({
       state: 'UNSUPPORTED',
-      reasons: ['candidate_coverage_incomplete'],
+      reasons: ['authority_attestation_invalid'],
       candidateCount: 1,
     });
   });
@@ -203,10 +213,10 @@ describe('resolveCanonicalCurb', () => {
 
     expect(poor).toMatchObject({ state: 'UNSUPPORTED', reasons: expect.arrayContaining(['reported_accuracy_exceeds_limit']) });
     expect(multiLevel).toMatchObject({ state: 'UNSUPPORTED', reasons: expect.arrayContaining(['multilevel_or_roadbed_ambiguity']) });
-    expect(incomplete).toMatchObject({ state: 'UNSUPPORTED', reasons: expect.arrayContaining(['candidate_coverage_incomplete']) });
+    expect(incomplete).toMatchObject({ state: 'UNSUPPORTED', reasons: expect.arrayContaining(['authority_attestation_invalid']) });
   });
 
-  it('uses uniquely aligned nearby planimetric curb evidence to resolve crossing roads', async () => {
+  it('does not use uniquely aligned nearby planimetric curb evidence to override crossing-road ambiguity', async () => {
     const maran = record({ coordinates: HORIZONTAL });
     const whitePlains = record({
       globalId: 'white-plains', streetName: 'WHITE PLAINS ROAD', coordinates: VERTICAL,
@@ -218,10 +228,7 @@ describe('resolveCanonicalCurb', () => {
       options([maran, whitePlains], { planimetricStore: planimetric([maranCurb]) }),
     );
 
-    expect(result).toMatchObject({
-      state: 'SUPPORTED',
-      identity: { names: { onStreet: 'MARAN PLACE' } },
-    });
+    expect(result).toMatchObject({ state: 'AMBIGUOUS' });
   });
 
   it('keeps ambiguity when planimetric curbs conflict across both candidates', async () => {
@@ -315,33 +322,25 @@ describe('resolveCanonicalCurb', () => {
 
     expect(result).toEqual({
       state: 'UNSUPPORTED',
-      reasons: ['candidate_coverage_incomplete'],
-      candidateCount: 101,
+      reasons: ['source_query_truncated'],
+      candidateCount: 0,
     });
   });
 
-  it('starts CSCL and planimetric reads in parallel', async () => {
-    let csclStarted = false;
-    let planStarted = false;
+  it('does not let an injected candidate store establish topology authority', async () => {
     const candidateStore = {
       async queryCandidates() {
-        csclStarted = true;
-        await Promise.resolve();
-        expect(planStarted).toBe(true);
         return { candidates: [record()], completeness: { state: 'COMPLETE', reason: null } };
       },
     };
     const planimetricStore = {
       async queryCurbs() {
-        planStarted = true;
-        await Promise.resolve();
-        expect(csclStarted).toBe(true);
         return { candidates: [], completeness: { state: 'COMPLETE', reason: null } };
       },
     };
 
     await expect(resolveCanonicalCurb(location(), {
       candidateStore, planimetricStore, requestNonce: 'parallel',
-    })).resolves.toMatchObject({ state: 'SUPPORTED' });
+    })).resolves.toMatchObject({ state: 'UNSUPPORTED', reasons: ['authority_attestation_invalid'] });
   });
 });

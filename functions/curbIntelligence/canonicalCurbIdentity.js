@@ -132,6 +132,8 @@ function candidateNonceDigest(input) {
 
 function createCandidateToken(input) {
   const nonceDigest = candidateNonceDigest(input);
+  const authorityContextDigest = typeof input?.authorityContextDigest === 'string'
+    && /^[a-f0-9]{64}$/.test(input.authorityContextDigest) ? input.authorityContextDigest : null;
   if (!input || !/^curb2_[a-f0-9]{32}$/.test(input.publicCurbKey)
     || !nonceDigest
     || !Number.isInteger(input.rank) || input.rank < 0) return null;
@@ -139,6 +141,7 @@ function createCandidateToken(input) {
     input.publicCurbKey,
     nonceDigest,
     input.rank,
+    ...(authorityContextDigest ? [authorityContextDigest] : []),
   ])}`;
 }
 
