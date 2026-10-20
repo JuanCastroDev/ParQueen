@@ -79,6 +79,7 @@ function fakeRequest(uid, claims = {}, data = {}) {
             uid,
             token: { uid, auth_time: NOW - 30, iat: NOW - 30, exp: NOW + 3600, ...claims },
         } : null,
+        app: { appId: 'test-app', token: 'test-token' },
         rawRequest: {},
     };
 }

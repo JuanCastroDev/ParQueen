@@ -8,6 +8,7 @@ const ENFORCED_CALLABLES = [
   'updateDisplayName',
   'adminReadView',
   'checkHydrantDistance',
+  'createSegmentFromSweepNYC',
 ];
 
 describe('Android Phase 2E App Check contracts', () => {
@@ -107,9 +108,9 @@ describe('Android Phase 2E App Check contracts', () => {
     expect(manifest).not.toMatch(/uses-permission[^>]*ACCESS_BACKGROUND_LOCATION/);
   });
 
-  it('does not change Cloud Functions App Check enforcement', () => {
+  it('keeps the reviewed Cloud Functions App Check enforcement set', () => {
     const functions = read('../functions/index.js');
-    expect(functions.match(/enforceAppCheck:\s*true/g) || []).toHaveLength(4);
+    expect(functions.match(/enforceAppCheck:\s*true/g) || []).toHaveLength(5);
     for (const name of ENFORCED_CALLABLES) {
       const start = functions.indexOf(`exports.${name} = onCall(`);
       expect(start, name).toBeGreaterThan(-1);

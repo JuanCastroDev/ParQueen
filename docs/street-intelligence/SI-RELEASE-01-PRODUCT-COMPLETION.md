@@ -200,9 +200,7 @@ None. SI-RELEASE-02 put the frozen `ac788` orchestrator on protocol 2 and stoppe
 
 ### P1 before release
 
-1. Enforce App Check on `createSegmentFromSweepNYC`.
-2. Give cache hits an explicit TTL. Proof and source-version equality are already required by the frozen persistence module.
-3. Deploy the resulting function revision on purpose and smoke the signed-in My Car save. Repository params are not evidence that production is current.
+1. Deploy the SI-RELEASE-03 function revision on purpose and smoke the signed-in My Car save. Repository source is not evidence that the live revision is current. App Check enforcement and the cache TTL are in this branch. They are not closed in production until that revision is the one serving traffic.
 
 ### P2 follow-up
 
@@ -215,7 +213,7 @@ None. SI-RELEASE-02 put the frozen `ac788` orchestrator on protocol 2 and stoppe
 
 `P0_COUNT = 0`
 
-`P1_COUNT = 3`
+`P1_COUNT = 1`
 
 `P2_COUNT = 2`
 
@@ -237,7 +235,7 @@ The predicate is true only when every line below is true. SI-LAUNCH-03 completio
 10. Critical findings are 0. High release blockers are 0.
 11. No prospective accuracy, coverage, or block-side claim is present.
 
-`STREET_INTELLIGENCE_PRODUCT_COMPLETE = FALSE` after SI-RELEASE-02. The two P0 items below are closed. App Check, cache TTL, and a controlled production deploy remain.
+`STREET_INTELLIGENCE_PRODUCT_COMPLETE = FALSE` after SI-RELEASE-03. The code-level App Check and cache TTL items are closed. The live function revision is still unknown because this phase did not deploy.
 
 ## SI-RELEASE-02 result
 
@@ -255,25 +253,86 @@ Closed:
 - P0 legacy `success: true` for a missing protocol.
 - P1 gap for Function 3C, cache, and persistence product tests. `functions/siRelease02ProductPath.test.js` covers that matrix.
 
-Still open:
+Open at the end of SI-RELEASE-02, and closed or carried by SI-RELEASE-03 below:
 
-- P1 App Check is not enforced on `createSegmentFromSweepNYC`.
-- P1 cache reads require proof and source-version equality, and they still have no TTL.
-- P1 the live Cloud Function revision is unknown. This phase did not deploy.
-- P2 debug-only `matchNearestSegment` remains in the client. Its callable requests are protocol 2 and are not the My Car save path.
+- P1 App Check was not enforced on `createSegmentFromSweepNYC`.
+- P1 cache reads required proof and source-version equality, and had no TTL.
+- P1 the live Cloud Function revision was unknown.
+- P2 debug-only `matchNearestSegment` remains in the client.
 - P2 `confirmedParkingSide` remains a local label.
+- Validation only: SI-LAUNCH-03 source consistency.
+
+## SI-RELEASE-03 result
+
+App Check and the cache TTL are product-boundary controls. No file under `functions/curbIntelligence/**` was edited.
+
+### App Check
+
+`createSegmentFromSweepNYC` declares `enforceAppCheck: true` on the same Firebase Functions v2 `onCall` options used by `checkHydrantDistance`. The handler also rejects a request whose runtime `request.app.appId` is missing before rate limit, protocol selection, topology, Function 3C, cache, or persistence. A caller-supplied field cannot satisfy that check. The declaration is the literal `true`. It is not switched off for the emulator.
+
+Shipping clients already initialize App Check before callable traffic:
+
+- Web and PWA: `initializeParQueenAppCheck` in `firebaseConfig.ts` uses `ReCaptchaEnterpriseProvider` when `VITE_FIREBASE_APPCHECK_SITE_KEY` is present. Production builds keep that key.
+- iOS: `ParQueenAppCheckProviderFactory` installs App Attest on device and DeviceCheck before iOS 14. The JS bridge forwards the native token.
+- Android: release builds install Play Integrity. The JS bridge forwards that token.
+
+`WEB_APP_CHECK_READY = TRUE`
+
+`IOS_APP_CHECK_READY = TRUE`
+
+`ANDROID_APP_CHECK_READY = TRUE`
+
+There is no product fallback when App Check is missing or invalid.
+
+### Cache TTL
+
+The frozen cache is unchanged.
+
+`CACHE_LOCATION = curbIdentities/{publicCurbKey} and streetSegments/{publicCurbKey}`
+
+`CACHE_KEY = publicCurbKey`, pattern `curb2_[a-f0-9]{32}`
+
+`CACHE_CREATED_AT_FIELD = streetSegments.updatedAt`
+
+`CACHE_CURRENT_VALIDATION = readCanonicalCache` requires primary topology authority, a proof bound to that topology result, schema 2, protocol 2, cache compatibility, geometry, names, side, and the public key.
+
+`CACHE_CURRENT_SOURCE_VERSION_BINDING = stored.sourceVersion.resourceId and stored.sourceVersion.version equal the current identity`
+
+`CACHE_CURRENT_PROOF_BINDING = hasCanonicalCurbIdentityProof(identityProof, topologyResult)`
+
+There was no existing Street Intelligence TTL. The product constant is one day:
+
+`STREET_INTELLIGENCE_CACHE_TTL_MS = 86400000`
+
+Street rules and cleaning change on a day scale. A shorter window would repeat Function 3C on every save of the same proven curb. The value is not taken from benchmark timings or from the 26B/26C source mismatch.
+
+`CACHE_TTL_BOUNDARY_RULE = inclusive: now - updatedAt <= 86400000 is eligible; now - updatedAt > 86400000 is expired`
+
+`CACHE_CREATED_AT_TRUST_MODEL = Admin SDK Timestamp.now() written by the frozen persist, read back only through Timestamp.toMillis(). The read clock is the same Admin SDK Timestamp.now() inside the product boundary. Request data cannot supply either clock. A missing, non-Timestamp, non-finite, or future timestamp more than 120000 ms ahead is not eligible. That 120000 ms figure is clock skew, not a grace period for old entries.`
+
+An authoritative hit still requires the frozen proof and source-version checks. The TTL is an additional condition. An expired entry returns `hit: false` and the request continues through the current frozen path. A failed or abstained resolution does not call persist, so it cannot refresh `updatedAt`.
+
+### Remaining release items
+
+- P1 `LIVE_FUNCTION_REVISION_UNKNOWN`. This phase did not query or deploy production.
+- P2 debug-only `matchNearestSegment`.
+- P2 `confirmedParkingSide` as a local label.
 - Validation only: SI-LAUNCH-03 source consistency.
 
 `P0_COUNT = 0`
 
-`P1_COUNT = 3`
+`P1_COUNT = 1`
 
 `P2_COUNT = 2`
 
 `VALIDATION_ONLY_COUNT = 1`
 
+`P0_ITEMS = none`
+
+`P1_ITEMS = LIVE_FUNCTION_REVISION_UNKNOWN`
+
 ## Next implementation phase
 
-`NEXT_PRODUCT_PHASE = APP_CHECK_CACHE_TTL_AND_CONTROLLED_DEPLOY`
+`NEXT_PRODUCT_PHASE = CONTROLLED_PRODUCTION_REVISION_VERIFICATION`
 
-Enforce App Check on the Street Intelligence callable, decide the cache TTL, deploy that revision, and smoke one signed-in authoritative save and one forced non-answer. Do not start from the dirty `main` worktree or the SI-LAUNCH worktree.
+Deploy the SI-RELEASE-03 revision on purpose, record the live function revision, and smoke one signed-in authoritative save and one forced non-answer. Do not start from the dirty `main` worktree or the SI-LAUNCH worktree. Do not treat this source branch as proof that production is current.

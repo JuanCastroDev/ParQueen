@@ -22,6 +22,8 @@ const socrataAppToken = defineSecret("SOCRATA_APP_TOKEN");
 const { osmNameToDOT, streetNameToLikePattern, dotSideToCardinal, BOROUGH_CODE_TO_NAME, nycOdSegmentDocId, selectBlockFace, findBlockContext, parseNYCOpenDataSign } = require('./nycOpenDataNormalizer');
 const { redactForLog, sanitizeError } = require('./redactForLog');
 const { checkRateLimit } = require('./rateLimiter');
+const { streetIntelligenceAppCheckRejection } = require('./streetIntelligenceAppCheck');
+const { createStreetIntelligenceCacheBoundary } = require('./streetIntelligenceCacheTtl');
 const {
   AUTH_BRIDGE_SERVICE_ACCOUNT,
   exchangePhoneAuthSessionHandler,
@@ -5031,6 +5033,7 @@ async function _runCanonicalCurbV2(requestData) {
   }
 
   const getSocrataToken = _socrataToken;
+  const streetIntelligenceCache = createStreetIntelligenceCacheBoundary({ Timestamp });
   const blockfaceResolver = createPrivateBlockfaceResolver({
     mode: 'shadow',
     serviceUrl: config.serviceUrl,
@@ -5049,6 +5052,8 @@ async function _runCanonicalCurbV2(requestData) {
     getSocrataToken,
     telemetry: createCurbTelemetry(),
     requestNonceFactory: randomUUID,
+    readCanonicalCache: streetIntelligenceCache.readCanonicalCache,
+    persistCanonicalCurb: streetIntelligenceCache.persistCanonicalCurb,
   });
 }
 
@@ -5207,9 +5212,17 @@ exports.checkHydrantDistance = onCall(
 );
 
 exports.createSegmentFromSweepNYC = onCall(
-  { region: 'us-central1', secrets: [socrataAppToken], serviceAccount: 'parqueen-curb-caller@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
+  {
+    region: 'us-central1',
+    secrets: [socrataAppToken],
+    enforceAppCheck: true,
+    serviceAccount: 'parqueen-curb-caller@parkqueen-46475363-ccf36.iam.gserviceaccount.com',
+  },
   async (request) => {
     if (!request.auth) throw new HttpsError('unauthenticated', 'Must be signed in.');
+    if (streetIntelligenceAppCheckRejection(request)) {
+      throw new HttpsError('unauthenticated', 'App Check required.');
+    }
 
     const uid = request.auth.uid;
     await checkRateLimit(uid, 'createSegmentFromSweepNYC', { limit: 30, windowSec: 3600 });
