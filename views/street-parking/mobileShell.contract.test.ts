@@ -98,6 +98,8 @@ describe('mobile shell layout contract', () => {
     expect(css).toMatch(/\.map-primary-cta\s*\{[^}]*letter-spacing:\s*-0\.02em/s);
     expect(css).toContain('.map-primary-cta-icon');
     expect(css).toContain('.map-status-chip');
+    expect(css).toMatch(/\.map-status-chip\.is-available\s*\{[^}]*min-height:\s*44px/s);
+    expect(css).toMatch(/\.map-status-chip\.is-available:focus-visible\s*\{[^}]*var\(--mobile-shell-focus\)/s);
     expect(css).toContain('.map-control-button');
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.map-primary-cta/s);
 

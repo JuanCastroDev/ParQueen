@@ -3005,9 +3005,10 @@ export const MapView: React.FC<MapViewProps> = ({
                         {spotCount > 0 ? (
                             <div className="flex items-center gap-1.5 flex-wrap">
                                 <button
+                                    type="button"
                                     onClick={handleNearbyPillClick}
                                     aria-label={spotCount === 1 ? t('map.view_nearby_spot') : t('map.view_nearby_spots')}
-                                    className="map-status-chip is-available inline-flex items-center gap-2.5 text-[12px] font-medium cursor-pointer active:opacity-80 transition-opacity motion-reduce:transition-none [@media(max-width:767px)_and_(min-height:501px)]:relative [@media(max-width:767px)_and_(min-height:501px)]:before:absolute [@media(max-width:767px)_and_(min-height:501px)]:before:inset-x-0 [@media(max-width:767px)_and_(min-height:501px)]:before:-inset-y-[7px]"
+                                    className="map-status-chip is-available inline-flex items-center gap-2.5 text-[12px] font-medium cursor-pointer active:opacity-80 transition-opacity motion-reduce:transition-none"
                                 >
                                     <div className="map-status-dot bg-emerald-400 animate-pulse motion-reduce:animate-none shrink-0" />
                                     {spotCount === 1 ? t('map.free_spot_singular') : t('map.free_spots_plural', { count: spotCount })}
