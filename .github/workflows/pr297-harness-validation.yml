@@ -1,0 +1,302 @@
+# PR #297 harness validation: STAGE 1 ONLY (throwaway branch, do not merge).
+# Prepared by ParQueen Release, 2026-10-23, per Juan directive 2026-10-23 17:10 ET and plan v2 §4/§5.
+# Subject: FINAL_HEAD 499d4371a79215448246afd20e253235cc095459 (PR #297 head, L100 CodeQL fix).
+# Scope: exactly 5 harness jobs (matrix jobs 1-5). Fault injection: NOT PRESENT (not approved for stage 1).
+# No jobs 6-20 are defined here; stage 2 needs a separate approval and a separate push.
+# No secrets, no deploy, no Firebase/GCP, no persistent or prod resources, no retries, no reruns.
+name: PR297 harness validation stage 1 (499d437, throwaway, do not merge)
+
+on:
+  push:
+    branches:
+      - 'ci-validate/pr297-499d437-20261023'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr297-validation-stage1-499d437
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  TARGET_SHA: 499d4371a79215448246afd20e253235cc095459
+  EXPECTED_REF: refs/heads/ci-validate/pr297-499d437-20261023
+  WORKFLOW_FILE: .github/workflows/pr297-harness-validation.yml
+  TEST_FILE: views/street-parking/handoffReachability.regression.test.ts
+  TEST_FILE_SHA256: fb012a0e315086ca6630928457a131b2e5a5b8b049f6d4cd12975b6a66cce6c5
+  EXPECTED_TESTS: '5'
+  SLOW_START_MS: '10000'
+  SLOW_XVFB_MS: '5000'
+
+jobs:
+  harness:
+    name: harness ${{ matrix.job }}
+    # GitHub-hosted runner: a fresh, isolated VM per job. Image version cannot be pinned; it is recorded per job.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10   # hard job cap (plan v2 §7); step caps below bound each phase
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        job: [1, 2, 3, 4, 5]
+    env:
+      JOB: ${{ matrix.job }}
+    steps:
+      - name: Prepare evidence dir
+        run: |
+          OUT="$RUNNER_TEMP/pr297-evidence"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+          mkdir -p "$OUT"
+          date -u +%Y-%m-%dT%H:%M:%S.%3NZ > "$OUT/job-start-utc.txt"
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2 (repo TM-16 pin)
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Guard (push only, exact branch, attempt 1, one scaffolding commit on FINAL_HEAD, test file pinned)
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "push" || { echo "::error::G-GUARD event=$GITHUB_EVENT_NAME (push only)"; exit 1; }
+          test "$GITHUB_REF" = "$EXPECTED_REF" || { echo "::error::G-GUARD ref=$GITHUB_REF expected $EXPECTED_REF"; exit 1; }
+          test "$GITHUB_RUN_ATTEMPT" = "1" || { echo "::error::G-GUARD run_attempt=$GITHUB_RUN_ATTEMPT: reruns are not authorized; this attempt is INVALID"; exit 1; }
+          git cat-file -e "${TARGET_SHA}^{commit}"
+          test "$(git rev-parse HEAD^)" = "$TARGET_SHA" || { echo "::error::G-GUARD HEAD^ is not FINAL_HEAD"; exit 1; }
+          test "$(git rev-list --count "$TARGET_SHA..HEAD")" = "1" || { echo "::error::G-GUARD expected exactly 1 commit on top of FINAL_HEAD"; exit 1; }
+          changed="$(git diff --name-only "$TARGET_SHA" HEAD)"
+          test "$changed" = "$WORKFLOW_FILE" || { echo "::error::G-GUARD changed files vs FINAL_HEAD: $changed"; exit 1; }
+          echo "$TEST_FILE_SHA256  $TEST_FILE" | sha256sum -c -
+          { echo "head=$(git rev-parse HEAD)"; echo "target=$TARGET_SHA"; echo "run_id=$GITHUB_RUN_ID"; echo "run_attempt=$GITHUB_RUN_ATTEMPT"; } > "$OUT/guard.ok"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4 (repo TM-16 pin)
+        with:
+          node-version: 22
+
+      - name: Install root dependencies (npm ci, no scripts beyond the lockfile's)
+        timeout-minutes: 8
+        run: npm ci
+
+      - name: Environment record (runner image, Chrome, Xvfb, Node)
+        timeout-minutes: 2
+        run: |
+          set -uo pipefail
+          {
+            echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-}"
+            echo "runner_name=${RUNNER_NAME:-} runner_os=${RUNNER_OS:-} runner_arch=${RUNNER_ARCH:-} runner_environment=${RUNNER_ENVIRONMENT:-}"
+            echo "chrome_version=$(timeout 20 google-chrome --version 2>&1 || echo unavailable)"
+            echo "xvfb_path=$(command -v Xvfb || echo missing)"
+            echo "node=$(node --version)"
+            echo "kernel=$(uname -r)"
+          } | tee "$OUT/env.txt"
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then echo "::error::runner is not GitHub-hosted (${RUNNER_ENVIRONMENT:-unset})"; fi
+
+      - name: Pre-run snapshot (processes, listening ports, temp dirs)
+        timeout-minutes: 1
+        run: |
+          set -uo pipefail
+          (pgrep -a -f 'chrome|Xvfb|handoff-(reach|desktop)-' || true) | sort > "$OUT/pre-procs.txt"
+          (ss -Hltnp 2>/dev/null || true) | awk '{print $4}' | sort -u > "$OUT/pre-ports.txt"
+          (find /tmp "${TMPDIR:-/tmp}" -maxdepth 1 -name 'handoff-*' 2>/dev/null || true) | sort -u > "$OUT/pre-tmp.txt"
+          if [ -s "$OUT/pre-procs.txt" ]; then echo "::warning::job $JOB pre-existing chrome/Xvfb/harness-like processes on a fresh runner"; cat "$OUT/pre-procs.txt"; fi
+
+      - name: Run handoff harness file ONCE (no retry, no rerun)
+        timeout-minutes: 6
+        run: |
+          set +e
+          start_ms=$(date +%s%3N)
+          timeout --kill-after=15s 300s npx vitest run "$TEST_FILE" --retry=0 \
+            --reporter=verbose --reporter=json --outputFile.json="$OUT/vitest.json" 2>&1 | tee "$OUT/vitest.log"
+          code=${PIPESTATUS[0]}
+          end_ms=$(date +%s%3N)
+          echo "$code" > "$OUT/vitest.exit"
+          echo "wall_ms=$((end_ms - start_ms))" > "$OUT/vitest.timing"
+          exit 0
+
+      - name: Post-run cleanup observation (leaks are reported, never inferred from runner exit)
+        if: always()
+        timeout-minutes: 1
+        run: |
+          set -uo pipefail
+          (pgrep -a -f 'chrome|Xvfb|handoff-(reach|desktop)-' || true) | sort > "$OUT/post-procs.txt"
+          (ss -Hltnp 2>/dev/null || true) | awk '{print $4}' | sort -u > "$OUT/post-ports.txt"
+          (ss -Hltnp 2>/dev/null || true) > "$OUT/post-ports-detail.txt"
+          (find /tmp "${TMPDIR:-/tmp}" -maxdepth 1 -name 'handoff-*' 2>/dev/null || true) | sort -u > "$OUT/post-tmp.txt"
+          comm -13 "$OUT/pre-ports.txt" "$OUT/post-ports.txt" > "$OUT/new-ports.txt" 2>/dev/null || true
+          comm -13 "$OUT/pre-procs.txt" "$OUT/post-procs.txt" > "$OUT/new-procs.txt" 2>/dev/null || true
+          comm -13 "$OUT/pre-tmp.txt" "$OUT/post-tmp.txt" > "$OUT/new-tmp.txt" 2>/dev/null || true
+          for f in new-procs new-ports new-tmp; do echo "== $f"; cat "$OUT/$f.txt"; done
+
+      - name: Classify (strict; skipped/pending/todo or missing evidence is never PASS)
+        if: always()
+        timeout-minutes: 1
+        run: |
+          python3 - <<'PY'
+          import json, os, re, sys
+          out = os.environ["OUT"]; job = os.environ["JOB"]
+          exp = int(os.environ["EXPECTED_TESTS"]); slow = int(os.environ["SLOW_START_MS"]); slow_x = int(os.environ["SLOW_XVFB_MS"])
+          test_file = os.environ["TEST_FILE"]
+          def rd(name, default=""):
+              try:
+                  return open(os.path.join(out, name), errors="replace").read()
+              except OSError:
+                  return default
+          def lines(name):
+              return [l for l in rd(name).splitlines() if l.strip()]
+          reasons, warnings, tags = [], [], []
+          guard_ok = os.path.exists(os.path.join(out, "guard.ok"))
+          log = rd("vitest.log")
+          exit_raw = rd("vitest.exit").strip()
+          code = int(exit_raw) if exit_raw.lstrip("-").isdigit() else None
+          wall = rd("vitest.timing").strip()
+          env = rd("env.txt")
+          try:
+              j = json.loads(rd("vitest.json") or "null") or {}
+          except Exception:
+              j = {}
+          if not guard_ok: reasons.append("INVALID: guard did not pass (G-GUARD)")
+          if code is None: reasons.append("INVALID: harness step did not run or no exit code (I-INFRA)")
+          elif code == 124 or code == 137: reasons.append(f"FAIL: harness run killed by step timeout (exit {code})")
+          elif code != 0: reasons.append(f"FAIL: vitest exit {code}")
+          if not j: reasons.append("INVALID: vitest JSON report missing or unparseable")
+          tot = j.get("numTotalTests"); p = j.get("numPassedTests"); f = j.get("numFailedTests")
+          pend = j.get("numPendingTests"); todo = j.get("numTodoTests"); fsuites = j.get("numFailedTestSuites")
+          files = [r for r in j.get("testResults", []) if str(r.get("name", "")).endswith(test_file)]
+          ar = files[0].get("assertionResults", []) if len(files) == 1 else []
+          statuses = [a.get("status") for a in ar]
+          if j:
+              if len(j.get("testResults", [])) != 1 or len(files) != 1: reasons.append(f"INVALID: expected exactly 1 test file result for {test_file}")
+              if tot != exp or p != exp: reasons.append(f"FAIL: expected exactly {exp} executed+passed, got total={tot} passed={p}")
+              if f != 0: reasons.append(f"FAIL: failed tests={f}")
+              if (pend or 0) != 0 or (todo or 0) != 0 or any(s != "passed" for s in statuses):
+                  reasons.append(f"FAIL: skipped/pending/todo present (pending={pend} todo={todo} statuses={statuses}); Vitest reports a beforeAll failure as skipped")
+                  if code == 0: tags.append("INVALID-SKIP(Chrome/Xvfb missing?)")
+              if fsuites not in (0, None): reasons.append(f"FAIL: failed suites={fsuites}")
+              if files and files[0].get("status") != "passed": reasons.append(f"FAIL: file status={files[0].get('status')}")
+          H = r"\[handoff-harness\] "
+          startup = {s: re.findall(H + s + r": runner image=(.*?) node=(\S+) chrome binary=(\S+) --version: (.*)", log) for s in ("headless", "desktop")}
+          for s, m in startup.items():
+              if len(m) != 1: reasons.append(f"INVALID: {s} suite startup log lines={len(m)} (expected 1)")
+          ups = [(s, int(a), int(ms)) for s, a, ms in re.findall(H + r"(headless|desktop): chrome attempt (\d)/2: devtools up after (\d+)ms", log)]
+          fails = [(s, int(a), r, int(ms)) for s, a, r, ms in re.findall(H + r"(headless|desktop): chrome attempt (\d)/2: FAILED \(([^)]+)\) after (\d+)ms", log)]
+          xv = [(int(d), int(ms)) for d, ms in re.findall(H + r"desktop: xvfb display=:(\d+) ready after (\d+)ms", log)]
+          xv_fail = re.findall(H + r"desktop: xvfb FAILED after (\d+)ms", log)
+          cdp = {s: re.findall(H + s + r": CDP Browser\.getVersion (product=\S+|unavailable.*)", log) for s in ("headless", "desktop")}
+          reaps = re.findall(H + r"(headless|desktop): reap \((afterAll|file afterAll|process exit)\) (.*)", log)
+          backstop = [r for r in reaps if r[1] != "afterAll"]
+          for s in ("headless", "desktop"):
+              if len([u for u in ups if u[0] == s]) != 1: reasons.append(f"INVALID: Chrome diagnostics: {s} devtools-up lines={len([u for u in ups if u[0] == s])} (expected 1)")
+              if len(cdp[s]) != 1: reasons.append(f"INVALID: Chrome diagnostics: {s} CDP Browser.getVersion lines={len(cdp[s])}")
+              elif cdp[s][0].startswith("unavailable"): warnings.append(f"{s} CDP Browser.getVersion unavailable")
+          if len(xv) != 1: reasons.append(f"INVALID: Xvfb diagnostics: ready lines={len(xv)} (expected 1)")
+          if xv_fail: reasons.append(f"FAIL: Xvfb FAILED lines={len(xv_fail)}")
+          if "Hook timed out" in log: reasons.append("FAIL: hook timeout")
+          if "Chrome DevTools did not start" in log: reasons.append("FAIL: Chrome DevTools did not start")
+          if backstop: reasons.append(f"FAIL(T-TEARDOWN): backstop reap lines {backstop}")
+          if re.search(r"did not render", log): tags.append("K-FIXTURE")
+          for s, a, ms in ups:
+              if a >= 2: warnings.append(f"{s} needed chrome attempt {a}/2 (2nd launch attempt)")
+              if ms > slow: warnings.append(f"{s} slow chrome start: devtools up after {ms}ms on attempt {a} (> {slow}ms)")
+          for s, a, r, ms in fails: warnings.append(f"{s} chrome attempt {a}/2 FAILED ({r}) after {ms}ms")
+          for d, ms in xv:
+              if ms > slow_x: warnings.append(f"xvfb slow: ready after {ms}ms (> {slow_x}ms)")
+          image_version = re.search(r"ImageVersion=(\S*)", env); image_os = re.search(r"ImageOS=(\S*)", env)
+          chrome_v = re.search(r"chrome_version=(.*)", env)
+          image_version = image_version.group(1) if image_version else ""
+          chrome_v = chrome_v.group(1).strip() if chrome_v else ""
+          if not image_version: reasons.append("INVALID: runner image version not recorded")
+          if not chrome_v or "unavailable" in chrome_v: reasons.append("INVALID: Chrome version not recorded")
+          if "github-hosted" not in env: reasons.append("INVALID: runner not confirmed GitHub-hosted")
+          new_procs, new_ports, new_tmp = lines("new-procs.txt"), lines("new-ports.txt"), lines("new-tmp.txt")
+          post_ok = os.path.exists(os.path.join(out, "post-procs.txt"))
+          if not post_ok: reasons.append("INVALID: post-run cleanup observation missing")
+          if new_procs: reasons.append(f"FAIL(LEAK): chrome/Xvfb/harness processes alive after run: {new_procs}")
+          detail = lines("post-ports-detail.txt")
+          for port in new_ports:
+              owner = " ".join(l for l in detail if port in l.split())
+              if re.search(r"chrome|Xvfb|node|vitest", owner):
+                  reasons.append(f"FAIL(LEAK): harness-attributable listening port after run: {port} {owner}")
+              else:
+                  warnings.append(f"cleanup observation: unattributed new listening port after run: {port} {owner}")
+          if new_tmp: warnings.append(f"cleanup observation: harness temp dirs left after run: {new_tmp} (deferred gap R8/R10, recorded)")
+          file_ms = None; hook_ms = None
+          if files:
+              st, en = files[0].get("startTime"), files[0].get("endTime")
+              if isinstance(st, (int, float)) and isinstance(en, (int, float)): file_ms = int(en - st)
+              tsum = sum(int(a.get("duration") or 0) for a in ar)
+              if file_ms is not None: hook_ms = file_ms - tsum
+          relaunch = any(a >= 2 for _, a, _ in ups) or bool(fails)
+          fatal = [r for r in reasons if r.startswith("FAIL")]
+          invalid = [r for r in reasons if r.startswith("INVALID")]
+          if fatal: cls = "FAIL"
+          elif invalid: cls = "INVALID"
+          elif relaunch: cls = "PASS-RELAUNCH"
+          else: cls = "PASS"
+          for w in warnings: print(f"::warning title=PR297 job {job}::{w}")
+          for r in reasons: print(f"::error title=PR297 job {job}::{r}")
+          row = dict(job=job, cls=cls, reasons=reasons, warnings=warnings, tags=tags, exit=code, wall=wall,
+                     total=tot, passed=p, failed=f, pending=pend, todo=todo, statuses=statuses,
+                     image_os=image_os.group(1) if image_os else "", image_version=image_version, chrome=chrome_v,
+                     startup={k: len(v) for k, v in startup.items()}, devtools_up=ups, chrome_failed=fails, xvfb=xv,
+                     cdp={k: v for k, v in cdp.items()}, reaps=reaps, backstop=backstop, file_ms_json_window=file_ms, derived_hook_ms=hook_ms,
+                     cleanup=dict(new_procs=new_procs, new_ports=new_ports, new_tmp=new_tmp,
+                                  note="Runner termination is NOT evidence of cleanup; only the observations above are."))
+          json.dump(row, open(os.path.join(out, "classify.json"), "w"), indent=2)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+              s.write(f"## PR297 stage 1, job {job}: **{cls}**\n\n")
+              s.write(f"- image: {row['image_os']} {image_version}; Chrome: {chrome_v}\n- vitest exit={code}; {wall}; file_ms={file_ms}; derived_hook_ms={hook_ms}; total/passed/failed/pending/todo = {tot}/{p}/{f}/{pend}/{todo}\n")
+              s.write(f"- startup logs: {row['startup']}; devtools up: {ups}; chrome FAILED attempts: {fails}; xvfb: {xv}\n")
+              s.write(f"- reaps: {reaps}\n- cleanup: new procs={new_procs or 'none'}; new listening ports={new_ports or 'none'}; leftover temp dirs={new_tmp or 'none'} (runner termination != cleanup verified)\n")
+              s.write(f"- warnings: {warnings or 'none'}\n- reasons: {reasons or 'none'}\n- tags: {tags or 'none'}\n\n")
+          print(json.dumps(row))
+          sys.exit(0 if cls in ("PASS", "PASS-RELAUNCH") else 1)
+          PY
+
+      - name: Upload evidence (logs, JSON, classification, snapshots)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (repo TM-16 pin)
+        with:
+          name: pr297-stage1-499d437-job-${{ matrix.job }}
+          path: ${{ runner.temp }}/pr297-evidence/
+          if-no-files-found: warn
+          retention-days: 30
+
+  stage1-gate:
+    name: stage 1 gate (stop and report; no progression)
+    needs: harness
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Gate and deferred-gap record
+        env:
+          HARNESS_RESULT: ${{ needs.harness.result }}
+        run: |
+          set -uo pipefail
+          {
+            echo "## PR297 stage 1 gate (FINAL_HEAD $TARGET_SHA)"
+            echo
+            echo "- harness matrix result (jobs 1-5): **$HARNESS_RESULT**"
+            echo "- Fault injection: not present in this workflow (not approved for stage 1)."
+            echo "- Jobs 6-20 are NOT defined here. No automatic progression. Stage 2 needs Juan's separate approval and a new push."
+            echo "- No reruns. Any rerun attempt fails its own guard (run_attempt != 1) and is INVALID."
+            echo "- Per-job classification is in each job summary and artifact pr297-stage1-499d437-job-N; Release aggregates off-runner."
+            echo
+            echo "### Deferred cleanup gaps (validation-only deferral per Juan 17:10 item 3; OPEN for merge-readiness, not waived)"
+            echo
+            echo "1. R5: suite afterAll awaits Browser.close with no bound (contained by file-level afterAll backstop; NOT MET)."
+            echo "2. R8: hook-timer vs boot race: a boot still in esbuild/postcss when the 120 s timer fires can listen() an HTTP server after afterAll and leave the temp dir (PARTIAL)."
+            echo "3. R9: no explicit afterAll timeout above the inner bounds; Vitest default 10 s (NOT MET)."
+            echo "4. R10: teardown log lacks profile/temp-dir removal result (PARTIAL)."
+            echo
+            echo "Runner termination is not evidence that cleanup worked. Only the per-job post-run observations count."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$HARNESS_RESULT" != "success" ]; then
+            echo "::error title=PR297 stage 1::STOP: at least one harness job is FAIL, INVALID, cancelled or timed out (result=$HARNESS_RESULT). Release reports to Control/Juan. No rerun, no progression."
+            exit 1
+          fi
+          echo "All 5 harness jobs classified PASS or PASS-RELAUNCH. Release still checks the stage-1 thresholds off-runner (relaunch <= 1 of 5, Chrome-ready max <= 10 s, 0 leaks, 0 T-TEARDOWN, diagnostics 5/5) before asking Juan about stage 2."
