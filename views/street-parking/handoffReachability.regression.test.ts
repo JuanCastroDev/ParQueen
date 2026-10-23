@@ -1,5 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import { spawn, type ChildProcess } from 'node:child_process';
+import type { Readable } from 'node:stream';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -23,6 +24,98 @@ function commandExists(bin: string) {
 const chromeBin = ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'].find(commandExists);
 const xvfbBin = commandExists('Xvfb');
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Environment boot only. CI runners have shown Chrome stalling with no output, or exiting
+// silently, before DevTools comes up. Each attempt waits on a wall-clock deadline and a failed
+// attempt is relaunched once on a fresh profile. Every assertion still runs only after
+// DevTools is up, so a broken page or a missed click fails exactly as before.
+const CHROME_DEVTOOLS_DEADLINE_MS = 30000;
+const CHROME_LAUNCH_ATTEMPTS = 2;
+const BROWSER_BOOT_TIMEOUT_MS = 120000;
+
+async function launchChromeWithDevTools(baseDir: string, args: string[], env: NodeJS.ProcessEnv = process.env) {
+  const failures: string[] = [];
+  for (let attempt = 1; attempt <= CHROME_LAUNCH_ATTEMPTS; attempt++) {
+    const profileDir = path.join(baseDir, attempt === 1 ? 'profile' : `profile-${attempt}`);
+    const activePortFile = path.join(profileDir, 'DevToolsActivePort');
+    const startedAt = Date.now();
+    let stderr = '';
+    const chrome = spawn(chromeBin!, [...args, `--user-data-dir=${profileDir}`, '--remote-debugging-port=0'], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env,
+    });
+    const exited = new Promise<void>((resolve) => chrome.once('exit', () => resolve()));
+    chrome.stderr?.on('data', (chunk) => {
+      stderr = (stderr + String(chunk)).slice(-4000);
+    });
+
+    while (Date.now() - startedAt < CHROME_DEVTOOLS_DEADLINE_MS) {
+      if (chrome.exitCode !== null || chrome.signalCode !== null) break;
+      try {
+        const [portLine, pathLine] = readFileSync(activePortFile, 'utf8').trim().split(/\r?\n/);
+        const debugPort = Number(portLine);
+        if (Number.isInteger(debugPort) && debugPort > 0 && pathLine) {
+          return { chrome, debugPort, browserPath: pathLine };
+        }
+      } catch {
+        // Chrome writes DevToolsActivePort only after the DevTools endpoint is ready.
+      }
+      await sleep(100);
+    }
+
+    const running = chrome.exitCode === null && chrome.signalCode === null;
+    const state = running ? 'still running' : `exited code=${chrome.exitCode} signal=${chrome.signalCode}`;
+    if (running) {
+      chrome.kill('SIGKILL');
+      await Promise.race([exited, sleep(3000)]);
+    }
+    const diagnostic = stderr.replace(/\s+/g, ' ').trim().slice(-1000);
+    failures.push(`attempt ${attempt}: ${state} after ${Date.now() - startedAt}ms${diagnostic ? `: ${diagnostic}` : ' (no stderr)'}`);
+  }
+  throw new Error(`Chrome DevTools did not start: ${failures.join(' | ')}`);
+}
+
+// -displayfd makes Xvfb pick a free display and report it only once it accepts connections.
+// This replaces a fixed 300ms sleep on a random display number, which let headed Chrome
+// start before any X server was listening ("Missing X server or $DISPLAY").
+async function startXvfb(): Promise<{ xvfb: ChildProcess; display: string }> {
+  const xvfb = spawn('Xvfb', ['-displayfd', '3', '-screen', '0', '1280x800x24', '-ac'], {
+    stdio: ['ignore', 'ignore', 'pipe', 'pipe'],
+  });
+  let stderr = '';
+  xvfb.stderr?.on('data', (chunk) => {
+    stderr = (stderr + String(chunk)).slice(-2000);
+  });
+  const displayPipe = xvfb.stdio[3] as Readable;
+  try {
+    const display = await new Promise<string>((resolve, reject) => {
+      let out = '';
+      const timer = setTimeout(() => reject(new Error('no display reported within 15000ms')), 15000);
+      displayPipe.on('data', (chunk) => {
+        out += String(chunk);
+        const match = out.match(/^(\d+)\s*\n/);
+        if (match) {
+          clearTimeout(timer);
+          resolve(match[1]);
+        }
+      });
+      xvfb.once('exit', (code, signal) => {
+        clearTimeout(timer);
+        reject(new Error(`exited code=${code} signal=${signal}`));
+      });
+      xvfb.once('error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+    });
+    displayPipe.destroy();
+    return { xvfb, display: `:${display}` };
+  } catch (error) {
+    if (xvfb.exitCode === null && xvfb.signalCode === null) xvfb.kill('SIGKILL');
+    const diagnostic = stderr.replace(/\s+/g, ' ').trim().slice(-1000);
+    throw new Error(`Xvfb did not start: ${(error as Error).message}${diagnostic ? `: ${diagnostic}` : ''}`);
+  }
+}
 
 describe('handoff reachability contract', () => {
   it('anchors the handoff action card directly above the nav instead of floating mid-map', () => {
@@ -54,14 +147,13 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'handoff-reach-'));
   let server: Server;
   let chrome: ChildProcess;
-  let chromeStderr = '';
   let browser: ((method: string, params?: Record<string, unknown>) => Promise<any>) | undefined;
   let page: (method: string, params?: Record<string, unknown>) => Promise<any>;
   let port = 0;
 
   beforeAll(async () => {
     await boot();
-  }, 60000);
+  }, BROWSER_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
     const waitForChromeExit = (timeoutMs: number) => new Promise<boolean>((resolve) => {
@@ -150,39 +242,11 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     port = (server.address() as { port: number }).port;
 
-    const profileDir = path.join(dir, 'profile');
-    const activePortFile = path.join(profileDir, 'DevToolsActivePort');
-    chromeStderr = '';
-    chrome = spawn(chromeBin!, [
+    const launched = await launchChromeWithDevTools(dir, [
       '--headless=new', '--disable-gpu', '--no-sandbox', '--no-first-run', '--disable-dev-shm-usage',
-      `--user-data-dir=${profileDir}`,
-      '--remote-debugging-port=0',
-    ], { stdio: ['ignore', 'ignore', 'pipe'] });
-    chrome.stderr?.on('data', (chunk) => {
-      chromeStderr = (chromeStderr + String(chunk)).slice(-4000);
-    });
-
-    let debugPort = 0;
-    let browserPath = '';
-    for (let i = 0; i < 150 && (!debugPort || !browserPath); i++) {
-      if (chrome.exitCode !== null || chrome.signalCode !== null) break;
-      try {
-        const [portLine, pathLine] = readFileSync(activePortFile, 'utf8').trim().split(/\r?\n/);
-        const parsedPort = Number(portLine);
-        if (Number.isInteger(parsedPort) && parsedPort > 0 && pathLine) {
-          debugPort = parsedPort;
-          browserPath = pathLine;
-          break;
-        }
-      } catch {
-        // Chrome writes DevToolsActivePort only after the DevTools endpoint is ready.
-      }
-      await sleep(100);
-    }
-    if (!debugPort || !browserPath) {
-      const diagnostic = chromeStderr.replace(/\s+/g, ' ').trim().slice(-1000);
-      throw new Error(`Chrome DevTools did not start${diagnostic ? `: ${diagnostic}` : ''}`);
-    }
+    ]);
+    chrome = launched.chrome;
+    const { debugPort, browserPath } = launched;
 
     const browserWs = new WebSocket(
       `ws://127.0.0.1:${debugPort}${browserPath.startsWith('/') ? browserPath : `/${browserPath}`}`,
@@ -384,7 +448,6 @@ describe.skipIf(!chromeBin || !xvfbBin)('handoff failure reasons in a resized de
   const dir = mkdtempSync(path.join(tmpdir(), 'handoff-desktop-'));
   let server: Server;
   let chrome: ChildProcess;
-  let chromeStderr = '';
   let browser: ((method: string, params?: Record<string, unknown>) => Promise<any>) | undefined;
   let xvfb: ChildProcess;
   let page: (method: string, params?: Record<string, unknown>) => Promise<any>;
@@ -424,43 +487,14 @@ describe.skipIf(!chromeBin || !xvfbBin)('handoff failure reasons in a resized de
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     port = (server.address() as { port: number }).port;
 
-    const profileDir = path.join(dir, 'profile');
-    const activePortFile = path.join(profileDir, 'DevToolsActivePort');
-    chromeStderr = '';
-    const display = 50 + Math.floor(Math.random() * 20);
-    xvfb = spawn('Xvfb', [`:${display}`, '-screen', '0', '1280x800x24', '-ac'], { stdio: 'ignore' });
-    await sleep(300);
-    chrome = spawn(chromeBin!, [
+    const started = await startXvfb();
+    xvfb = started.xvfb;
+    const launched = await launchChromeWithDevTools(dir, [
       '--disable-gpu', '--no-sandbox', '--no-first-run', '--disable-dev-shm-usage',
       '--window-size=420,780', '--window-position=0,0',
-      `--user-data-dir=${profileDir}`,
-      '--remote-debugging-port=0',
-    ], { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, DISPLAY: `:${display}` } });
-    chrome.stderr?.on('data', (chunk) => {
-      chromeStderr = (chromeStderr + String(chunk)).slice(-4000);
-    });
-
-    let debugPort = 0;
-    let browserPath = '';
-    for (let i = 0; i < 150 && (!debugPort || !browserPath); i++) {
-      if (chrome.exitCode !== null || chrome.signalCode !== null) break;
-      try {
-        const [portLine, pathLine] = readFileSync(activePortFile, 'utf8').trim().split(/\r?\n/);
-        const parsedPort = Number(portLine);
-        if (Number.isInteger(parsedPort) && parsedPort > 0 && pathLine) {
-          debugPort = parsedPort;
-          browserPath = pathLine;
-          break;
-        }
-      } catch {
-        // Chrome writes DevToolsActivePort only after the DevTools endpoint is ready.
-      }
-      await sleep(100);
-    }
-    if (!debugPort || !browserPath) {
-      const diagnostic = chromeStderr.replace(/\s+/g, ' ').trim().slice(-1000);
-      throw new Error(`Chrome DevTools did not start${diagnostic ? `: ${diagnostic}` : ''}`);
-    }
+    ], { ...process.env, DISPLAY: started.display });
+    chrome = launched.chrome;
+    const { debugPort, browserPath } = launched;
 
     const browserWs = new WebSocket(
       `ws://127.0.0.1:${debugPort}${browserPath.startsWith('/') ? browserPath : `/${browserPath}`}`,
@@ -490,7 +524,7 @@ describe.skipIf(!chromeBin || !xvfbBin)('handoff failure reasons in a resized de
     page = wire(pageWs);
     await page('Page.enable');
     await page('Runtime.enable');
-  }, 60000);
+  }, BROWSER_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
     const waitForChromeExit = (timeoutMs: number) => new Promise<boolean>((resolve) => {
