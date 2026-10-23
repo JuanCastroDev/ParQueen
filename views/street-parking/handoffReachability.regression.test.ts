@@ -97,7 +97,7 @@ afterAll(() => {
 
 function printEnvironmentOnce(session: HarnessSession) {
   const image = [process.env.ImageOS, process.env.ImageVersion].filter(Boolean).join(' ') || 'n/a';
-  let version = 'unknown';
+  let version: string;
   try {
     version = execFileSync(chromeBin!, ['--version'], { encoding: 'utf8', timeout: 10000, killSignal: 'SIGKILL', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   } catch (error) {
