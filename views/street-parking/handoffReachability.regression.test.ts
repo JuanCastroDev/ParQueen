@@ -1,5 +1,6 @@
 import { createServer, type Server } from 'node:http';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
+import type { Readable } from 'node:stream';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -23,6 +24,178 @@ function commandExists(bin: string) {
 const chromeBin = ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'].find(commandExists);
 const xvfbBin = commandExists('Xvfb');
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Environment boot only. CI runners have shown Chrome stalling with no output, or exiting
+// silently, before DevTools comes up. Each attempt waits on a wall-clock deadline and a failed
+// attempt is relaunched once on a fresh profile. Every assertion still runs only after
+// DevTools is up, so a broken page or a missed click fails exactly as before.
+const CHROME_DEVTOOLS_DEADLINE_MS = 30000;
+const CHROME_LAUNCH_ATTEMPTS = 2;
+const BROWSER_BOOT_TIMEOUT_MS = 120000;
+
+// Harness diagnostics go straight to the worker's stderr so CI logs keep them whether the
+// boot succeeds or fails. They never feed an assertion.
+function harnessLog(message: string) {
+  process.stderr.write(`[handoff-harness] ${message}\n`);
+}
+const tail = (text: string, max = 600) => text.replace(/\s+/g, ' ').trim().slice(-max);
+
+// Every Chrome and Xvfb this file spawns is the leader of its own process group
+// (detached) and is registered here until it has been reaped. A suite's afterAll reaps its
+// own group set, and a process 'exit' hook reaps anything left, so neither a startup
+// deadline nor an expired beforeAll hook can leak a browser, its helper processes, or Xvfb.
+// After a suite has been closed, a boot still running in the background (vitest does not
+// cancel a timed-out hook) cannot spawn anything new: spawnTracked kills it and throws.
+type HarnessSession = { name: string; closed: boolean; children: Set<ChildProcess> };
+const harnessSessions = new Set<HarnessSession>();
+
+function createHarnessSession(name: string): HarnessSession {
+  const session = { name, closed: false, children: new Set<ChildProcess>() };
+  harnessSessions.add(session);
+  return session;
+}
+
+function killProcessGroup(child: ChildProcess) {
+  if (!child.pid) return;
+  try {
+    process.kill(-child.pid, 'SIGKILL');
+  } catch {
+    // ESRCH: the whole group is already gone.
+  }
+  try {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  } catch {
+    // Already exited.
+  }
+}
+
+function spawnTracked(session: HarnessSession, command: string, args: string[], options: SpawnOptions) {
+  if (session.closed) throw new Error(`${session.name}: harness already torn down, not spawning ${command}`);
+  const child = spawn(command, args, { ...options, detached: true });
+  session.children.add(child);
+  if (session.closed) killProcessGroup(child);
+  return child;
+}
+
+function reapSession(session: HarnessSession, why: string) {
+  session.closed = true;
+  for (const child of session.children) {
+    const alive = child.exitCode === null && child.signalCode === null;
+    killProcessGroup(child);
+    harnessLog(`${session.name}: reap (${why}) pid=${child.pid} ${alive ? 'was running, SIGKILLed group' : 'already exited, group swept'}`);
+  }
+  session.children.clear();
+}
+
+process.once('exit', () => {
+  for (const session of harnessSessions) reapSession(session, 'process exit');
+});
+// File-level backstop: runs after both suites' own afterAll hooks, even if one of them threw.
+afterAll(() => {
+  for (const session of harnessSessions) if (session.children.size) reapSession(session, 'file afterAll');
+});
+
+function printEnvironmentOnce(session: HarnessSession) {
+  const image = [process.env.ImageOS, process.env.ImageVersion].filter(Boolean).join(' ') || 'n/a';
+  let version: string;
+  try {
+    version = execFileSync(chromeBin!, ['--version'], { encoding: 'utf8', timeout: 10000, killSignal: 'SIGKILL', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  } catch (error) {
+    version = `unavailable (${tail(String((error as Error).message), 200)})`;
+  }
+  harnessLog(`${session.name}: runner image=${image} node=${process.version} chrome binary=${chromeBin} --version: ${version}`);
+}
+
+async function launchChromeWithDevTools(session: HarnessSession, baseDir: string, args: string[], env: NodeJS.ProcessEnv = process.env) {
+  const failures: string[] = [];
+  for (let attempt = 1; attempt <= CHROME_LAUNCH_ATTEMPTS; attempt++) {
+    const profileDir = path.join(baseDir, attempt === 1 ? 'profile' : `profile-${attempt}`);
+    const activePortFile = path.join(profileDir, 'DevToolsActivePort');
+    const startedAt = Date.now();
+    let stderr = '';
+    const chrome = spawnTracked(session, chromeBin!, [...args, `--user-data-dir=${profileDir}`, '--remote-debugging-port=0'], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env,
+    });
+    const exited = new Promise<void>((resolve) => chrome.once('exit', () => resolve()));
+    chrome.stderr?.on('data', (chunk) => {
+      stderr = (stderr + String(chunk)).slice(-4000);
+    });
+
+    while (Date.now() - startedAt < CHROME_DEVTOOLS_DEADLINE_MS) {
+      if (session.closed) break;
+      if (chrome.exitCode !== null || chrome.signalCode !== null) break;
+      try {
+        const [portLine, pathLine] = readFileSync(activePortFile, 'utf8').trim().split(/\r?\n/);
+        const debugPort = Number(portLine);
+        if (Number.isInteger(debugPort) && debugPort > 0 && pathLine) {
+          harnessLog(`${session.name}: chrome attempt ${attempt}/${CHROME_LAUNCH_ATTEMPTS}: devtools up after ${Date.now() - startedAt}ms pid=${chrome.pid} exit=n/a (running) stderr tail: ${tail(stderr) || '(none)'}`);
+          return { chrome, debugPort, browserPath: pathLine };
+        }
+      } catch {
+        // Chrome writes DevToolsActivePort only after the DevTools endpoint is ready.
+      }
+      await sleep(100);
+    }
+
+    const running = chrome.exitCode === null && chrome.signalCode === null;
+    const state = running ? 'still running' : `exited code=${chrome.exitCode} signal=${chrome.signalCode}`;
+    killProcessGroup(chrome);
+    if (running) await Promise.race([exited, sleep(3000)]);
+    session.children.delete(chrome);
+    const diagnostic = stderr.replace(/\s+/g, ' ').trim().slice(-1000);
+    const reason = session.closed ? 'harness torn down' : running ? 'deadline expired' : 'exited early';
+    harnessLog(`${session.name}: chrome attempt ${attempt}/${CHROME_LAUNCH_ATTEMPTS}: FAILED (${reason}) after ${Date.now() - startedAt}ms pid=${chrome.pid} ${state}${running ? ' (SIGKILLed group)' : ''} stderr tail: ${tail(stderr) || '(none)'}`);
+    failures.push(`attempt ${attempt}: ${state} after ${Date.now() - startedAt}ms${diagnostic ? `: ${diagnostic}` : ' (no stderr)'}`);
+    if (session.closed) break;
+  }
+  throw new Error(`Chrome DevTools did not start: ${failures.join(' | ')}`);
+}
+
+// -displayfd makes Xvfb pick a free display and report it only once it accepts connections.
+// This replaces a fixed 300ms sleep on a random display number, which let headed Chrome
+// start before any X server was listening ("Missing X server or $DISPLAY").
+async function startXvfb(session: HarnessSession): Promise<{ xvfb: ChildProcess; display: string }> {
+  const startedAt = Date.now();
+  const xvfb = spawnTracked(session, 'Xvfb', ['-displayfd', '3', '-screen', '0', '1280x800x24', '-ac'], {
+    stdio: ['ignore', 'ignore', 'pipe', 'pipe'],
+  });
+  let stderr = '';
+  xvfb.stderr?.on('data', (chunk) => {
+    stderr = (stderr + String(chunk)).slice(-2000);
+  });
+  const displayPipe = xvfb.stdio[3] as Readable;
+  try {
+    const display = await new Promise<string>((resolve, reject) => {
+      let out = '';
+      const timer = setTimeout(() => reject(new Error('no display reported within 15000ms')), 15000);
+      displayPipe.on('data', (chunk) => {
+        out += String(chunk);
+        const match = out.match(/^(\d+)\s*\n/);
+        if (match) {
+          clearTimeout(timer);
+          resolve(match[1]);
+        }
+      });
+      xvfb.once('exit', (code, signal) => {
+        clearTimeout(timer);
+        reject(new Error(`exited code=${code} signal=${signal}`));
+      });
+      xvfb.once('error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+    });
+    displayPipe.destroy();
+    harnessLog(`${session.name}: xvfb display=:${display} ready after ${Date.now() - startedAt}ms pid=${xvfb.pid}`);
+    return { xvfb, display: `:${display}` };
+  } catch (error) {
+    killProcessGroup(xvfb);
+    harnessLog(`${session.name}: xvfb FAILED after ${Date.now() - startedAt}ms pid=${xvfb.pid} exit code=${xvfb.exitCode} signal=${xvfb.signalCode}: ${(error as Error).message} stderr tail: ${tail(stderr) || '(none)'}`);
+    const diagnostic = stderr.replace(/\s+/g, ' ').trim().slice(-1000);
+    throw new Error(`Xvfb did not start: ${(error as Error).message}${diagnostic ? `: ${diagnostic}` : ''}`);
+  }
+}
 
 describe('handoff reachability contract', () => {
   it('anchors the handoff action card directly above the nav instead of floating mid-map', () => {
@@ -52,16 +225,17 @@ describe('handoff reachability contract', () => {
 
 describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'handoff-reach-'));
+  const session = createHarnessSession('headless');
   let server: Server;
   let chrome: ChildProcess;
-  let chromeStderr = '';
   let browser: ((method: string, params?: Record<string, unknown>) => Promise<any>) | undefined;
   let page: (method: string, params?: Record<string, unknown>) => Promise<any>;
   let port = 0;
 
   beforeAll(async () => {
+    printEnvironmentOnce(session);
     await boot();
-  }, 60000);
+  }, BROWSER_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
     const waitForChromeExit = (timeoutMs: number) => new Promise<boolean>((resolve) => {
@@ -93,6 +267,10 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
       chrome.kill('SIGKILL');
       chromeExited = await waitForChromeExit(3000);
     }
+    // Also covers a beforeAll that timed out mid-launch: kills every tracked Chrome/Xvfb
+    // process group, including ones the suite variables never received, and blocks new spawns.
+    reapSession(session, 'afterAll');
+    if (!chromeExited) chromeExited = await waitForChromeExit(3000);
 
     await new Promise<void>((resolve) => {
       if (!server) {
@@ -150,39 +328,11 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     port = (server.address() as { port: number }).port;
 
-    const profileDir = path.join(dir, 'profile');
-    const activePortFile = path.join(profileDir, 'DevToolsActivePort');
-    chromeStderr = '';
-    chrome = spawn(chromeBin!, [
+    const launched = await launchChromeWithDevTools(session, dir, [
       '--headless=new', '--disable-gpu', '--no-sandbox', '--no-first-run', '--disable-dev-shm-usage',
-      `--user-data-dir=${profileDir}`,
-      '--remote-debugging-port=0',
-    ], { stdio: ['ignore', 'ignore', 'pipe'] });
-    chrome.stderr?.on('data', (chunk) => {
-      chromeStderr = (chromeStderr + String(chunk)).slice(-4000);
-    });
-
-    let debugPort = 0;
-    let browserPath = '';
-    for (let i = 0; i < 150 && (!debugPort || !browserPath); i++) {
-      if (chrome.exitCode !== null || chrome.signalCode !== null) break;
-      try {
-        const [portLine, pathLine] = readFileSync(activePortFile, 'utf8').trim().split(/\r?\n/);
-        const parsedPort = Number(portLine);
-        if (Number.isInteger(parsedPort) && parsedPort > 0 && pathLine) {
-          debugPort = parsedPort;
-          browserPath = pathLine;
-          break;
-        }
-      } catch {
-        // Chrome writes DevToolsActivePort only after the DevTools endpoint is ready.
-      }
-      await sleep(100);
-    }
-    if (!debugPort || !browserPath) {
-      const diagnostic = chromeStderr.replace(/\s+/g, ' ').trim().slice(-1000);
-      throw new Error(`Chrome DevTools did not start${diagnostic ? `: ${diagnostic}` : ''}`);
-    }
+    ]);
+    chrome = launched.chrome;
+    const { debugPort, browserPath } = launched;
 
     const browserWs = new WebSocket(
       `ws://127.0.0.1:${debugPort}${browserPath.startsWith('/') ? browserPath : `/${browserPath}`}`,
@@ -192,6 +342,12 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
       browserWs.addEventListener('error', () => reject(new Error('browser socket')));
     });
     browser = wire(browserWs);
+    try {
+      const version = await browser('Browser.getVersion');
+      harnessLog(`${session.name}: CDP Browser.getVersion product=${version.product} protocol=${version.protocolVersion} revision=${version.revision}`);
+    } catch (error) {
+      harnessLog(`${session.name}: CDP Browser.getVersion unavailable: ${tail(String((error as Error).message), 200)}`);
+    }
     const { targetId } = await browser('Target.createTarget', { url: 'about:blank' });
     let target: { id: string; webSocketDebuggerUrl: string } | undefined;
     for (let i = 0; i < 50 && !target; i++) {
@@ -382,15 +538,16 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
 // below run only after DevTools is up, and they require pointer:fine and hover:hover.
 describe.skipIf(!chromeBin || !xvfbBin)('handoff failure reasons in a resized desktop window', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'handoff-desktop-'));
+  const session = createHarnessSession('desktop');
   let server: Server;
   let chrome: ChildProcess;
-  let chromeStderr = '';
   let browser: ((method: string, params?: Record<string, unknown>) => Promise<any>) | undefined;
   let xvfb: ChildProcess;
   let page: (method: string, params?: Record<string, unknown>) => Promise<any>;
   let port = 0;
 
   beforeAll(async () => {
+    printEnvironmentOnce(session);
     const esbuild = require('esbuild') as typeof import('esbuild');
     const postcss = require('postcss') as typeof import('postcss').default;
     const tailwind = require('tailwindcss');
@@ -424,43 +581,14 @@ describe.skipIf(!chromeBin || !xvfbBin)('handoff failure reasons in a resized de
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     port = (server.address() as { port: number }).port;
 
-    const profileDir = path.join(dir, 'profile');
-    const activePortFile = path.join(profileDir, 'DevToolsActivePort');
-    chromeStderr = '';
-    const display = 50 + Math.floor(Math.random() * 20);
-    xvfb = spawn('Xvfb', [`:${display}`, '-screen', '0', '1280x800x24', '-ac'], { stdio: 'ignore' });
-    await sleep(300);
-    chrome = spawn(chromeBin!, [
+    const started = await startXvfb(session);
+    xvfb = started.xvfb;
+    const launched = await launchChromeWithDevTools(session, dir, [
       '--disable-gpu', '--no-sandbox', '--no-first-run', '--disable-dev-shm-usage',
       '--window-size=420,780', '--window-position=0,0',
-      `--user-data-dir=${profileDir}`,
-      '--remote-debugging-port=0',
-    ], { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, DISPLAY: `:${display}` } });
-    chrome.stderr?.on('data', (chunk) => {
-      chromeStderr = (chromeStderr + String(chunk)).slice(-4000);
-    });
-
-    let debugPort = 0;
-    let browserPath = '';
-    for (let i = 0; i < 150 && (!debugPort || !browserPath); i++) {
-      if (chrome.exitCode !== null || chrome.signalCode !== null) break;
-      try {
-        const [portLine, pathLine] = readFileSync(activePortFile, 'utf8').trim().split(/\r?\n/);
-        const parsedPort = Number(portLine);
-        if (Number.isInteger(parsedPort) && parsedPort > 0 && pathLine) {
-          debugPort = parsedPort;
-          browserPath = pathLine;
-          break;
-        }
-      } catch {
-        // Chrome writes DevToolsActivePort only after the DevTools endpoint is ready.
-      }
-      await sleep(100);
-    }
-    if (!debugPort || !browserPath) {
-      const diagnostic = chromeStderr.replace(/\s+/g, ' ').trim().slice(-1000);
-      throw new Error(`Chrome DevTools did not start${diagnostic ? `: ${diagnostic}` : ''}`);
-    }
+    ], { ...process.env, DISPLAY: started.display });
+    chrome = launched.chrome;
+    const { debugPort, browserPath } = launched;
 
     const browserWs = new WebSocket(
       `ws://127.0.0.1:${debugPort}${browserPath.startsWith('/') ? browserPath : `/${browserPath}`}`,
@@ -470,6 +598,12 @@ describe.skipIf(!chromeBin || !xvfbBin)('handoff failure reasons in a resized de
       browserWs.addEventListener('error', () => reject(new Error('browser socket')));
     });
     browser = wire(browserWs);
+    try {
+      const version = await browser('Browser.getVersion');
+      harnessLog(`${session.name}: CDP Browser.getVersion product=${version.product} protocol=${version.protocolVersion} revision=${version.revision}`);
+    } catch (error) {
+      harnessLog(`${session.name}: CDP Browser.getVersion unavailable: ${tail(String((error as Error).message), 200)}`);
+    }
     const { targetId } = await browser('Target.createTarget', { url: 'about:blank' });
     let target: { id: string; webSocketDebuggerUrl: string } | undefined;
     for (let i = 0; i < 50 && !target; i++) {
@@ -490,7 +624,7 @@ describe.skipIf(!chromeBin || !xvfbBin)('handoff failure reasons in a resized de
     page = wire(pageWs);
     await page('Page.enable');
     await page('Runtime.enable');
-  }, 60000);
+  }, BROWSER_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
     const waitForChromeExit = (timeoutMs: number) => new Promise<boolean>((resolve) => {
@@ -522,6 +656,10 @@ describe.skipIf(!chromeBin || !xvfbBin)('handoff failure reasons in a resized de
       chrome.kill('SIGKILL');
       chromeExited = await waitForChromeExit(3000);
     }
+    // Also covers a beforeAll that timed out mid-launch: kills every tracked Chrome/Xvfb
+    // process group, including ones the suite variables never received, and blocks new spawns.
+    reapSession(session, 'afterAll');
+    if (!chromeExited) chromeExited = await waitForChromeExit(3000);
     if (xvfb && xvfb.exitCode === null && xvfb.signalCode === null) {
       xvfb.kill('SIGKILL');
     }
