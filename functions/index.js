@@ -2992,13 +2992,23 @@ exports.setStaffRole = onCall(
 //      users/{uid}/private/moderation doc (no client rule matches it →
 //      default deny for every client, including the user); legacy public
 //      suspension fields are deleted; adminAuditLog entry.
-// A failure in 1/2 throws before any Firestore write (nothing claims the
-// user is suspended while Auth still lets them in). A failure in 3 leaves
-// Auth disabled with the old public status; the admin retries and the
-// call converges. Residual: already-issued ID tokens stay
-// cryptographically valid until expiry (≤1h) and no callable or rule
-// re-checks suspension in this change (a callable-side gate is deferred);
-// see PR body.
+// "Nothing was changed" is returned ONLY when step 1 (or anything before
+// it) fails. Once 1 has succeeded the account is disabled, Auth is NEVER
+// re-enabled automatically, and every later failure returns a distinct
+// partial outcome (HttpsError 'aborted' + details {partial, authDisabled,
+// revoked, recordWritten, auditWritten}; no PII, no upstream error text):
+//   - 2 fails: the account IS disabled, so step 3 still records it as
+//     Suspended, but the batch's audit entry is 'user.suspend.partial'
+//     (failedStep:'revoke') instead of 'user.suspend', so a retry that
+//     completes writes exactly one 'user.suspend'.
+//   - 3 fails (record and audit share one atomic batch, so either both
+//     land or neither does): Auth stays disabled, a separate best-effort
+//     'user.suspend.partial' adminAuditLog entry records the real state.
+// One structured console.error per partial outcome (step + code; no uid,
+// no reason text). A retry re-runs every step idempotently and converges.
+// Residual: already-issued ID tokens stay cryptographically valid until
+// expiry (≤1h) and no callable or rule re-checks suspension in this change
+// (a callable-side gate is deferred); see PR body.
 //
 // Runtime identity: parqueen-admin-auth — the existing SA that setStaffRole
 // already uses for setCustomUserClaims + revokeRefreshTokens. It needs
@@ -3018,6 +3028,18 @@ function mapSuspensionAuthError(err) {
   }
   return new HttpsError('internal', 'Could not update the account sign-in state. Nothing was changed; please retry.');
 }
+// Best-effort standalone adminAuditLog entry for a partial outcome whose
+// main batch did not land. Never throws; returns whether it was written so
+// the caller can say so truthfully (the caller's single structured log
+// line is the remaining record if it was not).
+async function writeSuspensionPartialAudit(entry) {
+  try {
+    await db.collection('adminAuditLog').doc().set({ ...entry, outcome: 'partial', createdAt: Timestamp.now() });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 exports.adminSuspendUser = onCall(
   { region: 'us-central1', serviceAccount: 'parqueen-admin-auth@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
@@ -3031,46 +3053,109 @@ exports.adminSuspendUser = onCall(
     const userRef = db.doc(`users/${userId}`);
     if (!(await userRef.get()).exists) throw new HttpsError('not-found', 'User not found.');
 
+    // Step 1 — the only failure that may say "Nothing was changed".
     try {
       await getAuth().updateUser(userId, { disabled: true });
-      await getAuth().revokeRefreshTokens(userId);
     } catch (err) {
-      console.error('adminSuspendUser: auth step failed', { code: err && err.code ? String(err.code) : 'unknown' });
+      console.error('adminSuspendUser: auth step failed', { step: 'disable', code: err && err.code ? String(err.code) : 'unknown' });
       throw mapSuspensionAuthError(err);
     }
 
+    // Step 2 — from here on the account is disabled; never re-enabled here.
+    let revoked = true;
+    let revokeCode = null;
+    try {
+      await getAuth().revokeRefreshTokens(userId);
+    } catch (err) {
+      revoked = false;
+      revokeCode = err && err.code ? String(err.code) : 'unknown';
+    }
+
     const now = Timestamp.now();
-    const batch = db.batch();
-    batch.update(userRef, { status: 'Suspended', updatedAt: now, ...legacySuspensionFieldDeletes() });
-    batch.set(db.doc(`users/${userId}/private/moderation`), {
-      status: 'Suspended',
-      suspendedAt: now,
-      suspendedBy: request.auth.uid,
-      suspensionReason: reason.trim(),
-      unsuspendedAt: null,
-      unsuspendedBy: null,
-      updatedAt: now,
-    }, { merge: true });
-    batch.set(db.collection('adminAuditLog').doc(), {
-      action: 'user.suspend',
+    const auditBase = {
       targetType: 'user',
       targetId: userId,
       targetUserId: userId,
       adminId: request.auth.uid,
       reason: reason.trim(),
       createdAt: now,
-    });
-    await batch.commit();
+    };
+    const auditEntry = revoked
+      ? { action: 'user.suspend', ...auditBase }
+      : { action: 'user.suspend.partial', ...auditBase, outcome: 'partial', failedStep: 'revoke',
+          errorCode: revokeCode, authDisabled: true, revoked: false, recordWritten: true };
 
-    return { success: true };
+    // Step 3 — record + audit in one atomic batch.
+    let recordCode = null;
+    try {
+      const batch = db.batch();
+      batch.update(userRef, { status: 'Suspended', updatedAt: now, ...legacySuspensionFieldDeletes() });
+      batch.set(db.doc(`users/${userId}/private/moderation`), {
+        status: 'Suspended',
+        suspendedAt: now,
+        suspendedBy: request.auth.uid,
+        suspensionReason: reason.trim(),
+        unsuspendedAt: null,
+        unsuspendedBy: null,
+        updatedAt: now,
+      }, { merge: true });
+      batch.set(db.collection('adminAuditLog').doc(), auditEntry);
+      await batch.commit();
+    } catch (err) {
+      recordCode = err && err.code ? String(err.code) : 'unknown';
+    }
+
+    if (revoked && recordCode === null) return { success: true };
+
+    const recordWritten = recordCode === null;
+    const auditWritten = recordWritten || await writeSuspensionPartialAudit({
+      action: 'user.suspend.partial',
+      ...auditBase,
+      failedStep: 'record',
+      errorCode: recordCode,
+      ...(revokeCode ? { revokeErrorCode: revokeCode } : {}),
+      authDisabled: true,
+      revoked,
+      recordWritten: false,
+    });
+    const failedStep = recordWritten ? 'revoke' : 'record';
+    console.error('adminSuspendUser: partial outcome', {
+      step: failedStep, code: recordWritten ? revokeCode : recordCode,
+      ...(revokeCode && !recordWritten ? { revokeCode } : {}),
+      authDisabled: true, revoked, recordWritten, auditWritten,
+    });
+    const message = recordWritten
+      ? 'Partially suspended: the account is disabled and recorded as Suspended, but revoking its existing sessions failed. '
+      : 'Partially suspended: the account is disabled and cannot sign in, '
+        + (revoked ? 'and its existing sessions were revoked, ' : 'but revoking its existing sessions also failed, ')
+        + 'but the suspension could not be saved, so the user still shows their previous status. ';
+    throw new HttpsError(
+      'aborted',
+      message
+        + (auditWritten ? 'This partial result was written to the audit log. ' : 'The audit log entry could not be written. ')
+        + 'Retry to finish.',
+      { partial: true, authDisabled: true, revoked, recordWritten, auditWritten },
+    );
   }
 );
 
-// 17) Admin unsuspend user — re-enables Auth, then restores status.
-// Auth first: if re-enable fails nothing changes (retry). If the Firestore
-// batch fails afterwards, the user can sign in while the public status
-// still reads Suspended until the admin retries. Refresh tokens revoked
-// at suspension stay revoked: the user signs in again.
+// 17) Admin unsuspend user — restores the record + audit, then re-enables Auth.
+//
+// Firestore first so that access is never restored without a record:
+//   0. Auth: getUser (read-only; same permission requireCurrentAdmin already
+//      uses) — a missing Auth user fails before any write.
+//   1. Firestore (one atomic batch): public status 'Active', private
+//      moderation doc, adminAuditLog 'user.unsuspend'. If it fails nothing
+//      changed (Auth still disabled, record still Suspended) — retry.
+//   2. Auth: updateUser({disabled:false}). If it fails the account is
+//      recorded Active but still CANNOT sign in (fail closed, partial
+//      outcome 'aborted'). No rollback of step 1: when an Auth error is
+//      ambiguous (e.g. a timeout after the server applied the change) a
+//      rollback could produce exactly the forbidden state (enabled +
+//      recorded Suspended / no unsuspend audit). Instead a best-effort
+//      'user.unsuspend.partial' entry records the real state and a retry
+//      converges.
+// Refresh tokens revoked at suspension stay revoked: the user signs in again.
 exports.adminUnsuspendUser = onCall(
   { region: 'us-central1', serviceAccount: 'parqueen-admin-auth@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
   async (request) => {
@@ -3081,34 +3166,69 @@ exports.adminUnsuspendUser = onCall(
     const userRef = db.doc(`users/${userId}`);
     if (!(await userRef.get()).exists) throw new HttpsError('not-found', 'User not found.');
 
+    // Step 0 — read-only; nothing has changed if this fails.
     try {
-      await getAuth().updateUser(userId, { disabled: false });
+      await getAuth().getUser(userId);
     } catch (err) {
-      console.error('adminUnsuspendUser: auth step failed', { code: err && err.code ? String(err.code) : 'unknown' });
+      console.error('adminUnsuspendUser: auth step failed', { step: 'lookup', code: err && err.code ? String(err.code) : 'unknown' });
       throw mapSuspensionAuthError(err);
     }
 
+    // Step 1 — record + audit in one atomic batch; nothing has changed if it fails.
     const now = Timestamp.now();
-    const batch = db.batch();
-    batch.update(userRef, { status: 'Active', updatedAt: now, ...legacySuspensionFieldDeletes() });
-    batch.set(db.doc(`users/${userId}/private/moderation`), {
-      status: 'Active',
-      unsuspendedAt: now,
-      unsuspendedBy: request.auth.uid,
-      suspendedAt: null,
-      suspendedBy: null,
-      suspensionReason: null,
-      updatedAt: now,
-    }, { merge: true });
-    batch.set(db.collection('adminAuditLog').doc(), {
-      action: 'user.unsuspend',
-      targetType: 'user',
-      targetId: userId,
-      targetUserId: userId,
-      adminId: request.auth.uid,
-      createdAt: now,
-    });
-    await batch.commit();
+    try {
+      const batch = db.batch();
+      batch.update(userRef, { status: 'Active', updatedAt: now, ...legacySuspensionFieldDeletes() });
+      batch.set(db.doc(`users/${userId}/private/moderation`), {
+        status: 'Active',
+        unsuspendedAt: now,
+        unsuspendedBy: request.auth.uid,
+        suspendedAt: null,
+        suspendedBy: null,
+        suspensionReason: null,
+        updatedAt: now,
+      }, { merge: true });
+      batch.set(db.collection('adminAuditLog').doc(), {
+        action: 'user.unsuspend',
+        targetType: 'user',
+        targetId: userId,
+        targetUserId: userId,
+        adminId: request.auth.uid,
+        createdAt: now,
+      });
+      await batch.commit();
+    } catch (err) {
+      console.error('adminUnsuspendUser: firestore step failed', { step: 'record', code: err && err.code ? String(err.code) : 'unknown' });
+      throw new HttpsError('internal', 'Could not save the unsuspension. Nothing was changed: the account is still suspended and cannot sign in; please retry.');
+    }
+
+    // Step 2 — re-enable sign-in.
+    try {
+      await getAuth().updateUser(userId, { disabled: false });
+    } catch (err) {
+      const enableCode = err && err.code ? String(err.code) : 'unknown';
+      const auditWritten = await writeSuspensionPartialAudit({
+        action: 'user.unsuspend.partial',
+        targetType: 'user',
+        targetId: userId,
+        targetUserId: userId,
+        adminId: request.auth.uid,
+        failedStep: 'enable',
+        errorCode: enableCode,
+        authDisabled: true,
+        recordWritten: true,
+      });
+      console.error('adminUnsuspendUser: partial outcome', {
+        step: 'enable', code: enableCode, authDisabled: true, recordWritten: true, auditWritten,
+      });
+      throw new HttpsError(
+        'aborted',
+        'Partially unsuspended: the user is recorded as Active, but re-enabling sign-in failed, so they still cannot sign in. '
+          + (auditWritten ? 'This partial result was written to the audit log. ' : 'The audit log entry could not be written. ')
+          + 'Retry to finish.',
+        { partial: true, authDisabled: true, recordWritten: true, auditWritten },
+      );
+    }
 
     return { success: true };
   }
