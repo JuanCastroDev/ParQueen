@@ -1,7 +1,8 @@
 import { createServer, type Server } from 'node:http';
 import { execFileSync, spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import type { Readable } from 'node:stream';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -32,6 +33,18 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const CHROME_DEVTOOLS_DEADLINE_MS = 30000;
 const CHROME_LAUNCH_ATTEMPTS = 2;
 const BROWSER_BOOT_TIMEOUT_MS = 120000;
+
+// Teardown only. Every wait in a suite's afterAll has an explicit bound, so a Chrome that
+// never answers Browser.close (the CDP helper below never rejects a call whose response does
+// not arrive) or a step that stalls cannot hang the hook. A bound that expires is logged and
+// teardown moves on to the process-group SIGKILL and reap, which always run. Worst case of the
+// bounded waits: close 3000 + 3 x exit wait 3000 + server 2000 + profile removal 5000 =
+// 19000ms, inside SUITE_TEARDOWN_TIMEOUT_MS. None of these limits touches a test or boot timeout.
+const BROWSER_CLOSE_TIMEOUT_MS = 3000;
+const CHROME_EXIT_WAIT_MS = 3000;
+const SERVER_CLOSE_TIMEOUT_MS = 2000;
+const PROFILE_REMOVE_TIMEOUT_MS = 5000;
+const SUITE_TEARDOWN_TIMEOUT_MS = 30000;
 
 // Harness diagnostics go straight to the worker's stderr so CI logs keep them whether the
 // boot succeeds or fails. They never feed an assertion.
@@ -94,6 +107,84 @@ process.once('exit', () => {
 afterAll(() => {
   for (const session of harnessSessions) if (session.children.size) reapSession(session, 'file afterAll');
 });
+
+// Waits for work for at most timeoutMs. Never rejects: the caller gets the value, the error,
+// or 'timed out'. A rejection that lands after the bound expired is logged, not dropped.
+async function settleWithin<T>(work: Promise<T>, timeoutMs: number, lateFailure: (error: unknown) => void) {
+  let expired = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const settled = work.then(
+    (value) => ({ state: 'done' as const, value }),
+    (error: unknown) => {
+      if (expired) lateFailure(error);
+      return { state: 'failed' as const, error };
+    },
+  );
+  const deadline = new Promise<{ state: 'timed out' }>((resolve) => {
+    timer = setTimeout(() => {
+      expired = true;
+      resolve({ state: 'timed out' });
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([settled, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const errorText = (error: unknown) => tail(String(error instanceof Error ? error.message : error), 200);
+
+// Asks Chrome to close itself, for at most BROWSER_CLOSE_TIMEOUT_MS. Chrome exiting counts as
+// an answer, since Browser.close can sever the DevTools socket before its response arrives.
+async function closeBrowserWithin(
+  session: HarnessSession,
+  browser: ((method: string, params?: Record<string, unknown>) => Promise<any>) | undefined,
+  chrome: ChildProcess,
+) {
+  if (!browser) return;
+  const startedAt = Date.now();
+  const exited = new Promise<void>((resolve) => chrome.once('exit', () => resolve()));
+  const outcome = await settleWithin(Promise.race([browser('Browser.close'), exited]), BROWSER_CLOSE_TIMEOUT_MS, (error) => {
+    harnessLog(`${session.name}: Browser.close failed after its ${BROWSER_CLOSE_TIMEOUT_MS}ms bound: ${errorText(error)}`);
+  });
+  if (outcome.state === 'timed out') {
+    harnessLog(`${session.name}: Browser.close did not answer within ${BROWSER_CLOSE_TIMEOUT_MS}ms pid=${chrome.pid}; continuing to SIGKILL and reap`);
+  } else if (outcome.state === 'failed') {
+    harnessLog(`${session.name}: Browser.close failed after ${Date.now() - startedAt}ms pid=${chrome.pid}: ${errorText(outcome.error)}`);
+  }
+}
+
+async function closeServerWithin(session: HarnessSession, server: Server | undefined) {
+  if (!server) return;
+  const closed = new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  const outcome = await settleWithin(closed, SERVER_CLOSE_TIMEOUT_MS, (error) => {
+    harnessLog(`${session.name}: fixture server close failed after its ${SERVER_CLOSE_TIMEOUT_MS}ms bound: ${errorText(error)}`);
+  });
+  if (outcome.state === 'timed out') {
+    server.closeAllConnections();
+    harnessLog(`${session.name}: fixture server did not close within ${SERVER_CLOSE_TIMEOUT_MS}ms; dropped its open connections`);
+  } else if (outcome.state === 'failed' && (outcome.error as NodeJS.ErrnoException).code !== 'ERR_SERVER_NOT_RUNNING') {
+    harnessLog(`${session.name}: fixture server close failed: ${errorText(outcome.error)}`);
+  }
+}
+
+// CI runners occasionally keep Chrome profile files busy for a moment after
+// process exit. Cleanup is hygiene, not part of the reachability assertion.
+// Never turn otherwise-passing product assertions red for that OS race. The removal is
+// asynchronous so its retries cannot block the event loop (and with it the hook timer).
+async function removeProfileWithin(session: HarnessSession, dir: string) {
+  const outcome = await settleWithin(rm(dir, { recursive: true, force: true, maxRetries: 40, retryDelay: 100 }), PROFILE_REMOVE_TIMEOUT_MS, (error) => {
+    harnessLog(`${session.name}: temp dir ${dir} removal failed after its ${PROFILE_REMOVE_TIMEOUT_MS}ms bound: ${errorText(error)}`);
+  });
+  if (outcome.state === 'timed out') {
+    harnessLog(`${session.name}: temp dir ${dir} not removed within ${PROFILE_REMOVE_TIMEOUT_MS}ms; leaving it`);
+  } else if (outcome.state === 'failed') {
+    const code = outcome.error && typeof outcome.error === 'object' ? (outcome.error as NodeJS.ErrnoException).code : undefined;
+    if (code !== 'ENOTEMPTY' && code !== 'EBUSY' && code !== 'EPERM') throw outcome.error;
+    harnessLog(`${session.name}: temp dir ${dir} not removed (${code}); leaving it`);
+  }
+}
 
 function printEnvironmentOnce(session: HarnessSession) {
   const image = [process.env.ImageOS, process.env.ImageVersion].filter(Boolean).join(' ') || 'n/a';
@@ -238,6 +329,7 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
   }, BROWSER_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
+    const teardownStartedAt = Date.now();
     const waitForChromeExit = (timeoutMs: number) => new Promise<boolean>((resolve) => {
       if (!chrome || chrome.exitCode !== null || chrome.signalCode !== null) {
         resolve(true);
@@ -255,43 +347,26 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
     });
 
     let chromeExited = !chrome || chrome.exitCode !== null || chrome.signalCode !== null;
-    if (!chromeExited) {
-      try {
-        await browser?.('Browser.close');
-      } catch {
-        // Browser.close can sever the DevTools socket before its response arrives.
+    try {
+      if (!chromeExited) {
+        await closeBrowserWithin(session, browser, chrome);
+        chromeExited = await waitForChromeExit(CHROME_EXIT_WAIT_MS);
       }
-      chromeExited = await waitForChromeExit(3000);
+      if (!chromeExited && chrome && chrome.exitCode === null && chrome.signalCode === null) {
+        chrome.kill('SIGKILL');
+        chromeExited = await waitForChromeExit(CHROME_EXIT_WAIT_MS);
+      }
+    } finally {
+      // Also covers a beforeAll that timed out mid-launch: kills every tracked Chrome/Xvfb
+      // process group, including ones the suite variables never received, and blocks new spawns.
+      reapSession(session, 'afterAll');
     }
-    if (!chromeExited && chrome && chrome.exitCode === null && chrome.signalCode === null) {
-      chrome.kill('SIGKILL');
-      chromeExited = await waitForChromeExit(3000);
-    }
-    // Also covers a beforeAll that timed out mid-launch: kills every tracked Chrome/Xvfb
-    // process group, including ones the suite variables never received, and blocks new spawns.
-    reapSession(session, 'afterAll');
-    if (!chromeExited) chromeExited = await waitForChromeExit(3000);
+    if (!chromeExited) chromeExited = await waitForChromeExit(CHROME_EXIT_WAIT_MS);
 
-    await new Promise<void>((resolve) => {
-      if (!server) {
-        resolve();
-        return;
-      }
-      server.close(() => resolve());
-    });
-
-    // CI runners occasionally keep Chrome profile files busy for a moment after
-    // process exit. Cleanup is hygiene, not part of the reachability assertion.
-    // Never turn otherwise-passing product assertions red for that OS race.
-    if (chromeExited) {
-      try {
-        rmSync(dir, { recursive: true, force: true, maxRetries: 40, retryDelay: 100 });
-      } catch (error) {
-        const code = error && typeof error === 'object' ? (error as NodeJS.ErrnoException).code : undefined;
-        if (code !== 'ENOTEMPTY' && code !== 'EBUSY' && code !== 'EPERM') throw error;
-      }
-    }
-  });
+    await closeServerWithin(session, server);
+    if (chromeExited) await removeProfileWithin(session, dir);
+    harnessLog(`${session.name}: teardown finished in ${Date.now() - teardownStartedAt}ms (limit ${SUITE_TEARDOWN_TIMEOUT_MS}ms) chrome exited=${chromeExited}`);
+  }, SUITE_TEARDOWN_TIMEOUT_MS);
 
   async function boot() {
     const esbuild = require('esbuild') as typeof import('esbuild');
@@ -627,6 +702,7 @@ describe.skipIf(!chromeBin || !xvfbBin)('handoff failure reasons in a resized de
   }, BROWSER_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
+    const teardownStartedAt = Date.now();
     const waitForChromeExit = (timeoutMs: number) => new Promise<boolean>((resolve) => {
       if (!chrome || chrome.exitCode !== null || chrome.signalCode !== null) {
         resolve(true);
@@ -644,46 +720,29 @@ describe.skipIf(!chromeBin || !xvfbBin)('handoff failure reasons in a resized de
     });
 
     let chromeExited = !chrome || chrome.exitCode !== null || chrome.signalCode !== null;
-    if (!chromeExited) {
-      try {
-        await browser?.('Browser.close');
-      } catch {
-        // Browser.close can sever the DevTools socket before its response arrives.
+    try {
+      if (!chromeExited) {
+        await closeBrowserWithin(session, browser, chrome);
+        chromeExited = await waitForChromeExit(CHROME_EXIT_WAIT_MS);
       }
-      chromeExited = await waitForChromeExit(3000);
+      if (!chromeExited && chrome && chrome.exitCode === null && chrome.signalCode === null) {
+        chrome.kill('SIGKILL');
+        chromeExited = await waitForChromeExit(CHROME_EXIT_WAIT_MS);
+      }
+    } finally {
+      // Also covers a beforeAll that timed out mid-launch: kills every tracked Chrome/Xvfb
+      // process group, including ones the suite variables never received, and blocks new spawns.
+      reapSession(session, 'afterAll');
     }
-    if (!chromeExited && chrome && chrome.exitCode === null && chrome.signalCode === null) {
-      chrome.kill('SIGKILL');
-      chromeExited = await waitForChromeExit(3000);
-    }
-    // Also covers a beforeAll that timed out mid-launch: kills every tracked Chrome/Xvfb
-    // process group, including ones the suite variables never received, and blocks new spawns.
-    reapSession(session, 'afterAll');
-    if (!chromeExited) chromeExited = await waitForChromeExit(3000);
+    if (!chromeExited) chromeExited = await waitForChromeExit(CHROME_EXIT_WAIT_MS);
     if (xvfb && xvfb.exitCode === null && xvfb.signalCode === null) {
       xvfb.kill('SIGKILL');
     }
 
-    await new Promise<void>((resolve) => {
-      if (!server) {
-        resolve();
-        return;
-      }
-      server.close(() => resolve());
-    });
-
-    // CI runners occasionally keep Chrome profile files busy for a moment after
-    // process exit. Cleanup is hygiene, not part of the reachability assertion.
-    // Never turn otherwise-passing product assertions red for that OS race.
-    if (chromeExited) {
-      try {
-        rmSync(dir, { recursive: true, force: true, maxRetries: 40, retryDelay: 100 });
-      } catch (error) {
-        const code = error && typeof error === 'object' ? (error as NodeJS.ErrnoException).code : undefined;
-        if (code !== 'ENOTEMPTY' && code !== 'EBUSY' && code !== 'EPERM') throw error;
-      }
-    }
-  });
+    await closeServerWithin(session, server);
+    if (chromeExited) await removeProfileWithin(session, dir);
+    harnessLog(`${session.name}: teardown finished in ${Date.now() - teardownStartedAt}ms (limit ${SUITE_TEARDOWN_TIMEOUT_MS}ms) chrome exited=${chromeExited}`);
+  }, SUITE_TEARDOWN_TIMEOUT_MS);
 
   async function ev<T>(expression: string): Promise<T> {
     const res = await page('Runtime.evaluate', { expression, returnByValue: true });
