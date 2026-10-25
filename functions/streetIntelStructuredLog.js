@@ -2,7 +2,7 @@
 
 function loadFunctionsLogger() {
   try {
-    return require('firebase-functions').logger;
+    return require('firebase-functions/logger').logger;
   } catch {
     return null;
   }

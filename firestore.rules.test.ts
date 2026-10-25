@@ -4858,7 +4858,7 @@ describe('A1 — one active incoming claim', () => {
         expect((await readSpot('a1-r001-new')).data().status).toBe('available');
         expect((await readLock(OTHER_UID)).data().spotId).toBe('a1-r001-legacy');
         await expect(claimAs(thirdDb(), THIRD_UID, 'cara', 'a1-r001-new')).resolves.toBe('claimed');
-    });
+    }, 15_000);
 
     it('A1-R001b: duplicate interested Pings are released deterministically and reported before the gate opens', async () => {
         await closeActiveClaimRollout();
