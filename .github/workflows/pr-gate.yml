@@ -18,6 +18,20 @@ on:
       - main
     types: [opened, synchronize, reopened, ready_for_review, edited]
   workflow_dispatch:
+    inputs:
+      root_repeatability_only:
+        description: Run only the temporary RC-03Y Ubuntu root-suite observation
+        required: true
+        default: false
+        type: boolean
+      expected_candidate_commit:
+        description: Exact four-file candidate commit SHA
+        required: true
+        type: string
+      expected_harness_commit:
+        description: Exact temporary harness commit SHA
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -25,6 +39,7 @@ permissions:
 jobs:
   gate:
     name: gate
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.root_repeatability_only != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -334,3 +349,315 @@ jobs:
       - name: Nothing applicable
         if: steps.classify.outputs.run_client == 'false' && steps.classify.outputs.run_functions == 'false' && steps.classify.outputs.run_firestore == 'false' && steps.classify.outputs.run_storage == 'false'
         run: echo "No CLIENT/FUNCTIONS/FIRESTORE/STORAGE-relevant paths changed — gate passes with nothing to verify."
+
+  root-repeatability:
+    name: RC-03Y Ubuntu root repeatability
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.root_repeatability_only == true }}
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RC03Y_EVIDENCE: ${{ runner.temp }}/rc03y-evidence
+
+    steps:
+      - name: Checkout exact dispatched commit without credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 3
+          persist-credentials: false
+
+      - name: Create evidence directory
+        shell: bash
+        run: mkdir -p "$RC03Y_EVIDENCE/attachments"
+
+      - name: Verify commit ancestry, manifests, and candidate hashes
+        shell: bash
+        env:
+          EXPECTED_CANDIDATE: ${{ inputs.expected_candidate_commit }}
+          EXPECTED_HARNESS: ${{ inputs.expected_harness_commit }}
+        run: |
+          set -euo pipefail
+          BASE=daa97397de5993fb8fa727e65f064d33f973784d
+          test "$GITHUB_SHA" = "$EXPECTED_HARNESS"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HARNESS"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_CANDIDATE"
+          test "$(git rev-parse "$EXPECTED_CANDIDATE^")" = "$BASE"
+          test "$(git rev-parse "$BASE^{tree}")" = 5f4b40606edaf38e395fa0878c1ff95c2be1621d
+
+          git diff-tree --no-commit-id --name-only -r "$EXPECTED_CANDIDATE" | sort > "$RC03Y_EVIDENCE/candidate-paths.actual.txt"
+          cat > "$RC03Y_EVIDENCE/candidate-paths.expected.txt" <<'EOF'
+          firestore.rules
+          firestore.rules.test.ts
+          functions/curbIntelligence/privateResolverLoggerDependency.contract.test.js
+          functions/streetIntelStructuredLog.js
+          EOF
+          diff -u "$RC03Y_EVIDENCE/candidate-paths.expected.txt" "$RC03Y_EVIDENCE/candidate-paths.actual.txt"
+
+          git diff-tree --no-commit-id --name-only -r "$EXPECTED_HARNESS" | sort > "$RC03Y_EVIDENCE/harness-paths.actual.txt"
+          cat > "$RC03Y_EVIDENCE/harness-paths.expected.txt" <<'EOF'
+          .github/scripts/rc03x-node-loopback-guard.cjs
+          .github/workflows/pr-gate.yml
+          EOF
+          diff -u "$RC03Y_EVIDENCE/harness-paths.expected.txt" "$RC03Y_EVIDENCE/harness-paths.actual.txt"
+
+          cat > "$RC03Y_EVIDENCE/candidate-sha256.expected.txt" <<'EOF'
+          00e399f0b944b86563573098a927266bfdb9708ff742d138370e6be84537b482  firestore.rules
+          a435b74b4b0e3f53870ac721128940b9bf5972f3b05f3fabf7d754fcf4a49b30  firestore.rules.test.ts
+          1956e52b59420a3a4f855964c2998422613c9f64b43fda64b9cbfd6fd81e178e  functions/streetIntelStructuredLog.js
+          becedf6c781e7eb15c630acb570ff992b48d9b20656d1f44e83890e601824067  functions/curbIntelligence/privateResolverLoggerDependency.contract.test.js
+          EOF
+          sha256sum --check "$RC03Y_EVIDENCE/candidate-sha256.expected.txt" | tee "$RC03Y_EVIDENCE/candidate-sha256.check.txt"
+          sha256sum firestore.rules firestore.rules.test.ts functions/streetIntelStructuredLog.js functions/curbIntelligence/privateResolverLoggerDependency.contract.test.js > "$RC03Y_EVIDENCE/candidate-sha256.actual.txt"
+
+          test "$(sha256sum functions/index.js | cut -d' ' -f1)" = 3fe7055abbde1f64a1271454b5c643bb3da2fc710d245ab1cc7ff45e7d0ed2a6
+          test "$(sha256sum functions/curbIntelligence/canonicalV2ModuleLoader.test.js | cut -d' ' -f1)" = c6d10f35436e5437d8a021c074b4dac1380b8f5d42280e26a9d3c812f10ca004
+          test "$(sha256sum .github/scripts/rc03x-node-loopback-guard.cjs | cut -d' ' -f1)" = 12f0fdb2b63898897eebe392af5320099f10ddb3bd43b45b15abdefe3eea1a1d
+          grep -Fq "require('firebase-functions/logger').logger" functions/streetIntelStructuredLog.js
+
+          git diff --name-only "$BASE..HEAD" | sort > "$RC03Y_EVIDENCE/delivered-paths.actual.txt"
+          cat > "$RC03Y_EVIDENCE/delivered-paths.expected.txt" <<'EOF'
+          .github/scripts/rc03x-node-loopback-guard.cjs
+          .github/workflows/pr-gate.yml
+          firestore.rules
+          firestore.rules.test.ts
+          functions/curbIntelligence/privateResolverLoggerDependency.contract.test.js
+          functions/streetIntelStructuredLog.js
+          EOF
+          diff -u "$RC03Y_EVIDENCE/delivered-paths.expected.txt" "$RC03Y_EVIDENCE/delivered-paths.actual.txt"
+          git diff --check "$BASE..HEAD"
+          git status --porcelain=v1 > "$RC03Y_EVIDENCE/preinstall-status.txt"
+          test ! -s "$RC03Y_EVIDENCE/preinstall-status.txt"
+          sha256sum .github/workflows/pr-gate.yml .github/scripts/rc03x-node-loopback-guard.cjs package-lock.json functions/package-lock.json > "$RC03Y_EVIDENCE/preinstall-hashes.txt"
+          git log -2 --format='%H%x09%P%x09%s' > "$RC03Y_EVIDENCE/commit-provenance.txt"
+
+      - name: Reject production credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          names=(
+            GOOGLE_APPLICATION_CREDENTIALS GOOGLE_CREDENTIALS GOOGLE_CLOUD_PROJECT
+            GCLOUD_PROJECT FIREBASE_CONFIG FIREBASE_PROJECT FIREBASE_PROJECT_ID
+            FIREBASE_TOKEN MAPBOX_ACCESS_TOKEN VITE_MAPBOX_TOKEN
+            APP_STORE_CONNECT_API_KEY APP_STORE_CONNECT_ISSUER_ID
+          )
+          for name in "${names[@]}"; do
+            if [ -n "${!name:-}" ]; then
+              echo "::error::Prohibited credential or production variable is present: $name"
+              exit 1
+            fi
+          done
+          printf '%s\n' "No prohibited credential variables present" > "$RC03Y_EVIDENCE/credential-check.txt"
+
+      - name: Set up exact Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.4
+
+      - name: Install exact npm
+        shell: bash
+        run: npm install --global npm@10.9.9
+
+      - name: Capture hosted runner identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "repository=$GITHUB_REPOSITORY"
+            echo "ref=$GITHUB_REF"
+            echo "sha=$GITHUB_SHA"
+            echo "run_id=$GITHUB_RUN_ID"
+            echo "run_attempt=$GITHUB_RUN_ATTEMPT"
+            echo "actor=$GITHUB_ACTOR"
+            echo "event=$GITHUB_EVENT_NAME"
+            echo "runner_os=$RUNNER_OS"
+            echo "runner_arch=$RUNNER_ARCH"
+            echo "image_os=${ImageOS:-unknown}"
+            echo "image_version=${ImageVersion:-unknown}"
+            echo "node=$(node --version)"
+            echo "npm=$(npm --version)"
+          } > "$RC03Y_EVIDENCE/runner-context.txt"
+          cat /etc/os-release > "$RC03Y_EVIDENCE/os-release.txt"
+          uname -a > "$RC03Y_EVIDENCE/uname.txt"
+          lscpu > "$RC03Y_EVIDENCE/cpu.txt"
+          free -h > "$RC03Y_EVIDENCE/memory.txt"
+          test "$(node --version)" = v22.23.4
+          test "$(npm --version)" = 10.9.9
+
+      - name: Install root dependencies from lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci 2>&1 | tee "$RC03Y_EVIDENCE/root-npm-ci.log"
+
+      - name: Install Functions dependencies from lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --prefix functions 2>&1 | tee "$RC03Y_EVIDENCE/functions-npm-ci.log"
+
+      - name: Verify lockfiles and clean source after installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum .github/workflows/pr-gate.yml .github/scripts/rc03x-node-loopback-guard.cjs package-lock.json functions/package-lock.json > "$RC03Y_EVIDENCE/postinstall-hashes.txt"
+          diff -u "$RC03Y_EVIDENCE/preinstall-hashes.txt" "$RC03Y_EVIDENCE/postinstall-hashes.txt"
+          git status --porcelain=v1 > "$RC03Y_EVIDENCE/postinstall-status.txt"
+          test ! -s "$RC03Y_EVIDENCE/postinstall-status.txt"
+
+      - name: Prove test-phase network guard controls
+        shell: bash
+        env:
+          NODE_OPTIONS: --require=${{ github.workspace }}/.github/scripts/rc03x-node-loopback-guard.cjs
+        run: |
+          set -euo pipefail
+          node <<'NODE' > "$RC03Y_EVIDENCE/guard-loopback-control.log" 2>&1
+          const net = require('node:net');
+          const server = net.createServer((socket) => socket.end());
+          server.on('error', (error) => { console.error(error); process.exit(1); });
+          server.listen(0, '127.0.0.1', () => {
+            const socket = net.connect({ host: '127.0.0.1', port: server.address().port }, () => {
+              socket.end();
+              server.close(() => console.log('LOOPBACK_CONTROL_PASS'));
+            });
+            socket.on('error', (error) => { console.error(error); server.close(() => process.exit(1)); });
+          });
+          NODE
+          grep -Fq LOOPBACK_CONTROL_PASS "$RC03Y_EVIDENCE/guard-loopback-control.log"
+
+          set +e
+          node -e "require('node:net').connect({host:'example.com',port:443})" > "$RC03Y_EVIDENCE/guard-deny-control.log" 2>&1
+          deny_status=$?
+          set -e
+          test "$deny_status" -ne 0
+          grep -Fq '[RC02B_NETWORK_BLOCK] node example.com:443' "$RC03Y_EVIDENCE/guard-deny-control.log"
+          printf 'deny_exit=%s\n' "$deny_status" > "$RC03Y_EVIDENCE/guard-controls.txt"
+
+      - name: Run root suite once with one maximum worker
+        id: root_suite
+        shell: bash
+        env:
+          NODE_OPTIONS: --require=${{ github.workspace }}/.github/scripts/rc03x-node-loopback-guard.cjs
+        run: |
+          set -o pipefail
+          set +e
+          npm test -- --maxWorkers=1 --reporter=json --outputFile="$RC03Y_EVIDENCE/raw-results.json" --attachmentsDir="$RC03Y_EVIDENCE/attachments" 2>&1 | tee "$RC03Y_EVIDENCE/root-suite.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          printf '%s\n' "$status" > "$RC03Y_EVIDENCE/test-exit-code.txt"
+          exit "$status"
+
+      - name: Verify result counts, identities, concurrency, and network safety
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const crypto = require('node:crypto');
+          const evidence = process.env.RC03Y_EVIDENCE;
+          const rawPath = path.join(evidence, 'raw-results.json');
+          if (!fs.existsSync(rawPath)) throw new Error('raw-results.json is missing');
+          const result = JSON.parse(fs.readFileSync(rawPath, 'utf8'));
+          const root = process.cwd().replaceAll('\\', '/').replace(/\/$/, '') + '/';
+          const relative = (name) => {
+            const normalized = String(name).replaceAll('\\', '/');
+            if (!normalized.startsWith(root)) throw new Error(`test path outside checkout: ${normalized}`);
+            return normalized.slice(root.length);
+          };
+          const baselineOrder = (left, right) => left.localeCompare(right, 'en-US', { sensitivity: 'base' });
+          const hashLines = (lines) => crypto.createHash('sha256').update([...lines].sort(baselineOrder).join('\n') + '\n').digest('hex');
+          const files = result.testResults.map((test) => relative(test.name));
+          const assertions = [];
+          const skipped = [];
+          const events = [];
+          for (const test of result.testResults) {
+            const file = relative(test.name);
+            events.push([Number(test.startTime), 1], [Number(test.endTime), -1]);
+            for (const assertion of test.assertionResults) {
+              assertions.push(`${file}|${assertion.fullName}`);
+              if (assertion.status !== 'passed') skipped.push(`${file}|${assertion.fullName}|${assertion.status}`);
+            }
+          }
+          events.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+          let active = 0;
+          let maxOverlap = 0;
+          for (const [, delta] of events) { active += delta; maxOverlap = Math.max(maxOverlap, active); }
+          const report = {
+            success: result.success,
+            files: result.testResults.length,
+            totalTests: result.numTotalTests,
+            passedTests: result.numPassedTests,
+            failedTests: result.numFailedTests,
+            skippedTests: result.numPendingTests,
+            todoTests: result.numTodoTests,
+            totalSuiteBlocks: result.numTotalTestSuites,
+            passedSuiteBlocks: result.numPassedTestSuites,
+            failedSuiteBlocks: result.numFailedTestSuites,
+            fileIdentitySha256: hashLines(files),
+            assertionIdentitySha256: hashLines(assertions),
+            skippedIdentityStatusSha256: hashLines(skipped),
+            maxOverlappingFileIntervals: maxOverlap,
+          };
+          fs.writeFileSync(path.join(evidence, 'coverage-and-identity.json'), JSON.stringify(report, null, 2) + '\n');
+          const expected = {
+            files: 322,
+            totalTests: 3935,
+            passedTests: 3927,
+            failedTests: 0,
+            skippedTests: 8,
+            todoTests: 0,
+            totalSuiteBlocks: 1003,
+            passedSuiteBlocks: 1003,
+            failedSuiteBlocks: 0,
+            fileIdentitySha256: '086a12168500b1772574acd6292879087350713af9b84820b56a2ba3caf7d1f4',
+            assertionIdentitySha256: '625aaeceebfb2fdbe9bfa231cdb28702170de7a8565ea8f88bba7a1ffb2d94ea',
+            skippedIdentityStatusSha256: 'f9da871309dc01a8fc03dd648e51d7842d03ae20a577939aa65d4e665388e5e9',
+            maxOverlappingFileIntervals: 1,
+          };
+          if (result.success !== true) throw new Error('Vitest success was not true');
+          for (const [key, value] of Object.entries(expected)) {
+            if (report[key] !== value) throw new Error(`${key}: expected ${value}, received ${report[key]}`);
+          }
+          NODE
+          test "$(cat "$RC03Y_EVIDENCE/test-exit-code.txt")" = 0
+          if grep -Fq '[RC02B_NETWORK_BLOCK]' "$RC03Y_EVIDENCE/root-suite.log"; then
+            echo '::error::Root suite attempted a prohibited non-loopback connection'
+            exit 1
+          fi
+          printf '%s\n' 'network_guard_violations=0' > "$RC03Y_EVIDENCE/network-safety.txt"
+          git status --porcelain=v1 > "$RC03Y_EVIDENCE/posttest-status.txt"
+          test ! -s "$RC03Y_EVIDENCE/posttest-status.txt"
+          sha256sum firestore.rules firestore.rules.test.ts functions/streetIntelStructuredLog.js functions/curbIntelligence/privateResolverLoggerDependency.contract.test.js > "$RC03Y_EVIDENCE/posttest-candidate-sha256.txt"
+          diff -u "$RC03Y_EVIDENCE/candidate-sha256.actual.txt" "$RC03Y_EVIDENCE/posttest-candidate-sha256.txt"
+
+      - name: Write hosted evidence manifest
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' "https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$RC03Y_EVIDENCE/workflow-run-url.txt"
+          find "$RC03Y_EVIDENCE" -type f ! -name evidence-sha256.txt -print0 | sort -z | xargs -0 sha256sum > "$RC03Y_EVIDENCE/evidence-sha256.txt"
+
+      - name: Upload RC-03Y evidence
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rc03x-ubuntu-root-suite-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rc03y-evidence
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Record artifact provenance
+        if: always()
+        shell: bash
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          {
+            echo "artifact_digest=$ARTIFACT_DIGEST"
+            echo "artifact_url=$ARTIFACT_URL"
+          } >> "$GITHUB_STEP_SUMMARY"
