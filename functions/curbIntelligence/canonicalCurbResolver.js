@@ -15,6 +15,13 @@ const { searchPolicy } = require('./curbResolver');
 const { createCsclCandidateStore } = require('./csclSocrataAdapter');
 const { buildCanonicalCsclPopulation } = require('./csclPopulationIdentity');
 const { deepFreeze } = require('./canonicalSearchEnvelope');
+const {
+  RETENTION_MODE,
+  ENRICHMENT_MODE,
+  SHADOW_EVALUATION,
+  observePrivateSourceContext,
+  readServerSourceEvidence,
+} = require('./privateSourceContextRetention');
 
 const NYC = Object.freeze({ minLat: 40.4, maxLat: 40.95, minLng: -74.3, maxLng: -73.65 });
 const BOROUGHS = Object.freeze({
@@ -30,6 +37,12 @@ const unsupported = (reasons, diagnostics = {}) => ({
   reasons: [...new Set(reasons)],
   ...diagnostics,
 });
+
+function emitPilotStage(telemetry, pilotStage) {
+  try {
+    telemetry?.emit?.('curb_pilot_diagnostic', { protocolVersion: 2, pilotStage });
+  } catch { /* diagnostic logging is fail-soft */ }
+}
 
 function locationQuality(location) {
   return classifyCanonicalCurb({
@@ -101,11 +114,36 @@ function identityRows(records) {
   }));
 }
 
-function buildCandidate(rankedGroup) {
+function shadowSourceEvidence(options) {
+  if (options.privateSourceContextEnrichment !== ENRICHMENT_MODE) return null;
+  if (options.evaluationScope !== SHADOW_EVALUATION) {
+    return { streetContextFor: () => ({ ok: false, reason: 'unverified_source_ownership' }) };
+  }
+  const bound = readServerSourceEvidence(options.privateSourceEvidence);
+  if (!bound) return { streetContextFor: () => ({ ok: false, reason: 'unverified_source_ownership' }) };
+  if (bound.ok === false) {
+    return { streetContextFor: () => ({ ok: false, reason: bound.reason || 'unverified_source_ownership' }) };
+  }
+  return bound;
+}
+
+function buildCandidate(rankedGroup, context) {
+  const identityFailure = context?.identityFailure;
   const record = rankedGroup.best;
   const projection = record.projection;
-  if (projection.csclSide !== 'LEFT' && projection.csclSide !== 'RIGHT') return null;
+  if (projection.csclSide !== 'LEFT' && projection.csclSide !== 'RIGHT') {
+    if (identityFailure && identityFailure.reason == null) identityFailure.reason = 'invalid_cscl_side';
+    return null;
+  }
   const native = record.sourceNative || {};
+  const supplied = context?.evidence ? context.evidence.streetContextFor(record) : null;
+  if (supplied && supplied.ok !== true) {
+    if (identityFailure && identityFailure.reason == null) identityFailure.reason = supplied.reason;
+    return null;
+  }
+  if (supplied?.ok && identityFailure && identityFailure.enrichment == null) {
+    identityFailure.enrichment = supplied;
+  }
   const identityResult = createCanonicalCurbIdentity({
     csclRows: identityRows(rankedGroup.group.records),
     csclSide: projection.csclSide,
@@ -115,13 +153,16 @@ function buildCandidate(rankedGroup) {
     streetWidthFeet: Number(native.streetwidth),
     borough: BOROUGHS[native.boroughcode] || String(native.boroughcode || '').trim(),
     onStreet: native.full_street_name || native.street_name || native.stname_label,
-    fromStreet: native.from_street,
-    toStreet: native.to_street,
+    fromStreet: supplied?.ok ? supplied.fromStreet : native.from_street,
+    toStreet: supplied?.ok ? supplied.toStreet : native.to_street,
     aliases: [native.street_name, native.stname_label],
     cardinalSide: cardinalSide(projection),
     resolutionMethod: 'automatic',
   });
-  if (!identityResult.ok) return null;
+  if (!identityResult.ok) {
+    if (identityFailure && identityFailure.reason == null) identityFailure.reason = identityResult.reason;
+    return null;
+  }
   return {
     identity: identityResult.identity,
     projection,
@@ -129,6 +170,7 @@ function buildCandidate(rankedGroup) {
     group: rankedGroup.group,
     streetName: identityResult.identity.names.onStreet,
     stroke: record.geometry,
+    sourceEnrichment: supplied?.ok === true,
   };
 }
 
@@ -283,9 +325,32 @@ async function resolveCanonicalCurb(location, options = {}) {
   if (materialRanked.length > 2) {
     return unsupported(['intersection_complex'], { candidateCount: materialRanked.length });
   }
-  const candidates = materialRanked.map(buildCandidate).filter(Boolean);
+  const retainPrivateSourceContext = options.privateSourceContextRetention === RETENTION_MODE;
+  const evidence = shadowSourceEvidence(options);
+  if (evidence?.ok === true) emitPilotStage(options.telemetry, 'cscl_admitted');
+  const identityFailure = retainPrivateSourceContext || evidence ? { reason: null, enrichment: null } : null;
+  const candidates = materialRanked.map(rankedGroup => (
+    identityFailure
+      ? buildCandidate(rankedGroup, { identityFailure, evidence })
+      : buildCandidate(rankedGroup)
+  )).filter(Boolean);
+  if (retainPrivateSourceContext) {
+    observePrivateSourceContext(materialRanked, options, identityFailure.reason);
+  }
+  if (evidence && typeof options.privateSourceContextObserver === 'function') {
+    options.privateSourceContextObserver(Object.freeze({
+      identityReason: identityFailure.reason,
+      enrichment: identityFailure.enrichment,
+    }));
+  }
   if (candidates.length !== materialRanked.length || candidates.length === 0) {
     return unsupported(['candidate_incomplete'], { candidateCount: materialRanked.length });
+  }
+  if (identityFailure?.enrichment?.fromStreet && identityFailure.enrichment.toStreet) {
+    emitPilotStage(options.telemetry, 'enrichment_accepted');
+  }
+  if (identityFailure?.enrichment?.certificationStatus === 'NOT_CERTIFIED') {
+    emitPilotStage(options.telemetry, 'source_not_certified');
   }
 
   const levelOrRoadbedAmbiguous = new Set(materialRanked.map(value => (
@@ -329,6 +394,19 @@ async function resolveCanonicalCurb(location, options = {}) {
     endpointAmbiguous: endpointDistance <= uncertainty,
     actionableCandidates: policyCandidates,
   });
+
+  if (considered.some(candidate => candidate.sourceEnrichment === true)
+    && (decision.state === 'SUPPORTED' || decision.state === 'AMBIGUOUS')) {
+    const diagnostics = {
+      candidateCount: considered.length,
+      classifierState: decision.state,
+      classifierReasons: decision.reasons,
+    };
+    if (evidence?.sourceAdmission) diagnostics.sourceAdmission = evidence.sourceAdmission;
+    emitPilotStage(options.telemetry, 'topology_primary_rejected');
+    emitPilotStage(options.telemetry, 'native_proof_not_invoked');
+    return unsupported(['topology_primary_required'], diagnostics);
+  }
 
   if (decision.state === 'SUPPORTED') {
     const result = deepFreeze({
@@ -403,6 +481,7 @@ function promoteAttestedVisualSelection(resolution, candidateToken) {
 
 module.exports = {
   resolveCanonicalCurb,
+  buildCandidate,
   hasPrimaryTopologyAuthority,
   hasAmbiguousTopologyAuthority,
   promoteAttestedVisualSelection,

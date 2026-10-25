@@ -14,6 +14,7 @@ const CURB_TELEMETRY_EVENTS = new Set([
   'source_conflict',
   'street_name_conflict',
   'cache_curb_mismatch',
+  'curb_pilot_diagnostic',
 ]);
 
 const REASONS = new Set([
@@ -54,6 +55,15 @@ const FAILURE_DETAILS = new Set([
   'source_unavailable',
   'competing_roadways_overlap',
   'endpoint_or_intersection_ambiguous',
+]);
+
+const PILOT_STAGES = new Set([
+  'pilot_closed',
+  'cscl_admitted',
+  'enrichment_accepted',
+  'source_not_certified',
+  'topology_primary_rejected',
+  'native_proof_not_invoked',
 ]);
 
 function candidateBucket(value) {
@@ -103,6 +113,7 @@ function buildCurbTelemetryPayload(event, input = {}) {
   if (Object.prototype.hasOwnProperty.call(input, 'accuracyMeters')) {
     payload.accuracyBucket = accuracyBucket(input.accuracyMeters);
   }
+  if (PILOT_STAGES.has(input.pilotStage)) payload.pilotStage = input.pilotStage;
   for (const key of ['cacheHit', 'hasCandidateToken', 'sourceAvailable', 'rulesAvailable']) {
     if (typeof input[key] === 'boolean') payload[key] = input[key];
   }
@@ -124,6 +135,7 @@ function createCurbTelemetry(options = {}) {
 
 module.exports = {
   CURB_TELEMETRY_EVENTS,
+  PILOT_STAGES,
   buildCurbTelemetryPayload,
   createCurbTelemetry,
 };

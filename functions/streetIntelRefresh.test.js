@@ -114,7 +114,7 @@ describe('E-F refresh continues into fallback and Curb observation', () => {
       INDEX_SRC.indexOf('function _existingNYCOpenDataResult'),
     );
     expect(callable).not.toContain('_observeCurbIntelligenceShadow');
-    expect(callable).toContain('return canonicalV2Handler(request.data)');
+    expect(callable).toContain('return canonicalV2Handler(request.data, request.auth.uid)');
     expect(INDEX_SRC).toContain('_attachSweepnycProductEvidence(refreshExistingId, d, captureProductEvidence, ruleWrite)');
   });
 });
