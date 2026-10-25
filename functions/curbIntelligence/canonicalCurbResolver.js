@@ -8,7 +8,7 @@ const {
   publicCurbKey,
   toPublicCurb,
 } = require('./canonicalCurbIdentity');
-const { projectPointToMultiLineString, rankRoadwayCandidates } = require('./geometry');
+const { rankRoadwayCandidates } = require('./geometry');
 const { groupRoadwayCandidates } = require('./roadwayGrouping');
 const { resolveOfficialCurbRuntime } = require('./runtimeCurbResolution');
 const { searchPolicy } = require('./curbResolver');
@@ -174,44 +174,6 @@ function buildCandidate(rankedGroup, context) {
   };
 }
 
-function tangentSimilarity(left, right) {
-  const leftLength = Math.hypot(left.eastMeters, left.northMeters);
-  const rightLength = Math.hypot(right.eastMeters, right.northMeters);
-  if (!leftLength || !rightLength) return 0;
-  return Math.abs((left.eastMeters * right.eastMeters + left.northMeters * right.northMeters)
-    / (leftLength * rightLength));
-}
-
-function planimetricChoice(location, candidates, evidence) {
-  if (evidence?.completeness?.state !== 'COMPLETE'
-    || !Array.isArray(evidence.candidates) || evidence.candidates.length === 0) return null;
-  const uncertainty = location.accuracyMeters + CURB_RESOLUTION_POLICY.modelErrorMeters;
-  const maximumDistance = Math.max(12, uncertainty + 3);
-  const scores = candidates.map(candidate => {
-    const compatibleDistances = evidence.candidates.map(curb => {
-      const curbProjection = projectPointToMultiLineString(location, curb?.geometry?.coordinates);
-      if (!curbProjection || curbProjection.distanceMeters > maximumDistance
-        || tangentSimilarity(candidate.projection.tangent, curbProjection.tangent) < 0.9) return null;
-      const roadwayProjection = projectPointToMultiLineString(
-        curbProjection.projectedPoint,
-        candidate.record.geometry?.coordinates,
-      );
-      const expectedOffset = Number(candidate.record.sourceNative?.streetwidth) * 0.3048 / 2;
-      if (!roadwayProjection
-        || roadwayProjection.csclSide !== candidate.identity.csclSide
-        || !Number.isFinite(expectedOffset)
-        || Math.abs(roadwayProjection.distanceMeters - expectedOffset) > uncertainty + 3) return null;
-      return curbProjection.distanceMeters;
-    }).filter(value => value !== null);
-    return compatibleDistances.length ? Math.min(...compatibleDistances) : Number.POSITIVE_INFINITY;
-  });
-  const finite = scores.map((score, index) => ({ score, index }))
-    .filter(value => Number.isFinite(value.score)).sort((a, b) => a.score - b.score);
-  if (finite.length === 0) return null;
-  if (finite.length > 1 && finite[0].score + uncertainty >= finite[1].score - uncertainty) return null;
-  return candidates[finite[0].index];
-}
-
 function visuallyDistinct(left, right) {
   return left.streetName !== right.streetName
     || JSON.stringify(left.stroke) !== JSON.stringify(right.stroke);
@@ -280,7 +242,7 @@ async function resolveCanonicalCurb(location, options = {}) {
       signal: options.signal,
     })
     : Promise.resolve({ candidates: [], completeness: { state: 'INCOMPLETE', reason: 'source_unavailable' } });
-  const [runtime, planimetricEvidence] = await Promise.all([
+  const [runtime] = await Promise.all([
     resolveOfficialCurbRuntime(location, {
       candidateStore,
       signal: options.signal,
@@ -356,8 +318,6 @@ async function resolveCanonicalCurb(location, options = {}) {
   const levelOrRoadbedAmbiguous = new Set(materialRanked.map(value => (
     levelSignature(value.best)
   ))).size > 1 || materialRanked.some(value => value.group.reasonCodes.length > 0);
-  const planChoice = candidates.length > 1
-    ? planimetricChoice(location, candidates, planimetricEvidence) : null;
   const considered = candidates;
   const selected = considered[0];
   const topologySelectable = candidate => {

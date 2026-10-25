@@ -94,20 +94,31 @@ describe('main-compatible integrated release coverage', () => {
 
   it('an empty packaged slot keeps the pinned 26B file, and a substitute cannot replace it', () => {
     const packagedDirectory = path.dirname(PACKAGED_ARTIFACT_PATH);
-    const directoryExisted = fs.existsSync(packagedDirectory);
-    expect(fs.existsSync(PACKAGED_ARTIFACT_PATH)).toBe(false);
-    expect(resolveRuntimeArtifactPath()).toBe(ARTIFACT_PATH);
     expect(sha256(ARTIFACT_PATH)).toBe(PINNED_ARTIFACT_SHA256);
+    expect(resolveRuntimeArtifactPath()).toBe(ARTIFACT_PATH);
 
-    fs.mkdirSync(packagedDirectory, { recursive: true });
-    fs.writeFileSync(PACKAGED_ARTIFACT_PATH, '{"not":"the pinned artifact"}');
+    let createdDirectory = false;
+    let createdFile = false;
     const reads = [];
     const originalRead = fs.readFileSync;
-    fs.readFileSync = function recordRead(filePath, ...rest) {
-      reads.push(String(filePath));
-      return originalRead.call(this, filePath, ...rest);
-    };
     try {
+      try {
+        fs.mkdirSync(packagedDirectory);
+        createdDirectory = true;
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+      }
+      const handle = fs.openSync(PACKAGED_ARTIFACT_PATH, 'wx');
+      createdFile = true;
+      try {
+        fs.writeFileSync(handle, '{"not":"the pinned artifact"}');
+      } finally {
+        fs.closeSync(handle);
+      }
+      fs.readFileSync = function recordRead(filePath, ...rest) {
+        reads.push(String(filePath));
+        return originalRead.call(this, filePath, ...rest);
+      };
       expect(resolveRuntimeArtifactPath()).toBe(PACKAGED_ARTIFACT_PATH);
       expect(loadPinnedRuntimeArtifact().reason).toBe('artifact_digest_mismatch');
       expect(reads).toContain(PACKAGED_ARTIFACT_PATH);
@@ -115,13 +126,10 @@ describe('main-compatible integrated release coverage', () => {
       expect(reads.some(filePath => /citywideCrossStreetCoverage|lion-snapshot|snd-w4v2/i.test(filePath))).toBe(false);
     } finally {
       fs.readFileSync = originalRead;
-      fs.rmSync(PACKAGED_ARTIFACT_PATH, { force: true });
-      if (!directoryExisted && fs.existsSync(packagedDirectory) && fs.readdirSync(packagedDirectory).length === 0) {
-        fs.rmdirSync(packagedDirectory);
-      }
+      if (createdFile) fs.rmSync(PACKAGED_ARTIFACT_PATH);
+      if (createdDirectory) fs.rmdirSync(packagedDirectory);
     }
 
-    expect(fs.existsSync(PACKAGED_ARTIFACT_PATH)).toBe(false);
     expect(resolveRuntimeArtifactPath()).toBe(ARTIFACT_PATH);
     expect(sha256(ARTIFACT_PATH)).toBe(PINNED_ARTIFACT_SHA256);
   });
