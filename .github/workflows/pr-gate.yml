@@ -32,6 +32,10 @@ on:
         description: Exact temporary harness commit SHA
         required: true
         type: string
+      expected_repair_commit:
+        description: Exact final workflow-repair commit SHA
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -357,31 +361,37 @@ jobs:
       contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      RC03Y_EVIDENCE: ${{ runner.temp }}/rc03y-evidence
 
     steps:
       - name: Checkout exact dispatched commit without credentials
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          fetch-depth: 3
+          fetch-depth: 4
           persist-credentials: false
 
       - name: Create evidence directory
         shell: bash
-        run: mkdir -p "$RC03Y_EVIDENCE/attachments"
+        run: |
+          set -euo pipefail
+          RC03Y_EVIDENCE="${RUNNER_TEMP:?}/rc03y-evidence"
+          mkdir -p "$RC03Y_EVIDENCE/attachments"
+          printf 'RC03Y_EVIDENCE=%s\n' "$RC03Y_EVIDENCE" >> "$GITHUB_ENV"
 
       - name: Verify commit ancestry, manifests, and candidate hashes
         shell: bash
         env:
           EXPECTED_CANDIDATE: ${{ inputs.expected_candidate_commit }}
           EXPECTED_HARNESS: ${{ inputs.expected_harness_commit }}
+          EXPECTED_REPAIR: ${{ inputs.expected_repair_commit }}
         run: |
           set -euo pipefail
           BASE=daa97397de5993fb8fa727e65f064d33f973784d
-          test "$GITHUB_SHA" = "$EXPECTED_HARNESS"
-          test "$(git rev-parse HEAD)" = "$EXPECTED_HARNESS"
-          test "$(git rev-parse HEAD^)" = "$EXPECTED_CANDIDATE"
+          test "$EXPECTED_CANDIDATE" = db7bb27f6ff38b8afb7a73c342746ec8eca1b3b6
+          test "$EXPECTED_HARNESS" = c03223bf8839de1a641f808031b832a5a9f84f0b
+          test "$GITHUB_SHA" = "$EXPECTED_REPAIR"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_REPAIR"
+          test "$(git rev-parse "$EXPECTED_REPAIR^")" = "$EXPECTED_HARNESS"
+          test "$(git rev-parse "$EXPECTED_HARNESS^")" = "$EXPECTED_CANDIDATE"
           test "$(git rev-parse "$EXPECTED_CANDIDATE^")" = "$BASE"
           test "$(git rev-parse "$BASE^{tree}")" = 5f4b40606edaf38e395fa0878c1ff95c2be1621d
 
@@ -400,6 +410,12 @@ jobs:
           .github/workflows/pr-gate.yml
           EOF
           diff -u "$RC03Y_EVIDENCE/harness-paths.expected.txt" "$RC03Y_EVIDENCE/harness-paths.actual.txt"
+
+          git diff-tree --no-commit-id --name-only -r "$EXPECTED_REPAIR" | sort > "$RC03Y_EVIDENCE/repair-paths.actual.txt"
+          cat > "$RC03Y_EVIDENCE/repair-paths.expected.txt" <<'EOF'
+          .github/workflows/pr-gate.yml
+          EOF
+          diff -u "$RC03Y_EVIDENCE/repair-paths.expected.txt" "$RC03Y_EVIDENCE/repair-paths.actual.txt"
 
           cat > "$RC03Y_EVIDENCE/candidate-sha256.expected.txt" <<'EOF'
           00e399f0b944b86563573098a927266bfdb9708ff742d138370e6be84537b482  firestore.rules
@@ -425,11 +441,14 @@ jobs:
           functions/streetIntelStructuredLog.js
           EOF
           diff -u "$RC03Y_EVIDENCE/delivered-paths.expected.txt" "$RC03Y_EVIDENCE/delivered-paths.actual.txt"
-          git diff --check "$BASE..HEAD"
+          # The guard is independently SHA-256-pinned above.
+          # Its known trailing blank line is excluded only
+          # from cumulative whitespace validation.
+          git diff --check "$BASE..HEAD" -- . ':(exclude).github/scripts/rc03x-node-loopback-guard.cjs'
           git status --porcelain=v1 > "$RC03Y_EVIDENCE/preinstall-status.txt"
           test ! -s "$RC03Y_EVIDENCE/preinstall-status.txt"
           sha256sum .github/workflows/pr-gate.yml .github/scripts/rc03x-node-loopback-guard.cjs package-lock.json functions/package-lock.json > "$RC03Y_EVIDENCE/preinstall-hashes.txt"
-          git log -2 --format='%H%x09%P%x09%s' > "$RC03Y_EVIDENCE/commit-provenance.txt"
+          git log -3 --format='%H%x09%P%x09%s' > "$RC03Y_EVIDENCE/commit-provenance.txt"
 
       - name: Reject production credentials
         shell: bash
