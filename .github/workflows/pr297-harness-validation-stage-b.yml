@@ -1,0 +1,583 @@
+# PR #297 Stage B validation. OFFLINE PREPARATION. This file is not a commit and must not be merged.
+# Structural reference: historical stage-2 workflow blob sha256 01463081c7f3d0b074cfe0a20c729bcb86d7a470e8ab37d3efca7a090fef4f32.
+# Classifier semantics are the reviewed Stage A classifier for candidate tree 4ee4ad3d, not the obsolete 499d437 stage-2 classifier.
+# Jobs 1-5 are the verified Stage A run 40336914674 attempt 1. This file does not rerun them.
+# This file runs harness jobs 6-20 only. It does not modify the Stage A workflow file.
+# Future commit: parent d3bbbe5d359974f0eca721884bf1432d038eb354, adding only this file.
+# Candidate aa4a57df85a21122d8226c04e927802181caf7ce, tree 4ee4ad3d414bd8bbfcda6dd50d0953ef2d162f2c, parent 84261ef46dd3babd8ac2942e90b448c47dd646fa.
+# Push only to ci-validate/pr297-4ee4ad3-stageb-20261026. Attempt 1. No retry, no rerun, no merge, no deploy.
+# Variant ii. FAULT_OPT_IN_CI=no. This file never sets HANDOFF_FAULT_TESTS.
+# Secret scan on pinned main runs for every push. This file does not disable it and does not start any other workflow.
+# An empty boot-abandoned list is not runtime proof of the R8 timeout path.
+# Action SHAs are the pins carried from the reviewed Stage A workflow and were not re-resolved here.
+name: PR297 harness validation stage B (candidate aa4a57df, jobs 6-20, throwaway, do not merge)
+
+on:
+  push:
+    branches:
+      - 'ci-validate/pr297-4ee4ad3-stageb-20261026'
+
+permissions:
+  contents: read
+  # No contents: write, id-token, packages, or actions: write. Jobs do not raise permissions.
+
+concurrency:
+  group: pr297-validation-stageB-4ee4ad3
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  STAGE: 'B'
+  BASE_SHA: 84261ef46dd3babd8ac2942e90b448c47dd646fa
+  CANDIDATE_SHA: aa4a57df85a21122d8226c04e927802181caf7ce
+  CANDIDATE_TREE: 4ee4ad3d414bd8bbfcda6dd50d0953ef2d162f2c
+  STAGE_A_SHA: d3bbbe5d359974f0eca721884bf1432d038eb354
+  STAGE_A_RUN_ID: '40336914674'
+  STAGE_A_ATTEMPT: '1'
+  STAGE_A_WORKFLOW_FILE: .github/workflows/pr297-harness-validation.yml
+  STAGE_A_WORKFLOW_BLOB: 43e39daf32dbdf66d755733831e9722c296f8133
+  STAGE_A_WORKFLOW_SHA256: a9360a86beb2bc2adeeb216cbfe97eb523ebe8fd5090869e6dc74f091539ccc4
+  STAGE_A_CHROME_READY_MS: '3421,3412,707,4116,3919'
+  STAGE_A_HOOK_MS: '9787,7559,5206,10594,10497'
+  STAGE_A_RELAUNCHES: '0'
+  STAGE_A_TEARDOWN_MAX_MS: '164'
+  FAULT_TEST_VARIANT: ii
+  FAULT_OPT_IN_CI: 'no'
+  EXPECTED_REF: refs/heads/ci-validate/pr297-4ee4ad3-stageb-20261026
+  WORKFLOW_FILE: .github/workflows/pr297-harness-validation-stage-b.yml
+  TEST_FILE: views/street-parking/handoffReachability.regression.test.ts
+  TEST_FILE_BLOB: 90d28c1ef0d114c58a139386559adcc1efffac9a
+  TEST_FILE_SHA256: 5c9612339b6f91e55614c1cfb55cee1445c1879ebf00f0dd530e0ce8139853ba
+  TEARDOWN_TEST_FILE: views/street-parking/handoffHarnessTeardown.regression.test.ts
+  TEARDOWN_TEST_FILE_BLOB: 4246af73d7d0dcf5b2e11bdcce61ac97e763b327
+  TEARDOWN_TEST_FILE_SHA256: ef73de987ad7f20dc708411ef81a683294b89b6ec99c98e6950462ba4517b14d
+  FAULT_TEST_TITLE: 'SIGKILLs and reaps a Chrome that never answers Browser.close within the teardown limit'
+  EXPECTED_TESTS: '5'
+  EXPECTED_JOBS: '6,7,8,9,10,11,12,13,14,15,16,17,18,19,20'
+  SLOW_START_MS: '10000'
+  SLOW_XVFB_MS: '5000'
+  REFERENCE_CHROME_VERSION: 'Google Chrome 155.0.8059.39'
+  P95_TARGET_MS: '10000'
+  MAX_TARGET_MS: '20000'
+  HOOK_MAX_TARGET_MS: '60000'
+  RELAUNCH_MAX: '1'
+  TEARDOWN_LIMIT_MS: '30000'
+  TEARDOWN_WARN_MS: '19000'   # designed worst case of the per-suite bounds (3000 + 3x3000 + 2000 + 5000); above it = TEARDOWN-SLOW
+
+jobs:
+  harness:
+    name: harness ${{ matrix.job }}
+    # GitHub-hosted runner: a fresh, isolated VM per job. Image version cannot be pinned; it is recorded per job.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10   # hard job cap (plan v2 §7); step caps below bound each phase
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        job: [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+    env:
+      JOB: ${{ matrix.job }}
+    steps:
+      - name: Prepare evidence dir
+        run: |
+          OUT="$RUNNER_TEMP/pr297-evidence"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+          mkdir -p "$OUT"
+          date -u +%Y-%m-%dT%H:%M:%S.%3NZ > "$OUT/job-start-utc.txt"
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2 (repo TM-16 pin)
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Guard (push only, exact stage B branch, attempt 1, one file on the Stage A commit, candidate aa4a57df tree 4ee4ad3d)
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          for v in "$BASE_SHA" "$CANDIDATE_SHA" "$CANDIDATE_TREE" "$STAGE_A_SHA" "$STAGE_A_WORKFLOW_BLOB" "$STAGE_A_WORKFLOW_SHA256" "$EXPECTED_REF" "$TEST_FILE_BLOB" "$TEARDOWN_TEST_FILE_BLOB" "$TEST_FILE_SHA256" "$TEARDOWN_TEST_FILE_SHA256" "$STAGE_A_CHROME_READY_MS" "$STAGE_A_HOOK_MS" "$STAGE_A_RUN_ID"; do case "$v" in *__*) echo "::error::G-GUARD template placeholder not filled: $v"; exit 1;; esac; done
+          case "$FAULT_TEST_VARIANT" in ii) ;; *) echo "::error::G-GUARD FAULT_TEST_VARIANT=$FAULT_TEST_VARIANT refused: only ii is approved"; exit 1;; esac
+          case "$FAULT_OPT_IN_CI" in no) ;; *) echo "::error::G-GUARD FAULT_OPT_IN_CI=$FAULT_OPT_IN_CI refused: only 'no' is accepted"; exit 1;; esac
+          test -z "${HANDOFF_FAULT_TESTS+set}" || { echo "::error::G-GUARD HANDOFF_FAULT_TESTS is set: CI fault injection is not authorized"; exit 1; }
+          test "$GITHUB_EVENT_NAME" = "push" || { echo "::error::G-GUARD event=$GITHUB_EVENT_NAME (push only)"; exit 1; }
+          test "$GITHUB_REF" = "$EXPECTED_REF" || { echo "::error::G-GUARD ref=$GITHUB_REF expected $EXPECTED_REF"; exit 1; }
+          test "$GITHUB_REF" != "refs/heads/ci-validate/pr297-4ee4ad3-20261026" || { echo "::error::G-GUARD this file must not run on the Stage A branch"; exit 1; }
+          test "$GITHUB_RUN_ATTEMPT" = "1" || { echo "::error::G-GUARD run_attempt=$GITHUB_RUN_ATTEMPT: reruns are not authorized; this attempt is INVALID"; exit 1; }
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA" || { echo "::error::G-GUARD checked-out HEAD != GITHUB_SHA"; exit 1; }
+          git cat-file -e "${BASE_SHA}^{commit}"
+          git cat-file -e "${CANDIDATE_SHA}^{commit}"
+          git cat-file -e "${STAGE_A_SHA}^{commit}"
+          test "$CANDIDATE_SHA" = "aa4a57df85a21122d8226c04e927802181caf7ce" || { echo "::error::G-GUARD candidate pin mismatch"; exit 1; }
+          test "$STAGE_A_SHA" = "d3bbbe5d359974f0eca721884bf1432d038eb354" || { echo "::error::G-GUARD Stage A commit pin mismatch"; exit 1; }
+          test "$STAGE_A_RUN_ID" = "40336914674" || { echo "::error::G-GUARD Stage A run pin mismatch"; exit 1; }
+          test "$STAGE_A_ATTEMPT" = "1" || { echo "::error::G-GUARD Stage A attempt pin mismatch"; exit 1; }
+          test "$STAGE_A_CHROME_READY_MS" = "3421,3412,707,4116,3919" || { echo "::error::G-GUARD Stage A chrome-ready pin mismatch"; exit 1; }
+          test "$STAGE_A_HOOK_MS" = "9787,7559,5206,10594,10497" || { echo "::error::G-GUARD Stage A hook pin mismatch"; exit 1; }
+          test "$STAGE_A_RELAUNCHES" = "0" || { echo "::error::G-GUARD Stage A relaunch pin mismatch"; exit 1; }
+          test "$STAGE_A_TEARDOWN_MAX_MS" = "164" || { echo "::error::G-GUARD Stage A teardown pin mismatch"; exit 1; }
+          test "$(git rev-list --parents -n 1 HEAD)" = "$(git rev-parse HEAD) $STAGE_A_SHA" || { echo "::error::G-GUARD HEAD must have exactly one parent, the Stage A workflow commit"; exit 1; }
+          test "$(git rev-list --parents -n 1 "$STAGE_A_SHA")" = "$STAGE_A_SHA $CANDIDATE_SHA" || { echo "::error::G-GUARD Stage A commit parent is not the candidate"; exit 1; }
+          test "$(git rev-list --parents -n 1 "$CANDIDATE_SHA")" = "$CANDIDATE_SHA $BASE_SHA" || { echo "::error::G-GUARD candidate parent is not pinned main"; exit 1; }
+          actual_tree="$(git rev-parse "${CANDIDATE_SHA}^{tree}")"
+          case "$actual_tree" in
+            a74bf39efec96b00a7d6861009d3103c60d2bdc2|d3622fc112c6afdbb21493da25df3699137bc3b9)
+              echo "::error::G-GUARD refusing older PR #297 tree $actual_tree"; exit 1;;
+          esac
+          test "$actual_tree" = "$CANDIDATE_TREE" || { echo "::error::G-GUARD candidate tree != $CANDIDATE_TREE"; exit 1; }
+          test "$(git rev-list --count "$BASE_SHA..HEAD")" = "3" || { echo "::error::G-GUARD expected exactly 3 commits on pinned main (candidate, Stage A workflow, Stage B workflow)"; exit 1; }
+          changed="$(git diff --name-only "$BASE_SHA" "$CANDIDATE_SHA" | sort | tr '\n' ' ')"
+          want="$TEARDOWN_TEST_FILE $TEST_FILE "
+          test "$changed" = "$want" || { echo "::error::G-GUARD candidate changes vs pinned main: [$changed] expected: [$want]"; exit 1; }
+          test "$(git diff --name-only "$CANDIDATE_SHA" "$STAGE_A_SHA")" = "$STAGE_A_WORKFLOW_FILE" || { echo "::error::G-GUARD Stage A commit is not workflow-only"; exit 1; }
+          test "$(git rev-parse "$STAGE_A_SHA:$STAGE_A_WORKFLOW_FILE")" = "$STAGE_A_WORKFLOW_BLOB" || { echo "::error::G-GUARD Stage A workflow blob changed"; exit 1; }
+          test "$(git rev-parse "HEAD:$STAGE_A_WORKFLOW_FILE")" = "$STAGE_A_WORKFLOW_BLOB" || { echo "::error::G-GUARD Stage B commit modified the Stage A workflow"; exit 1; }
+          echo "$STAGE_A_WORKFLOW_SHA256  $STAGE_A_WORKFLOW_FILE" | sha256sum -c -
+          changed="$(git diff --name-only "$STAGE_A_SHA" HEAD)"
+          test "$changed" = "$WORKFLOW_FILE" || { echo "::error::G-GUARD changed files vs Stage A commit: $changed"; exit 1; }
+          status="$(git diff --name-status "$STAGE_A_SHA" HEAD | tr '\t' ' ')"
+          test "$status" = "A $WORKFLOW_FILE" || { echo "::error::G-GUARD Stage B commit must add only $WORKFLOW_FILE, got: [$status]"; exit 1; }
+          git diff --quiet "$STAGE_A_SHA" HEAD -- . ":(exclude)$WORKFLOW_FILE" || { echo "::error::G-GUARD source tree differs from the Stage A commit"; exit 1; }
+          test "$(git rev-parse "$CANDIDATE_SHA:$TEST_FILE")" = "$TEST_FILE_BLOB" || { echo "::error::G-GUARD candidate harness blob mismatch"; exit 1; }
+          test "$(git rev-parse "$CANDIDATE_SHA:$TEARDOWN_TEST_FILE")" = "$TEARDOWN_TEST_FILE_BLOB" || { echo "::error::G-GUARD candidate teardown blob mismatch"; exit 1; }
+          test "$(git rev-parse "HEAD:$TEST_FILE")" = "$TEST_FILE_BLOB" || { echo "::error::G-GUARD HEAD harness blob changed"; exit 1; }
+          test "$(git rev-parse "HEAD:$TEARDOWN_TEST_FILE")" = "$TEARDOWN_TEST_FILE_BLOB" || { echo "::error::G-GUARD HEAD teardown blob changed"; exit 1; }
+          echo "$TEST_FILE_SHA256  $TEST_FILE" | sha256sum -c -
+          echo "$TEARDOWN_TEST_FILE_SHA256  $TEARDOWN_TEST_FILE" | sha256sum -c -
+          test -f "$WORKFLOW_FILE" || { echo "::error::G-GUARD Stage B workflow file missing"; exit 1; }
+          echo "CANDIDATE_SHA=$CANDIDATE_SHA" >> "$GITHUB_ENV"
+          { echo "head=$(git rev-parse HEAD)"; echo "stage_a=$STAGE_A_SHA"; echo "candidate=$CANDIDATE_SHA"; echo "candidate_tree=$actual_tree"; echo "base=$BASE_SHA"; echo "stage_a_run=$STAGE_A_RUN_ID"; echo "run_id=$GITHUB_RUN_ID"; echo "run_attempt=$GITHUB_RUN_ATTEMPT"; } > "$OUT/guard.ok"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4 (repo TM-16 pin)
+        with:
+          node-version: 22
+
+      - name: Install root dependencies (npm ci, no scripts beyond the lockfile's)
+        timeout-minutes: 8
+        run: npm ci
+
+      - name: Environment record (runner image from every in-job source, Chrome, Xvfb, Node; probe timing is a covariate only)
+        timeout-minutes: 2
+        run: |
+          set -uo pipefail
+          # In-job image sources. None is assumed authoritative (Juan 19:18 item 1); all are recorded and compared.
+          imagedata_version="$(python3 -c 'import json,re,sys
+          try:
+              d = json.load(open("/imagegeneration/imagedata.json"))
+              g = [x.get("detail", "") for x in d if x.get("group") == "Runner Image"]
+              m = re.search(r"Version: (\S+)", g[0]) if g else None
+              print(m.group(1) if m else "absent")
+          except Exception as e:
+              print("unavailable(" + type(e).__name__ + ")")' 2>&1)"
+          setup_info_file="$(timeout 20 find /home/runner /opt -maxdepth 4 -name .setup_info -not -path '*/work/*' 2>/dev/null | head -n 1 || true)"
+          setup_info_version="unavailable_in_job"
+          if [ -n "$setup_info_file" ]; then
+            setup_info_version="$(python3 -c 'import json,re,sys
+          try:
+              d = json.load(open(sys.argv[1]))
+              g = [x.get("detail", "") for x in d if x.get("group") == "Runner Image"]
+              m = re.search(r"Version: (\S+)", g[0]) if g else None
+              print(m.group(1) if m else "absent")
+          except Exception as e:
+              print("unparseable(" + type(e).__name__ + ")")' "$setup_info_file" 2>&1)"
+          fi
+          # Same single pre-test `google-chrome --version` as stages 1/2 (same position, same command), now also timed.
+          # Diagnostic covariate ONLY: never used to exclude, discount or re-score a launch.
+          probe_t0=$(date +%s%3N)
+          chrome_version="$(timeout 20 google-chrome --version 2>&1 || echo unavailable)"
+          probe_t1=$(date +%s%3N)
+          {
+            echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-}"
+            echo "image_imagedata_json=$imagedata_version"
+            echo "image_setup_info=$setup_info_version file=${setup_info_file:-none}"
+            echo "runner_name=${RUNNER_NAME:-} runner_os=${RUNNER_OS:-} runner_arch=${RUNNER_ARCH:-} runner_environment=${RUNNER_ENVIRONMENT:-}"
+            echo "chrome_version=$chrome_version"
+            echo "chrome_version_probe_ms=$((probe_t1 - probe_t0))"
+            echo "xvfb_path=$(command -v Xvfb || echo missing)"
+            echo "node=$(node --version)"
+            echo "kernel=$(uname -r)"
+          } | tee "$OUT/env.txt"
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then echo "::error::runner is not GitHub-hosted (${RUNNER_ENVIRONMENT:-unset})"; fi
+
+      - name: Pre-run snapshot (processes, listening ports, temp dirs)
+        timeout-minutes: 1
+        run: |
+          set -uo pipefail
+          (pgrep -a -f 'chrome|Xvfb|handoff-(reach|desktop)-' || true) | sort > "$OUT/pre-procs.txt"
+          (ss -Hltnp 2>/dev/null || true) | awk '{print $4}' | sort -u > "$OUT/pre-ports.txt"
+          (find /tmp "${TMPDIR:-/tmp}" -maxdepth 1 -name 'handoff-*' 2>/dev/null || true) | sort -u > "$OUT/pre-tmp.txt"
+          if [ -s "$OUT/pre-procs.txt" ]; then echo "::warning::job $JOB pre-existing chrome/Xvfb/harness-like processes on a fresh runner"; cat "$OUT/pre-procs.txt"; fi
+
+      - name: Run handoff harness file ONCE (no retry, no rerun; teardown regression file not run)
+        timeout-minutes: 6
+        run: |
+          set +e
+          unset HANDOFF_FAULT_TESTS
+          start_ms=$(date +%s%3N)
+          timeout --kill-after=15s 300s npx vitest run "$TEST_FILE" --retry=0 \
+            --reporter=verbose --reporter=json --outputFile.json="$OUT/vitest.json" 2>&1 | tee "$OUT/vitest.log"
+          code=${PIPESTATUS[0]}
+          end_ms=$(date +%s%3N)
+          echo "$code" > "$OUT/vitest.exit"
+          echo "wall_ms=$((end_ms - start_ms))" > "$OUT/vitest.timing"
+          exit 0
+
+      - name: Post-run cleanup observation (leaks are reported, never inferred from runner exit)
+        if: always()
+        timeout-minutes: 1
+        run: |
+          set -uo pipefail
+          (pgrep -a -f 'chrome|Xvfb|handoff-(reach|desktop)-' || true) | sort > "$OUT/post-procs.txt"
+          (ss -Hltnp 2>/dev/null || true) | awk '{print $4}' | sort -u > "$OUT/post-ports.txt"
+          (ss -Hltnp 2>/dev/null || true) > "$OUT/post-ports-detail.txt"
+          (find /tmp "${TMPDIR:-/tmp}" -maxdepth 1 -name 'handoff-*' 2>/dev/null || true) | sort -u > "$OUT/post-tmp.txt"
+          comm -13 "$OUT/pre-ports.txt" "$OUT/post-ports.txt" > "$OUT/new-ports.txt" 2>/dev/null || true
+          comm -13 "$OUT/pre-procs.txt" "$OUT/post-procs.txt" > "$OUT/new-procs.txt" 2>/dev/null || true
+          comm -13 "$OUT/pre-tmp.txt" "$OUT/post-tmp.txt" > "$OUT/new-tmp.txt" 2>/dev/null || true
+          for f in new-procs new-ports new-tmp; do echo "== $f"; cat "$OUT/$f.txt"; done
+
+      - name: Classify (strict; skipped/pending/todo or missing evidence is never PASS)
+        if: always()
+        timeout-minutes: 1
+        run: |
+          python3 - <<'PY'
+          import json, os, re, sys
+          out = os.environ["OUT"]; job = os.environ["JOB"]; stage = os.environ["STAGE"]
+          exp = int(os.environ["EXPECTED_TESTS"]); slow = int(os.environ["SLOW_START_MS"]); slow_x = int(os.environ["SLOW_XVFB_MS"])
+          test_file = os.environ["TEST_FILE"]; chrome_ref = os.environ["REFERENCE_CHROME_VERSION"]
+          td_limit = int(os.environ["TEARDOWN_LIMIT_MS"]); td_warn = int(os.environ["TEARDOWN_WARN_MS"])
+          teardown_warn = []   # Security P2-C2: teardown degradation is never a clean PASS
+          def rd(name, default=""):
+              try:
+                  return open(os.path.join(out, name), errors="replace").read()
+              except OSError:
+                  return default
+          def lines(name):
+              return [l for l in rd(name).splitlines() if l.strip()]
+          reasons, warnings, tags = [], [], []
+          guard_ok = os.path.exists(os.path.join(out, "guard.ok"))
+          log = rd("vitest.log")
+          exit_raw = rd("vitest.exit").strip()
+          code = int(exit_raw) if exit_raw.lstrip("-").isdigit() else None
+          wall = rd("vitest.timing").strip()
+          env = rd("env.txt")
+          try:
+              j = json.loads(rd("vitest.json") or "null") or {}
+          except Exception:
+              j = {}
+          if not guard_ok: reasons.append("INVALID: guard did not pass (G-GUARD)")
+          if code is None: reasons.append("INVALID: harness step did not run or no exit code (I-INFRA)")
+          elif code == 124 or code == 137: reasons.append(f"FAIL: harness run killed by step timeout (exit {code})")
+          elif code != 0: reasons.append(f"FAIL: vitest exit {code}")
+          if not j: reasons.append("INVALID: vitest JSON report missing or unparseable")
+          tot = j.get("numTotalTests"); p = j.get("numPassedTests"); f = j.get("numFailedTests")
+          pend = j.get("numPendingTests"); todo = j.get("numTodoTests"); fsuites = j.get("numFailedTestSuites")
+          files = [r for r in j.get("testResults", []) if str(r.get("name", "")).endswith(test_file)]
+          ar = files[0].get("assertionResults", []) if len(files) == 1 else []
+          statuses = [a.get("status") for a in ar]
+          if j:
+              if len(j.get("testResults", [])) != 1 or len(files) != 1: reasons.append(f"INVALID: expected exactly 1 test file result for {test_file}")
+              if tot != exp or p != exp: reasons.append(f"FAIL: expected exactly {exp} executed+passed, got total={tot} passed={p}")
+              if f != 0: reasons.append(f"FAIL: failed tests={f}")
+              if (pend or 0) != 0 or (todo or 0) != 0 or any(s != "passed" for s in statuses):
+                  reasons.append(f"FAIL: skipped/pending/todo present (pending={pend} todo={todo} statuses={statuses}); Vitest reports a beforeAll failure as skipped")
+                  if code == 0: tags.append("INVALID-SKIP(Chrome/Xvfb missing?)")
+              if fsuites not in (0, None): reasons.append(f"FAIL: failed suites={fsuites}")
+              if files and files[0].get("status") != "passed": reasons.append(f"FAIL: file status={files[0].get('status')}")
+          H = r"\[handoff-harness\] "
+          startup = {s: re.findall(H + s + r": runner image=(.*?) node=(\S+) chrome binary=(\S+) --version: (.*)", log) for s in ("headless", "desktop")}
+          for s, m in startup.items():
+              if len(m) != 1: reasons.append(f"INVALID: {s} suite startup log lines={len(m)} (expected 1)")
+          ups = [(s, int(a), int(ms)) for s, a, ms in re.findall(H + r"(headless|desktop): chrome attempt (\d)/2: devtools up after (\d+)ms", log)]
+          fails = [(s, int(a), r, int(ms)) for s, a, r, ms in re.findall(H + r"(headless|desktop): chrome attempt (\d)/2: FAILED \(([^)]+)\) after (\d+)ms", log)]
+          xv = [(int(d), int(ms)) for d, ms in re.findall(H + r"desktop: xvfb display=:(\d+) ready after (\d+)ms", log)]
+          xv_fail = re.findall(H + r"desktop: xvfb FAILED after (\d+)ms", log)
+          cdp = {s: re.findall(H + s + r": CDP Browser\.getVersion (product=\S+|unavailable.*)", log) for s in ("headless", "desktop")}
+          reaps = re.findall(H + r"(headless|desktop): reap \((afterAll|file afterAll|process exit)\) (.*)", log)
+          backstop = [r for r in reaps if r[1] != "afterAll"]
+          # R5/R9 teardown evidence (candidate log lines). A bound being hit is reported, never hidden; exceeding the limit is FAIL.
+          teardown = [(s, int(ms), int(lim), ex) for s, ms, lim, ex in re.findall(H + r"(headless|desktop): teardown finished in (\d+)ms \(limit (\d+)ms\) chrome exited=(true|false)", log)]
+          close_bound = re.findall(H + r"(headless|desktop): (Browser\.close did not answer within \d+ms|Browser\.close failed[^\n]*)", log)
+          server_bound = re.findall(H + r"(headless|desktop): (fixture server (?:did not close within \d+ms|close failed)[^\n]*)", log)
+          removal = re.findall(H + r"(headless|desktop): (temp dir \S+ removal outcome=\S+[^\n]*)", log)
+          if any("outcome=removed" in msg and "directory left in place" in msg for _, msg in removal):
+              reasons.append("INVALID: a removal line claims outcome=removed and directory left in place")
+          tmp_left = [(s, msg) for s, msg in removal if re.search(r"outcome=(?:failed|timed-out|skipped)\b", msg)]
+          tmp_left += re.findall(H + r"(headless|desktop): (temp dir \S+ (?:not removed|removal failed)[^\n]*)", log)
+          abandoned = re.findall(H + r"(headless|desktop): (boot abandoned after teardown:[^\n]*)", log)
+          for s in ("headless", "desktop"):
+              if len([u for u in ups if u[0] == s]) != 1: reasons.append(f"INVALID: Chrome diagnostics: {s} devtools-up lines={len([u for u in ups if u[0] == s])} (expected 1)")
+              if len(cdp[s]) != 1: reasons.append(f"INVALID: Chrome diagnostics: {s} CDP Browser.getVersion lines={len(cdp[s])}")
+              elif cdp[s][0].startswith("unavailable"): warnings.append(f"{s} CDP Browser.getVersion unavailable")
+              td = [t for t in teardown if t[0] == s]
+              if len(td) != 1: reasons.append(f"INVALID: teardown diagnostics: {s} 'teardown finished' lines={len(td)} (expected 1)")
+          for s, ms, lim, ex in teardown:
+              if lim != td_limit: reasons.append(f"INVALID: {s} teardown limit {lim}ms != reviewed {td_limit}ms (limit changed)")
+              if ms >= td_limit: reasons.append(f"FAIL(T-TEARDOWN): {s} teardown {ms}ms >= {td_limit}ms")
+              elif ms > td_warn: teardown_warn.append(f"TEARDOWN-SLOW: {s} teardown {ms}ms > designed worst case {td_warn}ms")
+              if ex != "true": teardown_warn.append(f"TEARDOWN-CHROME-NOT-EXITED: {s} chrome exited={ex} at end of afterAll (post-run leak check decides FAIL)")
+          for s, msg in close_bound: teardown_warn.append(f"R5-BOUND-HIT: {s}: {msg}")
+          for s, msg in server_bound: teardown_warn.append(f"SERVER-CLOSE-BOUND-HIT: {s}: {msg}")
+          for s, msg in tmp_left: teardown_warn.append(f"R10-TEMP-LEFT: {s}: {msg}")
+          warnings.extend(teardown_warn)
+          if len(xv) != 1: reasons.append(f"INVALID: Xvfb diagnostics: ready lines={len(xv)} (expected 1)")
+          if xv_fail: reasons.append(f"FAIL: Xvfb FAILED lines={len(xv_fail)}")
+          if "Hook timed out" in log: reasons.append("FAIL: hook timeout")
+          if "Chrome DevTools did not start" in log: reasons.append("FAIL: Chrome DevTools did not start")
+          if backstop: reasons.append(f"FAIL(T-TEARDOWN): backstop reap lines {backstop}")
+          if re.search(r"did not render", log): tags.append("K-FIXTURE")
+          slow_starts = []
+          for s, a, ms in ups:
+              if a >= 2: warnings.append(f"SECOND-ATTEMPT: {s} needed chrome attempt {a}/2 (2nd launch attempt)")
+              if ms > slow:
+                  slow_starts.append((s, a, ms))
+                  warnings.append(f"SLOW-START: {s} devtools up after {ms}ms on attempt {a} (> {slow}ms)")
+          for s, a, r, ms in fails: warnings.append(f"CHROME-ATTEMPT-FAILED: {s} chrome attempt {a}/2 FAILED ({r}) after {ms}ms")
+          for d, ms in xv:
+              if ms > slow_x: warnings.append(f"xvfb slow: ready after {ms}ms (> {slow_x}ms)")
+          def grab(pat):
+              m = re.search(pat, env)
+              return m.group(1).strip() if m else ""
+          image_os = grab(r"ImageOS=(\S*)")
+          image_env = grab(r"ImageVersion=(\S*)")
+          image_imagedata = grab(r"image_imagedata_json=(\S*)")
+          image_setup_info = grab(r"image_setup_info=(\S*)")
+          chrome_v = grab(r"chrome_version=(.*)")
+          probe_raw = grab(r"chrome_version_probe_ms=(\d+)")
+          probe_ms = int(probe_raw) if probe_raw else None
+          if not image_env: reasons.append("INVALID: runner image version (in-job ImageVersion) not recorded")
+          if not chrome_v or "unavailable" in chrome_v: reasons.append("INVALID: Chrome version not recorded")
+          if probe_ms is None: warnings.append("covariate: chrome_version_probe_ms not recorded")
+          if "github-hosted" not in env: reasons.append("INVALID: runner not confirmed GitHub-hosted")
+          image_values = {"env_ImageVersion": image_env, "imagedata_json": image_imagedata, "setup_info": image_setup_info}
+          comparable = {k: v for k, v in image_values.items() if re.fullmatch(r"\d{8}\.\d+\.\d+", v or "")}
+          image_mismatch = len(set(comparable.values())) > 1
+          if image_mismatch: warnings.append(f"IMAGE-MISMATCH (in-job sources disagree; none assumed authoritative): {comparable}")
+          if image_setup_info in ("unavailable_in_job", "absent"): tags.append("SETUP-HEADER-RELEASE-SIDE (compare with the 'Set up job' header in the job log)")
+          if any(re.match(r"\d{8}\.339\.", v) for v in comparable.values()): warnings.append(f"IMAGE-339: runner image {comparable} is a 339.x build (flag per plan v2 §5)")
+          if chrome_v and chrome_v != chrome_ref: warnings.append(f"CHROME-DRIFT: {chrome_v!r} differs from reference {chrome_ref!r}")
+          new_procs, new_ports, new_tmp = lines("new-procs.txt"), lines("new-ports.txt"), lines("new-tmp.txt")
+          post_ok = os.path.exists(os.path.join(out, "post-procs.txt"))
+          if not post_ok: reasons.append("INVALID: post-run cleanup observation missing")
+          if new_procs: reasons.append(f"FAIL(LEAK): chrome/Xvfb/harness processes alive after run: {new_procs}")
+          detail = lines("post-ports-detail.txt")
+          for port in new_ports:
+              owner = " ".join(l for l in detail if port in l.split())
+              if re.search(r"chrome|Xvfb|node|vitest", owner):
+                  reasons.append(f"FAIL(LEAK): harness-attributable listening port after run: {port} {owner}")
+              else:
+                  warnings.append(f"cleanup observation: unattributed new listening port after run: {port} {owner}")
+          if new_tmp: warnings.append(f"cleanup observation: harness temp dirs left after run: {new_tmp} (recorded; not a Stage A stop)")
+          file_ms = None; hook_ms = None
+          if files:
+              st, en = files[0].get("startTime"), files[0].get("endTime")
+              if isinstance(st, (int, float)) and isinstance(en, (int, float)): file_ms = int(en - st)
+              tsum = sum(int(a.get("duration") or 0) for a in ar)
+              if file_ms is not None: hook_ms = file_ms - tsum
+          ready = {s: next((ms for ss, a, ms in ups if ss == s), None) for s in ("headless", "desktop")}
+          ready_incl_failed = {s: (ready[s] + sum(ms for ss, a, r, ms in fails if ss == s)) if ready[s] is not None else None for s in ("headless", "desktop")}
+          chrome_ready_ms = max(v for v in ready.values()) if all(v is not None for v in ready.values()) else None
+          relaunch = any(a >= 2 for _, a, _ in ups) or bool(fails)
+          fatal = [r for r in reasons if r.startswith("FAIL")]
+          invalid = [r for r in reasons if r.startswith("INVALID")]
+          if fatal: cls = "FAIL"
+          elif invalid: cls = "INVALID"
+          elif teardown_warn: cls = "PASS-TEARDOWN-WARN"   # product assertions passed; teardown degraded -> counted by the gate, never clean
+          elif relaunch: cls = "PASS-RELAUNCH"
+          else: cls = "PASS"
+          for w in warnings: print(f"::warning title=PR297 job {job}::{w}")
+          for r in reasons: print(f"::error title=PR297 job {job}::{r}")
+          row = dict(stage=stage, job=job, cls=cls, reasons=reasons, warnings=warnings, tags=tags, exit=code, wall=wall,
+                     total=tot, passed=p, failed=f, pending=pend, todo=todo, statuses=statuses,
+                     image_os=image_os, image_version=image_env, image_sources=image_values, image_mismatch_in_job=image_mismatch,
+                     image_setup_header="Release-side: parse 'Set up job' > 'Runner Image' > 'Version:' from this job's log",
+                     chrome=chrome_v, chrome_version_probe_ms=probe_ms, startup={k: len(v) for k, v in startup.items()}, devtools_up=ups, chrome_failed=fails,
+                     ready_ms=ready, ready_ms_incl_failed_attempts=ready_incl_failed, chrome_ready_ms=chrome_ready_ms,
+                     relaunch=relaunch, slow_starts=slow_starts, xvfb=xv,
+                     cdp={k: v for k, v in cdp.items()}, reaps=reaps, backstop=backstop, file_ms_json_window=file_ms, derived_hook_ms=hook_ms,
+                     teardown=teardown, teardown_warnings=teardown_warn, close_bound_hits=close_bound, server_bound_hits=server_bound, temp_dirs_left_logged=tmp_left,
+                     removal_outcomes=removal, boot_abandoned=abandoned, candidate_tree=os.environ["CANDIDATE_TREE"], base=os.environ["BASE_SHA"], candidate=os.environ.get("CANDIDATE_SHA", ""),
+                     cleanup=dict(new_procs=new_procs, new_ports=new_ports, new_tmp=new_tmp,
+                                  note="Runner termination is NOT evidence of cleanup; only the observations above are."))
+          json.dump(row, open(os.path.join(out, "classify.json"), "w"), indent=2)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+              s.write(f"## PR297 stage {stage}, job {job}: **{cls}**\n\n")
+              s.write(f"- image sources (none assumed authoritative): {image_values}; mismatch in-job: {image_mismatch}; Chrome: {chrome_v}; pre-test --version probe: {probe_ms} ms (covariate only)\n")
+              s.write(f"- Chrome-ready ms (first success): {ready} -> job max {chrome_ready_ms}; incl. failed attempts: {ready_incl_failed}; relaunch: {relaunch}\n")
+              s.write(f"- vitest exit={code}; {wall}; file_ms={file_ms}; derived_hook_ms={hook_ms}; total/passed/failed/pending/todo = {tot}/{p}/{f}/{pend}/{todo}\n")
+              s.write(f"- startup logs: {row['startup']}; devtools up: {ups}; chrome FAILED attempts: {fails}; xvfb: {xv}\n")
+              s.write(f"- teardown: {teardown}; Browser.close bound hits: {close_bound or 'none'}; server bound hits: {server_bound or 'none'}; temp dirs left (logged): {tmp_left or 'none'}\n")
+              s.write(f"- removal outcomes: {removal or 'none'}; boot abandoned: {abandoned or 'none'}\n")
+              s.write(f"- reaps: {reaps}\n- cleanup: new procs={new_procs or 'none'}; new listening ports={new_ports or 'none'}; leftover temp dirs={new_tmp or 'none'} (runner termination != cleanup verified)\n")
+              s.write(f"- warnings: {warnings or 'none'}\n- reasons: {reasons or 'none'}\n- tags: {tags or 'none'}\n\n")
+          print(json.dumps(row))
+          sys.exit(0 if cls in ("PASS", "PASS-RELAUNCH", "PASS-TEARDOWN-WARN") else 1)
+          PY
+
+      - name: Upload evidence (logs, JSON, classification, snapshots)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (repo TM-16 pin)
+        with:
+          name: pr297-stageB-4ee4ad3-job-${{ matrix.job }}
+          path: ${{ runner.temp }}/pr297-evidence/
+          if-no-files-found: warn
+          retention-days: 30
+
+  stageB-gate:
+    name: stage B gate (15 fresh jobs plus the five verified Stage A results)
+    needs: harness
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Download this run's stage-B classifications (same run only)
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0 (same-run download, no token input)
+        with:
+          pattern: pr297-stageB-4ee4ad3-job-*
+          path: ${{ runner.temp }}/sB
+
+      - name: Gate (official nearest-rank p95 is rank 19 of the 20 Chrome-ready values)
+        env:
+          HARNESS_RESULT: ${{ needs.harness.result }}
+          SB_DIR: ${{ runner.temp }}/sB
+        run: |
+          set -uo pipefail
+          python3 - <<'PY'
+          import glob, json, math, os, sys
+          def nr_p95(xs):
+              xs = sorted(xs)
+              return xs[math.ceil(0.95 * len(xs)) - 1] if xs else None
+          ints = lambda k: [int(x) for x in os.environ[k].split(",") if x.strip()]
+          expected = ints("EXPECTED_JOBS")
+          p95_t, max_t, hook_t, rel_t, td_t = (int(os.environ[k]) for k in ("P95_TARGET_MS", "MAX_TARGET_MS", "HOOK_MAX_TARGET_MS", "RELAUNCH_MAX", "TEARDOWN_LIMIT_MS"))
+          slow = int(os.environ["SLOW_START_MS"])
+          problems = []
+          if os.environ["STAGE_A_RUN_ID"] != "40336914674" or os.environ["STAGE_A_ATTEMPT"] != "1":
+              problems.append("INVALID: Stage A run/attempt pin is not 40336914674 attempt 1")
+          if os.environ["STAGE_A_SHA"] != "d3bbbe5d359974f0eca721884bf1432d038eb354":
+              problems.append("INVALID: Stage A commit pin mismatch")
+          if os.environ["CANDIDATE_SHA"] != "aa4a57df85a21122d8226c04e927802181caf7ce":
+              problems.append("INVALID: candidate pin mismatch")
+          if os.environ["CANDIDATE_TREE"] != "4ee4ad3d414bd8bbfcda6dd50d0953ef2d162f2c":
+              problems.append("INVALID: candidate tree pin mismatch")
+          if os.environ["BASE_SHA"] != "84261ef46dd3babd8ac2942e90b448c47dd646fa":
+              problems.append("INVALID: pinned main mismatch")
+          sA = ints("STAGE_A_CHROME_READY_MS")
+          sA_hook = ints("STAGE_A_HOOK_MS")
+          if sA != [3421, 3412, 707, 4116, 3919]:
+              problems.append("INVALID: Stage A Chrome-ready values are not the verified 3421,3412,707,4116,3919")
+          if sA_hook != [9787, 7559, 5206, 10594, 10497]:
+              problems.append("INVALID: Stage A hook values are not the verified five")
+          if int(os.environ["STAGE_A_RELAUNCHES"]) != 0:
+              problems.append("INVALID: Stage A relaunch pin is not 0")
+          if int(os.environ["STAGE_A_TEARDOWN_MAX_MS"]) != 164:
+              problems.append("INVALID: Stage A teardown max pin is not 164")
+          rows = {}
+          for pth in glob.glob(os.path.join(os.environ["SB_DIR"], "pr297-stageB-4ee4ad3-job-*", "classify.json")):
+              try:
+                  r = json.load(open(pth)); rows[int(r["job"])] = r
+              except Exception as e:
+                  print(f"::warning::unreadable {pth}: {e}")
+          if os.environ["HARNESS_RESULT"] != "success":
+              problems.append(f"harness matrix result={os.environ['HARNESS_RESULT']} (a job is FAIL, INVALID, cancelled or timed out)")
+          missing = [j for j in expected if j not in rows]
+          extra = [j for j in rows if j not in expected]
+          if missing: problems.append(f"INVALID: classification missing for jobs {missing}")
+          if extra: problems.append(f"INVALID: unexpected job ids {extra}")
+          if any(j < 6 or j > 20 for j in rows):
+              problems.append("INVALID: Stage B contains a job outside 6-20")
+          for j, r in sorted(rows.items()):
+              if r.get("candidate") != os.environ["CANDIDATE_SHA"]:
+                  problems.append(f"INVALID: job {j} candidate={r.get('candidate')}")
+              if r.get("candidate_tree") != os.environ["CANDIDATE_TREE"]:
+                  problems.append(f"INVALID: job {j} candidate_tree={r.get('candidate_tree')}")
+              if r.get("base") != os.environ["BASE_SHA"]:
+                  problems.append(f"INVALID: job {j} base={r.get('base')}")
+              if len(r.get("teardown") or []) != 2:
+                  problems.append(f"INVALID: job {j} teardown records={len(r.get('teardown') or [])}")
+          bad = {j: r["cls"] for j, r in rows.items() if r.get("cls") not in ("PASS", "PASS-RELAUNCH", "PASS-TEARDOWN-WARN")}
+          if bad: problems.append(f"non-pass classes: {bad}")
+          fixture = {j: r.get("tags") for j, r in rows.items() if any("K-FIXTURE" in str(t) for t in (r.get("tags") or []))}
+          if fixture: problems.append(f"fixture-render evidence is not waived: {fixture}")
+          sB = [rows[j]["chrome_ready_ms"] for j in expected if j in rows and isinstance(rows[j].get("chrome_ready_ms"), int)]
+          if len(sB) != 15: problems.append(f"INVALID: Chrome-ready ms present for {len(sB)}/15 Stage B jobs")
+          sB_hook = [r["derived_hook_ms"] for j, r in sorted(rows.items()) if isinstance(r.get("derived_hook_ms"), int)]
+          if len(sB_hook) != len(rows): problems.append("INVALID: a Stage B job is missing derived_hook_ms")
+          all_ready = sA + sB
+          if len(all_ready) != 20: problems.append(f"INVALID: combined Chrome-ready count {len(all_ready)} != 20")
+          comb_p95 = nr_p95(all_ready) if len(all_ready) == 20 else None
+          comb_max = max(all_ready) if all_ready else None
+          over = sum(1 for x in all_ready if x > slow)
+          if comb_p95 is not None and comb_p95 > p95_t: problems.append(f"combined nearest-rank p95 {comb_p95}ms > {p95_t}ms (rank 19 of 20)")
+          if comb_max is not None and comb_max > max_t: problems.append(f"combined max {comb_max}ms > {max_t}ms")
+          if over >= 2: problems.append(f"{over} of 20 Chrome-ready values > {slow}ms")
+          rel = int(os.environ["STAGE_A_RELAUNCHES"]) + sum(1 for r in rows.values() if r.get("relaunch"))
+          if rel > rel_t: problems.append(f"relaunches {rel} of 20 > {rel_t}")
+          hooks = sA_hook + sB_hook
+          hook_max = max(hooks) if hooks else None
+          if hook_max is not None and hook_max > hook_t: problems.append(f"derived hook max {hook_max}ms > {hook_t}ms")
+          td = [t[1] for r in rows.values() for t in (r.get("teardown") or []) if isinstance(t, list) and len(t) > 1 and isinstance(t[1], int)]
+          td_max = max([int(os.environ["STAGE_A_TEARDOWN_MAX_MS"])] + td) if td else None
+          if td_max is None or td_max >= td_t: problems.append(f"teardown max {td_max}ms is not < {td_t}ms")
+          tw = {j: [w for w in (r.get("teardown_warnings") or []) if not str(w).startswith("R10-TEMP-LEFT")] for j, r in sorted(rows.items())}
+          tw = {j: v for j, v in tw.items() if v}
+          if tw: problems.append(f"blocking teardown warnings (limit 0): {tw}")
+          r10 = {j: [w for w in (r.get("teardown_warnings") or []) if str(w).startswith("R10-TEMP-LEFT")] for j, r in sorted(rows.items())}
+          r10 = {j: v for j, v in r10.items() if v}
+          removals = {j: r.get("removal_outcomes") or [] for j, r in sorted(rows.items())}
+          abandoned = {j: r.get("boot_abandoned") or [] for j, r in sorted(rows.items()) if r.get("boot_abandoned")}
+          empty_removal = [j for j, v in removals.items() if not v]
+          if empty_removal: print(f"::warning title=PR297 stage B::jobs with no removal-outcome lines: {empty_removal}")
+          only15 = nr_p95(sB) if len(sB) == 15 else None
+          if only15 is not None and only15 > p95_t:
+              print(f"::warning title=PR297 stage B::15-job nearest-rank p95 {only15}ms is supplementary and is not the official 20-job gate")
+          summary = dict(
+              stageB_jobs=sorted(rows),
+              stageA_chrome_ready_ms=sA,
+              stageB_chrome_ready_ms=sB,
+              combined_n=len(all_ready),
+              combined_p95_rank19=comb_p95,
+              combined_max=comb_max,
+              jobs_over_10s=over,
+              relaunches=rel,
+              hook_max=hook_max,
+              teardown_max=td_max,
+              teardown_warnings_blocking=tw,
+              r10_temp_dirs_logged=r10,
+              removal_outcomes=removals,
+              boot_abandoned=abandoned,
+              fixture_tags=fixture,
+              problems=problems,
+              definition="Official p95 is nearest-rank over the 20 job Chrome-ready values: five pinned Stage A values from run 40336914674 attempt 1, then fifteen fresh Stage B values. Rank 19 of 20. The 15-job p95 is not the official gate.",
+              r8_note="An empty boot_abandoned list means no boot hit the timeout path. It is not runtime proof that the R8 race is closed.",
+          )
+          os.makedirs(os.environ["RUNNER_TEMP"] + "/gate", exist_ok=True)
+          json.dump(summary, open(os.environ["RUNNER_TEMP"] + "/gate/gate-summary.json", "w"), indent=2)
+          print(json.dumps(summary, indent=2))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
+              fh.write(f"## PR297 stage B gate (candidate {os.environ['CANDIDATE_SHA']}, Stage A {os.environ['STAGE_A_SHA']})\n\n")
+              fh.write(f"- Stage A run {os.environ['STAGE_A_RUN_ID']} attempt {os.environ['STAGE_A_ATTEMPT']} Chrome-ready ms: {sA}\n")
+              fh.write(f"- Stage B Chrome-ready ms: {sB}\n")
+              fh.write(f"- combined N={len(all_ready)}: nearest-rank p95 (rank 19)={comb_p95} ms, max={comb_max} ms, values >10 s={over}, relaunches={rel}, hook max={hook_max} ms, teardown max={td_max} ms\n")
+              fh.write(f"- blocking teardown warnings: {tw or 'none'}; R10 leftovers recorded, not a stop: {r10 or 'none'}\n")
+              fh.write(f"- removal outcomes recorded: {removals or 'none'}\n")
+              fh.write(f"- boot abandoned: {abandoned or 'none'}. An empty list is not R8 timeout-path proof.\n")
+              fh.write(f"- fixture tags: {fixture or 'none'}\n")
+              fh.write(f"- problems: {problems or 'none'}\n\n")
+              fh.write("This gate does not start another workflow, rerun Stage A, or merge.\n")
+          if problems:
+              for pr in problems: print(f"::error title=PR297 stage B::STOP: {pr}. No rerun and no merge.")
+              sys.exit(1)
+          print("Combined 20-job figures are within the Stage B gate. This workflow does not merge and does not start another stage.")
+          PY
+
+      - name: Upload gate summary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (repo TM-16 pin)
+        with:
+          name: pr297-stageB-4ee4ad3-gate
+          path: ${{ runner.temp }}/gate/
+          if-no-files-found: warn
+          retention-days: 30
