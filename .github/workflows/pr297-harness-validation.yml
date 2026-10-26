@@ -1,0 +1,649 @@
+# PR #297 Stage A validation. OFFLINE PREPARATION. This file is not a commit and must not be merged.
+# Prepared 2026-10-26 from the reviewed Stage A workflow (blob sha256 0d372957d758bf5f6c91ea3740ec36f4e28ab67b5c5db5501d8607ccb413b435).
+# The candidate commit is not created here. When created, it must have exactly one parent,
+# pinned main 84261ef46dd3babd8ac2942e90b448c47dd646fa, and tree 4ee4ad3d414bd8bbfcda6dd50d0953ef2d162f2c.
+# The workflow commit must have that candidate as its only parent and must add only this file.
+# This file rejects older PR #297 trees a74bf39efec96b00a7d6861009d3103c60d2bdc2 and d3622fc112c6afdbb21493da25df3699137bc3b9.
+# Scope: exactly 5 harness jobs (matrix jobs 1-5, harness file ONLY) + 1 teardown-regression job on its own VM + gate.
+# Variant ii only. FAULT_OPT_IN_CI=no. This file never sets HANDOFF_FAULT_TESTS. Fault injection cannot start.
+# Push only, exact branch, attempt 1. No retry, no rerun, no Stage B, no deploy, no Firebase/GCP, no secrets.
+# R8 and R10 are corrected in the candidate code. This run records runtime evidence and does not waive them.
+# Stage A reports the five-job nearest-rank p95. It does not reject on the 20-job p95 <= 10000 ms rule.
+# Action SHAs are the pins from the reviewed Stage A file and were not re-resolved in this offline preparation.
+# In every variant the harness jobs run ONLY the harness file (exactly 5 tests); the teardown regression file runs
+# in its own job on its own VM after the harness jobs, so it cannot compete for CPU with the latency measurement.
+name: PR297 harness validation stage A (corrected tree 4ee4ad3d, throwaway, do not merge)
+
+on:
+  push:
+    branches:
+      - 'ci-validate/pr297-4ee4ad3-20261026'
+
+permissions:
+  contents: read
+  # No contents: write, id-token, packages, or actions: write. Jobs do not raise permissions.
+
+concurrency:
+  group: pr297-validation-stageA-4ee4ad3
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  STAGE: 'A'
+  BASE_SHA: 84261ef46dd3babd8ac2942e90b448c47dd646fa
+  CANDIDATE_TREE: 4ee4ad3d414bd8bbfcda6dd50d0953ef2d162f2c
+  FAULT_TEST_VARIANT: ii               # i = fault-path test runs in CI; ii = opt-in env var (CI skips it); iii = file not in the commit
+  FAULT_OPT_IN_CI: 'no'                # 'no' is the ONLY accepted value: both guards refuse anything else
+  EXPECTED_REF: refs/heads/ci-validate/pr297-4ee4ad3-20261026
+  WORKFLOW_FILE: .github/workflows/pr297-harness-validation.yml
+  TEST_FILE: views/street-parking/handoffReachability.regression.test.ts
+  TEST_FILE_BLOB: 90d28c1ef0d114c58a139386559adcc1efffac9a
+  TEST_FILE_SHA256: 5c9612339b6f91e55614c1cfb55cee1445c1879ebf00f0dd530e0ce8139853ba
+  TEARDOWN_TEST_FILE: views/street-parking/handoffHarnessTeardown.regression.test.ts
+  TEARDOWN_TEST_FILE_BLOB: 4246af73d7d0dcf5b2e11bdcce61ac97e763b327
+  TEARDOWN_TEST_FILE_SHA256: ef73de987ad7f20dc708411ef81a683294b89b6ec99c98e6950462ba4517b14d
+  FAULT_TEST_TITLE: 'SIGKILLs and reaps a Chrome that never answers Browser.close within the teardown limit'
+  EXPECTED_TESTS: '5'
+  EXPECTED_JOBS: '1,2,3,4,5'
+  SLOW_START_MS: '10000'
+  SLOW_XVFB_MS: '5000'
+  REFERENCE_CHROME_VERSION: 'Google Chrome 155.0.8059.39'
+  P95_TARGET_MS: '10000'
+  MAX_TARGET_MS: '20000'
+  HOOK_MAX_TARGET_MS: '60000'
+  RELAUNCH_MAX: '1'
+  TEARDOWN_LIMIT_MS: '30000'
+  TEARDOWN_WARN_MS: '19000'   # designed worst case of the per-suite bounds (3000 + 3x3000 + 2000 + 5000); above it = TEARDOWN-SLOW
+
+jobs:
+  harness:
+    name: harness ${{ matrix.job }}
+    # GitHub-hosted runner: a fresh, isolated VM per job. Image version cannot be pinned; it is recorded per job.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10   # hard job cap (plan v2 §7); step caps below bound each phase
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        job: [1, 2, 3, 4, 5]
+    env:
+      JOB: ${{ matrix.job }}
+    steps:
+      - name: Prepare evidence dir
+        run: |
+          OUT="$RUNNER_TEMP/pr297-evidence"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+          mkdir -p "$OUT"
+          date -u +%Y-%m-%dT%H:%M:%S.%3NZ > "$OUT/job-start-utc.txt"
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2 (repo TM-16 pin)
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Guard (push only, exact branch, attempt 1, workflow-only child, candidate parent is pinned main, tree is 4ee4ad3d)
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          for v in "$BASE_SHA" "$EXPECTED_REF" "$CANDIDATE_TREE" "$FAULT_TEST_VARIANT" "$TEST_FILE_SHA256" "$TEARDOWN_TEST_FILE_SHA256" "$TEST_FILE_BLOB" "$TEARDOWN_TEST_FILE_BLOB"; do case "$v" in *__*) echo "::error::G-GUARD template placeholder not filled: $v"; exit 1;; esac; done
+          case "$FAULT_TEST_VARIANT" in i|ii|iii) ;; *) echo "::error::G-GUARD FAULT_TEST_VARIANT=$FAULT_TEST_VARIANT (i|ii|iii)"; exit 1;; esac
+          case "$FAULT_TEST_VARIANT" in ii) ;; *) echo "::error::G-GUARD FAULT_TEST_VARIANT=$FAULT_TEST_VARIANT refused: only ii is approved (Security A1-C1)"; exit 1;; esac
+          case "$FAULT_OPT_IN_CI" in no) ;; *) echo "::error::G-GUARD FAULT_OPT_IN_CI=$FAULT_OPT_IN_CI refused: only 'no' is accepted; 'yes' is not authorized"; exit 1;; esac
+          test -z "${HANDOFF_FAULT_TESTS+set}" || { echo "::error::G-GUARD HANDOFF_FAULT_TESTS is set in the job environment: CI fault injection is not authorized (Security A1-C1)"; exit 1; }
+          test "$GITHUB_EVENT_NAME" = "push" || { echo "::error::G-GUARD event=$GITHUB_EVENT_NAME (push only)"; exit 1; }
+          test "$GITHUB_REF" = "$EXPECTED_REF" || { echo "::error::G-GUARD ref=$GITHUB_REF expected $EXPECTED_REF"; exit 1; }
+          test "$GITHUB_RUN_ATTEMPT" = "1" || { echo "::error::G-GUARD run_attempt=$GITHUB_RUN_ATTEMPT: reruns are not authorized; this attempt is INVALID"; exit 1; }
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA" || { echo "::error::G-GUARD checked-out HEAD != GITHUB_SHA"; exit 1; }
+          git cat-file -e "${BASE_SHA}^{commit}"
+          CANDIDATE_SHA="$(git rev-parse 'HEAD^')"
+          test "$(git rev-list --parents -n 1 HEAD)" = "$(git rev-parse HEAD) $CANDIDATE_SHA" || { echo "::error::G-GUARD HEAD must have exactly one parent, the candidate commit"; exit 1; }
+          test "$(git rev-list --parents -n 1 "$CANDIDATE_SHA")" = "$CANDIDATE_SHA $BASE_SHA" || { echo "::error::G-GUARD candidate parent is not pinned main $BASE_SHA"; exit 1; }
+          actual_tree="$(git rev-parse "${CANDIDATE_SHA}^{tree}")"
+          case "$actual_tree" in
+            a74bf39efec96b00a7d6861009d3103c60d2bdc2|d3622fc112c6afdbb21493da25df3699137bc3b9)
+              echo "::error::G-GUARD refusing older PR #297 tree $actual_tree"; exit 1;;
+          esac
+          test "$actual_tree" = "$CANDIDATE_TREE" || { echo "::error::G-GUARD candidate tree != reviewed tree $CANDIDATE_TREE"; exit 1; }
+          test "$(git rev-list --count "$BASE_SHA..HEAD")" = "2" || { echo "::error::G-GUARD expected exactly 2 commits on top of pinned main (candidate + stage A workflow)"; exit 1; }
+          changed="$(git diff --name-only "$BASE_SHA" "$CANDIDATE_SHA" | sort | tr '\n' ' ')"
+          want="$TEARDOWN_TEST_FILE $TEST_FILE "
+          test "$changed" = "$want" || { echo "::error::G-GUARD candidate changes vs pinned main: [$changed] expected: [$want]"; exit 1; }
+          ! git cat-file -e "$CANDIDATE_SHA:$WORKFLOW_FILE" 2>/dev/null || { echo "::error::G-GUARD candidate already contains $WORKFLOW_FILE"; exit 1; }
+          changed="$(git diff --name-only "$CANDIDATE_SHA" HEAD)"
+          test "$changed" = "$WORKFLOW_FILE" || { echo "::error::G-GUARD changed files vs candidate: $changed"; exit 1; }
+          status="$(git diff --name-status "$CANDIDATE_SHA" HEAD | tr '\t' ' ')"
+          test "$status" = "A $WORKFLOW_FILE" || { echo "::error::G-GUARD workflow commit must add only $WORKFLOW_FILE, got: [$status]"; exit 1; }
+          git diff --quiet "$CANDIDATE_SHA" HEAD -- . ":(exclude)$WORKFLOW_FILE" || { echo "::error::G-GUARD source tree differs from candidate"; exit 1; }
+          test "$(git rev-parse "$CANDIDATE_SHA:$TEST_FILE")" = "$TEST_FILE_BLOB" || { echo "::error::G-GUARD candidate harness blob != $TEST_FILE_BLOB"; exit 1; }
+          test "$(git rev-parse "$CANDIDATE_SHA:$TEARDOWN_TEST_FILE")" = "$TEARDOWN_TEST_FILE_BLOB" || { echo "::error::G-GUARD candidate teardown blob != $TEARDOWN_TEST_FILE_BLOB"; exit 1; }
+          test "$(git rev-parse "HEAD:$TEST_FILE")" = "$TEST_FILE_BLOB" || { echo "::error::G-GUARD HEAD harness blob differs from the candidate"; exit 1; }
+          test "$(git rev-parse "HEAD:$TEARDOWN_TEST_FILE")" = "$TEARDOWN_TEST_FILE_BLOB" || { echo "::error::G-GUARD HEAD teardown blob differs from the candidate"; exit 1; }
+          echo "$TEST_FILE_SHA256  $TEST_FILE" | sha256sum -c -
+          echo "$TEARDOWN_TEST_FILE_SHA256  $TEARDOWN_TEST_FILE" | sha256sum -c -
+          test -f "$WORKFLOW_FILE" || { echo "::error::G-GUARD workflow file missing at HEAD"; exit 1; }
+          echo "CANDIDATE_SHA=$CANDIDATE_SHA" >> "$GITHUB_ENV"
+          { echo "head=$(git rev-parse HEAD)"; echo "candidate=$CANDIDATE_SHA"; echo "candidate_tree=$actual_tree"; echo "base=$BASE_SHA"; echo "run_id=$GITHUB_RUN_ID"; echo "run_attempt=$GITHUB_RUN_ATTEMPT"; } > "$OUT/guard.ok"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4 (repo TM-16 pin)
+        with:
+          node-version: 22
+
+      - name: Install root dependencies (npm ci, no scripts beyond the lockfile's)
+        timeout-minutes: 8
+        run: npm ci
+
+      - name: Environment record (runner image from every in-job source, Chrome, Xvfb, Node; probe timing is a covariate only)
+        timeout-minutes: 2
+        run: |
+          set -uo pipefail
+          # In-job image sources. None is assumed authoritative (Juan 19:18 item 1); all are recorded and compared.
+          imagedata_version="$(python3 -c 'import json,re,sys
+          try:
+              d = json.load(open("/imagegeneration/imagedata.json"))
+              g = [x.get("detail", "") for x in d if x.get("group") == "Runner Image"]
+              m = re.search(r"Version: (\S+)", g[0]) if g else None
+              print(m.group(1) if m else "absent")
+          except Exception as e:
+              print("unavailable(" + type(e).__name__ + ")")' 2>&1)"
+          setup_info_file="$(timeout 20 find /home/runner /opt -maxdepth 4 -name .setup_info -not -path '*/work/*' 2>/dev/null | head -n 1 || true)"
+          setup_info_version="unavailable_in_job"
+          if [ -n "$setup_info_file" ]; then
+            setup_info_version="$(python3 -c 'import json,re,sys
+          try:
+              d = json.load(open(sys.argv[1]))
+              g = [x.get("detail", "") for x in d if x.get("group") == "Runner Image"]
+              m = re.search(r"Version: (\S+)", g[0]) if g else None
+              print(m.group(1) if m else "absent")
+          except Exception as e:
+              print("unparseable(" + type(e).__name__ + ")")' "$setup_info_file" 2>&1)"
+          fi
+          # Same single pre-test `google-chrome --version` as stages 1/2 (same position, same command), now also timed.
+          # Diagnostic covariate ONLY: never used to exclude, discount or re-score a launch.
+          probe_t0=$(date +%s%3N)
+          chrome_version="$(timeout 20 google-chrome --version 2>&1 || echo unavailable)"
+          probe_t1=$(date +%s%3N)
+          {
+            echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-}"
+            echo "image_imagedata_json=$imagedata_version"
+            echo "image_setup_info=$setup_info_version file=${setup_info_file:-none}"
+            echo "runner_name=${RUNNER_NAME:-} runner_os=${RUNNER_OS:-} runner_arch=${RUNNER_ARCH:-} runner_environment=${RUNNER_ENVIRONMENT:-}"
+            echo "chrome_version=$chrome_version"
+            echo "chrome_version_probe_ms=$((probe_t1 - probe_t0))"
+            echo "xvfb_path=$(command -v Xvfb || echo missing)"
+            echo "node=$(node --version)"
+            echo "kernel=$(uname -r)"
+          } | tee "$OUT/env.txt"
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then echo "::error::runner is not GitHub-hosted (${RUNNER_ENVIRONMENT:-unset})"; fi
+
+      - name: Pre-run snapshot (processes, listening ports, temp dirs)
+        timeout-minutes: 1
+        run: |
+          set -uo pipefail
+          (pgrep -a -f 'chrome|Xvfb|handoff-(reach|desktop)-' || true) | sort > "$OUT/pre-procs.txt"
+          (ss -Hltnp 2>/dev/null || true) | awk '{print $4}' | sort -u > "$OUT/pre-ports.txt"
+          (find /tmp "${TMPDIR:-/tmp}" -maxdepth 1 -name 'handoff-*' 2>/dev/null || true) | sort -u > "$OUT/pre-tmp.txt"
+          if [ -s "$OUT/pre-procs.txt" ]; then echo "::warning::job $JOB pre-existing chrome/Xvfb/harness-like processes on a fresh runner"; cat "$OUT/pre-procs.txt"; fi
+
+      - name: Run handoff harness file ONCE (no retry, no rerun; teardown regression file not run)
+        timeout-minutes: 6
+        run: |
+          set +e
+          unset HANDOFF_FAULT_TESTS
+          start_ms=$(date +%s%3N)
+          timeout --kill-after=15s 300s npx vitest run "$TEST_FILE" --retry=0 \
+            --reporter=verbose --reporter=json --outputFile.json="$OUT/vitest.json" 2>&1 | tee "$OUT/vitest.log"
+          code=${PIPESTATUS[0]}
+          end_ms=$(date +%s%3N)
+          echo "$code" > "$OUT/vitest.exit"
+          echo "wall_ms=$((end_ms - start_ms))" > "$OUT/vitest.timing"
+          exit 0
+
+      - name: Post-run cleanup observation (leaks are reported, never inferred from runner exit)
+        if: always()
+        timeout-minutes: 1
+        run: |
+          set -uo pipefail
+          (pgrep -a -f 'chrome|Xvfb|handoff-(reach|desktop)-' || true) | sort > "$OUT/post-procs.txt"
+          (ss -Hltnp 2>/dev/null || true) | awk '{print $4}' | sort -u > "$OUT/post-ports.txt"
+          (ss -Hltnp 2>/dev/null || true) > "$OUT/post-ports-detail.txt"
+          (find /tmp "${TMPDIR:-/tmp}" -maxdepth 1 -name 'handoff-*' 2>/dev/null || true) | sort -u > "$OUT/post-tmp.txt"
+          comm -13 "$OUT/pre-ports.txt" "$OUT/post-ports.txt" > "$OUT/new-ports.txt" 2>/dev/null || true
+          comm -13 "$OUT/pre-procs.txt" "$OUT/post-procs.txt" > "$OUT/new-procs.txt" 2>/dev/null || true
+          comm -13 "$OUT/pre-tmp.txt" "$OUT/post-tmp.txt" > "$OUT/new-tmp.txt" 2>/dev/null || true
+          for f in new-procs new-ports new-tmp; do echo "== $f"; cat "$OUT/$f.txt"; done
+
+      - name: Classify (strict; skipped/pending/todo or missing evidence is never PASS)
+        if: always()
+        timeout-minutes: 1
+        run: |
+          python3 - <<'PY'
+          import json, os, re, sys
+          out = os.environ["OUT"]; job = os.environ["JOB"]; stage = os.environ["STAGE"]
+          exp = int(os.environ["EXPECTED_TESTS"]); slow = int(os.environ["SLOW_START_MS"]); slow_x = int(os.environ["SLOW_XVFB_MS"])
+          test_file = os.environ["TEST_FILE"]; chrome_ref = os.environ["REFERENCE_CHROME_VERSION"]
+          td_limit = int(os.environ["TEARDOWN_LIMIT_MS"]); td_warn = int(os.environ["TEARDOWN_WARN_MS"])
+          teardown_warn = []   # Security P2-C2: teardown degradation is never a clean PASS
+          def rd(name, default=""):
+              try:
+                  return open(os.path.join(out, name), errors="replace").read()
+              except OSError:
+                  return default
+          def lines(name):
+              return [l for l in rd(name).splitlines() if l.strip()]
+          reasons, warnings, tags = [], [], []
+          guard_ok = os.path.exists(os.path.join(out, "guard.ok"))
+          log = rd("vitest.log")
+          exit_raw = rd("vitest.exit").strip()
+          code = int(exit_raw) if exit_raw.lstrip("-").isdigit() else None
+          wall = rd("vitest.timing").strip()
+          env = rd("env.txt")
+          try:
+              j = json.loads(rd("vitest.json") or "null") or {}
+          except Exception:
+              j = {}
+          if not guard_ok: reasons.append("INVALID: guard did not pass (G-GUARD)")
+          if code is None: reasons.append("INVALID: harness step did not run or no exit code (I-INFRA)")
+          elif code == 124 or code == 137: reasons.append(f"FAIL: harness run killed by step timeout (exit {code})")
+          elif code != 0: reasons.append(f"FAIL: vitest exit {code}")
+          if not j: reasons.append("INVALID: vitest JSON report missing or unparseable")
+          tot = j.get("numTotalTests"); p = j.get("numPassedTests"); f = j.get("numFailedTests")
+          pend = j.get("numPendingTests"); todo = j.get("numTodoTests"); fsuites = j.get("numFailedTestSuites")
+          files = [r for r in j.get("testResults", []) if str(r.get("name", "")).endswith(test_file)]
+          ar = files[0].get("assertionResults", []) if len(files) == 1 else []
+          statuses = [a.get("status") for a in ar]
+          if j:
+              if len(j.get("testResults", [])) != 1 or len(files) != 1: reasons.append(f"INVALID: expected exactly 1 test file result for {test_file}")
+              if tot != exp or p != exp: reasons.append(f"FAIL: expected exactly {exp} executed+passed, got total={tot} passed={p}")
+              if f != 0: reasons.append(f"FAIL: failed tests={f}")
+              if (pend or 0) != 0 or (todo or 0) != 0 or any(s != "passed" for s in statuses):
+                  reasons.append(f"FAIL: skipped/pending/todo present (pending={pend} todo={todo} statuses={statuses}); Vitest reports a beforeAll failure as skipped")
+                  if code == 0: tags.append("INVALID-SKIP(Chrome/Xvfb missing?)")
+              if fsuites not in (0, None): reasons.append(f"FAIL: failed suites={fsuites}")
+              if files and files[0].get("status") != "passed": reasons.append(f"FAIL: file status={files[0].get('status')}")
+          H = r"\[handoff-harness\] "
+          startup = {s: re.findall(H + s + r": runner image=(.*?) node=(\S+) chrome binary=(\S+) --version: (.*)", log) for s in ("headless", "desktop")}
+          for s, m in startup.items():
+              if len(m) != 1: reasons.append(f"INVALID: {s} suite startup log lines={len(m)} (expected 1)")
+          ups = [(s, int(a), int(ms)) for s, a, ms in re.findall(H + r"(headless|desktop): chrome attempt (\d)/2: devtools up after (\d+)ms", log)]
+          fails = [(s, int(a), r, int(ms)) for s, a, r, ms in re.findall(H + r"(headless|desktop): chrome attempt (\d)/2: FAILED \(([^)]+)\) after (\d+)ms", log)]
+          xv = [(int(d), int(ms)) for d, ms in re.findall(H + r"desktop: xvfb display=:(\d+) ready after (\d+)ms", log)]
+          xv_fail = re.findall(H + r"desktop: xvfb FAILED after (\d+)ms", log)
+          cdp = {s: re.findall(H + s + r": CDP Browser\.getVersion (product=\S+|unavailable.*)", log) for s in ("headless", "desktop")}
+          reaps = re.findall(H + r"(headless|desktop): reap \((afterAll|file afterAll|process exit)\) (.*)", log)
+          backstop = [r for r in reaps if r[1] != "afterAll"]
+          # R5/R9 teardown evidence (candidate log lines). A bound being hit is reported, never hidden; exceeding the limit is FAIL.
+          teardown = [(s, int(ms), int(lim), ex) for s, ms, lim, ex in re.findall(H + r"(headless|desktop): teardown finished in (\d+)ms \(limit (\d+)ms\) chrome exited=(true|false)", log)]
+          close_bound = re.findall(H + r"(headless|desktop): (Browser\.close did not answer within \d+ms|Browser\.close failed[^\n]*)", log)
+          server_bound = re.findall(H + r"(headless|desktop): (fixture server (?:did not close within \d+ms|close failed)[^\n]*)", log)
+          removal = re.findall(H + r"(headless|desktop): (temp dir \S+ removal outcome=\S+[^\n]*)", log)
+          if any("outcome=removed" in msg and "directory left in place" in msg for _, msg in removal):
+              reasons.append("INVALID: a removal line claims outcome=removed and directory left in place")
+          tmp_left = [(s, msg) for s, msg in removal if re.search(r"outcome=(?:failed|timed-out|skipped)\b", msg)]
+          tmp_left += re.findall(H + r"(headless|desktop): (temp dir \S+ (?:not removed|removal failed)[^\n]*)", log)
+          abandoned = re.findall(H + r"(headless|desktop): (boot abandoned after teardown:[^\n]*)", log)
+          for s in ("headless", "desktop"):
+              if len([u for u in ups if u[0] == s]) != 1: reasons.append(f"INVALID: Chrome diagnostics: {s} devtools-up lines={len([u for u in ups if u[0] == s])} (expected 1)")
+              if len(cdp[s]) != 1: reasons.append(f"INVALID: Chrome diagnostics: {s} CDP Browser.getVersion lines={len(cdp[s])}")
+              elif cdp[s][0].startswith("unavailable"): warnings.append(f"{s} CDP Browser.getVersion unavailable")
+              td = [t for t in teardown if t[0] == s]
+              if len(td) != 1: reasons.append(f"INVALID: teardown diagnostics: {s} 'teardown finished' lines={len(td)} (expected 1)")
+          for s, ms, lim, ex in teardown:
+              if lim != td_limit: reasons.append(f"INVALID: {s} teardown limit {lim}ms != reviewed {td_limit}ms (limit changed)")
+              if ms >= td_limit: reasons.append(f"FAIL(T-TEARDOWN): {s} teardown {ms}ms >= {td_limit}ms")
+              elif ms > td_warn: teardown_warn.append(f"TEARDOWN-SLOW: {s} teardown {ms}ms > designed worst case {td_warn}ms")
+              if ex != "true": teardown_warn.append(f"TEARDOWN-CHROME-NOT-EXITED: {s} chrome exited={ex} at end of afterAll (post-run leak check decides FAIL)")
+          for s, msg in close_bound: teardown_warn.append(f"R5-BOUND-HIT: {s}: {msg}")
+          for s, msg in server_bound: teardown_warn.append(f"SERVER-CLOSE-BOUND-HIT: {s}: {msg}")
+          for s, msg in tmp_left: teardown_warn.append(f"R10-TEMP-LEFT: {s}: {msg}")
+          warnings.extend(teardown_warn)
+          if len(xv) != 1: reasons.append(f"INVALID: Xvfb diagnostics: ready lines={len(xv)} (expected 1)")
+          if xv_fail: reasons.append(f"FAIL: Xvfb FAILED lines={len(xv_fail)}")
+          if "Hook timed out" in log: reasons.append("FAIL: hook timeout")
+          if "Chrome DevTools did not start" in log: reasons.append("FAIL: Chrome DevTools did not start")
+          if backstop: reasons.append(f"FAIL(T-TEARDOWN): backstop reap lines {backstop}")
+          if re.search(r"did not render", log): tags.append("K-FIXTURE")
+          slow_starts = []
+          for s, a, ms in ups:
+              if a >= 2: warnings.append(f"SECOND-ATTEMPT: {s} needed chrome attempt {a}/2 (2nd launch attempt)")
+              if ms > slow:
+                  slow_starts.append((s, a, ms))
+                  warnings.append(f"SLOW-START: {s} devtools up after {ms}ms on attempt {a} (> {slow}ms)")
+          for s, a, r, ms in fails: warnings.append(f"CHROME-ATTEMPT-FAILED: {s} chrome attempt {a}/2 FAILED ({r}) after {ms}ms")
+          for d, ms in xv:
+              if ms > slow_x: warnings.append(f"xvfb slow: ready after {ms}ms (> {slow_x}ms)")
+          def grab(pat):
+              m = re.search(pat, env)
+              return m.group(1).strip() if m else ""
+          image_os = grab(r"ImageOS=(\S*)")
+          image_env = grab(r"ImageVersion=(\S*)")
+          image_imagedata = grab(r"image_imagedata_json=(\S*)")
+          image_setup_info = grab(r"image_setup_info=(\S*)")
+          chrome_v = grab(r"chrome_version=(.*)")
+          probe_raw = grab(r"chrome_version_probe_ms=(\d+)")
+          probe_ms = int(probe_raw) if probe_raw else None
+          if not image_env: reasons.append("INVALID: runner image version (in-job ImageVersion) not recorded")
+          if not chrome_v or "unavailable" in chrome_v: reasons.append("INVALID: Chrome version not recorded")
+          if probe_ms is None: warnings.append("covariate: chrome_version_probe_ms not recorded")
+          if "github-hosted" not in env: reasons.append("INVALID: runner not confirmed GitHub-hosted")
+          image_values = {"env_ImageVersion": image_env, "imagedata_json": image_imagedata, "setup_info": image_setup_info}
+          comparable = {k: v for k, v in image_values.items() if re.fullmatch(r"\d{8}\.\d+\.\d+", v or "")}
+          image_mismatch = len(set(comparable.values())) > 1
+          if image_mismatch: warnings.append(f"IMAGE-MISMATCH (in-job sources disagree; none assumed authoritative): {comparable}")
+          if image_setup_info in ("unavailable_in_job", "absent"): tags.append("SETUP-HEADER-RELEASE-SIDE (compare with the 'Set up job' header in the job log)")
+          if any(re.match(r"\d{8}\.339\.", v) for v in comparable.values()): warnings.append(f"IMAGE-339: runner image {comparable} is a 339.x build (flag per plan v2 §5)")
+          if chrome_v and chrome_v != chrome_ref: warnings.append(f"CHROME-DRIFT: {chrome_v!r} differs from reference {chrome_ref!r}")
+          new_procs, new_ports, new_tmp = lines("new-procs.txt"), lines("new-ports.txt"), lines("new-tmp.txt")
+          post_ok = os.path.exists(os.path.join(out, "post-procs.txt"))
+          if not post_ok: reasons.append("INVALID: post-run cleanup observation missing")
+          if new_procs: reasons.append(f"FAIL(LEAK): chrome/Xvfb/harness processes alive after run: {new_procs}")
+          detail = lines("post-ports-detail.txt")
+          for port in new_ports:
+              owner = " ".join(l for l in detail if port in l.split())
+              if re.search(r"chrome|Xvfb|node|vitest", owner):
+                  reasons.append(f"FAIL(LEAK): harness-attributable listening port after run: {port} {owner}")
+              else:
+                  warnings.append(f"cleanup observation: unattributed new listening port after run: {port} {owner}")
+          if new_tmp: warnings.append(f"cleanup observation: harness temp dirs left after run: {new_tmp} (recorded; not a Stage A stop)")
+          file_ms = None; hook_ms = None
+          if files:
+              st, en = files[0].get("startTime"), files[0].get("endTime")
+              if isinstance(st, (int, float)) and isinstance(en, (int, float)): file_ms = int(en - st)
+              tsum = sum(int(a.get("duration") or 0) for a in ar)
+              if file_ms is not None: hook_ms = file_ms - tsum
+          ready = {s: next((ms for ss, a, ms in ups if ss == s), None) for s in ("headless", "desktop")}
+          ready_incl_failed = {s: (ready[s] + sum(ms for ss, a, r, ms in fails if ss == s)) if ready[s] is not None else None for s in ("headless", "desktop")}
+          chrome_ready_ms = max(v for v in ready.values()) if all(v is not None for v in ready.values()) else None
+          relaunch = any(a >= 2 for _, a, _ in ups) or bool(fails)
+          fatal = [r for r in reasons if r.startswith("FAIL")]
+          invalid = [r for r in reasons if r.startswith("INVALID")]
+          if fatal: cls = "FAIL"
+          elif invalid: cls = "INVALID"
+          elif teardown_warn: cls = "PASS-TEARDOWN-WARN"   # product assertions passed; teardown degraded -> counted by the gate, never clean
+          elif relaunch: cls = "PASS-RELAUNCH"
+          else: cls = "PASS"
+          for w in warnings: print(f"::warning title=PR297 job {job}::{w}")
+          for r in reasons: print(f"::error title=PR297 job {job}::{r}")
+          row = dict(stage=stage, job=job, cls=cls, reasons=reasons, warnings=warnings, tags=tags, exit=code, wall=wall,
+                     total=tot, passed=p, failed=f, pending=pend, todo=todo, statuses=statuses,
+                     image_os=image_os, image_version=image_env, image_sources=image_values, image_mismatch_in_job=image_mismatch,
+                     image_setup_header="Release-side: parse 'Set up job' > 'Runner Image' > 'Version:' from this job's log",
+                     chrome=chrome_v, chrome_version_probe_ms=probe_ms, startup={k: len(v) for k, v in startup.items()}, devtools_up=ups, chrome_failed=fails,
+                     ready_ms=ready, ready_ms_incl_failed_attempts=ready_incl_failed, chrome_ready_ms=chrome_ready_ms,
+                     relaunch=relaunch, slow_starts=slow_starts, xvfb=xv,
+                     cdp={k: v for k, v in cdp.items()}, reaps=reaps, backstop=backstop, file_ms_json_window=file_ms, derived_hook_ms=hook_ms,
+                     teardown=teardown, teardown_warnings=teardown_warn, close_bound_hits=close_bound, server_bound_hits=server_bound, temp_dirs_left_logged=tmp_left,
+                     removal_outcomes=removal, boot_abandoned=abandoned, candidate_tree=os.environ["CANDIDATE_TREE"], base=os.environ["BASE_SHA"], candidate=os.environ.get("CANDIDATE_SHA", ""),
+                     cleanup=dict(new_procs=new_procs, new_ports=new_ports, new_tmp=new_tmp,
+                                  note="Runner termination is NOT evidence of cleanup; only the observations above are."))
+          json.dump(row, open(os.path.join(out, "classify.json"), "w"), indent=2)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+              s.write(f"## PR297 stage {stage}, job {job}: **{cls}**\n\n")
+              s.write(f"- image sources (none assumed authoritative): {image_values}; mismatch in-job: {image_mismatch}; Chrome: {chrome_v}; pre-test --version probe: {probe_ms} ms (covariate only)\n")
+              s.write(f"- Chrome-ready ms (first success): {ready} -> job max {chrome_ready_ms}; incl. failed attempts: {ready_incl_failed}; relaunch: {relaunch}\n")
+              s.write(f"- vitest exit={code}; {wall}; file_ms={file_ms}; derived_hook_ms={hook_ms}; total/passed/failed/pending/todo = {tot}/{p}/{f}/{pend}/{todo}\n")
+              s.write(f"- startup logs: {row['startup']}; devtools up: {ups}; chrome FAILED attempts: {fails}; xvfb: {xv}\n")
+              s.write(f"- teardown: {teardown}; Browser.close bound hits: {close_bound or 'none'}; server bound hits: {server_bound or 'none'}; temp dirs left (logged): {tmp_left or 'none'}\n")
+              s.write(f"- removal outcomes: {removal or 'none'}; boot abandoned: {abandoned or 'none'}\n")
+              s.write(f"- reaps: {reaps}\n- cleanup: new procs={new_procs or 'none'}; new listening ports={new_ports or 'none'}; leftover temp dirs={new_tmp or 'none'} (runner termination != cleanup verified)\n")
+              s.write(f"- warnings: {warnings or 'none'}\n- reasons: {reasons or 'none'}\n- tags: {tags or 'none'}\n\n")
+          print(json.dumps(row))
+          sys.exit(0 if cls in ("PASS", "PASS-RELAUNCH", "PASS-TEARDOWN-WARN") else 1)
+          PY
+
+      - name: Upload evidence (logs, JSON, classification, snapshots)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (repo TM-16 pin)
+        with:
+          name: pr297-stageA-4ee4ad3-job-${{ matrix.job }}
+          path: ${{ runner.temp }}/pr297-evidence/
+          if-no-files-found: warn
+          retention-days: 30
+
+  teardown-regression:
+    name: teardown regression file (own VM, after harness jobs; variant-dependent)
+    # Runs only after every harness job has finished, on a separate VM, so the fault-path test can never compete for CPU
+    # with the latency-sensitive harness measurement (Security P3-6). Its result is reported separately from Chrome-ready figures.
+    needs: harness
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Prepare evidence dir
+        run: |
+          OUT="$RUNNER_TEMP/pr297-teardown"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+          mkdir -p "$OUT"
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2 (repo TM-16 pin)
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Guard (push only, exact branch, attempt 1, workflow-only child, candidate parent is pinned main, tree is 4ee4ad3d)
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          for v in "$BASE_SHA" "$EXPECTED_REF" "$CANDIDATE_TREE" "$FAULT_TEST_VARIANT" "$TEST_FILE_SHA256" "$TEARDOWN_TEST_FILE_SHA256" "$TEST_FILE_BLOB" "$TEARDOWN_TEST_FILE_BLOB"; do case "$v" in *__*) echo "::error::G-GUARD template placeholder not filled: $v"; exit 1;; esac; done
+          case "$FAULT_TEST_VARIANT" in i|ii|iii) ;; *) echo "::error::G-GUARD FAULT_TEST_VARIANT=$FAULT_TEST_VARIANT (i|ii|iii)"; exit 1;; esac
+          case "$FAULT_TEST_VARIANT" in ii) ;; *) echo "::error::G-GUARD FAULT_TEST_VARIANT=$FAULT_TEST_VARIANT refused: only ii is approved (Security A1-C1)"; exit 1;; esac
+          case "$FAULT_OPT_IN_CI" in no) ;; *) echo "::error::G-GUARD FAULT_OPT_IN_CI=$FAULT_OPT_IN_CI refused: only 'no' is accepted; 'yes' is not authorized"; exit 1;; esac
+          test -z "${HANDOFF_FAULT_TESTS+set}" || { echo "::error::G-GUARD HANDOFF_FAULT_TESTS is set in the job environment: CI fault injection is not authorized (Security A1-C1)"; exit 1; }
+          test "$GITHUB_EVENT_NAME" = "push" || { echo "::error::G-GUARD event=$GITHUB_EVENT_NAME (push only)"; exit 1; }
+          test "$GITHUB_REF" = "$EXPECTED_REF" || { echo "::error::G-GUARD ref=$GITHUB_REF expected $EXPECTED_REF"; exit 1; }
+          test "$GITHUB_RUN_ATTEMPT" = "1" || { echo "::error::G-GUARD run_attempt=$GITHUB_RUN_ATTEMPT: reruns are not authorized; this attempt is INVALID"; exit 1; }
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA" || { echo "::error::G-GUARD checked-out HEAD != GITHUB_SHA"; exit 1; }
+          git cat-file -e "${BASE_SHA}^{commit}"
+          CANDIDATE_SHA="$(git rev-parse 'HEAD^')"
+          test "$(git rev-list --parents -n 1 HEAD)" = "$(git rev-parse HEAD) $CANDIDATE_SHA" || { echo "::error::G-GUARD HEAD must have exactly one parent, the candidate commit"; exit 1; }
+          test "$(git rev-list --parents -n 1 "$CANDIDATE_SHA")" = "$CANDIDATE_SHA $BASE_SHA" || { echo "::error::G-GUARD candidate parent is not pinned main $BASE_SHA"; exit 1; }
+          actual_tree="$(git rev-parse "${CANDIDATE_SHA}^{tree}")"
+          case "$actual_tree" in
+            a74bf39efec96b00a7d6861009d3103c60d2bdc2|d3622fc112c6afdbb21493da25df3699137bc3b9)
+              echo "::error::G-GUARD refusing older PR #297 tree $actual_tree"; exit 1;;
+          esac
+          test "$actual_tree" = "$CANDIDATE_TREE" || { echo "::error::G-GUARD candidate tree != reviewed tree $CANDIDATE_TREE"; exit 1; }
+          test "$(git rev-list --count "$BASE_SHA..HEAD")" = "2" || { echo "::error::G-GUARD expected exactly 2 commits on top of pinned main (candidate + stage A workflow)"; exit 1; }
+          changed="$(git diff --name-only "$BASE_SHA" "$CANDIDATE_SHA" | sort | tr '\n' ' ')"
+          want="$TEARDOWN_TEST_FILE $TEST_FILE "
+          test "$changed" = "$want" || { echo "::error::G-GUARD candidate changes vs pinned main: [$changed] expected: [$want]"; exit 1; }
+          ! git cat-file -e "$CANDIDATE_SHA:$WORKFLOW_FILE" 2>/dev/null || { echo "::error::G-GUARD candidate already contains $WORKFLOW_FILE"; exit 1; }
+          changed="$(git diff --name-only "$CANDIDATE_SHA" HEAD)"
+          test "$changed" = "$WORKFLOW_FILE" || { echo "::error::G-GUARD changed files vs candidate: $changed"; exit 1; }
+          status="$(git diff --name-status "$CANDIDATE_SHA" HEAD | tr '\t' ' ')"
+          test "$status" = "A $WORKFLOW_FILE" || { echo "::error::G-GUARD workflow commit must add only $WORKFLOW_FILE, got: [$status]"; exit 1; }
+          git diff --quiet "$CANDIDATE_SHA" HEAD -- . ":(exclude)$WORKFLOW_FILE" || { echo "::error::G-GUARD source tree differs from candidate"; exit 1; }
+          test "$(git rev-parse "$CANDIDATE_SHA:$TEST_FILE")" = "$TEST_FILE_BLOB" || { echo "::error::G-GUARD candidate harness blob != $TEST_FILE_BLOB"; exit 1; }
+          test "$(git rev-parse "$CANDIDATE_SHA:$TEARDOWN_TEST_FILE")" = "$TEARDOWN_TEST_FILE_BLOB" || { echo "::error::G-GUARD candidate teardown blob != $TEARDOWN_TEST_FILE_BLOB"; exit 1; }
+          test "$(git rev-parse "HEAD:$TEST_FILE")" = "$TEST_FILE_BLOB" || { echo "::error::G-GUARD HEAD harness blob differs from the candidate"; exit 1; }
+          test "$(git rev-parse "HEAD:$TEARDOWN_TEST_FILE")" = "$TEARDOWN_TEST_FILE_BLOB" || { echo "::error::G-GUARD HEAD teardown blob differs from the candidate"; exit 1; }
+          echo "$TEST_FILE_SHA256  $TEST_FILE" | sha256sum -c -
+          echo "$TEARDOWN_TEST_FILE_SHA256  $TEARDOWN_TEST_FILE" | sha256sum -c -
+          test -f "$WORKFLOW_FILE" || { echo "::error::G-GUARD workflow file missing at HEAD"; exit 1; }
+          echo "CANDIDATE_SHA=$CANDIDATE_SHA" >> "$GITHUB_ENV"
+          { echo "head=$(git rev-parse HEAD)"; echo "candidate=$CANDIDATE_SHA"; echo "candidate_tree=$actual_tree"; echo "base=$BASE_SHA"; echo "run_id=$GITHUB_RUN_ID"; echo "run_attempt=$GITHUB_RUN_ATTEMPT"; } > "$OUT/guard.ok"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4 (repo TM-16 pin)
+        if: success() && env.FAULT_TEST_VARIANT == 'ii' && env.FAULT_OPT_IN_CI == 'no'
+        with:
+          node-version: 22
+
+      - name: Install root dependencies
+        if: success() && env.FAULT_TEST_VARIANT == 'ii' && env.FAULT_OPT_IN_CI == 'no'
+        timeout-minutes: 8
+        run: npm ci
+
+      - name: Run teardown regression file ONCE (variant ii, fault-path test stays skipped)
+        if: success() && env.FAULT_TEST_VARIANT == 'ii' && env.FAULT_OPT_IN_CI == 'no'
+        timeout-minutes: 6
+        run: |
+          set +e
+          unset HANDOFF_FAULT_TESTS
+          echo "fault-path test: opt-in absent (expected skip)" | tee "$OUT/mode.txt"
+          timeout --kill-after=15s 300s npx vitest run "$TEARDOWN_TEST_FILE" --retry=0 \
+            --reporter=verbose --reporter=json --outputFile.json="$OUT/vitest.json" 2>&1 | tee "$OUT/vitest.log"
+          echo "${PIPESTATUS[0]}" > "$OUT/vitest.exit"
+          exit 0
+
+      - name: Classify (exact per-variant counts; the only skip ever allowed is the named fault-path test in variant ii without opt-in)
+        if: always()
+        timeout-minutes: 1
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          out = os.environ["OUT"]; v = os.environ["FAULT_TEST_VARIANT"]; optin = os.environ["FAULT_OPT_IN_CI"]
+          title = os.environ["FAULT_TEST_TITLE"]; tf = os.environ["TEARDOWN_TEST_FILE"]
+          reasons = []
+          if not os.path.exists(os.path.join(out, "guard.ok")): reasons.append("INVALID: guard did not pass")
+          if v == "iii":
+              row = dict(variant=v, cls="NOT-APPLICABLE" if not reasons else "INVALID", reasons=reasons)
+          else:
+              enabled = v == "i" or optin == "yes"
+              try:
+                  j = json.load(open(os.path.join(out, "vitest.json")))
+              except Exception:
+                  j = {}
+              code = open(os.path.join(out, "vitest.exit")).read().strip() if os.path.exists(os.path.join(out, "vitest.exit")) else None
+              files = [r for r in j.get("testResults", []) if str(r.get("name", "")).endswith(tf)]
+              ar = files[0].get("assertionResults", []) if len(files) == 1 else []
+              st = {a.get("title"): a.get("status") for a in ar}
+              if code != "0": reasons.append(f"FAIL: vitest exit {code}")
+              if len(j.get("testResults", [])) != 1 or len(files) != 1: reasons.append("INVALID: expected exactly 1 test file result")
+              if len(ar) != 2: reasons.append(f"FAIL: expected exactly 2 tests, got {len(ar)}")
+              if enabled:
+                  if any(x != "passed" for x in st.values()): reasons.append(f"FAIL: expected 2 passed, 0 skipped: {st}")
+              else:
+                  others = {t: x for t, x in st.items() if t != title}
+                  if st.get(title) not in ("skipped", "pending"): reasons.append(f"FAIL: fault-path test should be skipped without opt-in, got {st.get(title)}")
+                  if len(others) != 1 or any(x != "passed" for x in others.values()): reasons.append(f"FAIL: static test must pass: {others}")
+              row = dict(variant=v, opt_in=optin, fault_path_enabled=enabled, statuses=st, exit=code,
+                         cls="FAIL" if any(r.startswith("FAIL") for r in reasons) else ("INVALID" if reasons else ("PASS" if enabled else "PASS-STATIC-ONLY")), reasons=reasons)
+          json.dump(row, open(os.path.join(out, "classify.json"), "w"), indent=2)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+              s.write(f"## PR297 teardown regression file (variant {v}): **{row['cls']}**\n\n- {row}\n")
+          print(json.dumps(row))
+          sys.exit(0 if row["cls"] in ("PASS", "PASS-STATIC-ONLY", "NOT-APPLICABLE") else 1)
+          PY
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (repo TM-16 pin)
+        with:
+          name: pr297-stageA-4ee4ad3-teardown-regression
+          path: ${{ runner.temp }}/pr297-teardown/
+          if-no-files-found: warn
+          retention-days: 30
+
+  stageA-gate:
+    name: stage A gate (5 jobs, fresh evidence only; expansion decision is Juan's)
+    needs: [harness, teardown-regression]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Download this run's stage-A classifications (same run only)
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0 (same-run download, no token input)
+        with:
+          pattern: pr297-stageA-4ee4ad3-job-*
+          path: ${{ runner.temp }}/sA
+
+      - name: Gate (fresh 5 only), expansion criteria and deferred-gap record
+        env:
+          HARNESS_RESULT: ${{ needs.harness.result }}
+          TEARDOWN_JOB_RESULT: ${{ needs.teardown-regression.result }}
+          SA_DIR: ${{ runner.temp }}/sA
+        run: |
+          set -uo pipefail
+          python3 - <<'PY'
+          import glob, json, math, os, re, sys
+          def nr_p95(xs):
+              # nearest-rank: sort ascending, take the value at rank ceil(0.95 * N) (1-based); for N=5 this is the max
+              xs = sorted(xs)
+              return xs[math.ceil(0.95 * len(xs)) - 1] if xs else None
+          ints = lambda k: [int(x) for x in os.environ[k].split(",") if x.strip()]
+          expected = ints("EXPECTED_JOBS")
+          p95_t, max_t, hook_t, rel_t, td_t = (int(os.environ[k]) for k in ("P95_TARGET_MS", "MAX_TARGET_MS", "HOOK_MAX_TARGET_MS", "RELAUNCH_MAX", "TEARDOWN_LIMIT_MS"))
+          slow = int(os.environ["SLOW_START_MS"])
+          rows = {}
+          for pth in glob.glob(os.path.join(os.environ["SA_DIR"], "pr297-stageA-4ee4ad3-job-*", "classify.json")):
+              try:
+                  r = json.load(open(pth)); rows[int(r["job"])] = r
+              except Exception as e:
+                  print(f"::warning::unreadable {pth}: {e}")
+          problems = []
+          if os.environ["HARNESS_RESULT"] != "success": problems.append(f"harness matrix result={os.environ['HARNESS_RESULT']} (a job is FAIL, INVALID, cancelled or timed out)")
+          if os.environ["TEARDOWN_JOB_RESULT"] != "success": problems.append(f"teardown-regression job result={os.environ['TEARDOWN_JOB_RESULT']} (reported separately from latency)")
+          missing = [j for j in expected if j not in rows]
+          if missing: problems.append(f"INVALID: classification missing for jobs {missing}")
+          extra = [j for j in rows if j not in expected]
+          if extra: problems.append(f"INVALID: unexpected job ids {extra}")
+          for j, r in sorted(rows.items()):
+              if r.get("candidate_tree") != os.environ["CANDIDATE_TREE"]:
+                  problems.append(f"INVALID: job {j} candidate_tree={r.get('candidate_tree')} != {os.environ['CANDIDATE_TREE']}")
+              if r.get("base") != os.environ["BASE_SHA"]:
+                  problems.append(f"INVALID: job {j} base={r.get('base')} != {os.environ['BASE_SHA']}")
+          cand = {r.get("candidate") for r in rows.values()}
+          if rows and (len(cand) != 1 or not re.fullmatch(r"[0-9a-f]{40}", next(iter(cand)) or "")):
+              problems.append(f"INVALID: candidate sha missing or not identical across jobs: {sorted(x or '' for x in cand)}")
+          bad = {j: r["cls"] for j, r in rows.items() if r.get("cls") not in ("PASS", "PASS-RELAUNCH", "PASS-TEARDOWN-WARN")}
+          if bad: problems.append(f"non-pass classes: {bad}")
+          ready = [r["chrome_ready_ms"] for j, r in sorted(rows.items()) if isinstance(r.get("chrome_ready_ms"), int)]
+          if len(ready) != len(expected): problems.append(f"INVALID: Chrome-ready ms present for {len(ready)}/{len(expected)} jobs")
+          hook = [r["derived_hook_ms"] for r in rows.values() if isinstance(r.get("derived_hook_ms"), int)]
+          rel = sum(1 for r in rows.values() if r.get("relaunch"))
+          over = sum(1 for x in ready if x > slow)
+          td = [t[1] for r in rows.values() for t in (r.get("teardown") or [])]
+          close_hits = sum(len(r.get("close_bound_hits") or []) for r in rows.values())
+          # Security P2-C2 gate rule: any bound hit, slow teardown, or non-exited Chrome stops expansion (limit 0).
+          # R10 leftover lines are recorded and do not stop. Recording them is not a waiver.
+          tw = {j: [w for w in (r.get("teardown_warnings") or []) if not w.startswith("R10-TEMP-LEFT")] for j, r in sorted(rows.items())}
+          tw = {j: v for j, v in tw.items() if v}
+          if tw: problems.append(f"teardown warnings (limit 0 for expansion): {tw}")
+          r10 = {j: [w for w in (r.get("teardown_warnings") or []) if w.startswith("R10-TEMP-LEFT")] for j, r in sorted(rows.items())}
+          r10 = {j: v for j, v in r10.items() if v}
+          st = dict(n=len(ready), p95_nearest_rank=nr_p95(ready), max=max(ready) if ready else None, jobs_over_10s=over,
+                    hook_max=max(hook) if hook else None, relaunches=rel, teardown_max=max(td) if td else None, close_bound_hits=close_hits)
+          if st["max"] is not None and st["max"] > max_t: problems.append(f"stage-A max {st['max']}ms > {max_t}ms")
+          if st["hook_max"] is not None and st["hook_max"] > hook_t: problems.append(f"derived hook max {st['hook_max']}ms > {hook_t}ms")
+          if rel > rel_t: problems.append(f"relaunches {rel} of 5 > {rel_t}")
+          if st["teardown_max"] is not None and st["teardown_max"] >= td_t: problems.append(f"teardown max {st['teardown_max']}ms >= {td_t}ms")
+          # Stage A has five jobs. nearest-rank p95 is reported and is not a rejection rule.
+          # At most one of these five jobs may exceed 10000 ms. Two or more stop expansion.
+          # The 20-job rule (nearest-rank p95 <= 10000 ms and at most one of twenty > 10000 ms) is not applied here.
+          if over >= 2: problems.append(f"{over} of 5 jobs > {slow}ms: a fresh 20-job p95 <= {p95_t}ms is already impossible; do not expand")
+          elif over == 1: print(f"::warning title=PR297 stage A::1 of 5 jobs > {slow}ms: expansion can only pass if all 15 stage-B jobs are <= {slow}ms")
+          covariate = {j: dict(probe_ms=r.get("chrome_version_probe_ms"), ready_ms=r.get("chrome_ready_ms"), image_sources=r.get("image_sources")) for j, r in sorted(rows.items())}
+          summary = dict(stageA=st, teardown_warnings_blocking=tw, r10_temp_dirs_logged=r10, covariate_diagnostic_only=covariate, problems=problems,
+                         definition="Chrome-ready = max(headless, desktop) first-success devtools-up ms per job; nearest-rank p95; fresh stage-A jobs only (no stage 1/2 values)",
+                         note="Gate figures are computed on-runner; Release recomputes them off-runner from this run's logs/artifacts, and Release's figure is the one reported. Stage A alone is not merge readiness. The five-job nearest-rank p95 is not a rejection rule. The 20-job gate remains separately authorized.")
+          os.makedirs(os.environ["RUNNER_TEMP"] + "/gate", exist_ok=True)
+          json.dump(summary, open(os.environ["RUNNER_TEMP"] + "/gate/gate-summary.json", "w"), indent=2)
+          print(json.dumps(summary, indent=2))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+              s.write(f"## PR297 stage A gate (candidate tree {os.environ['CANDIDATE_TREE']}, parent {os.environ['BASE_SHA']})\n\n")
+              s.write(f"- harness matrix result (jobs 1-5): **{os.environ['HARNESS_RESULT']}**; classifications read: {len(rows)}/5\n")
+              s.write(f"- stage A (N={st['n']}): p95 nearest-rank={st['p95_nearest_rank']} ms (= max for N=5), max={st['max']} ms, jobs >10 s={over}, relaunches={rel}, hook max={st['hook_max']} ms, teardown max={st['teardown_max']} ms, Browser.close bound hits={close_hits}\n")
+              s.write(f"- pre-test --version probe vs Chrome-ready (diagnostic covariate only, never used to exclude): {covariate}\n")
+              s.write(f"- teardown warnings (blocking, limit 0): {tw or 'none'}; R10 temp dirs logged (non-blocking): {r10 or 'none'}\n")
+              s.write(f"- problems: {problems or 'none'}\n\n")
+              s.write(f"- Fault-path test variant: {os.environ['FAULT_TEST_VARIANT']}; CI opt-in: {os.environ['FAULT_OPT_IN_CI']}. The harness jobs ran only the harness file. No jobs beyond 5. No reruns: any rerun fails its own guard (run_attempt != 1) and is INVALID.\n\n")
+              s.write("### Cleanup evidence\n\n1. R5 and R9: under validation here (teardown lines, bound hits, leak observations).\n")
+              s.write("2. R8 and R10: corrected in code on tree 4ee4ad3d. This run records runtime evidence. R10 leftover lines stay non-blocking and are not waived.\n\n")
+              s.write("Runner termination is not evidence that cleanup worked. Only the per-job post-run observations count.\n")
+          if problems:
+              for pr in problems: print(f"::error title=PR297 stage A::STOP: {pr}. Release reports to Control/Juan. No rerun, no expansion.")
+              sys.exit(1)
+          print("Stage-A figures are within the Stage A criteria. This workflow does not start Stage B. Stage B needs its own authorization.")
+          PY
+
+      - name: Upload gate summary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (repo TM-16 pin)
+        with:
+          name: pr297-stageA-4ee4ad3-gate
+          path: ${{ runner.temp }}/gate/
+          if-no-files-found: warn
+          retention-days: 30
