@@ -4,7 +4,11 @@
 // functions/curbIntelligence/provenanceAndConflict.test.cjs.
 // Provenance-critical implementation, source admission, runtime artifacts,
 // outcome indexes, release authority, and the files that define this policy
-// fail closed. GitHub Actions cannot execute the genuine successor, so this
+// fail closed. Any change to functions/index.js is critical. A Functions
+// implementation file is critical wherever it lives under functions/, including
+// a newly named module outside curbIntelligence. Recognized portable tests and
+// the public curb fixture directory stay non-critical. Patch keywords are not
+// a classification. GitHub Actions cannot execute the genuine successor, so this
 // guard must not report a successful private check.
 //
 // If the changed-file set cannot be determined, the result is fail closed.
@@ -25,30 +29,47 @@ const POLICY_FILES = new Set([
   '.github/workflows/provenance-change-guard.yml',
 ]);
 
-const INDEX_WIRING = /runtimeSourceArtifact|attachOwnerPilot|localRuntimeDependencies|productionAuthoritative|certificationStatus|releaseCertification|successorRelease|ownerApproval|PINNED_ARTIFACT/;
+const PORTABLE_FUNCTIONS_TEST = /^functions\/.*\.(?:test|spec)\.[cm]?[jt]sx?$/i;
 
 function normalize(file) {
-  return file.replace(/\\/g, '/').replace(/^\.\//, '');
+  return String(file ?? '').replace(/\\/g, '/').replace(/^\.\//, '').trim();
 }
 
-function isPortableCurbTest(file) {
+function isPortableFunctionsPath(file) {
   if (file === PRIVATE_SUITE) return false;
   if (file.startsWith('functions/curbIntelligence/fixtures/')) return true;
-  return /^functions\/curbIntelligence\/.*\.(test|spec)\.[cm]?[jt]sx?$/.test(file);
+  return PORTABLE_FUNCTIONS_TEST.test(file);
 }
 
-export function decisionForPath(file, patchText) {
+export function decisionForPath(file) {
   const path = normalize(file);
-  if (!path || path.includes('\0')) return 'undetermined';
+  if (!path || path.includes('\0') || path.includes('"')) return 'undetermined';
   if (POLICY_FILES.has(path) || path.startsWith('scripts/ci/')) return 'critical';
   if (path === PRIVATE_SUITE) return 'critical';
   if (path.startsWith('data/runtime-source/')) return 'critical';
-  if (path.startsWith('functions/curbIntelligence/') && !isPortableCurbTest(path)) return 'critical';
-  if (path === 'functions/index.js') {
-    if (!patchText) return 'undetermined';
-    return INDEX_WIRING.test(patchText) ? 'critical' : 'clear';
+  if (path.toLowerCase().startsWith('functions/')) {
+    return isPortableFunctionsPath(path) ? 'clear' : 'critical';
   }
   return 'clear';
+}
+
+export function pathsFromNameStatus(text) {
+  const files = [];
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const parts = line.split('\t');
+    const status = parts[0] || '';
+    if (status.startsWith('R') || status.startsWith('C')) {
+      if (!parts[1] || !parts[2]) return { error: 'a rename could not be classified' };
+      files.push(normalize(parts[1]), normalize(parts[2]));
+    } else if (parts[1]) {
+      files.push(normalize(parts[1]));
+    } else {
+      return { error: 'a changed path could not be classified' };
+    }
+  }
+  if (files.length === 0) return { error: 'the changed-file set is empty' };
+  return { files: [...new Set(files)] };
 }
 
 function failClosed(reason, paths = []) {
@@ -89,27 +110,7 @@ function changedPathsFromDiff(base, head) {
   }
   const names = git(['diff', '--name-status', '--find-renames', `${base}...${head}`]);
   if (names.status !== 0) return { error: 'git diff could not be read' };
-  const files = [];
-  for (const line of names.stdout.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    const parts = line.split('\t');
-    if (parts[0].startsWith('R') || parts[0].startsWith('C')) {
-      if (!parts[1] || !parts[2]) return { error: 'a rename could not be classified' };
-      files.push(normalize(parts[1]), normalize(parts[2]));
-    } else if (parts[1]) {
-      files.push(normalize(parts[1]));
-    } else {
-      return { error: 'a changed path could not be classified' };
-    }
-  }
-  if (files.length === 0) return { error: 'the changed-file set is empty' };
-  return { files: [...new Set(files)] };
-}
-
-function patchFor(base, head, file) {
-  const diff = git(['diff', '--unified=0', `${base}...${head}`, '--', file]);
-  if (diff.status !== 0) return null;
-  return diff.stdout;
+  return pathsFromNameStatus(names.stdout);
 }
 
 function filesFromArgs(argv) {
@@ -133,15 +134,13 @@ function main() {
 
   const explicit = process.argv.includes('--file');
   let files;
-  let base = '';
-  let head = '';
   if (explicit) {
     const parsed = filesFromArgs(process.argv.slice(2));
     if (parsed.error) failClosed(parsed.error);
     files = parsed.files;
   } else {
-    base = process.env.PR_BASE_SHA || '';
-    head = process.env.PR_HEAD_SHA || '';
+    const base = process.env.PR_BASE_SHA || '';
+    const head = process.env.PR_HEAD_SHA || '';
     if (!base || !head) failClosed('pull request base and head are required');
     const parsed = changedPathsFromDiff(base, head);
     if (parsed.error) failClosed(parsed.error);
@@ -150,8 +149,7 @@ function main() {
 
   const critical = [];
   for (const file of files) {
-    const patch = file === 'functions/index.js' && base && head ? patchFor(base, head, file) : null;
-    const decision = decisionForPath(file, file === 'functions/index.js' ? patch : undefined);
+    const decision = decisionForPath(file);
     if (decision === 'undetermined') failClosed(`classification failed for ${file}`, [file]);
     if (decision === 'critical') critical.push(file);
   }
