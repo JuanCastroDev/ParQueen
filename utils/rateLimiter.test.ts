@@ -179,7 +179,7 @@ describe('TM-13 — Phase J callable rate-limit source assertions', () => {
             const protocolIdx = callable.indexOf('request.data?.protocolVersion !== 2');
             const selectIdx = callable.indexOf('selectCanonicalV2Handler(');
             const runnerIdx = callable.indexOf('_runCanonicalCurbV2');
-            const invokeIdx = callable.indexOf('return canonicalV2Handler(request.data)');
+            const invokeIdx = callable.indexOf('return canonicalV2Handler(request.data, request.auth.uid)');
             const firstReturnIdx = callable.indexOf('return ');
 
             expect(rlIdx).toBeGreaterThan(-1);

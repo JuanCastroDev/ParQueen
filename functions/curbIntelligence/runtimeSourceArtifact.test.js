@@ -92,6 +92,8 @@ function readArtifact() {
 }
 
 describe('pinned runtime source artifact', () => {
+  // Parsing the pinned 43 MB artifact during the full suite exceeds Vitest's
+  // default 5s on a loaded Windows checkout. Every assertion below stays.
   it('verifies the artifact digest separately from source certification', () => {
     const bytes = readArtifact();
     const document = JSON.parse(bytes.toString('utf8'));
@@ -145,7 +147,7 @@ describe('pinned runtime source artifact', () => {
     expect(relative(functionsRoot, renderScript).startsWith('..')).toBe(true);
     const firebase = JSON.parse(readFileSync(new URL('../../firebase.json', import.meta.url), 'utf8'));
     expect(firebase.functions.source).toBe('functions');
-  });
+  }, 20_000);
 
   it('loads the artifact in emulator mode and reaches buildCandidate without primary authority', async () => {
     const row = batteryRow();

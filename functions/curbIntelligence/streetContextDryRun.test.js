@@ -1,4 +1,7 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
 
@@ -8,7 +11,8 @@ const { proveCanonicalCurbIdentity } = require('./canonicalCurbIdentityProof');
 const { diagnoseIncidentCrossStreets } = require('./incidentCrossStreetDiagnostic');
 const { resolveCanonicalCurb, hasPrimaryTopologyAuthority } = require('./canonicalCurbResolver');
 
-const RETAINED_DIAGNOSTIC = 'C:\\Users\\jayca\\AppData\\Local\\ParQueen\\S2-Release-Diagnostics\\si-block-association-02-physicalid-5.json';
+const RETAINED_DIAGNOSTIC = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'si-block-association-02-physicalid-5.json');
+const RETAINED_DIAGNOSTIC_SHA256 = 'bdaf877e58b78a8fc9bf9a7f8c2ff58d15fc8b3c487d0c7b88868ee64609dd21';
 const STRUCTURAL_SOURCE_VERSION = Object.freeze({
   resourceId: 'inkn-q76z',
   version: 'structural-grammar-only',
@@ -193,7 +197,9 @@ describe('source-backed street-context dry run', () => {
   });
 
   it('accepts the source-backed names once synthetic side grammar is supplied', async () => {
-    const retained = JSON.parse(readFileSync(RETAINED_DIAGNOSTIC, 'utf8'));
+    const retainedBytes = readFileSync(RETAINED_DIAGNOSTIC);
+    expect(createHash('sha256').update(retainedBytes).digest('hex')).toBe(RETAINED_DIAGNOSTIC_SHA256);
+    const retained = JSON.parse(retainedBytes.toString('utf8'));
     const diagnostic = diagnoseIncidentCrossStreets(evidence());
     const pair = acceptedPair(diagnostic);
     const recordedSide = retainedProjectionSide(retained);
