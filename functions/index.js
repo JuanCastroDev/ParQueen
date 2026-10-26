@@ -5013,7 +5013,7 @@ async function _queryCanonicalSweepEvidence({ identity, signal }) {
   };
 }
 
-async function _runCanonicalCurbV2(requestData) {
+async function _runCanonicalCurbV2(requestData, verifiedUid) {
   const {
     runCanonicalCurbOrchestrator,
     createPlanimetricCurbStore,
@@ -5038,7 +5038,7 @@ async function _runCanonicalCurbV2(requestData) {
     mode: 'shadow',
     serviceUrl: config.serviceUrl,
   });
-  return runCanonicalCurbOrchestrator(requestData, {
+  const orchestratorDependencies = {
     db,
     Timestamp,
     planimetricStore: createPlanimetricCurbStore({ fetchFn: fetch }),
@@ -5054,7 +5054,15 @@ async function _runCanonicalCurbV2(requestData) {
     requestNonceFactory: randomUUID,
     readCanonicalCache: streetIntelligenceCache.readCanonicalCache,
     persistCanonicalCurb: streetIntelligenceCache.persistCanonicalCurb,
-  });
+  };
+  if (process.env.FUNCTIONS_EMULATOR === 'true') {
+    const { localRuntimeDependencies } = require('./curbIntelligence/runtimeSourceArtifact');
+    Object.assign(orchestratorDependencies, localRuntimeDependencies());
+  } else {
+    const { attachOwnerPilot } = require('./curbIntelligence/runtimeSourceArtifact');
+    attachOwnerPilot(orchestratorDependencies, verifiedUid);
+  }
+  return runCanonicalCurbOrchestrator(requestData, orchestratorDependencies);
 }
 
 // ─── Hydrant proximity (NYC DEP) ─────────────────────────────────────────────
@@ -5239,7 +5247,7 @@ exports.createSegmentFromSweepNYC = onCall(
     if (typeof canonicalV2Handler !== 'function') {
       return { protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' };
     }
-    return canonicalV2Handler(request.data);
+    return canonicalV2Handler(request.data, request.auth.uid);
   }
 );
 

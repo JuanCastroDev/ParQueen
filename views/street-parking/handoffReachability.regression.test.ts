@@ -173,17 +173,117 @@ async function closeServerWithin(session: HarnessSession, server: Server | undef
 // process exit. Cleanup is hygiene, not part of the reachability assertion.
 // Never turn otherwise-passing product assertions red for that OS race. The removal is
 // asynchronous so its retries cannot block the event loop (and with it the hook timer).
+// Every attempt logs one outcome. "removed" is used only when rm resolves in time.
+function logTempDir(session: HarnessSession, dir: string, outcome: 'removed' | 'failed' | 'timed-out' | 'skipped', detail: string) {
+  harnessLog(`${session.name}: temp dir ${dir} removal outcome=${outcome}${detail ? ` ${detail}` : ''}`);
+}
+
 async function removeProfileWithin(session: HarnessSession, dir: string) {
   const outcome = await settleWithin(rm(dir, { recursive: true, force: true, maxRetries: 40, retryDelay: 100 }), PROFILE_REMOVE_TIMEOUT_MS, (error) => {
-    harnessLog(`${session.name}: temp dir ${dir} removal failed after its ${PROFILE_REMOVE_TIMEOUT_MS}ms bound: ${errorText(error)}`);
+    logTempDir(session, dir, 'failed', `late after ${PROFILE_REMOVE_TIMEOUT_MS}ms bound: ${errorText(error)}; directory left in place`);
   });
-  if (outcome.state === 'timed out') {
-    harnessLog(`${session.name}: temp dir ${dir} not removed within ${PROFILE_REMOVE_TIMEOUT_MS}ms; leaving it`);
-  } else if (outcome.state === 'failed') {
-    const code = outcome.error && typeof outcome.error === 'object' ? (outcome.error as NodeJS.ErrnoException).code : undefined;
-    if (code !== 'ENOTEMPTY' && code !== 'EBUSY' && code !== 'EPERM') throw outcome.error;
-    harnessLog(`${session.name}: temp dir ${dir} not removed (${code}); leaving it`);
+  if (outcome.state === 'done') {
+    logTempDir(session, dir, 'removed', '');
+    return;
   }
+  if (outcome.state === 'timed out') {
+    logTempDir(session, dir, 'timed-out', `bound=${PROFILE_REMOVE_TIMEOUT_MS}ms; directory left in place`);
+    return;
+  }
+  const code = outcome.error && typeof outcome.error === 'object' ? (outcome.error as NodeJS.ErrnoException).code : undefined;
+  logTempDir(session, dir, 'failed', `code=${code ?? 'unknown'}; directory left in place`);
+  if (code !== 'ENOTEMPTY' && code !== 'EBUSY' && code !== 'EPERM') throw outcome.error;
+}
+
+function skipProfileRemoval(session: HarnessSession, dir: string) {
+  logTempDir(session, dir, 'skipped', 'reason=chrome-still-running; directory left in place');
+}
+
+// R8: Vitest does not cancel a beforeAll that has hit its timer, so a boot still inside
+// esbuild or PostCSS can resume after afterAll. Checks at each resume point refuse new
+// files, the fixture server, and listen. A server that did open is closed with the
+// existing server bound. The temp dir is then removed or the removal outcome is logged.
+function bootCancelled(session: HarnessSession, step: string) {
+  const error = new Error(`${session.name}: boot cancelled before ${step}`);
+  error.name = 'BootCancelled';
+  return error;
+}
+
+function assertBootOpen(session: HarnessSession, step: string) {
+  if (session.closed) throw bootCancelled(session, step);
+}
+
+async function compileFixture(session: HarnessSession, dir: string) {
+  assertBootOpen(session, 'postcss');
+  const esbuild = require('esbuild') as typeof import('esbuild');
+  const postcss = require('postcss') as typeof import('postcss').default;
+  const tailwind = require('tailwindcss');
+  const autoprefixer = require('autoprefixer');
+  const compiled = await postcss([tailwind(path.join(root, 'tailwind.config.js')), autoprefixer])
+    .process(css, { from: path.join(root, 'index.css') });
+  assertBootOpen(session, 'writing app.css');
+  writeFileSync(path.join(dir, 'app.css'), compiled.css);
+  assertBootOpen(session, 'esbuild');
+  await esbuild.build({
+    absWorkingDir: root,
+    entryPoints: [path.join(__dirname, 'handoffReachability.fixture.tsx')],
+    bundle: true,
+    format: 'esm',
+    outfile: path.join(dir, 'fixture.js'),
+    jsx: 'automatic',
+    define: { 'process.env.NODE_ENV': '"development"' },
+  });
+  assertBootOpen(session, 'writing index.html');
+  writeFileSync(path.join(dir, 'index.html'), `<!doctype html><html class="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/app.css"></head><body><div id="root"></div><script type="module" src="/fixture.js"></script></body></html>`);
+}
+
+async function openFixtureServer(session: HarnessSession, dir: string): Promise<{ server: Server; port: number }> {
+  assertBootOpen(session, 'creating fixture server');
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    const file = path.join(dir, url.pathname === '/' ? 'index.html' : url.pathname);
+    try {
+      const body = readFileSync(file);
+      const type = file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/html';
+      res.writeHead(200, { 'content-type': type });
+      res.end(body);
+    } catch {
+      res.writeHead(404);
+      res.end('missing');
+    }
+  });
+  try {
+    assertBootOpen(session, 'server listen');
+    const port = await new Promise<number>((resolve, reject) => {
+      if (session.closed) {
+        resolve(0);
+        return;
+      }
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', () => {
+        if (session.closed) {
+          resolve(0);
+          return;
+        }
+        const address = server.address();
+        resolve(address && typeof address === 'object' ? address.port : 0);
+      });
+    });
+    if (session.closed || port === 0) {
+      await closeServerWithin(session, server);
+      throw bootCancelled(session, 'server listen');
+    }
+    return { server, port };
+  } catch (error) {
+    await closeServerWithin(session, server);
+    throw error;
+  }
+}
+
+async function abandonBoot(session: HarnessSession, dir: string, server: Server | undefined, error: unknown) {
+  await closeServerWithin(session, server);
+  await removeProfileWithin(session, dir);
+  harnessLog(`${session.name}: boot abandoned after teardown: ${errorText(error)}; no further server or browser will be started`);
 }
 
 function printEnvironmentOnce(session: HarnessSession) {
@@ -325,7 +425,12 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
 
   beforeAll(async () => {
     printEnvironmentOnce(session);
-    await boot();
+    try {
+      await boot();
+    } catch (error) {
+      if (!session.closed) throw error;
+      await abandonBoot(session, dir, server, error);
+    }
   }, BROWSER_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
@@ -365,49 +470,23 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
 
     await closeServerWithin(session, server);
     if (chromeExited) await removeProfileWithin(session, dir);
+    else skipProfileRemoval(session, dir);
     harnessLog(`${session.name}: teardown finished in ${Date.now() - teardownStartedAt}ms (limit ${SUITE_TEARDOWN_TIMEOUT_MS}ms) chrome exited=${chromeExited}`);
   }, SUITE_TEARDOWN_TIMEOUT_MS);
 
   async function boot() {
-    const esbuild = require('esbuild') as typeof import('esbuild');
-    const postcss = require('postcss') as typeof import('postcss').default;
-    const tailwind = require('tailwindcss');
-    const autoprefixer = require('autoprefixer');
-    const compiled = await postcss([tailwind(path.join(root, 'tailwind.config.js')), autoprefixer])
-      .process(css, { from: path.join(root, 'index.css') });
-    writeFileSync(path.join(dir, 'app.css'), compiled.css);
-    await esbuild.build({
-      absWorkingDir: root,
-      entryPoints: [path.join(__dirname, 'handoffReachability.fixture.tsx')],
-      bundle: true,
-      format: 'esm',
-      outfile: path.join(dir, 'fixture.js'),
-      jsx: 'automatic',
-      define: { 'process.env.NODE_ENV': '"development"' },
-    });
-    writeFileSync(path.join(dir, 'index.html'), `<!doctype html><html class="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/app.css"></head><body><div id="root"></div><script type="module" src="/fixture.js"></script></body></html>`);
-
-    server = createServer((req, res) => {
-      const url = new URL(req.url || '/', 'http://127.0.0.1');
-      const file = path.join(dir, url.pathname === '/' ? 'index.html' : url.pathname);
-      try {
-        const body = readFileSync(file);
-        const type = file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/html';
-        res.writeHead(200, { 'content-type': type });
-        res.end(body);
-      } catch {
-        res.writeHead(404);
-        res.end('missing');
-      }
-    });
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    port = (server.address() as { port: number }).port;
+    await compileFixture(session, dir);
+    const opened = await openFixtureServer(session, dir);
+    server = opened.server;
+    port = opened.port;
+    assertBootOpen(session, 'chrome launch');
 
     const launched = await launchChromeWithDevTools(session, dir, [
       '--headless=new', '--disable-gpu', '--no-sandbox', '--no-first-run', '--disable-dev-shm-usage',
     ]);
     chrome = launched.chrome;
     const { debugPort, browserPath } = launched;
+    assertBootOpen(session, 'devtools connection');
 
     const browserWs = new WebSocket(
       `ws://127.0.0.1:${debugPort}${browserPath.startsWith('/') ? browserPath : `/${browserPath}`}`,
@@ -623,40 +702,13 @@ describe.skipIf(!chromeBin || !xvfbBin)('handoff failure reasons in a resized de
 
   beforeAll(async () => {
     printEnvironmentOnce(session);
-    const esbuild = require('esbuild') as typeof import('esbuild');
-    const postcss = require('postcss') as typeof import('postcss').default;
-    const tailwind = require('tailwindcss');
-    const autoprefixer = require('autoprefixer');
-    const compiled = await postcss([tailwind(path.join(root, 'tailwind.config.js')), autoprefixer])
-      .process(css, { from: path.join(root, 'index.css') });
-    writeFileSync(path.join(dir, 'app.css'), compiled.css);
-    await esbuild.build({
-      absWorkingDir: root,
-      entryPoints: [path.join(__dirname, 'handoffReachability.fixture.tsx')],
-      bundle: true,
-      format: 'esm',
-      outfile: path.join(dir, 'fixture.js'),
-      jsx: 'automatic',
-      define: { 'process.env.NODE_ENV': '"development"' },
-    });
-    writeFileSync(path.join(dir, 'index.html'), `<!doctype html><html class="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/app.css"></head><body><div id="root"></div><script type="module" src="/fixture.js"></script></body></html>`);
-    server = createServer((req, res) => {
-      const url = new URL(req.url || '/', 'http://127.0.0.1');
-      const file = path.join(dir, url.pathname === '/' ? 'index.html' : url.pathname);
-      try {
-        const body = readFileSync(file);
-        const type = file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/html';
-        res.writeHead(200, { 'content-type': type });
-        res.end(body);
-      } catch {
-        res.writeHead(404);
-        res.end('missing');
-      }
-    });
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    port = (server.address() as { port: number }).port;
-
-    const started = await startXvfb(session);
+    try {
+      await compileFixture(session, dir);
+      const opened = await openFixtureServer(session, dir);
+      server = opened.server;
+      port = opened.port;
+      assertBootOpen(session, 'xvfb');
+      const started = await startXvfb(session);
     xvfb = started.xvfb;
     const launched = await launchChromeWithDevTools(session, dir, [
       '--disable-gpu', '--no-sandbox', '--no-first-run', '--disable-dev-shm-usage',
@@ -664,6 +716,7 @@ describe.skipIf(!chromeBin || !xvfbBin)('handoff failure reasons in a resized de
     ], { ...process.env, DISPLAY: started.display });
     chrome = launched.chrome;
     const { debugPort, browserPath } = launched;
+    assertBootOpen(session, 'devtools connection');
 
     const browserWs = new WebSocket(
       `ws://127.0.0.1:${debugPort}${browserPath.startsWith('/') ? browserPath : `/${browserPath}`}`,
@@ -699,6 +752,10 @@ describe.skipIf(!chromeBin || !xvfbBin)('handoff failure reasons in a resized de
     page = wire(pageWs);
     await page('Page.enable');
     await page('Runtime.enable');
+    } catch (error) {
+      if (!session.closed) throw error;
+      await abandonBoot(session, dir, server, error);
+    }
   }, BROWSER_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
@@ -741,6 +798,7 @@ describe.skipIf(!chromeBin || !xvfbBin)('handoff failure reasons in a resized de
 
     await closeServerWithin(session, server);
     if (chromeExited) await removeProfileWithin(session, dir);
+    else skipProfileRemoval(session, dir);
     harnessLog(`${session.name}: teardown finished in ${Date.now() - teardownStartedAt}ms (limit ${SUITE_TEARDOWN_TIMEOUT_MS}ms) chrome exited=${chromeExited}`);
   }, SUITE_TEARDOWN_TIMEOUT_MS);
 

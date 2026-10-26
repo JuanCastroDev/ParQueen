@@ -155,6 +155,22 @@ describe('handoff harness teardown bounds', () => {
     // The suites' own test and boot timeouts are unchanged.
     expect(limit('CHROME_DEVTOOLS_DEADLINE_MS')).toBe(30000);
     expect(limit('BROWSER_BOOT_TIMEOUT_MS')).toBe(120000);
+    expect(limit('PROFILE_REMOVE_TIMEOUT_MS')).toBe(5000);
+    expect(limit('SUITE_TEARDOWN_TIMEOUT_MS')).toBe(30000);
+    // R8: a resumed boot checks the torn-down session before creating or listening on a server.
+    expect(harnessSource.match(/function assertBootOpen\(session: HarnessSession, step: string\)/g)).toHaveLength(1);
+    expect(harnessSource.match(/assertBootOpen\(session, 'server listen'\)/g)).toHaveLength(1);
+    expect(harnessSource.match(/assertBootOpen\(session, 'creating fixture server'\)/g)).toHaveLength(1);
+    expect(harnessSource.match(/openFixtureServer\(session, dir\)/g)).toHaveLength(2);
+    expect(harnessSource).toContain('if (session.closed) throw bootCancelled(session, step)');
+    expect(harnessSource).toContain('boot abandoned after teardown');
+    // R10: success is logged only from the resolved removal, and the other outcomes say the directory remains.
+    expect(harnessSource).toMatch(/if \(outcome\.state === 'done'\) \{\s*logTempDir\(session, dir, 'removed', ''\);/);
+    expect(harnessSource).toContain("logTempDir(session, dir, 'failed',");
+    expect(harnessSource).toContain("logTempDir(session, dir, 'timed-out',");
+    expect(harnessSource).toContain("logTempDir(session, dir, 'skipped', 'reason=chrome-still-running; directory left in place')");
+    expect(harnessSource.match(/directory left in place/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(harnessSource.match(/skipProfileRemoval\(session, dir\)/g)).toHaveLength(2);
   });
 
   it.skipIf(!faultTestsEnabled || !realChrome)('SIGKILLs and reaps a Chrome that never answers Browser.close within the teardown limit', async () => {

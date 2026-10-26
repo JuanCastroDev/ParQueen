@@ -14,12 +14,14 @@ describe('createSegmentFromSweepNYC private resolver composition boundary', () =
     expect(callable).toContain('selectCanonicalV2Handler(');
     expect(callable).toContain('_callableHooks.canonicalCurbOrchestrator');
     expect(callable).toContain('_runCanonicalCurbV2');
-    expect(callable).toContain('return canonicalV2Handler(request.data)');
+    expect(callable).toContain('return canonicalV2Handler(request.data, request.auth.uid)');
+    expect(callable).not.toContain('request.data.uid');
+    expect(callable).not.toContain('request.data?.uid');
     expect(callable.indexOf('await checkRateLimit(uid')).toBeLessThan(
       callable.indexOf('request.data?.protocolVersion !== 2'),
     );
     expect(callable.indexOf('request.data?.protocolVersion !== 2')).toBeLessThan(
-      callable.indexOf('return canonicalV2Handler(request.data)'),
+      callable.indexOf('return canonicalV2Handler(request.data, request.auth.uid)'),
     );
     expect(callable).not.toContain('_tryCreateFromSweepNYC');
     expect(callable).not.toContain('revalidateSegmentId');

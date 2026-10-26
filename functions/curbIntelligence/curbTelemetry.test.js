@@ -4,6 +4,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const {
   CURB_TELEMETRY_EVENTS,
+  PILOT_STAGES,
   buildCurbTelemetryPayload,
   createCurbTelemetry,
 } = require('./curbTelemetry');
@@ -20,14 +21,43 @@ const REQUIRED_EVENTS = [
   'source_conflict',
   'street_name_conflict',
   'cache_curb_mismatch',
+  'curb_pilot_diagnostic',
+];
+
+const CLOSED_PILOT_STAGES = [
+  'pilot_closed',
+  'cscl_admitted',
+  'enrichment_accepted',
+  'source_not_certified',
+  'topology_primary_rejected',
+  'native_proof_not_invoked',
 ];
 
 describe('curb telemetry privacy', () => {
   it('allows every required categorical event', () => {
     expect([...CURB_TELEMETRY_EVENTS].sort()).toEqual([...REQUIRED_EVENTS].sort());
+    expect([...PILOT_STAGES].sort()).toEqual([...CLOSED_PILOT_STAGES].sort());
     for (const event of REQUIRED_EVENTS) {
       expect(buildCurbTelemetryPayload(event, { protocolVersion: 2 })).toMatchObject({ event, protocolVersion: 2 });
     }
+    expect(buildCurbTelemetryPayload('curb_pilot_diagnostic', {
+      protocolVersion: 2,
+      pilotStage: 'pilot_closed',
+      certificationStatus: 'CERTIFIED',
+      streetName: 'hidden',
+      uid: 'owner-aaa-111',
+    })).toEqual({
+      event: 'curb_pilot_diagnostic',
+      protocolVersion: 2,
+      pilotStage: 'pilot_closed',
+    });
+    expect(buildCurbTelemetryPayload('curb_pilot_diagnostic', {
+      protocolVersion: 2,
+      pilotStage: 'not_a_stage',
+    })).toEqual({
+      event: 'curb_pilot_diagnostic',
+      protocolVersion: 2,
+    });
   });
 
   it('buckets candidate, latency, and sample values and drops identifying fields', () => {

@@ -35,7 +35,7 @@ describe('createSegmentFromSweepNYC App Check boundary', () => {
     const guard = body.indexOf('streetIntelligenceAppCheckRejection(request)');
     const rate = body.indexOf("checkRateLimit(uid, 'createSegmentFromSweepNYC'");
     const protocol = body.indexOf('request.data?.protocolVersion !== 2');
-    const frozen = body.indexOf('return canonicalV2Handler(request.data)');
+    const frozen = body.indexOf('return canonicalV2Handler(request.data, request.auth.uid)');
     expect(guard).toBeGreaterThan(-1);
     expect(guard).toBeLessThan(rate);
     expect(rate).toBeLessThan(protocol);
