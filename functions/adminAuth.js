@@ -180,6 +180,13 @@ async function requireCurrentAdmin(request) {
         throw new HttpsError('permission-denied', 'Admin only.');
     }
 
+    // The admin caller is subject to the same product-access document as any
+    // other user. This does not inspect the target, so an authorized admin
+    // can still suspend or unsuspend a blocked account. A missing profile
+    // does not deny.
+    const { assertProductAccess } = require('./productAccess');
+    await assertProductAccess(request.auth.uid);
+
     return currentUser;
 }
 

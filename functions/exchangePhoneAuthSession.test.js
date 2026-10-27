@@ -23,6 +23,7 @@ function authed(uid, provider, data, authTime = Math.floor(Date.now() / 1000)) {
 function deps(createCustomToken = vi.fn(async (uid) => `token-for-${uid}`)) {
   return {
     checkRateLimit: vi.fn(async () => {}),
+    assertProductAccess: vi.fn(async () => {}),
     createCustomToken,
   };
 }
@@ -132,6 +133,25 @@ describe('exchangePhoneAuthSession', () => {
     expect(HANDLER_SRC).not.toContain('data.auth_time');
   });
 
+  it('does not mint when the product-access check denies or is missing', async () => {
+    const denied = deps();
+    denied.assertProductAccess = vi.fn(async () => {
+      const { HttpsError } = require('firebase-functions/v2/https');
+      throw new HttpsError('permission-denied', 'Product access is not available.');
+    });
+    await expect(
+      exchangePhoneAuthSessionHandler(authed('uid-real', 'phone', {}), denied),
+    ).rejects.toMatchObject({ code: 'permission-denied' });
+    expect(denied.createCustomToken).not.toHaveBeenCalled();
+
+    const missing = deps();
+    delete missing.assertProductAccess;
+    await expect(
+      exchangePhoneAuthSessionHandler(authed('uid-real', 'phone', {}), missing),
+    ).rejects.toMatchObject({ code: 'failed-precondition' });
+    expect(missing.createCustomToken).not.toHaveBeenCalled();
+  });
+
   it('does not log the token and declares the dedicated service account', () => {
     expect(HANDLER_SRC).not.toMatch(/console\.(log|info|debug|warn|error)/);
     const start = INDEX_SRC.indexOf('exports.exchangePhoneAuthSession');
@@ -140,6 +160,8 @@ describe('exchangePhoneAuthSession', () => {
     expect(block).toContain('serviceAccount: AUTH_BRIDGE_SERVICE_ACCOUNT');
     expect(HANDLER_SRC).toContain(AUTH_BRIDGE_SERVICE_ACCOUNT);
     expect(block).toContain('exchangePhoneAuthSessionHandler');
+    expect(block).toContain('assertProductAccess');
+    expect(block.indexOf('assertProductAccess')).toBeLessThan(block.indexOf('createCustomToken'));
     expect(block).not.toContain('request.data.uid');
     for (const name of ['deleteChat', 'updateDisplayName', 'adminReadView', 'checkHydrantDistance']) {
       const fnStart = INDEX_SRC.indexOf(`exports.${name}`);

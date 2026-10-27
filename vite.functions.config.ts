@@ -28,6 +28,7 @@ export default defineConfig({
       'functions/setStaffRole.integration.test.js',
       'functions/adminSessionAuth.integration.test.js',
       'functions/adminSuspension.integration.test.js',
+      'functions/productAccess.integration.test.js',
       'functions/adminBackfill.integration.test.js',
       'functions/adminReadViews.integration.test.js',
       'functions/adminAuth.revocation.integration.test.js',

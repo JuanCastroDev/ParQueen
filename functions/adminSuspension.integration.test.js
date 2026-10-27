@@ -9,9 +9,7 @@
  *   SU-02  admin suspend: Auth disabled, refresh tokens revoked, public doc
  *          carries only status, who/why lives in private/moderation, audit   (positive authz)
  *   SU-03  suspended user can no longer sign in (USER_DISABLED)
- *   SU-04  RESIDUAL (documented, not a fix): an ID token minted BEFORE
- *          suspension is still accepted by sendMessage until it expires
- *          (≤1h) — this PR does not touch sendMessage (PRESERVE)
+ *   SU-04  an ID token minted BEFORE suspension is denied by sendMessage
  *   SU-05  legacy user doc (no status field) suspends correctly; an
  *          unrelated user's Auth record and doc are untouched
  *   SU-06  unsuspend: Auth re-enabled, fresh sign-in works,
@@ -120,6 +118,7 @@ describe('F3 — server-authoritative suspension', () => {
         expect(resp.error?.status).toBe('PERMISSION_DENIED');
         expect((await adminAuth.getUser(target)).disabled).toBe(false);
         expect((await db.doc(`users/${target}`).get()).data().status).toBe('Active');
+        expect((await db.doc(`users/${target}`).get()).data().productAccessBlocked).toBeUndefined();
         expect((await db.doc(`users/${target}/private/moderation`).get()).exists).toBe(false);
         const unauth = await callFn('adminSuspendUser', null, { userId: target, reason: 'x' });
         expect(unauth.error?.status).toBe('UNAUTHENTICATED');
@@ -144,6 +143,7 @@ describe('F3 — server-authoritative suspension', () => {
 
         const pub = (await db.doc(`users/${target}`).get()).data();
         expect(pub.status).toBe('Suspended');
+        expect(pub.productAccessBlocked).toBe(true);
         for (const f of SUSPENSION_FIELDS) expect(pub).not.toHaveProperty(f);
         expect(JSON.stringify(pub)).not.toContain(admin);
         expect(JSON.stringify(pub)).not.toContain('spam');
@@ -166,20 +166,15 @@ describe('F3 — server-authoritative suspension', () => {
         expect(String(body.error?.message || '')).toMatch(/USER_DISABLED/);
     });
 
-    it('SU-04: RESIDUAL — an ID token minted before suspension is still accepted by sendMessage (no suspension gate in this PR)', async () => {
-        // Documents the known residual (PR body "Residual risk"): this PR does
-        // not edit sendMessage, so an already-issued ID token keeps working on
-        // it (and on other callables / Firestore) until it expires (≤1h).
-        // The probe gets past auth and fails at chat lookup (NOT_FOUND), i.e.
-        // it is NOT refused for suspension. If a future reviewed change adds a
-        // callable-side gate, flip this expectation to PERMISSION_DENIED.
+    it('SU-04: an ID token minted before suspension is denied by sendMessage', async () => {
         const userToken = await signInUser(target);
         expect((await sendProbe(userToken)).error?.status).toBe('NOT_FOUND');
         const token = await adminToken(admin);
         expect((await callFn('adminSuspendUser', token, { userId: target, reason: 'x' })).result?.success).toBe(true);
         expect((await adminAuth.getUser(target)).disabled).toBe(true);
         const resp = await sendProbe(userToken);
-        expect(resp.error?.status).toBe('NOT_FOUND');
+        expect(resp.error?.status).toBe('PERMISSION_DENIED');
+        expect(resp.error?.message).toBe('Product access is not available.');
     });
 
     it('SU-05: a legacy user doc with no status field suspends correctly; an unrelated user is untouched', async () => {
@@ -206,6 +201,7 @@ describe('F3 — server-authoritative suspension', () => {
 
         const pub = (await db.doc(`users/${target}`).get()).data();
         expect(pub.status).toBe('Active');
+        expect(pub.productAccessBlocked).toBeUndefined();
         for (const f of SUSPENSION_FIELDS) expect(pub).not.toHaveProperty(f);
         expect(JSON.stringify(pub)).not.toContain(admin);
 

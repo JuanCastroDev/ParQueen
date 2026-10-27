@@ -42,6 +42,8 @@ const {
 const { joinMutualSuccess } = require('./mutualSuccessJoin');
 const { releasedInterestPatch } = require('./activeIncomingClaimLogic');
 const { requireCurrentAdmin, requireCurrentAuthenticatedUser } = require('./adminAuth');
+const { assertProductAccess, userRecordDenies } = require('./productAccess');
+exports._productAccessHooks = { beforeProtectedWrite: null };
 const { isSweepNYCData, computeSegmentUpdate, computeRuleUpdate } = require('./backfillLogic');
 const {
   NYC_OD_EVIDENCE_REVALIDATION_VERSION,
@@ -1018,6 +1020,7 @@ exports.generateEmailOTP = onCall(
   { region: "us-central1", secrets: [sendgridApiKey, emailRateLimitPepper], serviceAccount: 'parqueen-email@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
   async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Sign in first.");
+    await assertProductAccess(request.auth.uid);
     const email = _canonicalizeEmail(request.data?.email);
 
     const uid = request.auth.uid;
@@ -1026,11 +1029,16 @@ exports.generateEmailOTP = onCall(
     const emailHash = createHmac('sha256', emailRateLimitPepper.value()).update(email).digest('hex');
     await checkRateLimit(emailHash, 'generateEmailOTP_email', { limit: 10, windowSec: 3600 });
     const docRef = db.collection("emailVerificationCodes").doc(uid);
+    const userRef = db.collection("users").doc(uid);
     const nowMs = _emailOtpHooks.now?.() ?? Date.now();
     const code = _emailOtpHooks.generateCode?.() ?? _generateEmailOtpCode();
     const requestId = randomUUID();
     await db.runTransaction(async tx => {
       const existing = await tx.get(docRef);
+      const caller = await tx.get(userRef);
+      if (userRecordDenies(caller.exists ? caller.data() : null)) {
+        throw new HttpsError('permission-denied', 'Product access is not available.');
+      }
       if (existing.exists) {
         const lastSent = existing.data().createdAt?.toMillis() || 0;
         if (nowMs - lastSent < 60000) {
@@ -1048,6 +1056,10 @@ exports.generateEmailOTP = onCall(
       await (_emailOtpHooks.deliver?.(email, code) ?? _deliverEmailOtp(email, code));
       await db.runTransaction(async tx => {
         const current = await tx.get(docRef);
+        const caller = await tx.get(userRef);
+        if (userRecordDenies(caller.exists ? caller.data() : null)) {
+          throw new HttpsError('permission-denied', 'Product access is not available.');
+        }
         if (!current.exists || current.data().requestId !== requestId || current.data().status !== 'pending') {
           throw new Error('OTP request superseded');
         }
@@ -1058,6 +1070,7 @@ exports.generateEmailOTP = onCall(
         const current = await tx.get(docRef);
         if (current.exists && current.data().requestId === requestId) tx.delete(docRef);
       }).catch(() => {});
+      if (e instanceof HttpsError && e.code === 'permission-denied') throw e;
       // A bare "delivery failed" line cost real time during a production outage:
       // it could not distinguish a rejected key (401/403) from a bad payload
       // (400) from a SendGrid outage (5xx). The numeric status is the one field
@@ -1078,6 +1091,7 @@ exports.verifyEmailOTP = onCall(
   { region: "us-central1", serviceAccount: 'parqueen-user@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
   async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Sign in first.");
+    await assertProductAccess(request.auth.uid);
     const email = _canonicalizeEmail(request.data?.email);
     const code = request.data?.code;
 
@@ -1100,6 +1114,10 @@ exports.verifyEmailOTP = onCall(
       if (!data.expiresAt?.toMillis || Date.now() > data.expiresAt.toMillis()) {
         tx.delete(docRef);
         return 'expired';
+      }
+      const caller = await tx.get(userRef);
+      if (userRecordDenies(caller.exists ? caller.data() : null)) {
+        throw new HttpsError('permission-denied', 'Product access is not available.');
       }
       tx.delete(docRef);
       // Consume the OTP only if both account updates can commit with it.
@@ -1444,6 +1462,16 @@ exports.moderateAvatarUpload = onObjectFinalized(
       console.log(`Avatar approval skipped (superseded) for ${maskedUid}`);
       return;
     }
+    const accessSnap = await db.doc(`users/${uid}`).get();
+    if (userRecordDenies(accessSnap.exists ? accessSnap.data() : null)) {
+      await Promise.all([
+        sourceFile.delete().catch(() => {}),
+        candidateFile.delete().catch(() => {}),
+        updateCurrentModeration({ status: "rejected", failureReason: "access_blocked", updatedAt: Timestamp.now() }),
+      ]);
+      console.log(`Avatar publication skipped (access blocked) for ${maskedUid}`);
+      return;
+    }
     if (_hooks.beforeAvatarPublishCopy) await _hooks.beforeAvatarPublishCopy({ uid, uploadId });
     try {
       await candidateFile.copy(publishedFile);
@@ -1502,6 +1530,7 @@ exports.moderateAvatarUpload = onObjectFinalized(
           d.processingAttemptId !== processingAttemptId ||
           d.status !== "processing") return { approved: false };
       if (pendingId && pendingId !== uploadId) return { approved: false };
+      if (userRecordDenies(userSnap.exists ? userSnap.data() : null)) return { approved: false, blocked: true };
       const previousPath = previousPublishedPath(userSnap.exists ? userSnap.data().avatarUrl : null);
       tx.update(moderationRef, { status: "approved", failureReason: null, updatedAt: Timestamp.now() });
       tx.update(userRef, { avatarUrl });
@@ -1521,6 +1550,7 @@ exports.moderateAvatarUpload = onObjectFinalized(
       ]);
       console.log(`Avatar approved for ${maskedUid}`);
     } else {
+      if (approval.blocked) await publishedFile.delete().catch(() => {});
       // Never delete an active successor's files on same-upload lease reclaim.
       await cleanupSuperseded(true);
       console.log(`Avatar approval skipped (superseded) for ${maskedUid}`);
@@ -1942,6 +1972,7 @@ const DELETE_CHAT_ID_RE = /^[A-Za-z0-9_-]{1,200}$/;
 // marker committed cannot successfully write after it.
 async function deleteChatHandler(request) {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+  await assertProductAccess(request.auth.uid);
 
   const { chatId } = request.data || {};
   if (typeof chatId !== 'string' || !DELETE_CHAT_ID_RE.test(chatId)) {
@@ -1966,6 +1997,10 @@ async function deleteChatHandler(request) {
     throw new HttpsError('permission-denied', 'Not a participant in this chat.');
   }
 
+  if (typeof exports._productAccessHooks.beforeProtectedWrite === 'function') {
+    await exports._productAccessHooks.beforeProtectedWrite({ uid, op: 'deleteChat' });
+  }
+  await assertProductAccess(uid);
   await markChatDeletingAndRecursiveDelete(chatRef);
   return { success: true };
 }
@@ -2005,6 +2040,7 @@ async function usersAreBlocked(tx, uidA, uidB) {
 
 async function sendMessageHandler(request) {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+  await assertProductAccess(request.auth.uid);
 
   const { chatId, clientRequestId, text } = request.data || {};
   if (
@@ -2037,7 +2073,15 @@ async function sendMessageHandler(request) {
   const chatRef = db.collection('chats').doc(chatId);
   const messageRef = chatRef.collection('messages').doc(clientRequestId);
 
+  if (typeof exports._productAccessHooks.beforeProtectedWrite === 'function') {
+    await exports._productAccessHooks.beforeProtectedWrite({ uid, op: 'sendMessage' });
+  }
+
   const result = await db.runTransaction(async (tx) => {
+    const callerSnap = await tx.get(db.doc(`users/${uid}`));
+    if (userRecordDenies(callerSnap.exists ? callerSnap.data() : null)) {
+      throw new HttpsError('permission-denied', 'Product access is not available.');
+    }
     const [chatSnap, existingMsgSnap] = await Promise.all([tx.get(chatRef), tx.get(messageRef)]);
     if (!chatSnap.exists) {
       throw new HttpsError('not-found', 'Chat not found.');
@@ -2130,6 +2174,7 @@ exports.claimUsername = onCall(
   { region: "us-central1", serviceAccount: 'parqueen-user@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
   async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Sign in first.");
+    await assertProductAccess(request.auth.uid);
     await checkRateLimit(request.auth.uid, 'claimUsername', { limit: 5, windowSec: 3600 });
 
     const username = request.data?.username;
@@ -2186,11 +2231,17 @@ exports.claimUsername = onCall(
           // missing account doc if the interruption happened before the
           // account itself was ever created.
           const userDoc = await tx.get(userRef);
+          if (userDoc.exists && userRecordDenies(userDoc.data())) {
+            throw new HttpsError('permission-denied', 'Product access is not available.');
+          }
           if (!userDoc.exists) bootstrapAccount(tx, uid, trimmed);
           return;
         }
 
         const userDoc = await tx.get(userRef);
+        if (userDoc.exists && userRecordDenies(userDoc.data())) {
+          throw new HttpsError('permission-denied', 'Product access is not available.');
+        }
         const userData = userDoc.exists ? userDoc.data() : {};
 
         // Enforce 30-day cooldown (skip for generated usernames starting with user_)
@@ -2247,6 +2298,7 @@ const UPDATE_DISPLAY_NAME_MAX_LEN = 100;
 
 async function updateDisplayNameHandler(request) {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+  await assertProductAccess(request.auth.uid);
 
   const { fullName } = request.data || {};
   if (typeof fullName !== 'string') {
@@ -2277,8 +2329,17 @@ async function updateDisplayNameHandler(request) {
   }
 
   try {
-    await db.collection('users').doc(uid).update({ fullName: trimmed });
+    await db.runTransaction(async (tx) => {
+      const userRef = db.collection('users').doc(uid);
+      const snap = await tx.get(userRef);
+      if (!snap.exists) throw new HttpsError('not-found', 'Profile not found.');
+      if (userRecordDenies(snap.data())) {
+        throw new HttpsError('permission-denied', 'Product access is not available.');
+      }
+      tx.update(userRef, { fullName: trimmed });
+    });
   } catch (e) {
+    if (e instanceof HttpsError) throw e;
     console.error('Display name update error:', sanitizeError(e));
     throw new HttpsError('internal', 'Failed to update display name.');
   }
@@ -2441,6 +2502,7 @@ exports.bootstrapAdmin = onCall(
   { region: 'us-central1', serviceAccount: 'parqueen-admin-auth@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
   async (request) => {
     await requireCurrentAuthenticatedUser(request);
+    await assertProductAccess(request.auth.uid);
 
     const email = request.auth.token.email || '';
     if (!email.endsWith('@parqueen.app')) {
@@ -2980,138 +3042,33 @@ exports.setStaffRole = onCall(
   }
 );
 
-// 16) Admin suspend user — server-authoritative suspension.
-//
-// Order (fail closed, retry-safe; every step is idempotent):
-//   1. Auth: updateUser({disabled:true}) — blocks new sign-ins and every
-//      refresh-token exchange.
-//   2. Auth: revokeRefreshTokens — invalidates refresh tokens so sessions
-//      that are already open cannot mint a new ID token.
-//   3. Firestore (one atomic batch): public users/{uid} keeps ONLY
-//      status:'Suspended'; who/why/when goes to the admin-only
-//      users/{uid}/private/moderation doc (no client rule matches it →
-//      default deny for every client, including the user); legacy public
-//      suspension fields are deleted; adminAuditLog entry.
-// A failure in 1/2 throws before any Firestore write (nothing claims the
-// user is suspended while Auth still lets them in). A failure in 3 leaves
-// Auth disabled with the old public status; the admin retries and the
-// call converges. Residual: already-issued ID tokens stay
-// cryptographically valid until expiry (≤1h) and no callable or rule
-// re-checks suspension in this change (a callable-side gate is deferred);
-// see PR body.
-//
-// Runtime identity: parqueen-admin-auth — the existing SA that setStaffRole
-// already uses for setCustomUserClaims + revokeRefreshTokens. It needs
-// Firebase Auth user update (firebaseauth.users.update) and Firestore
-// write; verify those grants read-only before deploy (see PR body).
-const SUSPENSION_PUBLIC_LEGACY_FIELDS = [
-  'suspendedAt', 'suspendedBy', 'suspensionReason', 'unsuspendedAt', 'unsuspendedBy',
-];
-function legacySuspensionFieldDeletes() {
-  const out = {};
-  for (const f of SUSPENSION_PUBLIC_LEGACY_FIELDS) out[f] = FieldValue.delete();
-  return out;
-}
-function mapSuspensionAuthError(err) {
-  if (err && err.code === 'auth/user-not-found') {
-    return new HttpsError('not-found', 'User not found.');
-  }
-  return new HttpsError('internal', 'Could not update the account sign-in state. Nothing was changed; please retry.');
-}
+const {
+  hooks: suspensionHooks,
+  SUSPENSION_CALL_TIMEOUT_SEC,
+  adminSuspendUser: adminSuspendUserHandler,
+  adminUnsuspendUser: adminUnsuspendUserHandler,
+} = require('./suspensionAccess');
+exports._suspensionConcurrencyHooks = suspensionHooks;
 
+// 16) Admin suspend user. The deny flag is committed before Auth disable.
+// See functions/suspensionAccess.js for the lock, partial audits, and the
+// late Auth RPC limitation.
 exports.adminSuspendUser = onCall(
-  { region: 'us-central1', serviceAccount: 'parqueen-admin-auth@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
+  { region: 'us-central1', timeoutSeconds: SUSPENSION_CALL_TIMEOUT_SEC, serviceAccount: 'parqueen-admin-auth@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
   async (request) => {
     await requireCurrentAdmin(request);
-    const { userId, reason } = request.data || {};
-    if (!userId || typeof userId !== 'string') throw new HttpsError('invalid-argument', 'userId required.');
-    if (!reason || typeof reason !== 'string' || !reason.trim()) throw new HttpsError('invalid-argument', 'reason required.');
-    if (userId === request.auth.uid) throw new HttpsError('failed-precondition', 'You cannot suspend your own account.');
-
-    const userRef = db.doc(`users/${userId}`);
-    if (!(await userRef.get()).exists) throw new HttpsError('not-found', 'User not found.');
-
-    try {
-      await getAuth().updateUser(userId, { disabled: true });
-      await getAuth().revokeRefreshTokens(userId);
-    } catch (err) {
-      console.error('adminSuspendUser: auth step failed', { code: err && err.code ? String(err.code) : 'unknown' });
-      throw mapSuspensionAuthError(err);
-    }
-
-    const now = Timestamp.now();
-    const batch = db.batch();
-    batch.update(userRef, { status: 'Suspended', updatedAt: now, ...legacySuspensionFieldDeletes() });
-    batch.set(db.doc(`users/${userId}/private/moderation`), {
-      status: 'Suspended',
-      suspendedAt: now,
-      suspendedBy: request.auth.uid,
-      suspensionReason: reason.trim(),
-      unsuspendedAt: null,
-      unsuspendedBy: null,
-      updatedAt: now,
-    }, { merge: true });
-    batch.set(db.collection('adminAuditLog').doc(), {
-      action: 'user.suspend',
-      targetType: 'user',
-      targetId: userId,
-      targetUserId: userId,
-      adminId: request.auth.uid,
-      reason: reason.trim(),
-      createdAt: now,
-    });
-    await batch.commit();
-
-    return { success: true };
-  }
+    return adminSuspendUserHandler(request);
+  },
 );
 
-// 17) Admin unsuspend user — re-enables Auth, then restores status.
-// Auth first: if re-enable fails nothing changes (retry). If the Firestore
-// batch fails afterwards, the user can sign in while the public status
-// still reads Suspended until the admin retries. Refresh tokens revoked
-// at suspension stay revoked: the user signs in again.
+// 17) Admin unsuspend user. productAccessBlocked stays true until the
+// guarded completion transaction also records user.unsuspend.
 exports.adminUnsuspendUser = onCall(
-  { region: 'us-central1', serviceAccount: 'parqueen-admin-auth@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
+  { region: 'us-central1', timeoutSeconds: SUSPENSION_CALL_TIMEOUT_SEC, serviceAccount: 'parqueen-admin-auth@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
   async (request) => {
     await requireCurrentAdmin(request);
-    const { userId } = request.data || {};
-    if (!userId || typeof userId !== 'string') throw new HttpsError('invalid-argument', 'userId required.');
-
-    const userRef = db.doc(`users/${userId}`);
-    if (!(await userRef.get()).exists) throw new HttpsError('not-found', 'User not found.');
-
-    try {
-      await getAuth().updateUser(userId, { disabled: false });
-    } catch (err) {
-      console.error('adminUnsuspendUser: auth step failed', { code: err && err.code ? String(err.code) : 'unknown' });
-      throw mapSuspensionAuthError(err);
-    }
-
-    const now = Timestamp.now();
-    const batch = db.batch();
-    batch.update(userRef, { status: 'Active', updatedAt: now, ...legacySuspensionFieldDeletes() });
-    batch.set(db.doc(`users/${userId}/private/moderation`), {
-      status: 'Active',
-      unsuspendedAt: now,
-      unsuspendedBy: request.auth.uid,
-      suspendedAt: null,
-      suspendedBy: null,
-      suspensionReason: null,
-      updatedAt: now,
-    }, { merge: true });
-    batch.set(db.collection('adminAuditLog').doc(), {
-      action: 'user.unsuspend',
-      targetType: 'user',
-      targetId: userId,
-      targetUserId: userId,
-      adminId: request.auth.uid,
-      createdAt: now,
-    });
-    await batch.commit();
-
-    return { success: true };
-  }
+    return adminUnsuspendUserHandler(request);
+  },
 );
 
 // 18) Admin update report status — review / dismiss / reopen with audit trail
@@ -3274,10 +3231,13 @@ exports.exchangePhoneAuthSession = onCall({
   region: 'us-central1',
   enforceAppCheck: false,
   serviceAccount: AUTH_BRIDGE_SERVICE_ACCOUNT,
-}, (request) => exchangePhoneAuthSessionHandler(request, {
-  checkRateLimit,
-  createCustomToken: (uid) => getAuth().createCustomToken(uid),
-}));
+}, async (request) => {
+  return exchangePhoneAuthSessionHandler(request, {
+    checkRateLimit,
+    assertProductAccess,
+    createCustomToken: (uid) => getAuth().createCustomToken(uid),
+  });
+});
 
 // Delete account — idempotent; covers all user-linked collections, Storage, and Auth.
 // Job document at accountDeletionJobs/{uid} tracks state: running → failed | completed.
@@ -3286,6 +3246,8 @@ exports.exchangePhoneAuthSession = onCall({
 exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parqueen-account@parkqueen-46475363-ccf36.iam.gserviceaccount.com' }, async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError('unauthenticated', 'Must be signed in.');
+    // Recovery path: a suspended or access-blocked user must still be able to
+    // delete the account. Do not call assertProductAccess here.
 
     // Auth-freshness check BEFORE rate limit — a stale-session rejection must not
     // consume quota; the user should re-auth and retry without hitting the daily cap.
@@ -5053,7 +5015,12 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
     telemetry: createCurbTelemetry(),
     requestNonceFactory: randomUUID,
     readCanonicalCache: streetIntelligenceCache.readCanonicalCache,
-    persistCanonicalCurb: streetIntelligenceCache.persistCanonicalCurb,
+    // The orchestrator fetches external evidence before this write. Re-check
+    // the caller immediately before the privileged persist.
+    persistCanonicalCurb: async (input) => {
+      await assertProductAccess(verifiedUid);
+      return streetIntelligenceCache.persistCanonicalCurb(input);
+    },
   };
   if (process.env.FUNCTIONS_EMULATOR === 'true') {
     const { localRuntimeDependencies } = require('./curbIntelligence/runtimeSourceArtifact');
@@ -5062,7 +5029,9 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
     const { attachOwnerPilot } = require('./curbIntelligence/runtimeSourceArtifact');
     attachOwnerPilot(orchestratorDependencies, verifiedUid);
   }
-  return runCanonicalCurbOrchestrator(requestData, orchestratorDependencies);
+  const outcome = await runCanonicalCurbOrchestrator(requestData, orchestratorDependencies);
+  await assertProductAccess(verifiedUid);
+  return outcome;
 }
 
 // ─── Hydrant proximity (NYC DEP) ─────────────────────────────────────────────
@@ -5186,6 +5155,7 @@ exports.checkHydrantDistance = onCall(
   },
   async (request) => {
     if (!request.auth) throw new HttpsError('unauthenticated', 'Must be signed in.');
+    await assertProductAccess(request.auth.uid);
 
     const { lat, lng } = request.data || {};
     if (typeof lat !== 'number' || typeof lng !== 'number'
@@ -5206,6 +5176,7 @@ exports.checkHydrantDistance = onCall(
     const result = hook
       ? await hook(lat, lng)
       : await _nearestHydrantMeters(lat, lng);
+    await assertProductAccess(request.auth.uid);
 
     if (!result || result.ok !== true) {
       return { status: 'unavailable', meters: null, radiusMeters: HYDRANT_SEARCH_RADIUS_M };
@@ -5231,6 +5202,7 @@ exports.createSegmentFromSweepNYC = onCall(
     if (streetIntelligenceAppCheckRejection(request)) {
       throw new HttpsError('unauthenticated', 'App Check required.');
     }
+    await assertProductAccess(request.auth.uid);
 
     const uid = request.auth.uid;
     await checkRateLimit(uid, 'createSegmentFromSweepNYC', { limit: 30, windowSec: 3600 });
@@ -6423,6 +6395,7 @@ exports.analyzeSign = onCall(
   { secrets: [geminiApiKey], enforceAppCheck: false, serviceAccount: 'parqueen-ai@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
   async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+    await assertProductAccess(request.auth.uid);
     const { imageBase64 } = request.data || {};
     if (typeof imageBase64 !== "string" || imageBase64.length === 0) {
       throw new HttpsError("invalid-argument", "imageBase64 is required.");
@@ -6487,6 +6460,7 @@ Give restrictionStartsAt and restrictionEndsAt as ISO timestamps, or null when u
         ` maxOutputTokens:${SIGN_ANALYSIS_MAX_OUTPUT_TOKENS}`
       );
     }
+    await assertProductAccess(request.auth.uid);
     return result;
   }
 );
@@ -6495,6 +6469,7 @@ exports.generateSmartReplies = onCall(
   { secrets: [geminiApiKey], enforceAppCheck: false, serviceAccount: 'parqueen-ai@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
   async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+    await assertProductAccess(request.auth.uid);
     const { lastMessage, context } = request.data || {};
     if (typeof lastMessage !== "string" || lastMessage.length === 0) {
       throw new HttpsError("invalid-argument", "lastMessage is required.");
@@ -6549,6 +6524,7 @@ Suggest exactly ${SMART_REPLY_COUNT} short, natural, polite replies the user mig
     }
     // Empty means "no suggestions": the chat strip hides itself rather than
     // offering a blank pill that would send an empty message when tapped.
+    await assertProductAccess(request.auth.uid);
     return { replies };
   }
 );
@@ -6557,6 +6533,7 @@ exports.generateListingDescription = onCall(
   { secrets: [geminiApiKey], enforceAppCheck: false, serviceAccount: 'parqueen-ai@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
   async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+    await assertProductAccess(request.auth.uid);
     const { features } = request.data || {};
     const MAX_FEATURES = 10;
     const MAX_FEATURE_LENGTH = 60;
@@ -6602,6 +6579,7 @@ exports.generateListingDescription = onCall(
         truncated ? "truncated" : "unusable"
       );
     }
+    await assertProductAccess(request.auth.uid);
     return { description: parsed ?? LISTING_DESCRIPTION_FALLBACK };
   }
 );
