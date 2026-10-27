@@ -14,12 +14,25 @@ service firebase.storage {
     }
 
     // Upload quarantine — owner may only CREATE the "original" file; no overwrites.
-    // Enforced:   owner auth, MIME type, 5 MB size limit, create-only (no update).
-    // OPEN/TM-13: pendingUploadId match and requestedAt freshness cannot be checked
-    //             here because Storage Rules have no cross-service Firestore read.
-    //             Server-side enforcement (Step 0 transaction) provides that guard.
+    // Enforced: owner auth, MIME type, 5 MB size limit, create-only (no update),
+    // and the same user-document access policy as Firestore.
+    //
+    // One firestore.exists/get of users/{uid} in the default database.
+    // status == 'Suspended' denies. productAccessBlocked denies unless the
+    // field is missing or exactly boolean false. pendingUploadId freshness
+    // stays in moderateAvatarUpload.
+    function avatarUploadDenied(uid) {
+      let userPath = /databases/(default)/documents/users/$(uid);
+      return firestore.exists(userPath) && (
+        firestore.get(userPath).data.get('status', '') == 'Suspended'
+        || firestore.get(userPath).data.get('productAccessBlocked', false) != false
+      );
+    }
+
     match /avatarUploads/{uid}/{uploadId}/original {
-      allow create: if isOwner(uid) && isValidAvatarUpload();
+      allow create: if isOwner(uid)
+        && isValidAvatarUpload()
+        && !avatarUploadDenied(uid);
       allow update, delete, read: if false;
     }
     // Any other filename under the upload quarantine is denied entirely.

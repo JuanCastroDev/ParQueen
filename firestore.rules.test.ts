@@ -30,6 +30,7 @@ import {
     where,
     Timestamp,
     runTransaction,
+    writeBatch,
 } from 'firebase/firestore';
 import { cancelClaimTransaction } from './views/street-parking/cancelClaimTransaction';
 import { commitClaimToHeading } from './views/street-parking/commitToHeading';
@@ -5894,5 +5895,215 @@ describe('C1 — participant success attestations', () => {
         await assertSucceeds(getDoc(doc(ownerDb(), 'spotFeedback', `${spotId}_${OTHER_UID}_finder`)));
         await assertFails(getDoc(doc(ownerDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`)));
         await assertFails(getDoc(doc(thirdDb(), 'spotFeedback', `${spotId}_${OTHER_UID}_finder`)));
+    });
+});
+
+// S7 access — one user document. status Suspended denies. productAccessBlocked
+// denies unless missing or exactly boolean false. Functions do not write the
+// field yet. private/access is client-denied and is not an authorization source.
+describe('S7 access — Firestore caller gate', () => {
+    const UID = 's7-access-uid';
+    function userDb() {
+        return testEnv.authenticatedContext(UID).firestore();
+    }
+
+    async function seedProfile(data: object) {
+        await seed('users', UID, data);
+    }
+
+    function ownedSpot(id: string) {
+        return {
+            finderId: UID,
+            finderName: 'legacy',
+            address: id,
+            lat: 40.71,
+            lng: -74.03,
+            status: 'available',
+            pingMode: 'now',
+            type: 'free',
+            reportedAt: Timestamp.now(),
+            expiresAt: FUTURE,
+            geohash: 'dr5ru',
+        };
+    }
+
+    it('A: a legacy profile with no productAccessBlocked field can still update a vehicle field', async () => {
+        await seedProfile({ username: 'legacy' });
+        await assertSucceeds(updateDoc(doc(userDb(), 'users', UID), { vehicleColor: 'blue' }));
+    });
+
+    it('B: Suspended denies even when productAccessBlocked is false', async () => {
+        await seedProfile({ username: 'legacy', status: 'Suspended', productAccessBlocked: false });
+        await assertFails(updateDoc(doc(userDb(), 'users', UID), { vehicleColor: 'blue' }));
+        await seed('spots', 's7-susp-spot', ownedSpot('s7-susp-spot'));
+        await assertFails(updateDoc(doc(userDb(), 'spots', 's7-susp-spot'), { interestExpiresAt: FUTURE }));
+        await assertFails(deleteDoc(doc(userDb(), 'spots', 's7-susp-spot')));
+        await assertFails(getDoc(doc(userDb(), 'spots', 's7-susp-spot')));
+    });
+
+    it('C: productAccessBlocked true denies spot create, update, and delete while status is Active', async () => {
+        await seedProfile({
+            username: 'legacy',
+            status: 'Active',
+            productAccessBlocked: true,
+            crowns: 0,
+        });
+        await assertFails(updateDoc(doc(userDb(), 'users', UID), { vehicleColor: 'blue' }));
+        const created = {
+            ...ownedSpot('s7-create'),
+            reportedAt: Timestamp.now(),
+            expiresAt: Timestamp.fromMillis(Date.now() + 20 * 60 * 1000),
+        };
+        await assertFails(commitBoundedPing(userDb(), UID, 's7-create', created));
+        await seed('spots', 's7-blocked-spot', ownedSpot('s7-blocked-spot'));
+        await assertFails(updateDoc(doc(userDb(), 'spots', 's7-blocked-spot'), { interestExpiresAt: FUTURE }));
+        await assertFails(deleteDoc(doc(userDb(), 'spots', 's7-blocked-spot')));
+        await assertFails(getDoc(doc(userDb(), 'spots', 's7-blocked-spot')));
+    });
+
+    it('D: the same auth context is denied after productAccessBlocked becomes true', async () => {
+        await seedProfile({ username: 'legacy', status: 'Active', productAccessBlocked: false });
+        const db = userDb();
+        await assertSucceeds(updateDoc(doc(db, 'users', UID), { vehicleColor: 'blue' }));
+        await seedProfile({ username: 'legacy', status: 'Active', productAccessBlocked: true, vehicleColor: 'blue' });
+        await assertFails(updateDoc(doc(db, 'users', UID), { vehicleColor: 'red' }));
+    });
+
+    it('E: clients cannot read or write private/access, or forge productAccessBlocked', async () => {
+        await seedProfile({ username: 'legacy', status: 'Active', productAccessBlocked: false });
+        const path = ['users', UID, 'private', 'access'] as const;
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            await setDoc(doc(ctx.firestore(), ...path), { blocked: true });
+        });
+        await assertFails(getDoc(doc(userDb(), ...path)));
+        await assertFails(getDoc(doc(otherDb(), ...path)));
+        await assertFails(getDoc(doc(adminDb(), ...path)));
+        await assertFails(setDoc(doc(userDb(), ...path), { blocked: false }));
+        await assertFails(updateDoc(doc(userDb(), ...path), { blocked: false }));
+        await assertFails(deleteDoc(doc(userDb(), ...path)));
+        await assertFails(updateDoc(doc(userDb(), 'users', UID), { productAccessBlocked: true }));
+        await assertFails(updateDoc(doc(userDb(), 'users', UID), {
+            vehicleColor: 'blue',
+            productAccessBlocked: true,
+        }));
+        const { deleteField } = await import('firebase/firestore');
+        await assertFails(updateDoc(doc(userDb(), 'users', UID), { productAccessBlocked: deleteField() }));
+        await assertFails(setDoc(doc(userDb(), 'users', 's7-new-user'), {
+            username: 'forged',
+            productAccessBlocked: false,
+        }));
+        let stored: { productAccessBlocked?: boolean } | undefined;
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            stored = (await getDoc(doc(ctx.firestore(), 'users', UID))).data();
+        });
+        expect(stored?.productAccessBlocked).toBe(false);
+    });
+
+    it('F: street segments, street rules, and curb suspensions stay publicly readable', async () => {
+        await seedProfile({ username: 'legacy', status: 'Suspended' });
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            const fs = ctx.firestore();
+            await setDoc(doc(fs, 'streetSegments', 'seg-s7'), { name: 'Main' });
+            await setDoc(doc(fs, 'streetSegments', 'seg-s7', 'streetRules', 'rule-s7'), { days: ['Mon'] });
+            await setDoc(doc(fs, 'suspensions', 'curb-s7'), { reason: 'sweep' });
+        });
+        await assertSucceeds(getDoc(doc(anonDb(), 'streetSegments', 'seg-s7')));
+        await assertSucceeds(getDoc(doc(anonDb(), 'streetSegments', 'seg-s7', 'streetRules', 'rule-s7')));
+        await assertSucceeds(getDoc(doc(anonDb(), 'suspensions', 'curb-s7')));
+        await assertSucceeds(getDoc(doc(userDb(), 'streetSegments', 'seg-s7')));
+        await assertSucceeds(getDoc(doc(userDb(), 'suspensions', 'curb-s7')));
+    });
+
+    it('G: a blocked caller cannot open a chat, and private/account stays server-written', async () => {
+        await seedProfile({ username: 'legacy', status: 'Active', productAccessBlocked: true });
+        const peer = 's7-chat-peer';
+        const participants = [UID, peer].sort();
+        const chatId = participants.join('_');
+        await assertFails(setDoc(doc(userDb(), 'chats', chatId), {
+            id: chatId,
+            participants,
+        }));
+        await assertFails(setDoc(doc(userDb(), 'users', UID, 'private', 'account'), { reportCount: 0 }));
+    });
+
+    it('H: first-time onboarding writes succeed when no profile or access doc exists', async () => {
+        await assertSucceeds(setDoc(doc(userDb(), 'users', UID, 'private', 'preferences'), { lang: 'en' }));
+        await seed('usernames', 'freshname', { uid: 'someone-else' });
+        await assertSucceeds(getDoc(doc(userDb(), 'usernames', 'freshname')));
+        await assertSucceeds(setDoc(doc(userDb(), 'users', UID, 'private', 'avatar'), {
+            pendingUploadId: 'upload-onboard-1',
+            requestedAt: Timestamp.now(),
+        }));
+    });
+
+    it('I: a malformed productAccessBlocked fails closed, and boolean false does not', async () => {
+        const cases = ['false', 'true', 0, 1, null];
+        for (const productAccessBlocked of cases) {
+            await seedProfile({ username: 'legacy', status: 'Active', productAccessBlocked });
+            await assertFails(updateDoc(doc(userDb(), 'users', UID), { vehicleColor: 'blue' }));
+        }
+        await seedProfile({ username: 'legacy', status: 'Active', productAccessBlocked: false });
+        await assertSucceeds(updateDoc(doc(userDb(), 'users', UID), { vehicleColor: 'blue' }));
+    });
+
+    it('J: a claim transaction still commits when productAccessBlocked is false', async () => {
+        const claimer = 's7-claimer';
+        const spotId = 's7-claim-spot';
+        await seedActiveClaimInvariantOpen();
+        await seed('users', OWNER_UID, { username: 'finder', crowns: 10, status: 'Active' });
+        await seed('users', claimer, {
+            username: 'claimer',
+            crowns: 0,
+            status: 'Active',
+            productAccessBlocked: false,
+        });
+        await seed('spots', spotId, {
+            finderId: OWNER_UID,
+            finderName: 'finder',
+            address: '1 Access Ave',
+            lat: 40.71,
+            lng: -74.03,
+            status: 'available',
+            pingMode: 'now',
+            reportedAt: Timestamp.now(),
+            expiresAt: FUTURE,
+        });
+        const db = testEnv.authenticatedContext(claimer).firestore();
+        const claimedAt = Timestamp.now();
+        await assertSucceeds(runTransaction(db, async (tx) => {
+            tx.update(doc(db, 'spots', spotId), {
+                status: 'interested',
+                claimState: 'heading',
+                interestedUserId: claimer,
+                interestExpiresAt: FUTURE,
+                claimStartedAt: claimedAt,
+            });
+            tx.set(doc(db, 'users', claimer, 'activeIncomingClaims', 'current'), {
+                spotId,
+                claimStartedAt: claimedAt,
+                claimState: 'heading',
+                updatedAt: claimedAt,
+            });
+        }));
+    });
+
+    it('J2: a two-write batch still commits for a legacy user with no access doc', async () => {
+        await seedProfile({ username: 'legacy', status: 'Active' });
+        const db = userDb();
+        const batch = writeBatch(db);
+        batch.set(doc(db, 'users', UID, 'private', 'preferences'), { lang: 'es' });
+        batch.set(doc(db, 'userLocations', UID), {
+            lastGeohash: 'dr5ru',
+            lastGeohashUpdatedAt: Timestamp.now(),
+        });
+        await assertSucceeds(batch.commit());
+    });
+
+    it('recovery: a Suspended user can still read their own account-deletion job', async () => {
+        await seedProfile({ username: 'legacy', status: 'Suspended' });
+        await seed('accountDeletionJobs', UID, { state: 'queued' });
+        const snap = await assertSucceeds(getDoc(doc(userDb(), 'accountDeletionJobs', UID)));
+        expect(snap.data()?.state).toBe('queued');
+        await assertFails(setDoc(doc(userDb(), 'users', UID, 'private', 'preferences'), { lang: 'en' }));
     });
 });
