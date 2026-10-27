@@ -11,6 +11,13 @@ name: PR Gate
 #
 # Secret scan remains a separate, independently-required workflow — already
 # unconditional on every push/PR, not folded in here.
+#
+# CI test-scope policy: the general client suite omits only
+# functions/curbIntelligence/provenanceAndConflict.test.cjs and reports that
+# exclusion. Provenance-critical changes fail closed because GitHub Actions
+# cannot run the genuine 26C successor. This policy requires independent
+# Security/QA acceptance before merge. npm test and release preflight still
+# include the private suite.
 
 on:
   pull_request:
@@ -34,6 +41,18 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+
+      # Fail closed when the diff is unknown or touches provenance-critical
+      # Street Intelligence paths. This does not run the private suite and
+      # must not be read as a successful private verification.
+      - name: Provenance change guard
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: node scripts/ci/provenance-change-guard.mjs
 
       # Classifies the FULL pull-request diff (base...head, not just the
       # latest commit — see PR #69 for why single-commit diffing is wrong)
@@ -174,9 +193,9 @@ jobs:
         if: steps.classify.outputs.run_client == 'true'
         run: npm ci --prefix functions
 
-      - name: CLIENT — Run unit tests
+      - name: CLIENT — Run general PR unit tests
         if: steps.classify.outputs.run_client == 'true'
-        run: npm test
+        run: node scripts/ci/general-pr-suite.mjs
 
       - name: CLIENT — Typecheck
         if: steps.classify.outputs.run_client == 'true'
@@ -317,6 +336,12 @@ jobs:
       - name: FIRESTORE — Run Firestore rules tests
         if: steps.classify.outputs.run_firestore == 'true'
         run: npm run test:rules
+        env:
+          FIREBASE_CLI_EXPERIMENTS: webframeworks
+
+      - name: FIRESTORE - Run analytics consent emulator tests
+        if: steps.classify.outputs.run_firestore == 'true'
+        run: firebase emulators:exec --only firestore --project demo-parkqueen-rules-test "node node_modules/vitest/vitest.mjs run utils/analyticsConsentFirestore.emulator.test.ts"
         env:
           FIREBASE_CLI_EXPERIMENTS: webframeworks
 

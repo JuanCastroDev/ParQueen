@@ -33,8 +33,12 @@
   --crown-7-text: #0b6aa8;
 
   --color-overlay: rgba(255, 255, 255, 0.04);
-  --mobile-primary-nav-space: calc(104px + env(safe-area-inset-bottom, 0px));
+  --mobile-primary-nav-space: calc(96px + env(safe-area-inset-bottom, 0px));
   --mobile-map-header-width: min(86vw, 372px);
+  /* Unified shell tokens: nav items sit in a centered track inside the full-width docked surface;
+     header/search/status chrome is capped at --shell-content-max on wide screens. */
+  --shell-nav-track: 398px;
+  --shell-content-max: 560px;
   /* Light-mode map chrome: cool pale glass + navy type (dark mode overrides below) */
   --mobile-shell-surface: rgba(244, 248, 253, 0.82);
   --mobile-shell-surface-strong: rgba(236, 243, 252, 0.92);
@@ -306,7 +310,13 @@ html, body, #root {
 }
 
 .map-status-chip.is-available {
+  min-height: 44px;
   border-color: rgba(52, 211, 153, 0.24);
+}
+
+.map-status-chip.is-available:focus-visible {
+  outline: 2px solid var(--mobile-shell-focus);
+  outline-offset: 3px;
 }
 
 .map-status-chip.is-empty {
@@ -399,6 +409,27 @@ html, body, #root {
   letter-spacing: -0.028em;
 }
 
+/* Hidden below 768px so phone layouts are unchanged; shown in the min-width: 768px block. */
+.map-context-chip {
+  display: none;
+}
+
+/* Phone portrait: the reminder timer chip is pinned above the docked nav (and its raised Ping) like the
+   handoff card. The in-flow version sat behind the nav because the utility pb-0 on .mobile-map-controls
+   outranks the padding-bottom rule above (utilities are emitted last). Two classes outrank w-full/mx-auto;
+   right: 82px keeps My Car/Locate clear; short screens keep their own pinned rule in the max-height block. */
+@media (max-width: 767px) and (min-height: 501px) {
+  .mobile-map-controls .map-timer-chip {
+    position: fixed;
+    bottom: calc(var(--mobile-primary-nav-space) + 14px);
+    left: max(16px, env(safe-area-inset-left, 0px));
+    right: max(82px, env(safe-area-inset-right, 0px));
+    z-index: 34;
+    width: auto;
+    margin: 0;
+  }
+}
+
 /* Four navigational destinations surround one distinct center action. */
 .mobile-primary-nav {
   position: fixed;
@@ -407,23 +438,27 @@ html, body, #root {
   bottom: 0;
   left: 0;
   pointer-events: none;
-  padding: 0 max(4vw, env(safe-area-inset-right, 0px)) max(8px, env(safe-area-inset-bottom, 0px)) max(4vw, env(safe-area-inset-left, 0px));
+  /* Docked flush to the viewport bottom; the surface owns the safe-area inset. */
+  padding: 0;
 }
 
 .mobile-primary-nav-surface {
-  width: min(92vw, 398px);
-  height: 86px;
-  min-height: 86px;
-  margin: 0 auto;
-  padding: 8px 6px 7px;
+  box-sizing: border-box;
+  width: 100%;
+  height: calc(86px + env(safe-area-inset-bottom, 0px));
+  min-height: calc(86px + env(safe-area-inset-bottom, 0px));
+  margin: 0;
+  /* Background extends under the home indicator / gesture area; items stay above it and within a centered 398px track. */
+  padding: 8px max(6px, env(safe-area-inset-right, 0px), calc(50% - var(--shell-nav-track) / 2)) calc(8px + env(safe-area-inset-bottom, 0px)) max(6px, env(safe-area-inset-left, 0px), calc(50% - var(--shell-nav-track) / 2));
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   align-items: stretch;
   pointer-events: auto;
   color: var(--mobile-shell-text-muted);
-  border-radius: 27px;
+  border-width: 1px 0 0;
+  border-radius: 22px 22px 0 0;
   background: linear-gradient(180deg, var(--mobile-shell-surface), var(--mobile-shell-surface-strong));
-  box-shadow: inset 0 1px 0 var(--mobile-shell-highlight), 0 16px 36px rgba(0, 5, 16, 0.32), 0 3px 10px rgba(0, 5, 16, 0.16);
+  box-shadow: inset 0 1px 0 var(--mobile-shell-highlight), 0 -8px 24px rgba(0, 5, 16, 0.28), 0 -1px 6px rgba(0, 5, 16, 0.14);
 }
 
 .mobile-primary-nav-item {
@@ -747,9 +782,11 @@ html, body, #root {
   }
 }
 
-@media (orientation: landscape) and (max-height: 430px) and (max-width: 767px) {
+/* Compact height mode: any short viewport (phone landscape at every width), keyed on height only. */
+@media (max-height: 500px) {
   :root {
-    --mobile-primary-nav-space: calc(78px + env(safe-area-inset-bottom, 0px));
+    --mobile-primary-nav-space: calc(70px + env(safe-area-inset-bottom, 0px));
+    --shell-nav-track: 430px;
   }
 
   .map-mobile-header {
@@ -784,11 +821,11 @@ html, body, #root {
   }
 
   .mobile-primary-nav-surface {
-    width: min(86vw, 430px);
-    height: 64px;
-    min-height: 64px;
-    padding: 6px;
-    border-radius: 22px;
+    width: 100%;
+    height: calc(64px + env(safe-area-inset-bottom, 0px));
+    min-height: calc(64px + env(safe-area-inset-bottom, 0px));
+    padding: 6px max(6px, env(safe-area-inset-right, 0px), calc(50% - var(--shell-nav-track) / 2)) calc(6px + env(safe-area-inset-bottom, 0px)) max(6px, env(safe-area-inset-left, 0px), calc(50% - var(--shell-nav-track) / 2));
+    border-radius: 18px 18px 0 0;
   }
 
   .mobile-primary-nav-item {
@@ -836,7 +873,7 @@ html, body, #root {
 
   .mobile-map-controls .map-secondary-controls {
     position: fixed;
-    right: max(16px, env(safe-area-inset-right, 0px), calc(50% - 190px));
+    right: max(16px, env(safe-area-inset-right, 0px));
     bottom: calc(var(--mobile-primary-nav-space) + 10px);
     z-index: 34;
     width: auto;
@@ -877,7 +914,77 @@ html, body, #root {
 
 }
 
+/* Short landscape phones (<768 wide) also get the parked-car / active-Ping chip; portrait cannot match. */
+@media (max-height: 500px) and (orientation: landscape) {
+  .map-context-chip.map-context-chip {
+    display: inline-flex;
+    min-height: 44px;
+    padding: 0 12px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  /* While the handoff-recovery card is rendered it overlaps the status row on short screens; hide the chip
+     (nav Ping and My Car keep its actions). Three classes outrank both chip display rules. */
+  .map-context-chip.map-context-chip.map-context-chip--suppressed {
+    display: none;
+  }
+
+  /* Priority on short landscape: handoff card > timer chip > contextual chip. The timer stays mounted (its
+     countdown lives in useParkingTimer) and is only hidden while the card is rendered. */
+  .map-timer-chip.map-timer-chip--suppressed {
+    display: none;
+  }
+
+  /* The max-height block lifts the card above a following timer chip; on short landscape that timer is always
+     suppressed while the card shows, so keep the card at its timer-less offset. Same specificity, later in the file. */
+  .mobile-map-controls .handoff-action-card.handoff-action-card {
+    bottom: calc(var(--mobile-primary-nav-space) + 10px);
+  }
+}
+
 @media (min-width: 768px) {
+  /* The docked nav is visible at every width; wider screens get a wider centered item track. */
+  :root {
+    --shell-nav-track: 480px;
+  }
+
+  /* Doubled class outranks the md:pb-* utilities on the primary screens so content clears the nav. */
+  .mobile-primary-screen.mobile-primary-screen {
+    padding-bottom: var(--mobile-primary-nav-space);
+  }
+
+  /* My Car + Locate: lower-right of the viewport, above the nav. */
+  .mobile-map-controls .map-secondary-controls {
+    position: fixed;
+    right: max(16px, env(safe-area-inset-right, 0px));
+    bottom: calc(var(--mobile-primary-nav-space) + 16px);
+    z-index: 34;
+    width: auto;
+    margin: 0;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  /* In-flow chips (timer, handoff recovery) stay above the always-visible nav; doubled class beats pb-0. */
+  .mobile-map-controls.mobile-map-controls {
+    padding-bottom: calc(var(--mobile-primary-nav-space) + 16px);
+  }
+
+  /* Contextual parked-car / active-Ping chip (replaces the floating CTA) at the widths that showed it.
+     Doubled class outranks the later compact .map-status-chip sizing. */
+  .map-context-chip.map-context-chip {
+    display: inline-flex;
+    min-height: 44px;
+    padding: 0 14px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .map-context-chip.is-arrived {
+    color: var(--color-success);
+  }
+
   .map-mobile-header {
     padding-top: env(safe-area-inset-top, 0px) !important;
   }
@@ -921,6 +1028,7 @@ html, body, #root {
 
   .map-header-search-row {
     width: 100%;
+    max-width: var(--shell-content-max);
   }
 
   .map-ai-action {
@@ -971,8 +1079,8 @@ html, body, #root {
   }
 
   .map-control-button {
-    width: 40px;
-    height: 40px;
+    width: 44px;
+    height: 44px;
     border-color: rgba(30, 117, 255, 0.40);
     background: var(--color-card);
     box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.10), 0 4px 6px -4px rgb(0 0 0 / 0.10);
@@ -3064,8 +3172,8 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
     linear-gradient(180deg, rgba(255, 255, 255, 0.78) 0%, rgba(236, 243, 252, 0.9) 100%);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.88),
-    0 14px 32px rgba(20, 40, 80, 0.12),
-    0 3px 10px rgba(20, 40, 80, 0.06);
+    0 -8px 22px rgba(20, 40, 80, 0.10),
+    0 -1px 6px rgba(20, 40, 80, 0.05);
 }
 :root:not(.dark) .mobile-primary-nav-item {
   color: rgba(40, 64, 100, 0.72);

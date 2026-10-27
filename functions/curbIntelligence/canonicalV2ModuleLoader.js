@@ -2,7 +2,6 @@
 
 function loadCanonicalV2Modules() {
   const { runCanonicalCurbOrchestrator } = require('./canonicalCurbOrchestrator');
-  const { createCsclCandidateStore } = require('./csclSocrataAdapter');
   const { createPlanimetricCurbStore } = require('./planimetricCurbAdapter');
   const { createParkNycCandidateStore } = require('./parkNycSocrataAdapter');
   const { createPrivateBlockfaceResolver } = require('./privateBlockfaceResolver');
@@ -10,7 +9,6 @@ function loadCanonicalV2Modules() {
   const { createCurbTelemetry } = require('./curbTelemetry');
   return Object.freeze({
     runCanonicalCurbOrchestrator,
-    createCsclCandidateStore,
     createPlanimetricCurbStore,
     createParkNycCandidateStore,
     createPrivateBlockfaceResolver,

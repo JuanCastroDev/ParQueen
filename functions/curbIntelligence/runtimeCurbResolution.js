@@ -28,7 +28,8 @@ async function resolveOfficialCurbRuntime(location, options = {}) {
       return retrieved;
     },
   } : sourceStore;
-  const resolution = await resolveOfficialCurb(location, { ...options, candidateStore });
+  const resolution = await resolveOfficialCurb(location, { ...options, candidateStore,
+    precomputedSearchPolicy: options.precomputedSearchPolicy });
   const selectedId = resolution?.roadway?.selectedRecordGlobalId;
   const candidates = Array.isArray(retrieved?.candidates) ? retrieved.candidates : [];
   const selected = candidates.find(record => record?.globalId === selectedId);

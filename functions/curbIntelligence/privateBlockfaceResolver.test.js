@@ -1,6 +1,9 @@
 'use strict';
 
-const { createPrivateBlockfaceResolver } = require('./privateBlockfaceResolver');
+const {
+  createPrivateBlockfaceResolver,
+  hasValidatedPrivateBlockfaceResult,
+} = require('./privateBlockfaceResolver');
 
 const SERVICE_URL = 'https://parqueen-curb-resolver-spike-oxbozdhlwa-uc.a.run.app';
 const VALID_TUPLE = Object.freeze({
@@ -82,14 +85,23 @@ describe('private blockface resolver request contract', () => {
 describe('private blockface resolver response contract', () => {
   it('accepts the reviewed authoritative response without coercion', async () => {
     const { resolver } = harness();
-    await expect(resolver.resolve(VALID_TUPLE)).resolves.toEqual(VALID_SUCCESS);
+    const result = await resolver.resolve(VALID_TUPLE);
+    expect(result).toEqual(VALID_SUCCESS);
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.normalizedStreetNames)).toBe(true);
+    expect(Object.isFrozen(result.sourceVersion)).toBe(true);
+    expect(hasValidatedPrivateBlockfaceResult(result, VALID_TUPLE, resolver)).toBe(true);
+    expect(hasValidatedPrivateBlockfaceResult({ ...result }, VALID_TUPLE, resolver)).toBe(false);
+    expect(hasValidatedPrivateBlockfaceResult(result, { ...VALID_TUPLE, compassDirection: 'E' }, resolver)).toBe(false);
+    expect(hasValidatedPrivateBlockfaceResult(result, VALID_TUPLE, { resolve: resolver.resolve })).toBe(false);
   });
 
   it.each([
-    ['short BFI', { ...VALID_SUCCESS, officialBlockFaceId: '123' }],
-    ['all-zero BFI', { ...VALID_SUCCESS, officialBlockFaceId: '0000000000' }],
-    ['numeric BFI', { ...VALID_SUCCESS, officialBlockFaceId: 212261301 }],
-    ['missing BFI', { ...VALID_SUCCESS, officialBlockFaceId: undefined }],
+    ['blank BFI', { ...VALID_SUCCESS, officialBlockFaceId: '' }, 'BFI_BLANK'],
+    ['short BFI', { ...VALID_SUCCESS, officialBlockFaceId: '123' }, 'BFI_MALFORMED'],
+    ['all-zero BFI', { ...VALID_SUCCESS, officialBlockFaceId: '0000000000' }, 'BFI_MALFORMED'],
+    ['numeric BFI', { ...VALID_SUCCESS, officialBlockFaceId: 212261301 }, 'BFI_MALFORMED'],
+    ['missing BFI', { ...VALID_SUCCESS, officialBlockFaceId: undefined }, 'BFI_BLANK'],
     ['non-00 return code', { ...VALID_SUCCESS, returnCode: '01' }],
     ['padded normalized name', { ...VALID_SUCCESS,
       normalizedStreetNames: { ...VALID_SUCCESS.normalizedStreetNames, onStreet: ' GOLD STREET' } }],
@@ -97,11 +109,11 @@ describe('private blockface resolver response contract', () => {
       normalizedStreetNames: { ...VALID_SUCCESS.normalizedStreetNames, onStreet: 'GOLD\nSTREET' } }],
     ['overlong normalized name', { ...VALID_SUCCESS,
       normalizedStreetNames: { ...VALID_SUCCESS.normalizedStreetNames, onStreet: 'A'.repeat(33) } }],
-    ['missing source version', { ...VALID_SUCCESS, sourceVersion: undefined }],
+    ['missing source version', { ...VALID_SUCCESS, sourceVersion: undefined }, 'SOURCE_VERSION_INVALID'],
     ['unexpected success field', { ...VALID_SUCCESS, providerMessage: 'raw detail' }],
-  ])('fails closed for %s', async (_label, body) => {
+  ])('fails closed for %s', async (_label, body, failureClass = 'INVALID_RESPONSE') => {
     const { resolver } = harness({ transport: vi.fn(async () => response(200, body)) });
-    await expect(resolver.resolve(VALID_TUPLE)).resolves.toEqual({ ok: false, failureClass: 'INVALID_RESPONSE' });
+    await expect(resolver.resolve(VALID_TUPLE)).resolves.toEqual({ ok: false, failureClass });
   });
 
   it('preserves only reviewed safe-rejection fields and discards identity-looking data', async () => {

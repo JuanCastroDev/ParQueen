@@ -62,6 +62,18 @@ const testApp =
 const db = getFirestore(testApp);
 const adminAuth = getAuth(testApp);
 
+// Storage: in production FIREBASE_CONFIG supplies the default bucket. In this
+// vitest process (direct-handler tests) the default app has no storageBucket,
+// so getStorage().bucket() would throw — which the old .catch(() => {})
+// silently swallowed. Bind the default app's no-arg bucket() to the emulator
+// default bucket so Storage cleanup is genuinely exercised.
+const { getStorage } = require('firebase-admin/storage');
+const STORAGE_BUCKET = `${PROJECT_ID}.appspot.com`;
+const testBucket = getStorage(testApp).bucket(STORAGE_BUCKET);
+const defaultStorage = getStorage();
+const origDefaultBucket = defaultStorage.bucket.bind(defaultStorage);
+defaultStorage.bucket = (name) => origDefaultBucket(name ?? STORAGE_BUCKET);
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async function callDeleteAccount(idToken, data = {}) {
@@ -419,6 +431,53 @@ describe('deleteAccount — Functions emulator integration', () => {
         expect(resp.result?.success ?? resp.result?.alreadyCompleted).toBeTruthy();
         expect(resp.error).toBeUndefined();
     });
+
+    it('FN-09b: spotsAsClaimer releases only ACTIVE claims; terminal/handoff history keeps its state', async () => {
+        const future = Timestamp.fromMillis(Date.now() + 3600_000);
+        const past = Timestamp.fromMillis(Date.now() - 3600_000);
+        const ident = {
+            interestedUserId: uid, interestedUserName: 'Test', interestedUserVehicleColor: 'red',
+            interestedUserVehicleType: 'sedan', interestedUserVehicleBrand: 'Honda', interestedUserTitle: 'Newcomer',
+        };
+        const col = db.collection('spots');
+        const active = col.doc(); const activeExpired = col.doc(); const arrived = col.doc();
+        const occupied = col.doc(); const expiredHist = col.doc(); const otherClaimer = col.doc();
+        await active.set({ finderId: 'f1', ...ident, status: 'interested', claimState: 'en_route',
+            claimStartedAt: Timestamp.now(), etaMinutes: 5, expiresAt: future });
+        await activeExpired.set({ finderId: 'f1', ...ident, status: 'interested', claimState: 'en_route', expiresAt: past });
+        await arrived.set({ finderId: 'f1', ...ident, status: 'interested', claimState: 'arrived_pending_outcome', expiresAt: future });
+        await occupied.set({ finderId: 'f1', ...ident, status: 'occupied', claimState: 'arrived_pending_outcome', expiresAt: future });
+        await expiredHist.set({ finderId: 'f1', ...ident, status: 'expired', expiresAt: past });
+        await otherClaimer.set({ finderId: 'f1', ...ident, interestedUserId: 'someone_else', status: 'interested', expiresAt: future });
+
+        const idToken = await signInUser(uid);
+        const resp = await callDeleteAccount(idToken);
+        expect(resp.result?.success).toBe(true);
+
+        const identityKeys = Object.keys(ident);
+        const noIdentity = (d) => identityKeys.forEach(k => expect(d?.[k]).toBeUndefined());
+
+        const a = (await active.get()).data();
+        noIdentity(a); expect(a.status).toBe('available'); expect(a.claimState).toBeNull();
+        expect(a.claimStartedAt).toBeNull(); expect(a.etaMinutes).toBeNull();
+
+        const ae = (await activeExpired.get()).data();
+        noIdentity(ae); expect(ae.status).toBe('interested'); expect(ae.claimState).toBeNull(); // never reopened
+
+        const ar = (await arrived.get()).data();
+        noIdentity(ar); expect(ar.status).toBe('interested'); expect(ar.claimState).toBe('arrived_pending_outcome');
+
+        const oc = (await occupied.get()).data();
+        noIdentity(oc); expect(oc.status).toBe('occupied'); expect(oc.claimState).toBe('arrived_pending_outcome');
+
+        const ex = (await expiredHist.get()).data();
+        noIdentity(ex); expect(ex.status).toBe('expired');
+
+        const other = (await otherClaimer.get()).data();
+        expect(other.interestedUserId).toBe('someone_else'); expect(other.status).toBe('interested');
+
+        await Promise.all([active, activeExpired, arrived, occupied, expiredHist, otherClaimer].map(r => r.delete()));
+    }, 60000);
 
     // ── Pagination ────────────────────────────────────────────────────────────
 
@@ -1053,5 +1112,183 @@ describe('deleteAccount — admin-lockout safety (DA)', () => {
             expect(err.code).toBe('failed-precondition');
             expect(err.code).not.toMatch(/^auth\//);
         }
+    });
+});
+
+// ─── Storage integrity (fail closed, 404 = success, retry-safe) ───────────────
+describe('deleteAccount — Storage cleanup integrity', () => {
+    let uid;
+    const paths = (u) => [
+        `avatarUploads/${u}/up1/original`,
+        `avatarCandidates/${u}/up1.webp`,
+        `avatars/${u}/up1.webp`,
+        `avatars/${u}`,
+    ];
+    const exists = async (p) => (await testBucket.file(p).exists())[0];
+    const seedFiles = async (u) => {
+        for (const p of paths(u)) await testBucket.file(p).save(Buffer.from('x'), { resumable: false, contentType: 'image/webp' });
+    };
+
+    function withFailingBucket(shouldFail, fn) {
+        // Wrap the real bucket: object deletes under matching paths fail with
+        // a non-404 error (e.g. permission denied / transient 503).
+        defaultStorage.bucket = (name) => {
+            const real = origDefaultBucket(name ?? STORAGE_BUCKET);
+            return new Proxy(real, {
+                get(target, prop) {
+                    if (prop === 'deleteFiles') {
+                        // Same contract as the SDK with force:true: delete what
+                        // can be deleted, then reject with the per-object errors.
+                        return async (q) => {
+                            const [files] = await target.getFiles({ prefix: q.prefix });
+                            const errors = [];
+                            for (const f of files) {
+                                if (shouldFail(f.name)) errors.push(Object.assign(new Error('injected storage 403'), { code: 403 }));
+                                else await f.delete().catch((e) => errors.push(e));
+                            }
+                            if (errors.length) throw errors;
+                        };
+                    }
+                    if (prop === 'getFiles') {
+                        return async (opts) => {
+                            const [files] = await target.getFiles(opts);
+                            return [files.map((f) => new Proxy(f, {
+                                get(ft, fp) {
+                                    if (fp === 'delete' && shouldFail(ft.name)) {
+                                        return async () => { throw Object.assign(new Error('injected storage 403'), { code: 403 }); };
+                                    }
+                                    const v = ft[fp];
+                                    return typeof v === 'function' ? v.bind(ft) : v;
+                                },
+                            }))];
+                        };
+                    }
+                    if (prop === 'file') {
+                        return (n) => {
+                            const f = target.file(n);
+                            if (!shouldFail(n)) return f;
+                            return new Proxy(f, {
+                                get(ft, fp) {
+                                    if (fp === 'delete') return async () => { throw Object.assign(new Error('injected storage 503'), { code: 503 }); };
+                                    const v = ft[fp];
+                                    return typeof v === 'function' ? v.bind(ft) : v;
+                                },
+                            });
+                        };
+                    }
+                    const v = target[prop];
+                    return typeof v === 'function' ? v.bind(target) : v;
+                },
+            });
+        };
+        return Promise.resolve().then(fn).finally(() => {
+            defaultStorage.bucket = (name) => origDefaultBucket(name ?? STORAGE_BUCKET);
+        });
+    }
+
+    beforeEach(async () => {
+        uid = `da_st_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+        await adminAuth.createUser({ uid }).catch(() => {});
+        await db.doc(`users/${uid}`).set({ id: uid, username: `st${Date.now()}` });
+    });
+
+    afterEach(async () => {
+        for (const p of paths(uid)) await testBucket.file(p).delete().catch(() => {});
+        await nukeTestData(uid);
+        await cleanupSideEffects(uid);
+    });
+
+    it('DAS-01: happy path — every user-owned Storage path is deleted before Auth deletion', async () => {
+        await seedFiles(uid);
+        await callDirect(uid, Math.floor(Date.now() / 1000) - 30);
+        for (const p of paths(uid)) expect(await exists(p)).toBe(false);
+        expect(await adminAuth.getUser(uid).catch(() => null)).toBeNull();
+        expect((await db.doc(`accountDeletionJobs/${uid}`).get()).data().state).toBe('completed');
+    });
+
+    it('DAS-02: absent objects (404) are success — a user with no avatar files deletes cleanly', async () => {
+        const res = await callDirect(uid, Math.floor(Date.now() / 1000) - 30);
+        expect(res.success).toBe(true);
+        expect(await adminAuth.getUser(uid).catch(() => null)).toBeNull();
+    });
+
+    it('DAS-03 (fail closed): a non-404 delete failure on a published avatar fails the step and Auth is NOT deleted', async () => {
+        await seedFiles(uid);
+        let caught;
+        await withFailingBucket((n) => n.startsWith(`avatars/${uid}/`), async () => {
+            try { await callDirect(uid, Math.floor(Date.now() / 1000) - 30); } catch (e) { caught = e; }
+        });
+        expect(caught?.code).toBe('internal');
+        expect(await adminAuth.getUser(uid).catch(() => null)).not.toBeNull();
+        const job = (await db.doc(`accountDeletionJobs/${uid}`).get()).data();
+        expect(job.state).toBe('failed');
+        expect(job.lastError).toMatch(/^storagePublished:/);
+        expect(job.steps.storageUploads).toBe('done');
+        expect(await exists(`avatars/${uid}/up1.webp`)).toBe(true);
+    });
+
+    it('DAS-04 (fail closed): a non-404 failure on the legacy avatars/{uid} object also blocks Auth deletion', async () => {
+        await seedFiles(uid);
+        let caught;
+        await withFailingBucket((n) => n === `avatars/${uid}`, async () => {
+            try { await callDirect(uid, Math.floor(Date.now() / 1000) - 30); } catch (e) { caught = e; }
+        });
+        expect(caught?.code).toBe('internal');
+        expect(await adminAuth.getUser(uid).catch(() => null)).not.toBeNull();
+    });
+
+    it('DAS-05 (fail closed): a listing failure (e.g. missing permission) blocks Auth deletion', async () => {
+        defaultStorage.bucket = () => ({
+            deleteFiles: async () => { throw Object.assign(new Error('injected list 403'), { code: 403 }); },
+            getFiles: async () => { throw Object.assign(new Error('injected list 403'), { code: 403 }); },
+            file: (n) => origDefaultBucket(STORAGE_BUCKET).file(n),
+        });
+        let caught;
+        try { await callDirect(uid, Math.floor(Date.now() / 1000) - 30); } catch (e) { caught = e; }
+        finally { defaultStorage.bucket = (name) => origDefaultBucket(name ?? STORAGE_BUCKET); }
+        expect(caught?.code).toBe('internal');
+        expect(await adminAuth.getUser(uid).catch(() => null)).not.toBeNull();
+        expect((await db.doc(`accountDeletionJobs/${uid}`).get()).data().lastError).toMatch(/^storageUploads:/);
+    });
+
+    it('DAS-06 (retry-safe): after a Storage failure, a retry resumes, deletes the remaining files, and completes', async () => {
+        await seedFiles(uid);
+        await withFailingBucket((n) => n.startsWith(`avatars/${uid}/`), async () => {
+            await callDirect(uid, Math.floor(Date.now() / 1000) - 30).catch(() => {});
+        });
+        expect(await adminAuth.getUser(uid).catch(() => null)).not.toBeNull();
+        await db.doc(`accountDeletionJobs/${uid}`).update({ leaseAt: Timestamp.fromMillis(Date.now() - 700_000) });
+        const res = await callDirect(uid, Math.floor(Date.now() / 1000) - 30);
+        expect(res.success).toBe(true);
+        for (const p of paths(uid)) expect(await exists(p)).toBe(false);
+        expect(await adminAuth.getUser(uid).catch(() => null)).toBeNull();
+    });
+
+    it('DAS-07 (scope): objects of a user whose UID merely starts with this UID are never touched', async () => {
+        const neighbor = `${uid}x`;
+        await seedFiles(uid);
+        await seedFiles(neighbor);
+        try {
+            await callDirect(uid, Math.floor(Date.now() / 1000) - 30);
+            for (const p of paths(neighbor)) expect(await exists(p)).toBe(true);
+        } finally {
+            for (const p of paths(neighbor)) await testBucket.file(p).delete().catch(() => {});
+        }
+    });
+
+    it('DAS-08: strict helper refuses a non-slash-terminated prefix (no prefix over-match)', async () => {
+        const mod = require('./index.js');
+        await expect(mod._deleteStoragePrefixStrict(testBucket, `avatars/${uid}`)).rejects.toThrow(/non-exact prefix/);
+        expect(mod._isStorageNotFound({ code: 404 })).toBe(true);
+        expect(mod._isStorageNotFound({ code: 403 })).toBe(false);
+        expect(mod._isStorageNotFound({ response: { statusCode: 404 } })).toBe(true);
+    });
+
+    it('DAS-09 (source contract): no Storage step in deleteAccount swallows errors with .catch(() => {})', () => {
+        const src = require('fs').readFileSync(require.resolve('./index.js'), 'utf8');
+        const start = src.indexOf("await step('storageUploads'");
+        const block = src.slice(start, src.indexOf('await renewLockOrThrow();', start));
+        expect(block).not.toMatch(/\.catch\(\(\) => \{\}\)/);
+        expect(block).toMatch(/_deleteStoragePrefixStrict\(getStorage\(\)\.bucket\(\), `avatarUploads\/\$\{uid\}\/`\)/);
     });
 });

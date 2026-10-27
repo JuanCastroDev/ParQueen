@@ -546,12 +546,13 @@ jobs:
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
           VITE_FIREBASE_VAPID_KEY: ${{ secrets.VITE_FIREBASE_VAPID_KEY }}
           VITE_FIREBASE_IOS_JS_API_KEY: ${{ secrets.VITE_FIREBASE_IOS_JS_API_KEY }}
+          VITE_POSTHOG_PROJECT_TOKEN: ${{ secrets.VITE_POSTHOG_PROJECT_TOKEN }}
           IOS_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_B64: ${{ secrets.IOS_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_B64 }}
         shell: bash
         run: |
           set -euo pipefail
           missing=0
-          for name in APPLE_TEAM_ID ASC_ISSUER_ID ASC_KEY_ID ASC_API_KEY_P8_BASE64 VITE_MAPBOX_TOKEN VITE_MAPBOX_IOS_TOKEN VITE_FIREBASE_APPCHECK_SITE_KEY VITE_SENTRY_DSN VITE_FIREBASE_VAPID_KEY VITE_FIREBASE_IOS_JS_API_KEY IOS_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_B64; do
+          for name in APPLE_TEAM_ID ASC_ISSUER_ID ASC_KEY_ID ASC_API_KEY_P8_BASE64 VITE_MAPBOX_TOKEN VITE_MAPBOX_IOS_TOKEN VITE_FIREBASE_APPCHECK_SITE_KEY VITE_SENTRY_DSN VITE_FIREBASE_VAPID_KEY VITE_FIREBASE_IOS_JS_API_KEY VITE_POSTHOG_PROJECT_TOKEN IOS_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_B64; do
             if [ -n "$(printenv "${name}" 2>/dev/null || true)" ]; then
               echo "${name}: PRESENT"
             else
@@ -584,6 +585,8 @@ jobs:
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
           VITE_FIREBASE_VAPID_KEY: ${{ secrets.VITE_FIREBASE_VAPID_KEY }}
           VITE_FIREBASE_IOS_JS_API_KEY: ${{ secrets.VITE_FIREBASE_IOS_JS_API_KEY }}
+          VITE_POSTHOG_PROJECT_TOKEN: ${{ secrets.VITE_POSTHOG_PROJECT_TOKEN }}
+          VITE_POSTHOG_ENABLED: "true"
           SENTRY_AUTH_TOKEN: ""
           SENTRY_ORG: ""
           SENTRY_PROJECT: ""
@@ -591,6 +594,7 @@ jobs:
         run: |
           set -euo pipefail
           npm run build
+          grep -l 'us.i.posthog.com/i/v0/e/' dist/assets/*.js > /dev/null || { echo '::error::PostHog transport missing from build.'; exit 1; }
           test -f dist/index.html
           echo "dist/index.html: PRESENT"
 

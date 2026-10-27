@@ -2,8 +2,13 @@
 
 const { createHash } = require('node:crypto');
 const { publicCurbKey, toPublicCurb } = require('./canonicalCurbIdentity');
+const { hasPrimaryTopologyAuthority } = require('./canonicalCurbResolver');
+const { hasCanonicalCurbIdentityProof } = require('./canonicalCurbIdentityProof');
 
 const PUBLIC_KEY = /^curb2_[a-f0-9]{32}$/;
+const RULE_SET_VERSION = /^curbrules2_[a-f0-9]{20}$/;
+const CACHE_COMPATIBILITY_VERSION = 'canonical-curb-cache-compatibility-1';
+const PUBLIC_GEOMETRY_VERSION = 'canonical-public-geometry-1';
 
 function publicSchedule(value) {
   if (!value || typeof value !== 'object') return null;
@@ -68,7 +73,48 @@ function toPublicRule(rule) {
   return value;
 }
 
-async function readCanonicalCache({ db, publicCurbKey: key }) {
+const canonicalNumber = value => Object.is(value, -0) ? 0 : value;
+function canonicalGeometry(value) {
+  if (value?.type !== 'MultiLineString' || !Array.isArray(value.coordinates)) return null;
+  const representation = JSON.stringify({
+    schema: PUBLIC_GEOMETRY_VERSION,
+    type: value.type,
+    coordinates: value.coordinates.map(line => (
+    line.map(point => point.map(canonicalNumber))
+    )),
+  });
+  return createHash('sha256').update(representation).digest('hex');
+}
+const sorted = value => Array.isArray(value) ? [...value].sort() : [];
+
+function compatibleIdentity(stored, current) {
+  if (!stored || !current) return false;
+  return stored.schemaVersion === current.schemaVersion
+    && stored.jurisdiction === current.jurisdiction
+    && stored.officialBlockFaceId === current.officialBlockFaceId
+    && stored.csclSide === current.csclSide
+    && stored.sourceVersion?.resourceId === current.sourceVersion?.resourceId
+    && stored.sourceVersion?.version === current.sourceVersion?.version
+    && stored.roadway?.selectedGlobalId === current.roadway?.selectedGlobalId
+    && JSON.stringify(sorted(stored.roadway?.supportingGlobalIds))
+      === JSON.stringify(sorted(current.roadway?.supportingGlobalIds))
+    && stored.roadway?.physicalId === current.roadway?.physicalId
+    && stored.roadway?.b5sc === current.roadway?.b5sc
+    && canonicalGeometry(stored.roadway?.geometry) === canonicalGeometry(current.roadway?.geometry)
+    && stored.names?.borough === current.names?.borough
+    && stored.names?.onStreet === current.names?.onStreet
+    && stored.names?.fromStreet === current.names?.fromStreet
+    && stored.names?.toStreet === current.names?.toStreet
+    && stored.side?.cardinal === current.side?.cardinal;
+}
+
+async function readCanonicalCache({ db, topologyResult, identityProof }) {
+  if (!hasPrimaryTopologyAuthority(topologyResult)) return { hit: false, reason: 'authority_invalid' };
+  if (!hasCanonicalCurbIdentityProof(identityProof, topologyResult)) {
+    return { hit: false, reason: 'identity_proof_invalid' };
+  }
+  const identity = topologyResult.identity;
+  const key = publicCurbKey(identity);
   if (!db || !PUBLIC_KEY.test(key || '')) return { hit: false, reason: 'invalid_public_key' };
   const [privateSnapshot, publicSnapshot] = await Promise.all([
     db.doc(`curbIdentities/${key}`).get(),
@@ -79,14 +125,32 @@ async function readCanonicalCache({ db, publicCurbKey: key }) {
   }
   const privateData = privateSnapshot.data();
   const publicSegment = publicSnapshot.data();
-  const identity = privateData?.identity;
-  if (publicCurbKey(identity) !== key || publicSegment?.segmentId !== key) {
+  const storedIdentity = privateData?.identity;
+  const currentPublic = topologyResult.publicCurb || toPublicCurb(identity);
+  if (privateData?.schemaVersion !== 2 || publicSegment?.schemaVersion !== 2
+    || publicSegment?.protocolVersion !== 2
+    || privateData?.cacheCompatibilityVersion !== CACHE_COMPATIBILITY_VERSION
+    || publicSegment?.cacheCompatibilityVersion !== CACHE_COMPATIBILITY_VERSION
+    || privateData?.publicCurbKey !== key || publicCurbKey(storedIdentity) !== key
+    || publicSegment?.segmentId !== key
+    || !RULE_SET_VERSION.test(publicSegment?.activeRuleSetVersion || '')
+    || !compatibleIdentity(storedIdentity, identity)
+    || publicSegment.streetName !== currentPublic?.streetName
+    || publicSegment.sideLabel !== currentPublic?.sideLabel
+    || canonicalGeometry(publicSegment.geometry) !== canonicalGeometry(currentPublic?.geometry)) {
     return { hit: false, reason: 'cache_curb_mismatch' };
   }
-  return { hit: true, identity, publicSegment };
+  return { hit: true, identity: storedIdentity, publicSegment };
 }
 
-async function persistCanonicalCurb({ db, Timestamp, identity, selectedRules }) {
+async function persistCanonicalCurb({ db, Timestamp, topologyResult, identityProof, selectedRules }) {
+  if (!hasPrimaryTopologyAuthority(topologyResult)) {
+    return { success: false, reason: 'authority_invalid' };
+  }
+  if (!hasCanonicalCurbIdentityProof(identityProof, topologyResult)) {
+    return { success: false, reason: 'identity_proof_invalid' };
+  }
+  const identity = topologyResult.identity;
   const key = publicCurbKey(identity);
   const publicCurb = toPublicCurb(identity);
   if (!db || !Timestamp?.now || !key || !publicCurb) {
@@ -100,6 +164,7 @@ async function persistCanonicalCurb({ db, Timestamp, identity, selectedRules }) 
   const batch = db.batch();
   batch.set(db.doc(`curbIdentities/${key}`), {
     schemaVersion: 2,
+    cacheCompatibilityVersion: CACHE_COMPATIBILITY_VERSION,
     publicCurbKey: key,
     identity,
     updatedAt: now,
@@ -108,6 +173,7 @@ async function persistCanonicalCurb({ db, Timestamp, identity, selectedRules }) 
     ...publicCurb,
     status: 'active',
     protocolVersion: 2,
+    cacheCompatibilityVersion: CACHE_COMPATIBILITY_VERSION,
     activeRuleSetVersion: ruleSetVersion,
     ruleSummary: { cleaningAvailable: Boolean(selectedRules?.cleaning) },
     updatedAt: now,
@@ -147,4 +213,8 @@ module.exports = {
   persistCanonicalCurb,
   migrateCompatibleLegacyRules,
   toPublicRule,
+  compatibleIdentity,
+  canonicalGeometry,
+  CACHE_COMPATIBILITY_VERSION,
+  PUBLIC_GEOMETRY_VERSION,
 };

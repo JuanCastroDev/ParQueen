@@ -509,14 +509,14 @@ describe('requireCurrentAdmin — session revocation / stale admin token hardeni
         expect(migratedCount).toBe(16);
     });
 
-    it('AS-28: Runtime-IAM canary config-contract — Wave 6B-2 user-enforcement callables run as the dedicated parqueen-admin-write identity, still gated by requireCurrentAdmin', () => {
+    it('AS-28: Runtime-IAM canary config-contract — Wave 6B-2 user-enforcement callables run as the existing parqueen-admin-auth identity (F3: they now disable/re-enable Auth users + revoke refresh tokens, the same Auth capability setStaffRole already uses on that identity — no IAM change), still gated by requireCurrentAdmin', () => {
         const src = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
         const WAVE_6B_2 = ['adminSuspendUser', 'adminUnsuspendUser'];
         for (const name of WAVE_6B_2) {
             const callStart = src.indexOf(`exports.${name} = onCall(`);
             expect(callStart).toBeGreaterThan(-1);
             const optionsSlice = src.slice(callStart, callStart + 400);
-            expect(optionsSlice).toMatch(/serviceAccount:\s*'parqueen-admin-write@parkqueen-46475363-ccf36\.iam\.gserviceaccount\.com'/);
+            expect(optionsSlice).toMatch(/serviceAccount:\s*'parqueen-admin-auth@parkqueen-46475363-ccf36\.iam\.gserviceaccount\.com'/);
             expect(optionsSlice).toMatch(/await requireCurrentAdmin\(request\);/);
         }
 
@@ -533,7 +533,7 @@ describe('requireCurrentAdmin — session revocation / stale admin token hardeni
         // fields through either callable.
         for (const name of WAVE_6B_2) {
             const callStart = src.indexOf(`exports.${name} = onCall(`);
-            const body = src.slice(callStart, callStart + 1200);
+            const body = src.slice(callStart, callStart + 3000);
             expect(body).not.toMatch(/\.\.\.request\.data/);
             expect(body).not.toMatch(/\.set\(request\.data/);
         }

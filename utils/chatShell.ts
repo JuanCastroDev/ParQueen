@@ -26,6 +26,27 @@ export function chatIdForPair(uidA: string, uidB: string): string {
   return [uidA, uidB].sort().join('_');
 }
 
+/**
+ * X-1: a chat shell is trustworthy for the pair (uidA, uidB) only when its
+ * stored participants are exactly those two distinct UIDs (either order)
+ * AND its document ID is the canonical sorted pair. A shell at the right ID
+ * holding someone else (e.g. chats/A_B with participants [M, A], pre-created
+ * by M) must never be opened as the A<->B conversation.
+ */
+export function chatShellMatchesPair(
+  chatId: string,
+  participants: unknown,
+  uidA: string,
+  uidB: string,
+): boolean {
+  if (!uidA || !uidB || uidA === uidB) return false;
+  if (!Array.isArray(participants) || participants.length !== 2) return false;
+  const [p0, p1] = participants;
+  if (typeof p0 !== 'string' || typeof p1 !== 'string' || p0 === p1) return false;
+  const samePair = (p0 === uidA && p1 === uidB) || (p0 === uidB && p1 === uidA);
+  return samePair && chatId === chatIdForPair(uidA, uidB);
+}
+
 export function chatShellCreatePayload(
   uidA: string,
   uidB: string,

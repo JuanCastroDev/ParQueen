@@ -75,7 +75,7 @@ let chatSetDocCalls: ChatSetDocCall[] = [];
 let chatSetDocAuto: 'succeed' | 'permission-denied' | 'pending' = 'succeed';
 // 'missing' matches Rules for a parent that was not created (including a
 // mutual-block denial). 'exists' is an already-created shell.
-let chatGetDocAuto: 'missing' | 'exists' = 'missing';
+let chatGetDocAuto: 'missing' | 'exists' | 'squatted' = 'missing';
 
 vi.mock('firebase/firestore', () => ({
     collection: (_db: any, ...path: string[]) => ({ __col: path }),
@@ -104,8 +104,11 @@ vi.mock('firebase/firestore', () => ({
             // permission-denied. initChat probes only after a create
             // collision, to tell "already exists" from a real denial.
             chatGetDocCalls.push(path);
-            if (chatGetDocAuto === 'exists') {
-                resolve({ exists: () => true, data: () => ({}) });
+            if (chatGetDocAuto === 'exists' || chatGetDocAuto === 'squatted') {
+                // 'squatted' models X-1: a readable shell at the canonical
+                // ID whose stored participants are not this pair.
+                const participants = chatGetDocAuto === 'squatted' ? ['mallory', 'me'] : ['me', 'alice'];
+                resolve({ exists: () => true, data: () => ({ participants }) });
                 return;
             }
             reject(Object.assign(new Error('Missing or insufficient permissions'), { code: 'permission-denied' }));
@@ -152,6 +155,7 @@ vi.mock('../utils/errorReporting', () => ({ reportCriticalActionFailure }));
 
 import { MessagesView, formatThreadTime, formatDayLabel, groupThread } from './MessagesView';
 import { t } from '../i18n';
+import { generateSmartReplies } from '../services/geminiService';
 
 const T0 = Date.parse('2026-08-27T12:00:00.000Z');
 
@@ -311,13 +315,505 @@ function getMessageInput(renderer: TestRenderer.ReactTestRenderer) {
 function getSendButton(renderer: TestRenderer.ReactTestRenderer) {
     return getMessageInput(renderer).parent!.findByType('button');
 }
-async function typeAndSend(renderer: TestRenderer.ReactTestRenderer, text: string) {
+const scopedReadKey = (userId: string, chatId: string) =>
+    `lastReadChat_${JSON.stringify([userId, chatId])}`;
+function typeDraft(renderer: TestRenderer.ReactTestRenderer, text: string) {
     act(() => { getMessageInput(renderer).props.onChange({ target: { value: text } }); });
+}
+async function typeAndSend(renderer: TestRenderer.ReactTestRenderer, text: string) {
+    typeDraft(renderer, text);
     await act(async () => {
         getSendButton(renderer).props.onClick();
         await flush();
     });
 }
+
+describe('MessagesView — chat draft isolation and async send safety', () => {
+    beforeEach(() => {
+        localStorage.clear();
+        userDocCalls = [];
+        chatsOnNext = null;
+        chatsUnsubCount = 0;
+        callableCalls = [];
+        callableImpl = null;
+        messagesSnapshotCalls = [];
+        messagesUnsubCount = 0;
+        olderPageCalls = [];
+        olderPageAutoDocs = [];
+        reportCriticalActionFailure.mockClear();
+        vi.mocked(generateSmartReplies).mockReset().mockResolvedValue([]);
+        resetScrollMock();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    async function renderTwoConversations() {
+        const renderer = await renderMessages();
+        emitChats([
+            chatDoc('chat-a', ['me', 'alice'], { lastMessageTimestampMs: T0 + 1000 }),
+            chatDoc('chat-b', ['me', 'bob'], { lastMessageTimestampMs: T0 }),
+        ]);
+        await act(async () => { await flush(); });
+        return renderer;
+    }
+
+    it('keeps drafts isolated per conversation and restores them only in their original thread', async () => {
+        const renderer = await renderTwoConversations();
+        openConversationAt(renderer, 0);
+        typeDraft(renderer, 'draft for A');
+
+        goBackToInbox(renderer);
+        openConversationAt(renderer, 1);
+        expect(getMessageInput(renderer).props.value).toBe('');
+        typeDraft(renderer, 'draft for B');
+
+        goBackToInbox(renderer);
+        openConversationAt(renderer, 0);
+        expect(getMessageInput(renderer).props.value).toBe('draft for A');
+        goBackToInbox(renderer);
+        openConversationAt(renderer, 1);
+        expect(getMessageInput(renderer).props.value).toBe('draft for B');
+        act(() => renderer.unmount());
+    });
+
+    it('discards every prior-account draft when the authenticated identity changes', async () => {
+        const renderer = await renderTwoConversations();
+        openConversationAt(renderer, 0);
+        typeDraft(renderer, 'private draft from account A');
+
+        await act(async () => {
+            renderer.update(React.createElement(MessagesView, {
+                user: { id: 'other-account', blockedUsers: [] },
+                activeChatContext: null,
+                onBack: () => {},
+            }));
+            await flush();
+        });
+        emitChats([chatDoc('other_charlie', ['other-account', 'charlie'])]);
+        await act(async () => { await flush(); });
+        openFirstConversation(renderer);
+        expect(getMessageInput(renderer).props.value).toBe('');
+
+        await act(async () => {
+            renderer.update(React.createElement(MessagesView, {
+                user: { id: 'me', blockedUsers: [] },
+                activeChatContext: null,
+                onBack: () => {},
+            }));
+            await flush();
+        });
+        emitChats([chatDoc('chat-a', ['me', 'alice'])]);
+        await act(async () => { await flush(); });
+        openFirstConversation(renderer);
+        expect(getMessageInput(renderer).props.value).toBe('');
+        act(() => renderer.unmount());
+    });
+
+    it('clears a successful send only when the submitted draft is still current', async () => {
+        let resolveSend!: () => void;
+        callableImpl = () => new Promise(resolve => { resolveSend = () => resolve({ data: { success: true } }); });
+        const renderer = await renderTwoConversations();
+        openConversationAt(renderer, 0);
+        typeDraft(renderer, 'submitted text');
+        act(() => { getSendButton(renderer).props.onClick(); });
+        typeDraft(renderer, 'newer text');
+
+        await act(async () => { resolveSend(); await flush(); });
+        expect(getMessageInput(renderer).props.value).toBe('newer text');
+        act(() => renderer.unmount());
+    });
+
+    it('allows independent conversation sends and ignores out-of-order stale completions', async () => {
+        const pending = new Map<string, { resolve: () => void }>();
+        callableImpl = (_name, payload) => new Promise(resolve => {
+            pending.set(payload.chatId, { resolve: () => resolve({ data: { success: true } }) });
+        });
+        const renderer = await renderTwoConversations();
+
+        openConversationAt(renderer, 0);
+        typeDraft(renderer, 'send A');
+        act(() => { getSendButton(renderer).props.onClick(); });
+        goBackToInbox(renderer);
+        openConversationAt(renderer, 1);
+        typeDraft(renderer, 'send B');
+        act(() => { getSendButton(renderer).props.onClick(); });
+        expect(callableCalls.map(call => call.payload.chatId)).toEqual(['chat-a', 'chat-b']);
+
+        typeDraft(renderer, 'newer B draft');
+        await act(async () => { pending.get('chat-a')!.resolve(); await flush(); });
+        expect(getMessageInput(renderer).props.value).toBe('newer B draft');
+        await act(async () => { pending.get('chat-b')!.resolve(); await flush(); });
+        expect(getMessageInput(renderer).props.value).toBe('newer B draft');
+
+        goBackToInbox(renderer);
+        openConversationAt(renderer, 0);
+        expect(getMessageInput(renderer).props.value).toBe('');
+        act(() => renderer.unmount());
+    });
+
+    it('retains retryable text after a failed send and hides stale failure feedback after switching threads', async () => {
+        let rejectSend!: (error: unknown) => void;
+        callableImpl = () => new Promise((_resolve, reject) => { rejectSend = reject; });
+        const renderer = await renderTwoConversations();
+        openConversationAt(renderer, 0);
+        typeDraft(renderer, 'retry me');
+        act(() => { getSendButton(renderer).props.onClick(); });
+
+        goBackToInbox(renderer);
+        openConversationAt(renderer, 1);
+        typeDraft(renderer, 'draft B');
+        await act(async () => {
+            rejectSend(Object.assign(new Error('slow down'), { code: 'functions/resource-exhausted' }));
+            await flush();
+        });
+        expect(getMessageInput(renderer).props.value).toBe('draft B');
+        expect(renderer.root.findAll(n => n.props.role === 'alert')).toHaveLength(0);
+
+        goBackToInbox(renderer);
+        openConversationAt(renderer, 0);
+        expect(getMessageInput(renderer).props.value).toBe('retry me');
+        act(() => renderer.unmount());
+    });
+
+    it('uses the same active conversation for Enter, Send, and smart replies', async () => {
+        vi.mocked(generateSmartReplies).mockResolvedValueOnce(['Smart answer']);
+        const renderer = await renderTwoConversations();
+        openConversationAt(renderer, 1);
+
+        typeDraft(renderer, 'from Enter');
+        await act(async () => {
+            getMessageInput(renderer).props.onKeyDown({ key: 'Enter', nativeEvent: { isComposing: false } });
+            await flush();
+        });
+        typeDraft(renderer, 'from button');
+        await act(async () => { getSendButton(renderer).props.onClick(); await flush(); });
+
+        const incoming = messageDoc('incoming-b', { senderId: 'bob', text: 'Question?', ms: T0 + 2000 });
+        emitMessages(0, [incoming], added([incoming]));
+        await act(async () => { await flush(); });
+        const smartReply = renderer.root.findAll(n => n.type === 'button' && n.props.children === 'Smart answer')[0];
+        await act(async () => { smartReply.props.onClick(); await flush(); });
+
+        expect(callableCalls.filter(call => call.name === 'sendMessage').map(call => call.payload)).toEqual([
+            expect.objectContaining({ chatId: 'chat-b', text: 'from Enter' }),
+            expect.objectContaining({ chatId: 'chat-b', text: 'from button' }),
+            expect.objectContaining({ chatId: 'chat-b', text: 'Smart answer' }),
+        ]);
+        act(() => renderer.unmount());
+    });
+
+    it('blocks a synchronous double activation while the first send is pending', async () => {
+        let resolveSend!: () => void;
+        callableImpl = () => new Promise(resolve => { resolveSend = () => resolve({ data: { success: true } }); });
+        const renderer = await renderTwoConversations();
+        openConversationAt(renderer, 0);
+        typeDraft(renderer, 'once only');
+        const send = getSendButton(renderer);
+
+        act(() => {
+            send.props.onClick();
+            send.props.onClick();
+        });
+        expect(callableCalls.filter(call => call.name === 'sendMessage')).toHaveLength(1);
+        await act(async () => { resolveSend(); await flush(); });
+        expect(getMessageInput(renderer).props.value).toBe('');
+        act(() => renderer.unmount());
+    });
+
+    it.each(['resolve', 'reject'] as const)(
+        'keeps a newer same-key send pending when a stale request %ss after an account round trip',
+        async staleCompletion => {
+            const pending: Array<{ resolve: () => void; reject: (error: unknown) => void }> = [];
+            callableImpl = () => new Promise((resolve, reject) => {
+                pending.push({
+                    resolve: () => resolve({ data: { success: true } }),
+                    reject,
+                });
+            });
+            const renderer = await renderMessages();
+            emitChats([chatDoc('chat-x', ['me', 'alice'])]);
+            await act(async () => { await flush(); });
+            openFirstConversation(renderer);
+            typeDraft(renderer, 'send one');
+            act(() => { getSendButton(renderer).props.onClick(); });
+
+            await act(async () => {
+                renderer.update(React.createElement(MessagesView, {
+                    user: { id: 'account-b', blockedUsers: [] },
+                    activeChatContext: null,
+                    onBack: () => {},
+                }));
+                await flush();
+            });
+            emitChats([chatDoc('chat-b', ['account-b', 'bob'])]);
+            await act(async () => { await flush(); });
+
+            await act(async () => {
+                renderer.update(React.createElement(MessagesView, {
+                    user: { id: 'me', blockedUsers: [] },
+                    activeChatContext: null,
+                    onBack: () => {},
+                }));
+                await flush();
+            });
+            emitChats([chatDoc('chat-x', ['me', 'alice'])]);
+            await act(async () => { await flush(); });
+            openFirstConversation(renderer);
+            typeDraft(renderer, 'send two');
+            act(() => { getSendButton(renderer).props.onClick(); });
+            expect(callableCalls.filter(call => call.name === 'sendMessage')).toHaveLength(2);
+            expect(getSendButton(renderer).props.disabled).toBe(true);
+
+            await act(async () => {
+                if (staleCompletion === 'resolve') pending[0].resolve();
+                else pending[0].reject(Object.assign(new Error('stale failure'), { code: 'functions/internal' }));
+                await flush();
+            });
+            expect(getSendButton(renderer).props.disabled).toBe(true);
+            act(() => { getSendButton(renderer).props.onClick(); });
+            expect(callableCalls.filter(call => call.name === 'sendMessage')).toHaveLength(2);
+
+            typeDraft(renderer, 'newer text while send two is pending');
+            expect(getSendButton(renderer).props.disabled).toBe(true);
+            await act(async () => { pending[1].resolve(); await flush(); });
+            expect(getSendButton(renderer).props.disabled).toBe(false);
+            act(() => renderer.unmount());
+        },
+    );
+
+    it('keeps inbox read state isolated when two accounts encounter the same chat id', async () => {
+        localStorage.setItem(scopedReadKey('me', 'chat-x'), String(T0 + 1));
+        localStorage.setItem('lastReadChat_chat-x', String(T0 + 1));
+        const renderer = await renderMessages();
+        emitChats([chatDoc('chat-x', ['me', 'alice'])]);
+        await act(async () => { await flush(); });
+        expect(conversationRowButtons(renderer)[0].props.className).not.toContain('pq-thread--unread');
+
+        await act(async () => {
+            renderer.update(React.createElement(MessagesView, {
+                user: { id: 'account-b', blockedUsers: [] },
+                activeChatContext: null,
+                onBack: () => {},
+            }));
+            await flush();
+        });
+        emitChats([chatDoc('chat-x', ['account-b', 'alice'])]);
+        await act(async () => { await flush(); });
+        expect(conversationRowButtons(renderer)[0].props.className).toContain('pq-thread--unread');
+        openFirstConversation(renderer);
+        expect(localStorage.getItem(scopedReadKey('account-b', 'chat-x'))).not.toBeNull();
+
+        await act(async () => {
+            renderer.update(React.createElement(MessagesView, {
+                user: { id: 'me', blockedUsers: [] },
+                activeChatContext: null,
+                onBack: () => {},
+            }));
+            await flush();
+        });
+        emitChats([chatDoc('chat-x', ['me', 'alice'])]);
+        await act(async () => { await flush(); });
+        expect(conversationRowButtons(renderer)[0].props.className).not.toContain('pq-thread--unread');
+        act(() => renderer.unmount());
+    });
+
+    it('ignores stale failure feedback after an account-session round trip', async () => {
+        const pending: Array<{ reject: (error: unknown) => void }> = [];
+        callableImpl = () => new Promise((_resolve, reject) => { pending.push({ reject }); });
+        const renderer = await renderMessages();
+        emitChats([chatDoc('chat-x', ['me', 'alice'])]);
+        await act(async () => { await flush(); });
+        openFirstConversation(renderer);
+        typeDraft(renderer, 'old request');
+        act(() => { getSendButton(renderer).props.onClick(); });
+
+        await act(async () => {
+            renderer.update(React.createElement(MessagesView, {
+                user: { id: 'account-b', blockedUsers: [] }, activeChatContext: null, onBack: () => {},
+            }));
+            await flush();
+        });
+        await act(async () => {
+            renderer.update(React.createElement(MessagesView, {
+                user: { id: 'me', blockedUsers: [] }, activeChatContext: null, onBack: () => {},
+            }));
+            await flush();
+        });
+        emitChats([chatDoc('chat-x', ['me', 'alice'])]);
+        await act(async () => { await flush(); });
+        openFirstConversation(renderer);
+        typeDraft(renderer, 'current request');
+        act(() => { getSendButton(renderer).props.onClick(); });
+        await act(async () => {
+            pending[1].reject(Object.assign(new Error('current rate limit'), { code: 'functions/resource-exhausted' }));
+            await flush();
+        });
+        expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === t('messages.rate_limited'))).toHaveLength(1);
+
+        await act(async () => {
+            pending[0].reject(Object.assign(new Error('old moderation message'), { code: 'functions/invalid-argument' }));
+            await flush();
+        });
+        expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === t('messages.rate_limited'))).toHaveLength(1);
+        expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === 'old moderation message')).toHaveLength(0);
+        act(() => renderer.unmount());
+    });
+
+    it('does not restore a failed-send toast after an account-session round trip reopens the same chat', async () => {
+        vi.useFakeTimers();
+        callableImpl = async () => { throw Object.assign(new Error('internal'), { code: 'functions/internal' }); };
+        const renderer = await renderMessages();
+        emitChats([chatDoc('chat-x', ['me', 'alice'])]);
+        await act(async () => { await flush(); });
+        openFirstConversation(renderer);
+        await typeAndSend(renderer, 'retry me');
+        expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === t('messages.toast_send_failed'))).toHaveLength(1);
+
+        await act(async () => {
+            renderer.update(React.createElement(MessagesView, {
+                user: { id: 'account-b', blockedUsers: [] }, activeChatContext: null, onBack: () => {},
+            }));
+            await flush();
+        });
+        await act(async () => {
+            renderer.update(React.createElement(MessagesView, {
+                user: { id: 'me', blockedUsers: [] }, activeChatContext: null, onBack: () => {},
+            }));
+            await flush();
+        });
+        emitChats([chatDoc('chat-x', ['me', 'alice'])]);
+        await act(async () => { await flush(); });
+        openFirstConversation(renderer);
+
+        expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === t('messages.toast_send_failed'))).toHaveLength(0);
+        act(() => renderer.unmount());
+    });
+
+    it('clears a context-free block toast when the authenticated account changes', async () => {
+        vi.useFakeTimers();
+        const renderer = await renderMessages();
+        emitChats([chatDoc('chat-x', ['me', 'alice'])]);
+        await act(async () => { await flush(); });
+        openFirstConversation(renderer);
+        clickButtonWithAriaLabel(renderer, t('messages.menu_aria'));
+        await act(async () => {
+            clickButtonWithText(renderer, t('messages.block_user'));
+            await flush();
+        });
+        expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === t('messages.toast_blocked'))).toHaveLength(1);
+
+        await act(async () => {
+            renderer.update(React.createElement(MessagesView, {
+                user: { id: 'account-b', blockedUsers: [] }, activeChatContext: null, onBack: () => {},
+            }));
+            await flush();
+        });
+
+        expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === t('messages.toast_blocked'))).toHaveLength(0);
+        act(() => renderer.unmount());
+    });
+
+    it('does not let a prior-account toast timeout clear newer account feedback', async () => {
+        vi.useFakeTimers();
+        callableImpl = async () => { throw Object.assign(new Error('internal'), { code: 'functions/internal' }); };
+        const renderer = await renderMessages();
+        emitChats([chatDoc('chat-x', ['me', 'alice'])]);
+        await act(async () => { await flush(); });
+        openFirstConversation(renderer);
+        await typeAndSend(renderer, 'old failure');
+
+        act(() => { vi.advanceTimersByTime(1000); });
+        await act(async () => {
+            renderer.update(React.createElement(MessagesView, {
+                user: { id: 'account-b', blockedUsers: [] }, activeChatContext: null, onBack: () => {},
+            }));
+            await flush();
+        });
+        emitChats([chatDoc('chat-b', ['account-b', 'bob'])]);
+        await act(async () => { await flush(); });
+        openFirstConversation(renderer);
+        clickButtonWithAriaLabel(renderer, t('messages.menu_aria'));
+        await act(async () => {
+            clickButtonWithText(renderer, t('messages.block_user'));
+            await flush();
+        });
+        expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === t('messages.toast_blocked'))).toHaveLength(1);
+
+        act(() => { vi.advanceTimersByTime(2000); });
+        expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === t('messages.toast_blocked'))).toHaveLength(1);
+        act(() => renderer.unmount());
+    });
+
+    it('ignores stale success effects after an account-session round trip but applies current success', async () => {
+        const pending: Array<{ resolve: () => void }> = [];
+        callableImpl = () => new Promise(resolve => {
+            pending.push({ resolve: () => resolve({ data: { success: true } }) });
+        });
+        vi.mocked(generateSmartReplies).mockResolvedValue(['Current suggestion']);
+        const renderer = await renderMessages();
+        emitChats([chatDoc('chat-x', ['me', 'alice'])]);
+        await act(async () => { await flush(); });
+        openFirstConversation(renderer);
+        typeDraft(renderer, 'old request');
+        act(() => { getSendButton(renderer).props.onClick(); });
+
+        await act(async () => {
+            renderer.update(React.createElement(MessagesView, {
+                user: { id: 'account-b', blockedUsers: [] }, activeChatContext: null, onBack: () => {},
+            }));
+            await flush();
+        });
+        await act(async () => {
+            renderer.update(React.createElement(MessagesView, {
+                user: { id: 'me', blockedUsers: [] }, activeChatContext: null, onBack: () => {},
+            }));
+            await flush();
+        });
+        emitChats([chatDoc('chat-x', ['me', 'alice'])]);
+        await act(async () => { await flush(); });
+        openFirstConversation(renderer);
+        const incoming = messageDoc('current-incoming', { senderId: 'alice', text: 'Question?', ms: T0 + 2000 });
+        emitMessages(messagesSnapshotCalls.length - 1, [incoming], added([incoming]));
+        await act(async () => { await flush(); });
+        expect(renderer.root.findAll(n => n.type === 'button' && n.props.children === 'Current suggestion')).toHaveLength(1);
+
+        localStorage.setItem(scopedReadKey('me', 'chat-x'), 'current-session-marker');
+        localStorage.setItem('lastReadChat_chat-x', 'legacy-marker');
+        await act(async () => { pending[0].resolve(); await flush(); });
+        expect(renderer.root.findAll(n => n.type === 'button' && n.props.children === 'Current suggestion')).toHaveLength(1);
+        expect(localStorage.getItem(scopedReadKey('me', 'chat-x'))).toBe('current-session-marker');
+        expect(localStorage.getItem('lastReadChat_chat-x')).toBe('legacy-marker');
+
+        localStorage.removeItem(scopedReadKey('me', 'chat-x'));
+        typeDraft(renderer, 'current request');
+        act(() => { getSendButton(renderer).props.onClick(); });
+        await act(async () => { pending[1].resolve(); await flush(); });
+        expect(renderer.root.findAll(n => n.type === 'button' && n.props.children === 'Current suggestion')).toHaveLength(0);
+        expect(localStorage.getItem(scopedReadKey('me', 'chat-x'))).not.toBeNull();
+        expect(localStorage.getItem('lastReadChat_chat-x')).toBe('legacy-marker');
+        act(() => renderer.unmount());
+    });
+
+    it('does not write a read marker when a send completes after unmount', async () => {
+        let resolveSend!: () => void;
+        callableImpl = () => new Promise(resolve => {
+            resolveSend = () => resolve({ data: { success: true } });
+        });
+        const renderer = await renderMessages();
+        emitChats([chatDoc('chat-x', ['me', 'alice'])]);
+        await act(async () => { await flush(); });
+        openFirstConversation(renderer);
+        typeDraft(renderer, 'pending during unmount');
+        act(() => { getSendButton(renderer).props.onClick(); });
+        localStorage.removeItem(scopedReadKey('me', 'chat-x'));
+
+        act(() => renderer.unmount());
+        await act(async () => { resolveSend(); await flush(); });
+        expect(localStorage.getItem(scopedReadKey('me', 'chat-x'))).toBeNull();
+    });
+});
 
 describe('MessagesView — partner profile hydration', () => {
     beforeEach(() => {
@@ -1228,7 +1724,7 @@ describe('MessagesView — refined presentation', () => {
         expect(textOf(unread.toJSON())).not.toContain(t('messages.all_caught_up'));
         act(() => unread.unmount());
 
-        localStorage.setItem('lastReadChat_me_alice', String(T0 + 1));
+        localStorage.setItem(scopedReadKey('me', 'me_alice'), String(T0 + 1));
         const read = await inbox([chatDoc('me_alice', ['me', 'alice'])]);
         expect(textOf(read.toJSON())).toContain(t('messages.all_caught_up'));
         act(() => read.unmount());
@@ -1410,6 +1906,48 @@ describe('MessagesView — Ping chat-shell init (no read-before-create)', () => 
         expect(reportCriticalActionFailure).toHaveBeenCalledTimes(1);
         expect(reportCriticalActionFailure.mock.calls[0][0]).toBe('chat_init');
         expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === t('messages.toast_open_failed')).length).toBe(1);
+        act(() => renderer.unmount());
+    });
+
+    it('X-1: a readable shell at the canonical ID holding another user ([mallory, me]) is NOT opened', async () => {
+        chatSetDocAuto = 'permission-denied';
+        chatGetDocAuto = 'squatted';
+        const renderer = await renderMessages({ activeChatContext: pingContext });
+        await act(async () => { await flush(); });
+
+        expect(chatGetDocCalls).toEqual([['chats', pingChatId]]);
+        expect(messagesSnapshotCalls).toHaveLength(0);
+        expect(isInConversationDetail(renderer)).toBe(false);
+        expect(reportCriticalActionFailure).toHaveBeenCalledTimes(1);
+        expect(renderer.root.findAll(n => n.type === 'p' && n.props.children === t('messages.toast_open_failed')).length).toBe(1);
+        act(() => renderer.unmount());
+    });
+
+    it('X-1: an inbox-listed shell at the canonical ID with mismatched participants is NOT opened from a Ping', async () => {
+        const renderer = await renderMessages();
+        emitChats([chatDoc(pingChatId, ['mallory', 'me'])]);
+        await act(async () => { await flush(); });
+        act(() => renderer.update(React.createElement(MessagesView, {
+            user: { id: 'me', blockedUsers: [] },
+            activeChatContext: pingContext,
+            onBack: () => {},
+        })));
+        await act(async () => { await flush(); });
+
+        expect(chatSetDocCalls).toHaveLength(0);
+        expect(messagesSnapshotCalls).toHaveLength(0);
+        expect(isInConversationDetail(renderer)).toBe(false);
+        expect(reportCriticalActionFailure).toHaveBeenCalledTimes(1);
+        act(() => renderer.unmount());
+    });
+
+    it('X-1: a self-chat Ping context never writes a shell or opens a thread', async () => {
+        const renderer = await renderMessages({ activeChatContext: { userId: 'me', context: 'Self' } });
+        await act(async () => { await flush(); });
+        expect(chatSetDocCalls).toHaveLength(0);
+        expect(chatGetDocCalls).toEqual([]);
+        expect(isInConversationDetail(renderer)).toBe(false);
+        expect(reportCriticalActionFailure).toHaveBeenCalledTimes(1);
         act(() => renderer.unmount());
     });
 

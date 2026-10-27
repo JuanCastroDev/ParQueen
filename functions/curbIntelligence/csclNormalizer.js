@@ -6,6 +6,7 @@ const NATIVE_FIELDS = Object.freeze([
   'globalid', 'physicalid', 'l_blockfaceid', 'r_blockfaceid', 'boroughcode', 'b5sc',
   'rw_type', 'full_street_name', 'street_name', 'stname_label', 'trafdir', 'nominaldir',
   'streetwidth', 'from_level_code', 'to_level_code', 'accessible', 'nonped', 'status',
+  'from_street', 'to_street',
   'modified_date', 'created_date',
 ]);
 
@@ -17,7 +18,7 @@ function sourceText(value) {
 
 function validCoordinate(value) {
   return Array.isArray(value) && value.length >= 2
-    && Number.isFinite(value[0]) && Number.isFinite(value[1])
+    && value.every(Number.isFinite)
     && value[0] >= NYC_ENVELOPE.minLng && value[0] <= NYC_ENVELOPE.maxLng
     && value[1] >= NYC_ENVELOPE.minLat && value[1] <= NYC_ENVELOPE.maxLat;
 }

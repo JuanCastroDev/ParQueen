@@ -14,16 +14,21 @@ describe('createSegmentFromSweepNYC private resolver composition boundary', () =
     expect(callable).toContain('selectCanonicalV2Handler(');
     expect(callable).toContain('_callableHooks.canonicalCurbOrchestrator');
     expect(callable).toContain('_runCanonicalCurbV2');
-    expect(callable).toContain('return canonicalV2Handler(request.data)');
+    expect(callable).toContain('return canonicalV2Handler(request.data, request.auth.uid)');
+    expect(callable).not.toContain('request.data.uid');
+    expect(callable).not.toContain('request.data?.uid');
     expect(callable.indexOf('await checkRateLimit(uid')).toBeLessThan(
-      callable.indexOf('const canonicalV2Handler = selectCanonicalV2Handler('),
+      callable.indexOf('request.data?.protocolVersion !== 2'),
     );
-    expect(callable.indexOf('if (canonicalV2Handler)')).toBeLessThan(
-      callable.indexOf('const { lat, lng, accuracyMeters, revalidateSegmentId }'),
+    expect(callable.indexOf('request.data?.protocolVersion !== 2')).toBeLessThan(
+      callable.indexOf('return canonicalV2Handler(request.data, request.auth.uid)'),
     );
+    expect(callable).not.toContain('_tryCreateFromSweepNYC');
+    expect(callable).not.toContain('revalidateSegmentId');
     const v2Start = source.indexOf('async function _runCanonicalCurbV2');
     const v2 = source.slice(v2Start, source.indexOf('// ─── Hydrant proximity', v2Start));
-    expect(v2).toContain('candidateStore: createCsclCandidateStore');
+    expect(v2).not.toContain('candidateStore: createCsclCandidateStore');
+    expect(v2).toContain('fetchFn: fetch');
     expect(v2).toContain('planimetricStore: createPlanimetricCurbStore');
     expect(v2).toContain('parkNycStore: createParkNycCandidateStore');
     expect(v2).toContain('sweepSource: { query: _queryCanonicalSweepEvidence }');
@@ -36,18 +41,12 @@ describe('createSegmentFromSweepNYC private resolver composition boundary', () =
     expect(callable).not.toContain("serviceAccount: 'parqueen-user@parkqueen-46475363-ccf36.iam.gserviceaccount.com'");
   });
 
-  it('observes the established result without exposing BFI or changing response/write construction', () => {
-    expect(callable).toContain('_observeCurbIntelligenceShadow(productionResult, lat, lng, accuracyMeters, shadowEvidence)');
+  it('does not return a legacy parking answer or expose BFI from the callable', () => {
+    expect(callable).not.toContain('_observeCurbIntelligenceShadow');
+    expect(callable).not.toContain('_fallbackToNYCOpenData');
     expect(callable).not.toMatch(/officialBlockFaceId|blockFaceId|blockfaceId/);
     expect(callable).not.toMatch(/\.set\(|\.add\(|\.update\(/);
-  });
-
-  it('passes optional accuracy and captured fallback evidence only to the observer', () => {
-    expect(callable).toContain('accuracyMeters');
-    expect(callable).toContain('shadowEvidence');
-    expect(callable).toMatch(/_fallbackToNYCOpenData\(\s*lat,\s*lng,\s*null,/);
-    expect(callable).toContain('_observeCurbIntelligenceShadow(productionResult, lat, lng, accuracyMeters, shadowEvidence)');
-    expect(callable).not.toMatch(/accuracyMeters\s*[,}][\s\S]*?\.set\(/);
+    expect(callable).not.toMatch(/success:\s*true/);
   });
 
   it('does not supply operatorAuthorized to the shadow observer', () => {

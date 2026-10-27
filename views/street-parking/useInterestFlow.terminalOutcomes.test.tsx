@@ -62,6 +62,14 @@ vi.mock('./cancelClaimTransaction', () => ({ cancelClaimTransaction: vi.fn() }))
 const { reportCriticalActionFailure } = vi.hoisted(() => ({ reportCriticalActionFailure: vi.fn() }));
 vi.mock('../../utils/errorReporting', () => ({ reportCriticalActionFailure }));
 
+const { recordParkingAnalyticsEvent } = vi.hoisted(() => ({
+  recordParkingAnalyticsEvent: vi.fn(),
+}));
+vi.mock('../../utils/parkingAnalytics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../utils/parkingAnalytics')>()),
+  recordParkingAnalyticsEvent,
+}));
+
 import { useInterestFlow } from './useInterestFlow';
 import { HandoffFlow } from './HandoffFlow';
 import { selectUnfinishedHandoff } from './unfinishedHandoff';
@@ -252,6 +260,7 @@ describe('useInterestFlow — terminal handoff outcomes', () => {
     documents.clear();
     documents.set('spots/spot-1', { ...spot });
     reportCriticalActionFailure.mockClear();
+    recordParkingAnalyticsEvent.mockClear();
     getDoc.mockImplementation(async (ref) => snapshotFor(ref));
     runTransaction.mockImplementation(async (_db, callback) => {
       const staged: Array<{ ref: any; data: Record<string, any>; merge?: boolean }> = [];
@@ -549,6 +558,37 @@ describe('useInterestFlow — terminal handoff outcomes', () => {
     expect(feedbackPaths()).toEqual(['spotFeedback/spot-1_driver-1']);
     expect(seeded.outcome).toBe('participant_success');
     assertClientDidNotAward();
+  });
+
+  it('records exactly one success after a cached success is confirmed by the server', async () => {
+    const { getFlow, renderer } = mount(user, spot, true);
+    await arrive(getFlow);
+    await act(async () => { await getFlow().handleHandoffOutcome('success'); });
+    expect(getFlow().handoffStep).toBe('waiting');
+    expect(spotListeners.size).toBe(1);
+
+    // A cached completed_success must not be an analytics completion, and the
+    // listener must survive this update to receive a fresh server snapshot.
+    await act(async () => {
+      spotListeners.forEach((fn) => fn({
+        data: () => ({ status: 'occupied', claimState: 'completed_success' }),
+        metadata: { fromCache: true, hasPendingWrites: false },
+      }));
+    });
+    expect(recordParkingAnalyticsEvent).not.toHaveBeenCalledWith('handoff_success_recorded');
+    expect(spotListeners.size).toBe(1);
+    expect(getFlow().handoffStep).toBe('celebration');
+
+    await act(async () => {
+      spotListeners.forEach((fn) => fn({
+        data: () => ({ status: 'occupied', claimState: 'completed_success' }),
+        metadata: { fromCache: false, hasPendingWrites: false },
+      }));
+    });
+    expect(recordParkingAnalyticsEvent).toHaveBeenCalledTimes(1);
+    expect(recordParkingAnalyticsEvent).toHaveBeenCalledWith('handoff_success_recorded');
+    expect(spotListeners.size).toBe(0);
+    expect(renderer.root.findByProps({ 'data-testid': 'handoff-crown-copy' })).toBeTruthy();
   });
 
   it('sends claimer +1 only after the server award and never tells the claimer +2', async () => {

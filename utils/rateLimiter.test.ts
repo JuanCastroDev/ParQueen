@@ -100,7 +100,7 @@ describe('TM-13 — fixed-window rate limiter', () => {
 // ── Phase J callable rate-limit source assertions (TM-13) ────────────────────
 // These tests read functions/index.js as text to verify that:
 //   a) checkRateLimit is called with the expected operation key and limit
-//   b) the rate-limit call precedes the external API or expensive processing call
+//   b) the rate-limit call precedes canonical resolution or the other expensive call
 //   c) the rate-limit call occurs after the auth guard, not before it
 //
 // Source assertions are the correct level here: emulator tests for the three
@@ -168,12 +168,30 @@ describe('TM-13 — Phase J callable rate-limit source assertions', () => {
             expect(body).toMatch(/checkRateLimit\(.*'createSegmentFromSweepNYC'.*\{.*limit:\s*30.*windowSec:\s*3600/s);
         });
 
-        it('RL-C8: checkRateLimit precedes external API call (_tryCreateFromSweepNYC)', () => {
-            const rlIdx = body.indexOf("checkRateLimit(uid, 'createSegmentFromSweepNYC'");
-            const apiIdx = body.indexOf('_tryCreateFromSweepNYC');
+        it('RL-C8: awaited rate limit precedes canonical resolution and the unsupported-protocol return', () => {
+            // Source order of this callable only. The slice stops at the next
+            // helper so later legacy functions cannot satisfy the assertion.
+            // This is not a runtime side-effect test; that remains the emulator suite.
+            const callableEnd = body.indexOf('function _existingNYCOpenDataResult');
+            expect(callableEnd).toBeGreaterThan(-1);
+            const callable = body.slice(0, callableEnd);
+            const rlIdx = callable.indexOf("await checkRateLimit(uid, 'createSegmentFromSweepNYC'");
+            const protocolIdx = callable.indexOf('request.data?.protocolVersion !== 2');
+            const selectIdx = callable.indexOf('selectCanonicalV2Handler(');
+            const runnerIdx = callable.indexOf('_runCanonicalCurbV2');
+            const invokeIdx = callable.indexOf('return canonicalV2Handler(request.data, request.auth.uid)');
+            const firstReturnIdx = callable.indexOf('return ');
+
             expect(rlIdx).toBeGreaterThan(-1);
-            expect(apiIdx).toBeGreaterThan(-1);
-            expect(rlIdx).toBeLessThan(apiIdx);
+            expect(firstReturnIdx).toBeGreaterThan(rlIdx);
+            expect(protocolIdx).toBeGreaterThan(rlIdx);
+            expect(selectIdx).toBeGreaterThan(protocolIdx);
+            expect(runnerIdx).toBeGreaterThan(selectIdx);
+            expect(invokeIdx).toBeGreaterThan(runnerIdx);
+            expect(callable).toContain("status: 'unsupported'");
+            expect(callable).not.toContain('_tryCreateFromSweepNYC');
+            expect(callable).not.toContain('_fallbackToNYCOpenData');
+            expect(callable).not.toMatch(/success:\s*true/);
         });
 
         it('RL-C9: auth guard precedes checkRateLimit', () => {

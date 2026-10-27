@@ -53,6 +53,7 @@ interface FakeSub {
 }
 let subs: FakeSub[] = [];
 let radiusWrites: Array<{ path: string; data: any }> = [];
+let radiusWriteImpl: () => Promise<void> = () => Promise.resolve();
 let onSnapshotCallCount = 0;
 let unsubscribeCallCount = 0;
 
@@ -71,10 +72,16 @@ vi.mock('firebase/firestore', () => ({
     // The radius pill writes the notificationRadius preference through the
     // same path NotificationsSettingsView uses.
     doc: (_db: any, ...path: string[]) => ({ __path: path.join('/') }),
-    updateDoc: (ref: any, data: any) => { radiusWrites.push({ path: ref.__path, data }); return Promise.resolve(); },
+    updateDoc: (ref: any, data: any) => {
+        radiusWrites.push({ path: ref.__path, data });
+        return radiusWriteImpl();
+    },
 }));
 
 import { NotificationsView } from './NotificationsView';
+import en from '../i18n/en';
+import es from '../i18n/es';
+import { setLang } from '../i18n';
 
 function spotDoc(id: string, opts: {
     reportedAtMs: number; expiresAtMs: number; finderId?: string; status?: string;
@@ -553,10 +560,13 @@ describe('NotificationsView — radius comes from the alert preference', () => {
         vi.useFakeTimers();
         vi.setSystemTime(T0);
         subs = [];
+        radiusWrites = [];
+        radiusWriteImpl = () => Promise.resolve();
         onSnapshotCallCount = 0;
         unsubscribeCallCount = 0;
+        setLang('en');
     });
-    afterEach(() => { vi.useRealTimers(); });
+    afterEach(() => { setLang('en'); vi.useRealTimers(); });
 
     it('queries the radius the user actually chose, not a built-in constant', async () => {
         for (const radius of [1, 2, 3, 5]) {
@@ -619,7 +629,6 @@ describe('NotificationsView — radius comes from the alert preference', () => {
     });
 
     it('writes a radius change through the existing preference document', async () => {
-        radiusWrites = [];
         const renderer = await renderNotifications({ user: { id: 'me', notificationRadius: 1 } });
         const pill = renderer.root.find(
             n => n.type === 'button' && typeof n.props['aria-label'] === 'string'
@@ -635,6 +644,143 @@ describe('NotificationsView — radius comes from the alert preference', () => {
         expect(radiusWrites).toHaveLength(1);
         expect(radiusWrites[0].path).toBe('users/me/private/preferences');
         expect(radiusWrites[0].data).toEqual({ notificationRadius: 5 });
+        expect(renderer.root.findAllByProps({ role: 'alert' })).toHaveLength(0);
+        expect(pill.props.disabled).toBe(false);
+        act(() => renderer.unmount());
+    });
+
+    it('shows an accessible error, preserves the confirmed radius, and restores interaction after a failed save', async () => {
+        radiusWriteImpl = () => Promise.reject(new Error('offline'));
+        const renderer = await renderNotifications({ user: { id: 'me', notificationRadius: 1 } });
+        const pill = renderer.root.find(
+            n => n.type === 'button' && typeof n.props['aria-label'] === 'string'
+                && n.props['aria-label'].startsWith('Search radius'),
+        );
+        await act(async () => { pill.props.onClick(); });
+        const option = renderer.root.find(
+            n => n.type === 'button' && n.props.children === '5 mi'
+                || (n.type === 'button' && Array.isArray(n.props.children) && n.props.children.join('') === '5 mi'),
+        );
+
+        await act(async () => { await option.props.onClick(); });
+
+        const alert = renderer.root.findByProps({ role: 'alert' });
+        expect(alert.props.children).toBe("Couldn't save your radius. Please try again.");
+        expect(pill.props['aria-label']).toContain('1 mi');
+        expect(pill.props.disabled).toBe(false);
+        await act(async () => { pill.props.onClick(); });
+        expect(renderer.root.findAllByProps({ role: 'dialog' })).toHaveLength(1);
+        act(() => renderer.unmount());
+    });
+
+    it('keeps the radius control unavailable until a pending save settles', async () => {
+        let resolveWrite!: () => void;
+        radiusWriteImpl = () => new Promise<void>(resolve => { resolveWrite = resolve; });
+        const renderer = await renderNotifications({ user: { id: 'me', notificationRadius: 1 } });
+        const pill = () => renderer.root.find(
+            n => n.type === 'button' && typeof n.props['aria-label'] === 'string'
+                && n.props['aria-label'].startsWith('Search radius'),
+        );
+        await act(async () => { pill().props.onClick(); });
+        const option = renderer.root.find(
+            n => n.type === 'button' && n.props.children === '5 mi'
+                || (n.type === 'button' && Array.isArray(n.props.children) && n.props.children.join('') === '5 mi'),
+        );
+
+        await act(async () => { void option.props.onClick(); await Promise.resolve(); });
+
+        expect(radiusWrites).toHaveLength(1);
+        expect(pill().props.disabled).toBe(true);
+        expect(renderer.root.findAllByProps({ role: 'dialog' })).toHaveLength(0);
+
+        await act(async () => { resolveWrite(); await Promise.resolve(); });
+        expect(pill().props.disabled).toBe(false);
+        act(() => renderer.unmount());
+    });
+
+    it('retries the same write, clears the error after success, and waits for the live snapshot to change the radius', async () => {
+        radiusWriteImpl = vi.fn()
+            .mockRejectedValueOnce(new Error('offline'))
+            .mockResolvedValueOnce(undefined);
+        const renderer = await renderNotifications({ user: { id: 'me', notificationRadius: 1 } });
+        const pill = () => renderer.root.find(
+            n => n.type === 'button' && typeof n.props['aria-label'] === 'string'
+                && n.props['aria-label'].startsWith('Search radius'),
+        );
+        const chooseFiveMiles = async () => {
+            await act(async () => { pill().props.onClick(); });
+            const option = renderer.root.find(
+                n => n.type === 'button' && n.props.children === '5 mi'
+                    || (n.type === 'button' && Array.isArray(n.props.children) && n.props.children.join('') === '5 mi'),
+            );
+            await act(async () => { await option.props.onClick(); });
+        };
+        const listenersBefore = onSnapshotCallCount;
+
+        await chooseFiveMiles();
+        expect(renderer.root.findAllByProps({ role: 'alert' })).toHaveLength(1);
+        await chooseFiveMiles();
+
+        expect(radiusWrites).toHaveLength(2);
+        expect(radiusWrites[1]).toEqual({
+            path: 'users/me/private/preferences',
+            data: { notificationRadius: 5 },
+        });
+        expect(renderer.root.findAllByProps({ role: 'alert' })).toHaveLength(0);
+        expect(pill().props['aria-label']).toContain('1 mi');
+        expect(onSnapshotCallCount).toBe(listenersBefore);
+
+        await act(async () => {
+            renderer.update(React.createElement(NotificationsView, {
+                user: { id: 'me', notificationRadius: 5 },
+                onBack: () => {}, onSelectSpot: () => {},
+                permissionState: 'granted' as const, callbacks: noopCallbacks,
+            }));
+        });
+        expect(pill().props['aria-label']).toContain('5 mi');
+        act(() => renderer.unmount());
+    });
+
+    it('localizes a visible save error when the selected language changes', async () => {
+        radiusWriteImpl = () => Promise.reject(new Error('offline'));
+        const renderer = await renderNotifications({ user: { id: 'me', notificationRadius: 1 } });
+        const pill = renderer.root.find(
+            n => n.type === 'button' && typeof n.props['aria-label'] === 'string'
+                && n.props['aria-label'].startsWith('Search radius'),
+        );
+        await act(async () => { pill.props.onClick(); });
+        const option = renderer.root.find(
+            n => n.type === 'button' && n.props.children === '5 mi'
+                || (n.type === 'button' && Array.isArray(n.props.children) && n.props.children.join('') === '5 mi'),
+        );
+        await act(async () => { await option.props.onClick(); });
+        expect(renderer.root.findByProps({ role: 'alert' }).props.children)
+            .toBe("Couldn't save your radius. Please try again.");
+
+        act(() => setLang('es'));
+
+        expect(renderer.root.findByProps({ role: 'alert' }).props.children)
+            .toBe('No se pudo guardar el radio de búsqueda. Inténtalo de nuevo.');
+        expect(renderer.root.find(
+            n => n.type === 'button' && typeof n.props['aria-label'] === 'string'
+                && n.props['aria-label'].startsWith('Radio de búsqueda'),
+        ).props.type).toBe('button');
+        act(() => renderer.unmount());
+    });
+
+    it('has complete localized radius-save error copy', () => {
+        expect(en['nearby_activity.radius_save_error']).toBe("Couldn't save your radius. Please try again.");
+        expect(es['nearby_activity.radius_save_error']).toBe('No se pudo guardar el radio de búsqueda. Inténtalo de nuevo.');
+    });
+
+    it('does not attempt a preference write without a user identity', async () => {
+        const renderer = await renderNotifications({ user: { notificationRadius: 1 } });
+        const pill = renderer.root.find(
+            n => n.type === 'button' && typeof n.props['aria-label'] === 'string'
+                && n.props['aria-label'].startsWith('Search radius'),
+        );
+        expect(pill.props.disabled).toBe(true);
+        expect(radiusWrites).toHaveLength(0);
         act(() => renderer.unmount());
     });
 });

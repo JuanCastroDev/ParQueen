@@ -22,6 +22,8 @@ const socrataAppToken = defineSecret("SOCRATA_APP_TOKEN");
 const { osmNameToDOT, streetNameToLikePattern, dotSideToCardinal, BOROUGH_CODE_TO_NAME, nycOdSegmentDocId, selectBlockFace, findBlockContext, parseNYCOpenDataSign } = require('./nycOpenDataNormalizer');
 const { redactForLog, sanitizeError } = require('./redactForLog');
 const { checkRateLimit } = require('./rateLimiter');
+const { streetIntelligenceAppCheckRejection } = require('./streetIntelligenceAppCheck');
+const { createStreetIntelligenceCacheBoundary } = require('./streetIntelligenceCacheTtl');
 const {
   AUTH_BRIDGE_SERVICE_ACCOUNT,
   exchangePhoneAuthSessionHandler,
@@ -336,6 +338,85 @@ exports.cleanupExpiredSpotsHourly = onSchedule(
   }
 );
 
+// S-SPOT-1: phantom-claim sweep. A modified client could cancel a claim by
+// writing only {status:'available'} (+ lock release) while keeping
+// interestedUserId and the other claimer fields. isAvailableForClaim() then
+// refuses every other claimer, freezing the Ping until it expires; the
+// finder cannot clear claimer fields, and cleanupExpiredInterests only
+// selects status=='interested'. Rules Arms 3/3b now require full cleanup
+// (null), but docs written before that rule ships must still be repaired.
+//
+// Query uses the existing spots(status ASC, expiresAt ASC) composite index
+// (firestore.indexes.json) — no new index. Only live available Pings are
+// examined (expired ones are not claimable and are deleted hourly by
+// cleanupExpiredSpotsHourly). Each candidate is re-verified in its own
+// transaction; one failure never stops the others. Emits exactly one
+// value-free summary line per run (counts only — no spot IDs, UIDs or
+// locations): `phantomClaimSweep: examined=N cleared=N errors=N`.
+const PHANTOM_CLAIM_SWEEP_LIMIT = 200;
+const PHANTOM_CLAIM_CLEAR_FIELDS = Object.freeze({
+  interestedUserId: null,
+  interestedUserName: null,
+  interestedUserVehicleColor: null,
+  interestedUserVehicleType: null,
+  interestedUserVehicleBrand: null,
+  interestedUserTitle: null,
+  etaMinutes: null,
+  interestExpiresAt: null,
+  claimState: null,
+  claimStartedAt: null,
+  ownerLeavingNow: null,
+  ownerLeavingNowAt: null,
+  claimReminderAt: null,
+  claimReminderSentAt: null,
+  claimAutoReleaseAt: null,
+  claimAutoReleasedAt: null,
+});
+
+function isPhantomClaim(spot) {
+  return !!spot && spot.status === 'available'
+    && spot.interestedUserId !== undefined && spot.interestedUserId !== null;
+}
+
+async function sweepPhantomClaims(firestoreDb, now) {
+  let examined = 0;
+  let cleared = 0;
+  let errors = 0;
+  try {
+    const snap = await firestoreDb
+      .collection('spots')
+      .where('status', '==', 'available')
+      .where('expiresAt', '>', now)
+      .limit(PHANTOM_CLAIM_SWEEP_LIMIT)
+      .get();
+    examined = snap.size;
+    for (const d of snap.docs) {
+      if (!isPhantomClaim(d.data())) continue;
+      try {
+        const didClear = await firestoreDb.runTransaction(async (tx) => {
+          const fresh = await tx.get(d.ref);
+          if (!fresh.exists || !isPhantomClaim(fresh.data())) return false;
+          const holder = fresh.data().interestedUserId;
+          const lockSnap = typeof holder === 'string' && holder.length > 0 && !holder.includes('/')
+            ? await readActiveIncomingClaim(tx, firestoreDb, holder)
+            : null;
+          tx.update(d.ref, { ...PHANTOM_CLAIM_CLEAR_FIELDS });
+          if (lockSnap) deleteMatchingActiveIncomingClaim(tx, lockSnap, d.id);
+          return true;
+        });
+        if (didClear) cleared++;
+      } catch (e) {
+        errors++;
+      }
+    }
+  } catch (e) {
+    errors++;
+  }
+  console.log(`phantomClaimSweep: examined=${examined} cleared=${cleared} errors=${errors}`);
+  return { examined, cleared, errors };
+}
+exports._sweepPhantomClaims = sweepPhantomClaims;
+
 // 1b) Revert expired interest reservations every minute
 exports.cleanupExpiredInterests = onSchedule(
   {
@@ -424,6 +505,8 @@ exports.cleanupExpiredInterests = onSchedule(
       `✅ cleanupExpiredInterests: examined ${snap.size}, released ${released}, skipped ${skipped} (already stale/renewed), errors ${errors}`
     );
     }
+    // S-SPOT-1: independent of the expired-interest pass above; never throws.
+    await sweepPhantomClaims(db, now);
     try {
       const repair = await repairActiveIncomingClaims(db, now);
       console.log(
@@ -1036,6 +1119,7 @@ exports.verifyEmailOTP = onCall(
 // deterministically without calling the real Vision API.
 const _hooks = {
   visionSafeSearch: null, // null → use real Vision; (gcsUri) => Promise<annotation|null>
+  beforeAvatarPublishCopy: null, // integration test race seam; null in production
 };
 exports._hooks = _hooks;
 
@@ -1084,6 +1168,9 @@ function _isAllowedImageHeader(buf) {
 //   candidate objects are deleted. Permanent failures (invalid format,
 //   content policy) are acknowledged immediately regardless of retryCount.
 const AVATAR_MAX_RETRIES = 3;
+// A lease must outlive the explicitly bounded 120-second invocation runtime.
+// Eventarc retries active duplicates; only abandoned attempts are reclaimed.
+const AVATAR_PROCESSING_LEASE_MS = 3 * 60 * 1000;
 // 4096 × 4096 — well above 512 × 512 output; 64× below Sharp's 268 M default.
 const AVATAR_MAX_PIXELS    = 16_777_216;
 const AVATAR_MAX_DIMENSION = 4096;
@@ -1091,12 +1178,13 @@ const AVATAR_MAX_DIMENSION = 4096;
 // Quarantine path design — prevents trigger recursion and pre-approval exposure:
 //   Upload (client-writable, owner-private):  avatarUploads/{uid}/{uploadId}/original
 //   Candidate (server-only, not public):      avatarCandidates/{uid}/{uploadId}.webp
-//   Published (server-written, owner-read):   avatars/{uid}
+//   Published (server-written, owner-read):   avatars/{uid}/{uploadId}.webp
+//   Legacy published avatar remains readable until replaced: avatars/{uid}
 //   Moderation state (client-readable):       avatarModeration/{uid}
 
 // 6) Moderate avatar uploads via Vision SafeSearch
 exports.moderateAvatarUpload = onObjectFinalized(
-  { region: "us-central1", memory: "512MiB", retry: true, serviceAccount: 'parqueen-avatar-moderator@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
+  { region: "us-central1", memory: "512MiB", timeoutSeconds: 120, retry: true, preserveExternalChanges: true, serviceAccount: 'parqueen-avatar-moderator@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
   async (event) => {
     const filePath = event.data.name;
 
@@ -1109,6 +1197,7 @@ exports.moderateAvatarUpload = onObjectFinalized(
     const uid            = parts[1];
     const uploadId       = parts[2];
     const sourceGen      = String(event.data.generation || "");
+    const processingAttemptId = randomUUID();
     const maskedUid      = uid.slice(0, 4) + "***";
     const moderationRef  = db.collection("avatarModeration").doc(uid);
     const pendingRef     = db.doc(`users/${uid}/private/avatar`);
@@ -1116,7 +1205,40 @@ exports.moderateAvatarUpload = onObjectFinalized(
     const sourceFile     = bucket.file(filePath);
     const candidatePath  = `avatarCandidates/${uid}/${uploadId}.webp`;
     const candidateFile  = bucket.file(candidatePath);
-    const publishedFile  = bucket.file(`avatars/${uid}`);
+    // Each upload publishes to its own image object; concurrent copies cannot
+    // overwrite another attempt's approved bytes or download token.
+    const publishedPath  = `avatars/${uid}/${uploadId}.webp`;
+    const publishedFile  = bucket.file(publishedPath);
+
+    // A replaced upload may still be running when a newer upload claims the slot.
+    // Never let its asynchronous error/cleanup path overwrite the newer record.
+    const updateCurrentModeration = (patch) => db.runTransaction(async (tx) => {
+      const snap = await tx.get(moderationRef);
+      if (!snap.exists || snap.data().uploadId !== uploadId ||
+          snap.data().processingAttemptId !== processingAttemptId ||
+          snap.data().status !== "processing") return false;
+      tx.update(moderationRef, patch);
+      return true;
+    });
+
+    // When a processing lease has been reclaimed for the SAME upload ID, old
+    // work must not delete the new owner's identical source/candidate paths.
+    // Different upload IDs have distinct paths and may clean their own files.
+    const cleanupSuperseded = async (includePublished = false) => {
+      let current;
+      try {
+        const snap = await moderationRef.get();
+        current = snap.exists ? snap.data() : null;
+      } catch (err) {
+        console.warn(`Avatar stale cleanup deferred (${maskedUid}):`, sanitizeError(err));
+        return;
+      }
+      if (current?.uploadId === uploadId &&
+          current.processingAttemptId !== processingAttemptId) return;
+      const files = [sourceFile, candidateFile];
+      if (includePublished) files.push(publishedFile);
+      await Promise.all(files.map(file => file.delete().catch(() => {})));
+    };
 
     // ── Step 0: Generation-scoped idempotency via transaction ─────────────────
     // Also reads users/{uid}/private/avatar to enforce the pre-event newer-upload
@@ -1133,15 +1255,38 @@ exports.moderateAvatarUpload = onObjectFinalized(
           tx.set(moderationRef, {
             uid, uploadId, sourcePath: filePath, sourceGeneration: sourceGen,
             status: "processing", retryCount: 0, processedPath: null,
+            processingAttemptId, processingStartedAt: Timestamp.now(),
             failureReason: null, createdAt: Timestamp.now(), updatedAt: Timestamp.now(),
           });
           return { claimed: true, retryCount: 0 };
         }
         const d = moderationSnap.data();
-        if (d.uploadId !== uploadId) return { claimed: false, reason: "superseded" };
-        if (d.status === "approved" || d.status === "rejected") return { claimed: false, reason: "terminal" };
+        if (d.uploadId !== uploadId) {
+          // The latest client-requested upload may replace a prior terminal,
+          // failed, or in-flight upload. An old/stray event WITHOUT a matching
+          // pendingUploadId remains superseded (fail closed).
+          if (pendingId !== uploadId) return { claimed: false, reason: "superseded" };
+          tx.set(moderationRef, {
+            uid, uploadId, sourcePath: filePath, sourceGeneration: sourceGen,
+            status: "processing", retryCount: 0, processedPath: null,
+            processingAttemptId, processingStartedAt: Timestamp.now(),
+            failureReason: null, createdAt: Timestamp.now(), updatedAt: Timestamp.now(),
+          });
+          return { claimed: true, retryCount: 0 };
+        }
+        if (d.status === "approved" || d.status === "rejected" || d.status === "failed")
+          return { claimed: false, reason: "terminal" };
+        if (d.status === "processing") {
+          const startedAt = d.processingStartedAt?.toMillis?.()
+            ?? d.updatedAt?.toMillis?.() ?? 0;
+          if (Date.now() - startedAt < AVATAR_PROCESSING_LEASE_MS)
+            return { claimed: false, reason: "already_processing" };
+        }
         if (d.retryCount >= AVATAR_MAX_RETRIES) return { claimed: false, reason: "max_retries" };
-        tx.update(moderationRef, { status: "processing", updatedAt: Timestamp.now() });
+        tx.update(moderationRef, {
+          status: "processing", processingAttemptId,
+          processingStartedAt: Timestamp.now(), updatedAt: Timestamp.now(),
+        });
         return { claimed: true, retryCount: d.retryCount };
       });
     } catch (err) {
@@ -1155,10 +1300,25 @@ exports.moderateAvatarUpload = onObjectFinalized(
       if (reason === "superseded" || reason === "superseded_by_pending") {
         // Source has no active processor — delete immediately to prevent orphan accumulation.
         await sourceFile.delete().catch(() => {});
+      } else if (reason === "already_processing") {
+        // Retriable: do NOT acknowledge a concurrent Eventarc delivery while an
+        // owner may still be running. After terminal state it will exit cleanly;
+        // after lease expiry the retried event can recover a crashed attempt.
+        throw new Error("Avatar already processing; retry later");
       } else if (reason === "max_retries") {
-        // Terminal failure: record it and remove all objects for this upload.
+        // No owner claimed this invocation; only mark failure if the same upload
+        // still owns a terminal-retry slot. Never overwrite another upload.
+        await db.runTransaction(async (tx) => {
+          const snap = await tx.get(moderationRef);
+          const d = snap.exists ? snap.data() : null;
+          if (d?.uploadId === uploadId && d.retryCount >= AVATAR_MAX_RETRIES &&
+              (d.status === "retry_pending" || d.status === "processing"))
+            tx.update(moderationRef, {
+              status: "failed", failureReason: "max_retries_exhausted",
+              updatedAt: Timestamp.now(),
+            });
+        }).catch(() => {});
         await Promise.all([
-          moderationRef.update({ status: "failed", failureReason: "max_retries_exhausted", updatedAt: Timestamp.now() }).catch(() => {}),
           sourceFile.delete().catch(() => {}),
           candidateFile.delete().catch(() => {}),
         ]);
@@ -1172,7 +1332,7 @@ exports.moderateAvatarUpload = onObjectFinalized(
     try {
       [rawBytes] = await sourceFile.download();
     } catch (err) {
-      await moderationRef.update({ status: "retry_pending", failureReason: "download_error", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
+      await updateCurrentModeration({ status: "retry_pending", failureReason: "download_error", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
       console.error(`Avatar download error (${maskedUid}):`, sanitizeError(err));
       throw err; // transient — let CF retry
     }
@@ -1181,7 +1341,7 @@ exports.moderateAvatarUpload = onObjectFinalized(
     if (!_isAllowedImageHeader(rawBytes)) {
       await Promise.all([
         sourceFile.delete().catch(() => {}),
-        moderationRef.update({ status: "rejected", failureReason: "invalid_format", updatedAt: Timestamp.now() }),
+        updateCurrentModeration({ status: "rejected", failureReason: "invalid_format", updatedAt: Timestamp.now() }),
       ]);
       console.log(`Avatar rejected (invalid_format) for ${maskedUid}`);
       return;
@@ -1211,12 +1371,12 @@ exports.moderateAvatarUpload = onObjectFinalized(
       if (err._perm) {
         await Promise.all([
           sourceFile.delete().catch(() => {}),
-          moderationRef.update({ status: "rejected", failureReason: err._reason || "invalid_image", updatedAt: Timestamp.now() }),
+          updateCurrentModeration({ status: "rejected", failureReason: err._reason || "invalid_image", updatedAt: Timestamp.now() }),
         ]);
         console.log(`Avatar rejected (${err._reason || "invalid_image"}) for ${maskedUid}`);
         return;
       }
-      await moderationRef.update({ status: "retry_pending", failureReason: "processing_error", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
+      await updateCurrentModeration({ status: "retry_pending", failureReason: "processing_error", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
       console.error(`Avatar processing error (${maskedUid}):`, sanitizeError(err));
       throw err; // transient — let CF retry
     }
@@ -1224,9 +1384,9 @@ exports.moderateAvatarUpload = onObjectFinalized(
     // ── Step 4: Save to candidate path (never the trigger prefix) ────────────
     try {
       await candidateFile.save(processedBuffer, { metadata: { contentType: "image/webp" }, resumable: false });
-      await moderationRef.update({ processedPath: candidatePath, updatedAt: Timestamp.now() });
+      await updateCurrentModeration({ processedPath: candidatePath, updatedAt: Timestamp.now() });
     } catch (err) {
-      await moderationRef.update({ status: "retry_pending", failureReason: "upload_error", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
+      await updateCurrentModeration({ status: "retry_pending", failureReason: "upload_error", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
       console.error(`Avatar candidate upload error (${maskedUid}):`, sanitizeError(err));
       throw err; // transient
     }
@@ -1243,14 +1403,14 @@ exports.moderateAvatarUpload = onObjectFinalized(
             return result?.safeSearchAnnotation ?? null;
           })());
     } catch (err) {
-      await moderationRef.update({ status: "retry_pending", failureReason: "vision_error", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
+      await updateCurrentModeration({ status: "retry_pending", failureReason: "vision_error", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
       console.error(`Avatar Vision error (${maskedUid}):`, sanitizeError(err));
       throw err; // transient — let CF retry
     }
 
     if (!safeSnap) {
       // Missing annotation fails closed — retry to give Vision another chance.
-      await moderationRef.update({ status: "retry_pending", failureReason: "missing_annotation", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
+      await updateCurrentModeration({ status: "retry_pending", failureReason: "missing_annotation", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
       console.error(`Avatar Vision annotation missing (${maskedUid})`);
       throw new Error("Missing Vision SafeSearch annotation");
     }
@@ -1260,19 +1420,35 @@ exports.moderateAvatarUpload = onObjectFinalized(
       await Promise.all([
         sourceFile.delete().catch(() => {}),
         candidateFile.delete().catch(() => {}),
-        moderationRef.update({ status: "rejected", failureReason: "content_policy", updatedAt: Timestamp.now() }),
+        updateCurrentModeration({ status: "rejected", failureReason: "content_policy", updatedAt: Timestamp.now() }),
       ]);
       console.log(`Avatar rejected (content_policy) for ${maskedUid}`);
       return;
     }
 
     // ── Step 6: Approve — copy to published path, update user doc atomically ──
-    // Staleness check: abort if a newer upload already claimed the moderation slot
-    // or if pendingUploadId was updated to a different uploadId after Vision ran.
+    // Avoid copying a superseded candidate into the shared published path.
+    // The final transaction below still checks again before updating avatarUrl.
+    const stillCurrent = await db.runTransaction(async (tx) => {
+      const moderationSnap = await tx.get(moderationRef);
+      const pendingSnap = await tx.get(pendingRef);
+      const pendingId = pendingSnap.exists ? pendingSnap.data().pendingUploadId : null;
+      return moderationSnap.exists
+        && moderationSnap.data().uploadId === uploadId
+        && moderationSnap.data().processingAttemptId === processingAttemptId
+        && moderationSnap.data().status === "processing"
+        && (!pendingId || pendingId === uploadId);
+    });
+    if (!stillCurrent) {
+      await cleanupSuperseded();
+      console.log(`Avatar approval skipped (superseded) for ${maskedUid}`);
+      return;
+    }
+    if (_hooks.beforeAvatarPublishCopy) await _hooks.beforeAvatarPublishCopy({ uid, uploadId });
     try {
       await candidateFile.copy(publishedFile);
     } catch (err) {
-      await moderationRef.update({ status: "retry_pending", failureReason: "publish_error", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
+      await updateCurrentModeration({ status: "retry_pending", failureReason: "publish_error", retryCount: retryCount + 1, updatedAt: Timestamp.now() });
       console.error(`Avatar publish copy error (${maskedUid}):`, sanitizeError(err));
       throw err;
     }
@@ -1281,7 +1457,6 @@ exports.moderateAvatarUpload = onObjectFinalized(
     // Copied files don't inherit download tokens, so we generate one explicitly
     // and attach it via setMetadata. getDownloadURL is not used because it
     // requires a pre-existing token (which only client-SDK uploads produce).
-    const { randomUUID } = require("crypto");
     const downloadToken = randomUUID();
     try {
       await publishedFile.setMetadata({ metadata: { firebaseStorageDownloadTokens: downloadToken } });
@@ -1290,35 +1465,116 @@ exports.moderateAvatarUpload = onObjectFinalized(
       // in tests (truthy) and in production setMetadata always succeeds.
       console.warn(`Avatar metadata token error (${maskedUid}):`, sanitizeError(err));
     }
-    const encodedPath = encodeURIComponent(`avatars/${uid}`);
+    const encodedPath = encodeURIComponent(publishedPath);
     const avatarUrl = `https://firebasestorage.googleapis.com/v0/b/${event.data.bucket}/o/${encodedPath}?alt=media&token=${downloadToken}`;
 
-    const approved = await db.runTransaction(async (tx) => {
+
+    // Resolve only canonical Firebase URLs for this user's published avatars.
+    // Never derive Storage deletion paths from arbitrary profile URL contents.
+    const previousPublishedPath = (previousUrl) => {
+      if (typeof previousUrl !== "string") return null;
+      try {
+        const parsed = new URL(previousUrl);
+        const storagePrefix = `/v0/b/${event.data.bucket}/o/`;
+        if (parsed.protocol !== "https:" ||
+            parsed.hostname !== "firebasestorage.googleapis.com" ||
+            !parsed.pathname.startsWith(storagePrefix)) return null;
+        const path = decodeURIComponent(parsed.pathname.slice(storagePrefix.length));
+        const ownerPrefix = `avatars/${uid}/`;
+        const owned = path === `avatars/${uid}` ||
+          (path.startsWith(ownerPrefix) &&
+           /^[A-Za-z0-9_-]+\.webp$/.test(path.slice(ownerPrefix.length)));
+        return owned && path !== publishedPath ? path : null;
+      } catch {
+        return null;
+      }
+    };
+
+    const approval = await db.runTransaction(async (tx) => {
+      const userRef        = db.doc(`users/${uid}`);
       const moderationSnap = await tx.get(moderationRef);
       const pendingSnap    = await tx.get(pendingRef);
-      const d = moderationSnap.data();
+      const userSnap       = await tx.get(userRef);
+      const d = moderationSnap.exists ? moderationSnap.data() : null;
       const pendingId = pendingSnap.exists ? pendingSnap.data().pendingUploadId : null;
-      // Abort if moderation slot was taken by a newer upload, or if client
-      // registered a newer upload (pendingUploadId mismatch) after Vision ran.
-      if (!d || d.uploadId !== uploadId) return false;
-      if (pendingId && pendingId !== uploadId) return false;
+      // Old attempts must not update users/{uid} once another upload is current.
+      if (!d || d.uploadId !== uploadId ||
+          d.processingAttemptId !== processingAttemptId ||
+          d.status !== "processing") return { approved: false };
+      if (pendingId && pendingId !== uploadId) return { approved: false };
+      const previousPath = previousPublishedPath(userSnap.exists ? userSnap.data().avatarUrl : null);
       tx.update(moderationRef, { status: "approved", failureReason: null, updatedAt: Timestamp.now() });
-      tx.update(db.doc(`users/${uid}`), { avatarUrl });
-      // Clear the pending record now that this upload is published.
+      tx.update(userRef, { avatarUrl });
       if (pendingSnap.exists && pendingId === uploadId) tx.delete(pendingRef);
-      return true;
+      return { approved: true, previousPath };
     });
 
-    if (approved) {
-      await Promise.all([sourceFile.delete().catch(() => {}), candidateFile.delete().catch(() => {})]);
+    if (approval.approved) {
+      // Commit the new URL before removing any previously approved picture.
+      // Rejected or superseded replacements never delete that old picture.
+      const oldPublishedFile = approval.previousPath ? bucket.file(approval.previousPath) : null;
+      await Promise.all([
+        sourceFile.delete().catch(() => {}),
+        candidateFile.delete().catch(() => {}),
+        oldPublishedFile?.delete().catch((err) =>
+          console.warn(`Avatar previous published cleanup failed (${maskedUid}):`, sanitizeError(err))),
+      ]);
       console.log(`Avatar approved for ${maskedUid}`);
     } else {
-      // Superseded mid-flight — remove both objects to prevent orphan accumulation.
-      await Promise.all([sourceFile.delete().catch(() => {}), candidateFile.delete().catch(() => {})]);
+      // Never delete an active successor's files on same-upload lease reclaim.
+      await cleanupSuperseded(true);
       console.log(`Avatar approval skipped (superseded) for ${maskedUid}`);
     }
   }
 );
+
+
+ // Published avatar cleanup must be scoped to the exact UID. Using the prefix
+ // "avatars/${uid}" without the trailing slash would also match other users
+ // whose UID starts with the same characters (e.g. abc and abcd).
+async function _deletePublishedAvatarsForUser(storageBucket, uid) {
+  await _deleteStoragePrefixStrict(storageBucket, `avatars/${uid}/`);
+  await storageBucket.file(`avatars/${uid}`).delete().catch((err) => {
+    // Legacy avatars/{uid} may not exist for newer users; absence is success.
+    if (!_isStorageNotFound(err)) throw err;
+  });
+}
+exports._deletePublishedAvatarsForUser = _deletePublishedAvatarsForUser;
+
+// deleteAccount Storage integrity: only "object not found" counts as success.
+// Any other failure (permission, transient 5xx, listing failure, missing
+// bucket config) propagates, so the deleteAccount step fails, the job is
+// marked 'failed' (retryable), and Auth deletion is NOT reached — no Auth
+// account is ever removed while the user's Storage objects remain.
+function _isStorageNotFound(err) {
+  const code = err?.code ?? err?.response?.statusCode;
+  return code === 404 || code === '404';
+}
+exports._isStorageNotFound = _isStorageNotFound;
+
+// Deletes every object under an exact, slash-terminated prefix and PROVES
+// the prefix is empty afterwards. Uses the SDK's bucket.deleteFiles with
+// force:true (keeps going past per-object errors and reports them all)
+// instead of the previous `.catch(() => {})`. Per-object 404s (already gone /
+// raced) are success; any other error — listing failure, 403, 5xx — throws.
+// Idempotent and retry-safe: a re-run only sees what is still present. The
+// final re-list catches anything left behind (incl. a concurrent write), so
+// the step fails and a retry picks it up.
+async function _deleteStoragePrefixStrict(storageBucket, prefix) {
+  if (typeof prefix !== 'string' || !prefix.endsWith('/') || prefix.length < 3) {
+    throw new Error('storage cleanup: refusing non-exact prefix');
+  }
+  try {
+    await storageBucket.deleteFiles({ prefix, force: true });
+  } catch (err) {
+    const errs = Array.isArray(err) ? err : [err];
+    const real = errs.filter((e) => !_isStorageNotFound(e));
+    if (real.length > 0) throw new Error(`storage cleanup incomplete: ${real.length} error(s)`);
+  }
+  const [remaining] = await storageBucket.getFiles({ prefix, maxResults: 1, autoPaginate: false });
+  if (remaining.length > 0) throw new Error('storage cleanup incomplete: objects remain');
+}
+exports._deleteStoragePrefixStrict = _deleteStoragePrefixStrict;
 
 // ── Orphan cleanup helper ─────────────────────────────────────────────────────
 // Deletes avatarUploads/ and avatarCandidates/ objects older than cutoffMs
@@ -2724,17 +2980,69 @@ exports.setStaffRole = onCall(
   }
 );
 
-// 16) Admin suspend user — writes user doc + standardized audit log entry
+// 16) Admin suspend user — server-authoritative suspension.
+//
+// Order (fail closed, retry-safe; every step is idempotent):
+//   1. Auth: updateUser({disabled:true}) — blocks new sign-ins and every
+//      refresh-token exchange.
+//   2. Auth: revokeRefreshTokens — invalidates refresh tokens so sessions
+//      that are already open cannot mint a new ID token.
+//   3. Firestore (one atomic batch): public users/{uid} keeps ONLY
+//      status:'Suspended'; who/why/when goes to the admin-only
+//      users/{uid}/private/moderation doc (no client rule matches it →
+//      default deny for every client, including the user); legacy public
+//      suspension fields are deleted; adminAuditLog entry.
+// A failure in 1/2 throws before any Firestore write (nothing claims the
+// user is suspended while Auth still lets them in). A failure in 3 leaves
+// Auth disabled with the old public status; the admin retries and the
+// call converges. Residual: already-issued ID tokens stay
+// cryptographically valid until expiry (≤1h) and no callable or rule
+// re-checks suspension in this change (a callable-side gate is deferred);
+// see PR body.
+//
+// Runtime identity: parqueen-admin-auth — the existing SA that setStaffRole
+// already uses for setCustomUserClaims + revokeRefreshTokens. It needs
+// Firebase Auth user update (firebaseauth.users.update) and Firestore
+// write; verify those grants read-only before deploy (see PR body).
+const SUSPENSION_PUBLIC_LEGACY_FIELDS = [
+  'suspendedAt', 'suspendedBy', 'suspensionReason', 'unsuspendedAt', 'unsuspendedBy',
+];
+function legacySuspensionFieldDeletes() {
+  const out = {};
+  for (const f of SUSPENSION_PUBLIC_LEGACY_FIELDS) out[f] = FieldValue.delete();
+  return out;
+}
+function mapSuspensionAuthError(err) {
+  if (err && err.code === 'auth/user-not-found') {
+    return new HttpsError('not-found', 'User not found.');
+  }
+  return new HttpsError('internal', 'Could not update the account sign-in state. Nothing was changed; please retry.');
+}
+
 exports.adminSuspendUser = onCall(
-  { region: 'us-central1', serviceAccount: 'parqueen-admin-write@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
+  { region: 'us-central1', serviceAccount: 'parqueen-admin-auth@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
   async (request) => {
     await requireCurrentAdmin(request);
     const { userId, reason } = request.data || {};
     if (!userId || typeof userId !== 'string') throw new HttpsError('invalid-argument', 'userId required.');
     if (!reason || typeof reason !== 'string' || !reason.trim()) throw new HttpsError('invalid-argument', 'reason required.');
+    if (userId === request.auth.uid) throw new HttpsError('failed-precondition', 'You cannot suspend your own account.');
+
+    const userRef = db.doc(`users/${userId}`);
+    if (!(await userRef.get()).exists) throw new HttpsError('not-found', 'User not found.');
+
+    try {
+      await getAuth().updateUser(userId, { disabled: true });
+      await getAuth().revokeRefreshTokens(userId);
+    } catch (err) {
+      console.error('adminSuspendUser: auth step failed', { code: err && err.code ? String(err.code) : 'unknown' });
+      throw mapSuspensionAuthError(err);
+    }
 
     const now = Timestamp.now();
-    await db.doc(`users/${userId}`).update({
+    const batch = db.batch();
+    batch.update(userRef, { status: 'Suspended', updatedAt: now, ...legacySuspensionFieldDeletes() });
+    batch.set(db.doc(`users/${userId}/private/moderation`), {
       status: 'Suspended',
       suspendedAt: now,
       suspendedBy: request.auth.uid,
@@ -2742,9 +3050,8 @@ exports.adminSuspendUser = onCall(
       unsuspendedAt: null,
       unsuspendedBy: null,
       updatedAt: now,
-    });
-
-    await db.collection('adminAuditLog').add({
+    }, { merge: true });
+    batch.set(db.collection('adminAuditLog').doc(), {
       action: 'user.suspend',
       targetType: 'user',
       targetId: userId,
@@ -2753,21 +3060,38 @@ exports.adminSuspendUser = onCall(
       reason: reason.trim(),
       createdAt: now,
     });
+    await batch.commit();
 
     return { success: true };
   }
 );
 
-// 17) Admin unsuspend user — clears suspension + standardized audit log entry
+// 17) Admin unsuspend user — re-enables Auth, then restores status.
+// Auth first: if re-enable fails nothing changes (retry). If the Firestore
+// batch fails afterwards, the user can sign in while the public status
+// still reads Suspended until the admin retries. Refresh tokens revoked
+// at suspension stay revoked: the user signs in again.
 exports.adminUnsuspendUser = onCall(
-  { region: 'us-central1', serviceAccount: 'parqueen-admin-write@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
+  { region: 'us-central1', serviceAccount: 'parqueen-admin-auth@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
   async (request) => {
     await requireCurrentAdmin(request);
     const { userId } = request.data || {};
     if (!userId || typeof userId !== 'string') throw new HttpsError('invalid-argument', 'userId required.');
 
+    const userRef = db.doc(`users/${userId}`);
+    if (!(await userRef.get()).exists) throw new HttpsError('not-found', 'User not found.');
+
+    try {
+      await getAuth().updateUser(userId, { disabled: false });
+    } catch (err) {
+      console.error('adminUnsuspendUser: auth step failed', { code: err && err.code ? String(err.code) : 'unknown' });
+      throw mapSuspensionAuthError(err);
+    }
+
     const now = Timestamp.now();
-    await db.doc(`users/${userId}`).update({
+    const batch = db.batch();
+    batch.update(userRef, { status: 'Active', updatedAt: now, ...legacySuspensionFieldDeletes() });
+    batch.set(db.doc(`users/${userId}/private/moderation`), {
       status: 'Active',
       unsuspendedAt: now,
       unsuspendedBy: request.auth.uid,
@@ -2775,9 +3099,8 @@ exports.adminUnsuspendUser = onCall(
       suspendedBy: null,
       suspensionReason: null,
       updatedAt: now,
-    });
-
-    await db.collection('adminAuditLog').add({
+    }, { merge: true });
+    batch.set(db.collection('adminAuditLog').doc(), {
       action: 'user.unsuspend',
       targetType: 'user',
       targetId: userId,
@@ -2785,6 +3108,7 @@ exports.adminUnsuspendUser = onCall(
       adminId: request.auth.uid,
       createdAt: now,
     });
+    await batch.commit();
 
     return { success: true };
   }
@@ -3166,6 +3490,52 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
         }
 
         // ── True cursor-based paginated update ────────────────────────────────
+        async function releaseClaimsOfDeletedUser(claimerUid) {
+            const identity = {
+                interestedUserId: FieldValue.delete(),
+                interestedUserName: FieldValue.delete(),
+                interestedUserVehicleColor: FieldValue.delete(),
+                interestedUserVehicleType: FieldValue.delete(),
+                interestedUserVehicleBrand: FieldValue.delete(),
+                interestedUserTitle: FieldValue.delete(),
+            };
+            const activeClaimClear = {
+                claimState: null,
+                claimStartedAt: null,
+                etaMinutes: null,
+                interestExpiresAt: null,
+                ownerLeavingNow: null,
+                ownerLeavingNowAt: null,
+                claimReminderAt: null,
+                claimReminderSentAt: null,
+                claimAutoReleaseAt: null,
+                claimAutoReleasedAt: null,
+            };
+            for (let guard = 0; guard < 1000; guard++) {
+                const snap = await db.collection('spots')
+                    .where('interestedUserId', '==', claimerUid).limit(499).get();
+                if (snap.empty) return;
+                const nowMs = Date.now();
+                const batch = db.batch();
+                for (const d of snap.docs) {
+                    const spot = d.data();
+                    const active = spot.status === 'interested'
+                        && spot.claimState !== 'arrived_pending_outcome';
+                    if (!active) {
+                        batch.update(d.ref, identity);
+                        continue;
+                    }
+                    const expired = spot.expiresAt && typeof spot.expiresAt.toMillis === 'function'
+                        && spot.expiresAt.toMillis() <= nowMs;
+                    batch.update(d.ref, expired
+                        ? { ...identity, ...activeClaimClear }
+                        : { ...identity, ...activeClaimClear, status: 'available' });
+                }
+                await batch.commit();
+            }
+            throw new Error('spotsAsClaimer: release did not converge');
+        }
+
         async function paginatedUpdate(baseQuery, updateData) {
             let cursor = null;
             while (true) {
@@ -3259,21 +3629,18 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
             paginatedDelete(db.collection('spots').where('finderId', '==', uid))
         );
 
-        // Active Pings being claimed — release back to available
-        await step('spotsAsClaimer', () =>
-            paginatedUpdate(
-                db.collection('spots').where('interestedUserId', '==', uid),
-                {
-                    interestedUserId: FieldValue.delete(),
-                    interestedUserName: FieldValue.delete(),
-                    interestedUserVehicleColor: FieldValue.delete(),
-                    interestedUserVehicleType: FieldValue.delete(),
-                    interestedUserVehicleBrand: FieldValue.delete(),
-                    interestedUserTitle: FieldValue.delete(),
-                    status: 'available',
-                }
-            )
-        );
+        // Pings this user claimed. Every one loses the claimer identity (PII).
+        // Only an ACTIVE claim (status 'interested', not arrived) is released:
+        // all claimer metadata is cleared and the Ping reopens to 'available'
+        // unless the Ping itself has already expired (never reopen an expired
+        // Ping — same rule as cancelClaimTransaction / cleanupExpiredInterests).
+        // Terminal/handoff history (occupied, arrived_pending_outcome,
+        // completed, expired, ...) keeps its status and claimState; previously
+        // every such Ping was flipped back to 'available', briefly
+        // re-publishing the finder's private history and breaking the durable
+        // handoff state. Updated docs drop out of the query (interestedUserId
+        // deleted), so the loop drains without a cursor; bounded per batch.
+        await step('spotsAsClaimer', () => releaseClaimsOfDeletedUser(uid));
 
         // Chats — paginated to avoid loading all IDs into memory. Uses the
         // same markChatDeletingAndRecursiveDelete helper deleteChat uses —
@@ -3315,10 +3682,17 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
             )
         );
 
-        // Storage — clean up all three path families; absence is success (idempotent).
-        await step('storageUploads',   () => getStorage().bucket().deleteFiles({ prefix: `avatarUploads/${uid}/`   }).catch(() => {}));
-        await step('storageCandidates',() => getStorage().bucket().deleteFiles({ prefix: `avatarCandidates/${uid}/` }).catch(() => {}));
-        await step('storagePublished', () => getStorage().bucket().deleteFiles({ prefix: `avatars/${uid}`           }).catch(() => {}));
+        // Storage — clean up all three user-owned path families BEFORE Auth
+        // deletion. Fail closed: only object-not-found (404) is success; any
+        // other Storage error fails this step, marks the job 'failed'
+        // (retryable, already-done steps are skipped on retry) and leaves the
+        // Auth account in place so the user/support can retry. Previously each
+        // step ended in .catch(() => {}), so a Storage outage or permission
+        // error silently orphaned the user's avatar images while Auth was
+        // deleted anyway.
+        await step('storageUploads',   () => _deleteStoragePrefixStrict(getStorage().bucket(), `avatarUploads/${uid}/`));
+        await step('storageCandidates',() => _deleteStoragePrefixStrict(getStorage().bucket(), `avatarCandidates/${uid}/`));
+        await step('storagePublished', () => _deletePublishedAvatarsForUser(getStorage().bucket(), uid));
 
         // ── Auth deletion — only reached after every required step passes ───────
         // Revalidate lock ownership immediately before the one irreversible step,
@@ -3395,48 +3769,131 @@ exports.updateTrustOnFeedback = onDocumentCreated(
 // 12) Trust: record finder-cancelled-after-interest when a spot is deleted while claimed.
 // Only penalizes if status === 'interested' at deletion time — not for normal spot removal.
 // eventId: spotId + ':finder-cancel' is deterministic and unique for this transition.
-exports.scheduleCleaningReminders = onSchedule(
-  { schedule: 'every 15 minutes', region: 'us-central1', serviceAccount: 'parqueen-messaging@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
-  async () => {
+// F7 / R3: street-cleaning reminders.
+// - Recipient is ALWAYS the session owner (parkingSessions/{uid} doc id): the
+//   FCM token is read from users/{uid}/private/preferences.fcmToken at send
+//   time. The session doc's own fcmToken (legacy client shape, still written
+//   by shipped clients) is ignored, so a caller can no longer pick the
+//   recipient device.
+// - streetName is attacker-influenced display text: bounded and sanitized.
+//   reminderMinutesBefore is coerced to a sane integer.
+// - Poison-doc isolation: reminderAt is type-guarded; a truthy non-Timestamp
+//   reminderAt (which previously made filter() throw and aborted the whole
+//   run for every user) is quarantined by the server with
+//   reminderEnabled:false so it stops matching the query. Every doc is
+//   processed in its own try/catch (Promise.allSettled), including the
+//   reminderSent update, so one bad doc never blocks the others.
+// - Exactly one value-free summary line per run (counts only):
+//   `cleaningReminders: due=N sent=N failed=N skippedNoToken=N invalid=N`.
+const CLEANING_REMINDER_STREET_MAX = 80;
+const CLEANING_REMINDER_DEFAULT_MINUTES = 60;
+
+function isFirestoreTimestamp(v) {
+  return v instanceof Timestamp
+    || (!!v && typeof v === 'object' && typeof v.toMillis === 'function' && typeof v.toDate === 'function');
+}
+
+function sanitizeReminderStreetName(v) {
+  if (typeof v !== 'string') return null;
+  // eslint-disable-next-line no-control-regex
+  const cleaned = v.replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return null;
+  return cleaned.length > CLEANING_REMINDER_STREET_MAX
+    ? cleaned.slice(0, CLEANING_REMINDER_STREET_MAX - 1).trimEnd() + '\u2026'
+    : cleaned;
+}
+
+function coerceReminderMinutes(v) {
+  return Number.isInteger(v) && v > 0 && v <= 1440 ? v : CLEANING_REMINDER_DEFAULT_MINUTES;
+}
+
+async function readOwnerFcmToken(uid) {
+  if (typeof uid !== 'string' || uid.length === 0 || uid.includes('/')) return null;
+  const prefs = await db.doc(`users/${uid}/private/preferences`).get();
+  const token = prefs.exists ? prefs.get('fcmToken') : null;
+  return typeof token === 'string' && token.length > 0 && token.length <= 4096 ? token : null;
+}
+
+async function runCleaningReminders(nowMs = Date.now()) {
+  const counts = { due: 0, sent: 0, failed: 0, skippedNoToken: 0, invalid: 0 };
+  try {
     const snap = await db.collection('parkingSessions')
       .where('active', '==', true)
       .where('reminderEnabled', '==', true)
       .where('reminderSent', '==', false)
       .get();
 
-    const now = new Date();
-    const due = snap.docs.filter(d => {
-      const ra = d.data().reminderAt;
-      return ra && ra.toDate() <= now;
-    });
-
-    await Promise.all(due.map(async d => {
-      const { fcmToken, streetName, reminderMinutesBefore, reminderAt, savedAt } = d.data();
-      const savedAtGeneration = savedAt && typeof savedAt.toMillis === 'function'
-        ? savedAt.toMillis()
-        : 'legacy';
-      const deliveryId = `cleaning_${stableId(d.id, savedAtGeneration, reminderAt.toMillis())}`;
+    await Promise.allSettled(snap.docs.map(async (d) => {
       try {
-        const push = {
-          token: fcmToken,
-          notification: {
-            title: 'Move Your Car',
-            body: `Street cleaning on ${streetName} starts in ${reminderMinutesBefore} minutes`,
-          },
-          data: {
-            navigationVersion: '1',
-            navigationType: 'my_car',
-            deliveryId,
-          },
-          android: { priority: 'high' },
-          apns: { payload: { aps: { sound: 'default', badge: 1 } } },
-        };
-        await (_pingNotificationHooks.send?.(push) ?? getMessaging().send(push));
+        const data = d.data() || {};
+        const ra = data.reminderAt;
+        if (ra === null || ra === undefined) return; // legit "no reminder" merge shape
+        if (!isFirestoreTimestamp(ra)) {
+          counts.invalid++;
+          // Quarantine: stop matching the query, and null the poison value
+          // so the doc satisfies the parkingSessions rules schema again (the
+          // owner's later merges, e.g. endSession {active:false}, would
+          // otherwise be denied). The owner's next full write (setDoc
+          // without merge) re-enables a valid reminder.
+          await d.ref.update({ reminderEnabled: false, reminderAt: null });
+          return;
+        }
+        if (ra.toMillis() > nowMs) return; // not due yet
+        counts.due++;
+
+        const savedAtGeneration = isFirestoreTimestamp(data.savedAt) ? data.savedAt.toMillis() : 'legacy';
+        const deliveryId = `cleaning_${stableId(d.id, savedAtGeneration, ra.toMillis())}`;
+        const token = await readOwnerFcmToken(d.id);
+        if (!token) {
+          counts.skippedNoToken++;
+        } else {
+          const street = sanitizeReminderStreetName(data.streetName);
+          const minutes = coerceReminderMinutes(data.reminderMinutesBefore);
+          const push = {
+            token,
+            notification: {
+              title: 'Move Your Car',
+              body: street
+                ? `Street cleaning on ${street} starts in ${minutes} minutes`
+                : `Street cleaning starts in ${minutes} minutes`,
+            },
+            data: {
+              navigationVersion: '1',
+              navigationType: 'my_car',
+              deliveryId,
+            },
+            android: { priority: 'high' },
+            apns: { payload: { aps: { sound: 'default', badge: 1 } } },
+          };
+          try {
+            await (_pingNotificationHooks.send?.(push) ?? getMessaging().send(push));
+            counts.sent++;
+          } catch (e) {
+            counts.failed++;
+            console.error('FCM send failed for session', d.id.slice(0, 8) + '***', sanitizeError(e));
+          }
+        }
+        // One attempt per reminder generation (unchanged semantics).
+        await d.ref.update({ reminderSent: true });
       } catch (e) {
-        console.error('FCM send failed for session', d.id.slice(0, 8) + '***', sanitizeError(e));
+        counts.failed++;
+        console.error('cleaningReminders: session processing failed', d.id.slice(0, 8) + '***', sanitizeError(e));
       }
-      await d.ref.update({ reminderSent: true });
     }));
+  } finally {
+    console.log(
+      `cleaningReminders: due=${counts.due} sent=${counts.sent} failed=${counts.failed} skippedNoToken=${counts.skippedNoToken} invalid=${counts.invalid}`
+    );
+  }
+  return counts;
+}
+exports._runCleaningReminders = runCleaningReminders;
+exports._sanitizeReminderStreetName = sanitizeReminderStreetName;
+
+exports.scheduleCleaningReminders = onSchedule(
+  { schedule: 'every 15 minutes', region: 'us-central1', serviceAccount: 'parqueen-messaging@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
+  async () => {
+    await runCleaningReminders();
   }
 );
 
@@ -4556,10 +5013,9 @@ async function _queryCanonicalSweepEvidence({ identity, signal }) {
   };
 }
 
-async function _runCanonicalCurbV2(requestData) {
+async function _runCanonicalCurbV2(requestData, verifiedUid) {
   const {
     runCanonicalCurbOrchestrator,
-    createCsclCandidateStore,
     createPlanimetricCurbStore,
     createParkNycCandidateStore,
     createPrivateBlockfaceResolver,
@@ -4577,18 +5033,14 @@ async function _runCanonicalCurbV2(requestData) {
   }
 
   const getSocrataToken = _socrataToken;
+  const streetIntelligenceCache = createStreetIntelligenceCacheBoundary({ Timestamp });
   const blockfaceResolver = createPrivateBlockfaceResolver({
     mode: 'shadow',
     serviceUrl: config.serviceUrl,
   });
-  return runCanonicalCurbOrchestrator(requestData, {
+  const orchestratorDependencies = {
     db,
     Timestamp,
-    candidateStore: createCsclCandidateStore({
-      fetchFn: fetch,
-      getSocrataToken,
-      candidateLimit: 100,
-    }),
     planimetricStore: createPlanimetricCurbStore({ fetchFn: fetch }),
     parkNycStore: createParkNycCandidateStore({
       fetchFn: fetch,
@@ -4600,7 +5052,17 @@ async function _runCanonicalCurbV2(requestData) {
     getSocrataToken,
     telemetry: createCurbTelemetry(),
     requestNonceFactory: randomUUID,
-  });
+    readCanonicalCache: streetIntelligenceCache.readCanonicalCache,
+    persistCanonicalCurb: streetIntelligenceCache.persistCanonicalCurb,
+  };
+  if (process.env.FUNCTIONS_EMULATOR === 'true') {
+    const { localRuntimeDependencies } = require('./curbIntelligence/runtimeSourceArtifact');
+    Object.assign(orchestratorDependencies, localRuntimeDependencies());
+  } else {
+    const { attachOwnerPilot } = require('./curbIntelligence/runtimeSourceArtifact');
+    attachOwnerPilot(orchestratorDependencies, verifiedUid);
+  }
+  return runCanonicalCurbOrchestrator(requestData, orchestratorDependencies);
 }
 
 // ─── Hydrant proximity (NYC DEP) ─────────────────────────────────────────────
@@ -4758,64 +5220,34 @@ exports.checkHydrantDistance = onCall(
 );
 
 exports.createSegmentFromSweepNYC = onCall(
-  { region: 'us-central1', secrets: [socrataAppToken], serviceAccount: 'parqueen-curb-caller@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
+  {
+    region: 'us-central1',
+    secrets: [socrataAppToken],
+    enforceAppCheck: true,
+    serviceAccount: 'parqueen-curb-caller@parkqueen-46475363-ccf36.iam.gserviceaccount.com',
+  },
   async (request) => {
     if (!request.auth) throw new HttpsError('unauthenticated', 'Must be signed in.');
+    if (streetIntelligenceAppCheckRejection(request)) {
+      throw new HttpsError('unauthenticated', 'App Check required.');
+    }
 
     const uid = request.auth.uid;
     await checkRateLimit(uid, 'createSegmentFromSweepNYC', { limit: 30, windowSec: 3600 });
+
+    if (request.data?.protocolVersion !== 2) {
+      return { protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' };
+    }
 
     const canonicalV2Handler = selectCanonicalV2Handler(
       request.data,
       _callableHooks.canonicalCurbOrchestrator,
       _runCanonicalCurbV2,
     );
-    if (canonicalV2Handler) return canonicalV2Handler(request.data);
-
-    const { lat, lng, accuracyMeters, revalidateSegmentId } = request.data || {};
-    if (typeof lat !== 'number' || typeof lng !== 'number')
-      throw new HttpsError('invalid-argument', 'lat and lng must be numbers.');
-    if (lat < 40.4 || lat > 40.95 || lng < -74.3 || lng > -73.65)
-      throw new HttpsError('invalid-argument', 'Coordinates outside NYC bounds.');
-    if (revalidateSegmentId !== undefined
-      && (typeof revalidateSegmentId !== 'string'
-        || revalidateSegmentId.length === 0
-        || revalidateSegmentId.length > 500
-        || revalidateSegmentId.includes('/'))) {
-      throw new HttpsError('invalid-argument', 'Invalid segment ID.');
+    if (typeof canonicalV2Handler !== 'function') {
+      return { protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' };
     }
-
-    let productionResult;
-    let shadowEvidence = null;
-    try {
-      if (revalidateSegmentId) {
-        productionResult = await _revalidateLegacyNYCOpenDataSegment(revalidateSegmentId, lat, lng);
-      } else if (_callableHooks.sweepNYCResult) {
-        productionResult = await _callableHooks.sweepNYCResult(lat, lng);
-      } else {
-        const sweepResult = await _tryCreateFromSweepNYC(
-          lat,
-          lng,
-          evidence => { shadowEvidence = evidence; },
-        );
-        if (sweepResult.success || !_SWEEPNYC_FALLBACK_REASONS.has(sweepResult.reason)) {
-          productionResult = sweepResult;
-        } else {
-          logStreetIntelEvent('fallback_attempted', { sweepReason: sweepResult.reason });
-          console.log('[SweepNYC→NYCOpenData] falling back, sweepReason:', sweepResult.reason);
-          productionResult = await _fallbackToNYCOpenData(
-            lat,
-            lng,
-            null,
-            evidence => { shadowEvidence = evidence; },
-          );
-        }
-      }
-    } catch (err) {
-      console.error('[createSegmentFromSweepNYC] top-level error:', sanitizeError(err));
-      productionResult = { success: false, reason: 'unknown_error', _diag: { error: sanitizeError(err) } };
-    }
-    return _observeCurbIntelligenceShadow(productionResult, lat, lng, accuracyMeters, shadowEvidence);
+    return canonicalV2Handler(request.data, request.auth.uid);
   }
 );
 

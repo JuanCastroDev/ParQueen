@@ -1,6 +1,8 @@
 import { createServer, type Server } from 'node:http';
-import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { execFileSync, spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
+import type { Readable } from 'node:stream';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -24,6 +26,368 @@ const chromeBin = ['google-chrome', 'google-chrome-stable', 'chromium', 'chromiu
 const xvfbBin = commandExists('Xvfb');
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Environment boot only. CI runners have shown Chrome stalling with no output, or exiting
+// silently, before DevTools comes up. Each attempt waits on a wall-clock deadline and a failed
+// attempt is relaunched once on a fresh profile. Every assertion still runs only after
+// DevTools is up, so a broken page or a missed click fails exactly as before.
+const CHROME_DEVTOOLS_DEADLINE_MS = 30000;
+const CHROME_LAUNCH_ATTEMPTS = 2;
+const BROWSER_BOOT_TIMEOUT_MS = 120000;
+
+// Teardown only. Every wait in a suite's afterAll has an explicit bound, so a Chrome that
+// never answers Browser.close (the CDP helper below never rejects a call whose response does
+// not arrive) or a step that stalls cannot hang the hook. A bound that expires is logged and
+// teardown moves on to the process-group SIGKILL and reap, which always run. Worst case of the
+// bounded waits: close 3000 + 3 x exit wait 3000 + server 2000 + profile removal 5000 =
+// 19000ms, inside SUITE_TEARDOWN_TIMEOUT_MS. None of these limits touches a test or boot timeout.
+const BROWSER_CLOSE_TIMEOUT_MS = 3000;
+const CHROME_EXIT_WAIT_MS = 3000;
+const SERVER_CLOSE_TIMEOUT_MS = 2000;
+const PROFILE_REMOVE_TIMEOUT_MS = 5000;
+const SUITE_TEARDOWN_TIMEOUT_MS = 30000;
+
+// Harness diagnostics go straight to the worker's stderr so CI logs keep them whether the
+// boot succeeds or fails. They never feed an assertion.
+function harnessLog(message: string) {
+  process.stderr.write(`[handoff-harness] ${message}\n`);
+}
+const tail = (text: string, max = 600) => text.replace(/\s+/g, ' ').trim().slice(-max);
+
+// Every Chrome and Xvfb this file spawns is the leader of its own process group
+// (detached) and is registered here until it has been reaped. A suite's afterAll reaps its
+// own group set, and a process 'exit' hook reaps anything left, so neither a startup
+// deadline nor an expired beforeAll hook can leak a browser, its helper processes, or Xvfb.
+// After a suite has been closed, a boot still running in the background (vitest does not
+// cancel a timed-out hook) cannot spawn anything new: spawnTracked kills it and throws.
+type HarnessSession = { name: string; closed: boolean; children: Set<ChildProcess> };
+const harnessSessions = new Set<HarnessSession>();
+
+function createHarnessSession(name: string): HarnessSession {
+  const session = { name, closed: false, children: new Set<ChildProcess>() };
+  harnessSessions.add(session);
+  return session;
+}
+
+function killProcessGroup(child: ChildProcess) {
+  if (!child.pid) return;
+  try {
+    process.kill(-child.pid, 'SIGKILL');
+  } catch {
+    // ESRCH: the whole group is already gone.
+  }
+  try {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  } catch {
+    // Already exited.
+  }
+}
+
+function spawnTracked(session: HarnessSession, command: string, args: string[], options: SpawnOptions) {
+  if (session.closed) throw new Error(`${session.name}: harness already torn down, not spawning ${command}`);
+  const child = spawn(command, args, { ...options, detached: true });
+  session.children.add(child);
+  if (session.closed) killProcessGroup(child);
+  return child;
+}
+
+function reapSession(session: HarnessSession, why: string) {
+  session.closed = true;
+  for (const child of session.children) {
+    const alive = child.exitCode === null && child.signalCode === null;
+    killProcessGroup(child);
+    harnessLog(`${session.name}: reap (${why}) pid=${child.pid} ${alive ? 'was running, SIGKILLed group' : 'already exited, group swept'}`);
+  }
+  session.children.clear();
+}
+
+process.once('exit', () => {
+  for (const session of harnessSessions) reapSession(session, 'process exit');
+});
+// File-level backstop: runs after both suites' own afterAll hooks, even if one of them threw.
+afterAll(() => {
+  for (const session of harnessSessions) if (session.children.size) reapSession(session, 'file afterAll');
+});
+
+// Waits for work for at most timeoutMs. Never rejects: the caller gets the value, the error,
+// or 'timed out'. A rejection that lands after the bound expired is logged, not dropped.
+async function settleWithin<T>(work: Promise<T>, timeoutMs: number, lateFailure: (error: unknown) => void) {
+  let expired = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const settled = work.then(
+    (value) => ({ state: 'done' as const, value }),
+    (error: unknown) => {
+      if (expired) lateFailure(error);
+      return { state: 'failed' as const, error };
+    },
+  );
+  const deadline = new Promise<{ state: 'timed out' }>((resolve) => {
+    timer = setTimeout(() => {
+      expired = true;
+      resolve({ state: 'timed out' });
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([settled, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const errorText = (error: unknown) => tail(String(error instanceof Error ? error.message : error), 200);
+
+// Asks Chrome to close itself, for at most BROWSER_CLOSE_TIMEOUT_MS. Chrome exiting counts as
+// an answer, since Browser.close can sever the DevTools socket before its response arrives.
+async function closeBrowserWithin(
+  session: HarnessSession,
+  browser: ((method: string, params?: Record<string, unknown>) => Promise<any>) | undefined,
+  chrome: ChildProcess,
+) {
+  if (!browser) return;
+  const startedAt = Date.now();
+  const exited = new Promise<void>((resolve) => chrome.once('exit', () => resolve()));
+  const outcome = await settleWithin(Promise.race([browser('Browser.close'), exited]), BROWSER_CLOSE_TIMEOUT_MS, (error) => {
+    harnessLog(`${session.name}: Browser.close failed after its ${BROWSER_CLOSE_TIMEOUT_MS}ms bound: ${errorText(error)}`);
+  });
+  if (outcome.state === 'timed out') {
+    harnessLog(`${session.name}: Browser.close did not answer within ${BROWSER_CLOSE_TIMEOUT_MS}ms pid=${chrome.pid}; continuing to SIGKILL and reap`);
+  } else if (outcome.state === 'failed') {
+    harnessLog(`${session.name}: Browser.close failed after ${Date.now() - startedAt}ms pid=${chrome.pid}: ${errorText(outcome.error)}`);
+  }
+}
+
+async function closeServerWithin(session: HarnessSession, server: Server | undefined) {
+  if (!server) return;
+  const closed = new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  const outcome = await settleWithin(closed, SERVER_CLOSE_TIMEOUT_MS, (error) => {
+    harnessLog(`${session.name}: fixture server close failed after its ${SERVER_CLOSE_TIMEOUT_MS}ms bound: ${errorText(error)}`);
+  });
+  if (outcome.state === 'timed out') {
+    server.closeAllConnections();
+    harnessLog(`${session.name}: fixture server did not close within ${SERVER_CLOSE_TIMEOUT_MS}ms; dropped its open connections`);
+  } else if (outcome.state === 'failed' && (outcome.error as NodeJS.ErrnoException).code !== 'ERR_SERVER_NOT_RUNNING') {
+    harnessLog(`${session.name}: fixture server close failed: ${errorText(outcome.error)}`);
+  }
+}
+
+// CI runners occasionally keep Chrome profile files busy for a moment after
+// process exit. Cleanup is hygiene, not part of the reachability assertion.
+// Never turn otherwise-passing product assertions red for that OS race. The removal is
+// asynchronous so its retries cannot block the event loop (and with it the hook timer).
+// Every attempt logs one outcome. "removed" is used only when rm resolves in time.
+function logTempDir(session: HarnessSession, dir: string, outcome: 'removed' | 'failed' | 'timed-out' | 'skipped', detail: string) {
+  harnessLog(`${session.name}: temp dir ${dir} removal outcome=${outcome}${detail ? ` ${detail}` : ''}`);
+}
+
+async function removeProfileWithin(session: HarnessSession, dir: string) {
+  const outcome = await settleWithin(rm(dir, { recursive: true, force: true, maxRetries: 40, retryDelay: 100 }), PROFILE_REMOVE_TIMEOUT_MS, (error) => {
+    logTempDir(session, dir, 'failed', `late after ${PROFILE_REMOVE_TIMEOUT_MS}ms bound: ${errorText(error)}; directory left in place`);
+  });
+  if (outcome.state === 'done') {
+    logTempDir(session, dir, 'removed', '');
+    return;
+  }
+  if (outcome.state === 'timed out') {
+    logTempDir(session, dir, 'timed-out', `bound=${PROFILE_REMOVE_TIMEOUT_MS}ms; directory left in place`);
+    return;
+  }
+  const code = outcome.error && typeof outcome.error === 'object' ? (outcome.error as NodeJS.ErrnoException).code : undefined;
+  logTempDir(session, dir, 'failed', `code=${code ?? 'unknown'}; directory left in place`);
+  if (code !== 'ENOTEMPTY' && code !== 'EBUSY' && code !== 'EPERM') throw outcome.error;
+}
+
+function skipProfileRemoval(session: HarnessSession, dir: string) {
+  logTempDir(session, dir, 'skipped', 'reason=chrome-still-running; directory left in place');
+}
+
+// R8: Vitest does not cancel a beforeAll that has hit its timer, so a boot still inside
+// esbuild or PostCSS can resume after afterAll. Checks at each resume point refuse new
+// files, the fixture server, and listen. A server that did open is closed with the
+// existing server bound. The temp dir is then removed or the removal outcome is logged.
+function bootCancelled(session: HarnessSession, step: string) {
+  const error = new Error(`${session.name}: boot cancelled before ${step}`);
+  error.name = 'BootCancelled';
+  return error;
+}
+
+function assertBootOpen(session: HarnessSession, step: string) {
+  if (session.closed) throw bootCancelled(session, step);
+}
+
+async function compileFixture(session: HarnessSession, dir: string) {
+  assertBootOpen(session, 'postcss');
+  const esbuild = require('esbuild') as typeof import('esbuild');
+  const postcss = require('postcss') as typeof import('postcss').default;
+  const tailwind = require('tailwindcss');
+  const autoprefixer = require('autoprefixer');
+  const compiled = await postcss([tailwind(path.join(root, 'tailwind.config.js')), autoprefixer])
+    .process(css, { from: path.join(root, 'index.css') });
+  assertBootOpen(session, 'writing app.css');
+  writeFileSync(path.join(dir, 'app.css'), compiled.css);
+  assertBootOpen(session, 'esbuild');
+  await esbuild.build({
+    absWorkingDir: root,
+    entryPoints: [path.join(__dirname, 'handoffReachability.fixture.tsx')],
+    bundle: true,
+    format: 'esm',
+    outfile: path.join(dir, 'fixture.js'),
+    jsx: 'automatic',
+    define: { 'process.env.NODE_ENV': '"development"' },
+  });
+  assertBootOpen(session, 'writing index.html');
+  writeFileSync(path.join(dir, 'index.html'), `<!doctype html><html class="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/app.css"></head><body><div id="root"></div><script type="module" src="/fixture.js"></script></body></html>`);
+}
+
+async function openFixtureServer(session: HarnessSession, dir: string): Promise<{ server: Server; port: number }> {
+  assertBootOpen(session, 'creating fixture server');
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    const file = path.join(dir, url.pathname === '/' ? 'index.html' : url.pathname);
+    try {
+      const body = readFileSync(file);
+      const type = file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/html';
+      res.writeHead(200, { 'content-type': type });
+      res.end(body);
+    } catch {
+      res.writeHead(404);
+      res.end('missing');
+    }
+  });
+  try {
+    assertBootOpen(session, 'server listen');
+    const port = await new Promise<number>((resolve, reject) => {
+      if (session.closed) {
+        resolve(0);
+        return;
+      }
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', () => {
+        if (session.closed) {
+          resolve(0);
+          return;
+        }
+        const address = server.address();
+        resolve(address && typeof address === 'object' ? address.port : 0);
+      });
+    });
+    if (session.closed || port === 0) {
+      await closeServerWithin(session, server);
+      throw bootCancelled(session, 'server listen');
+    }
+    return { server, port };
+  } catch (error) {
+    await closeServerWithin(session, server);
+    throw error;
+  }
+}
+
+async function abandonBoot(session: HarnessSession, dir: string, server: Server | undefined, error: unknown) {
+  await closeServerWithin(session, server);
+  await removeProfileWithin(session, dir);
+  harnessLog(`${session.name}: boot abandoned after teardown: ${errorText(error)}; no further server or browser will be started`);
+}
+
+function printEnvironmentOnce(session: HarnessSession) {
+  const image = [process.env.ImageOS, process.env.ImageVersion].filter(Boolean).join(' ') || 'n/a';
+  let version: string;
+  try {
+    version = execFileSync(chromeBin!, ['--version'], { encoding: 'utf8', timeout: 10000, killSignal: 'SIGKILL', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  } catch (error) {
+    version = `unavailable (${tail(String((error as Error).message), 200)})`;
+  }
+  harnessLog(`${session.name}: runner image=${image} node=${process.version} chrome binary=${chromeBin} --version: ${version}`);
+}
+
+async function launchChromeWithDevTools(session: HarnessSession, baseDir: string, args: string[], env: NodeJS.ProcessEnv = process.env) {
+  const failures: string[] = [];
+  for (let attempt = 1; attempt <= CHROME_LAUNCH_ATTEMPTS; attempt++) {
+    const profileDir = path.join(baseDir, attempt === 1 ? 'profile' : `profile-${attempt}`);
+    const activePortFile = path.join(profileDir, 'DevToolsActivePort');
+    const startedAt = Date.now();
+    let stderr = '';
+    const chrome = spawnTracked(session, chromeBin!, [...args, `--user-data-dir=${profileDir}`, '--remote-debugging-port=0'], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env,
+    });
+    const exited = new Promise<void>((resolve) => chrome.once('exit', () => resolve()));
+    chrome.stderr?.on('data', (chunk) => {
+      stderr = (stderr + String(chunk)).slice(-4000);
+    });
+
+    while (Date.now() - startedAt < CHROME_DEVTOOLS_DEADLINE_MS) {
+      if (session.closed) break;
+      if (chrome.exitCode !== null || chrome.signalCode !== null) break;
+      try {
+        const [portLine, pathLine] = readFileSync(activePortFile, 'utf8').trim().split(/\r?\n/);
+        const debugPort = Number(portLine);
+        if (Number.isInteger(debugPort) && debugPort > 0 && pathLine) {
+          harnessLog(`${session.name}: chrome attempt ${attempt}/${CHROME_LAUNCH_ATTEMPTS}: devtools up after ${Date.now() - startedAt}ms pid=${chrome.pid} exit=n/a (running) stderr tail: ${tail(stderr) || '(none)'}`);
+          return { chrome, debugPort, browserPath: pathLine };
+        }
+      } catch {
+        // Chrome writes DevToolsActivePort only after the DevTools endpoint is ready.
+      }
+      await sleep(100);
+    }
+
+    const running = chrome.exitCode === null && chrome.signalCode === null;
+    const state = running ? 'still running' : `exited code=${chrome.exitCode} signal=${chrome.signalCode}`;
+    killProcessGroup(chrome);
+    if (running) await Promise.race([exited, sleep(3000)]);
+    session.children.delete(chrome);
+    const diagnostic = stderr.replace(/\s+/g, ' ').trim().slice(-1000);
+    const reason = session.closed ? 'harness torn down' : running ? 'deadline expired' : 'exited early';
+    harnessLog(`${session.name}: chrome attempt ${attempt}/${CHROME_LAUNCH_ATTEMPTS}: FAILED (${reason}) after ${Date.now() - startedAt}ms pid=${chrome.pid} ${state}${running ? ' (SIGKILLed group)' : ''} stderr tail: ${tail(stderr) || '(none)'}`);
+    failures.push(`attempt ${attempt}: ${state} after ${Date.now() - startedAt}ms${diagnostic ? `: ${diagnostic}` : ' (no stderr)'}`);
+    if (session.closed) break;
+  }
+  throw new Error(`Chrome DevTools did not start: ${failures.join(' | ')}`);
+}
+
+// -displayfd makes Xvfb pick a free display and report it only once it accepts connections.
+// This replaces a fixed 300ms sleep on a random display number, which let headed Chrome
+// start before any X server was listening ("Missing X server or $DISPLAY").
+async function startXvfb(session: HarnessSession): Promise<{ xvfb: ChildProcess; display: string }> {
+  const startedAt = Date.now();
+  const xvfb = spawnTracked(session, 'Xvfb', ['-displayfd', '3', '-screen', '0', '1280x800x24', '-ac'], {
+    stdio: ['ignore', 'ignore', 'pipe', 'pipe'],
+  });
+  let stderr = '';
+  xvfb.stderr?.on('data', (chunk) => {
+    stderr = (stderr + String(chunk)).slice(-2000);
+  });
+  const displayPipe = xvfb.stdio[3] as Readable;
+  try {
+    const display = await new Promise<string>((resolve, reject) => {
+      let out = '';
+      const timer = setTimeout(() => reject(new Error('no display reported within 15000ms')), 15000);
+      displayPipe.on('data', (chunk) => {
+        out += String(chunk);
+        const match = out.match(/^(\d+)\s*\n/);
+        if (match) {
+          clearTimeout(timer);
+          resolve(match[1]);
+        }
+      });
+      xvfb.once('exit', (code, signal) => {
+        clearTimeout(timer);
+        reject(new Error(`exited code=${code} signal=${signal}`));
+      });
+      xvfb.once('error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+    });
+    displayPipe.destroy();
+    harnessLog(`${session.name}: xvfb display=:${display} ready after ${Date.now() - startedAt}ms pid=${xvfb.pid}`);
+    return { xvfb, display: `:${display}` };
+  } catch (error) {
+    killProcessGroup(xvfb);
+    harnessLog(`${session.name}: xvfb FAILED after ${Date.now() - startedAt}ms pid=${xvfb.pid} exit code=${xvfb.exitCode} signal=${xvfb.signalCode}: ${(error as Error).message} stderr tail: ${tail(stderr) || '(none)'}`);
+    const diagnostic = stderr.replace(/\s+/g, ' ').trim().slice(-1000);
+    throw new Error(`Xvfb did not start: ${(error as Error).message}${diagnostic ? `: ${diagnostic}` : ''}`);
+  }
+}
+
 describe('handoff reachability contract', () => {
   it('anchors the handoff action card directly above the nav instead of floating mid-map', () => {
     const mobile = css.slice(css.indexOf('@media (max-width: 767px)'), css.indexOf('.mobile-primary-nav-ping {'));
@@ -34,7 +398,7 @@ describe('handoff reachability contract', () => {
     expect(mobile).not.toMatch(/orientation:\s*landscape/);
 
     const landscape = css.slice(
-      css.indexOf('@media (orientation: landscape) and (max-height: 430px) and (max-width: 767px)'),
+      css.indexOf('@media (max-height: 500px) {'),
       css.indexOf('@media (min-width: 768px)'),
     );
     expect(landscape).toMatch(/\.mobile-map-controls \.handoff-action-card\s*\{[^}]*position:\s*fixed[^}]*bottom:\s*calc\(var\(--mobile-primary-nav-space\) \+ 10px\)/s);
@@ -52,18 +416,25 @@ describe('handoff reachability contract', () => {
 
 describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'handoff-reach-'));
+  const session = createHarnessSession('headless');
   let server: Server;
   let chrome: ChildProcess;
-  let chromeStderr = '';
   let browser: ((method: string, params?: Record<string, unknown>) => Promise<any>) | undefined;
   let page: (method: string, params?: Record<string, unknown>) => Promise<any>;
   let port = 0;
 
   beforeAll(async () => {
-    await boot();
-  }, 60000);
+    printEnvironmentOnce(session);
+    try {
+      await boot();
+    } catch (error) {
+      if (!session.closed) throw error;
+      await abandonBoot(session, dir, server, error);
+    }
+  }, BROWSER_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
+    const teardownStartedAt = Date.now();
     const waitForChromeExit = (timeoutMs: number) => new Promise<boolean>((resolve) => {
       if (!chrome || chrome.exitCode !== null || chrome.signalCode !== null) {
         resolve(true);
@@ -81,108 +452,41 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
     });
 
     let chromeExited = !chrome || chrome.exitCode !== null || chrome.signalCode !== null;
-    if (!chromeExited) {
-      try {
-        await browser?.('Browser.close');
-      } catch {
-        // Browser.close can sever the DevTools socket before its response arrives.
+    try {
+      if (!chromeExited) {
+        await closeBrowserWithin(session, browser, chrome);
+        chromeExited = await waitForChromeExit(CHROME_EXIT_WAIT_MS);
       }
-      chromeExited = await waitForChromeExit(3000);
+      if (!chromeExited && chrome && chrome.exitCode === null && chrome.signalCode === null) {
+        chrome.kill('SIGKILL');
+        chromeExited = await waitForChromeExit(CHROME_EXIT_WAIT_MS);
+      }
+    } finally {
+      // Also covers a beforeAll that timed out mid-launch: kills every tracked Chrome/Xvfb
+      // process group, including ones the suite variables never received, and blocks new spawns.
+      reapSession(session, 'afterAll');
     }
-    if (!chromeExited && chrome && chrome.exitCode === null && chrome.signalCode === null) {
-      chrome.kill('SIGKILL');
-      chromeExited = await waitForChromeExit(3000);
-    }
+    if (!chromeExited) chromeExited = await waitForChromeExit(CHROME_EXIT_WAIT_MS);
 
-    await new Promise<void>((resolve) => {
-      if (!server) {
-        resolve();
-        return;
-      }
-      server.close(() => resolve());
-    });
-
-    // CI runners occasionally keep Chrome profile files busy for a moment after
-    // process exit. Cleanup is hygiene, not part of the reachability assertion.
-    // Never turn otherwise-passing product assertions red for that OS race.
-    if (chromeExited) {
-      try {
-        rmSync(dir, { recursive: true, force: true, maxRetries: 40, retryDelay: 100 });
-      } catch (error) {
-        const code = error && typeof error === 'object' ? (error as NodeJS.ErrnoException).code : undefined;
-        if (code !== 'ENOTEMPTY' && code !== 'EBUSY' && code !== 'EPERM') throw error;
-      }
-    }
-  });
+    await closeServerWithin(session, server);
+    if (chromeExited) await removeProfileWithin(session, dir);
+    else skipProfileRemoval(session, dir);
+    harnessLog(`${session.name}: teardown finished in ${Date.now() - teardownStartedAt}ms (limit ${SUITE_TEARDOWN_TIMEOUT_MS}ms) chrome exited=${chromeExited}`);
+  }, SUITE_TEARDOWN_TIMEOUT_MS);
 
   async function boot() {
-    const esbuild = require('esbuild') as typeof import('esbuild');
-    const postcss = require('postcss') as typeof import('postcss').default;
-    const tailwind = require('tailwindcss');
-    const autoprefixer = require('autoprefixer');
-    const compiled = await postcss([tailwind(path.join(root, 'tailwind.config.js')), autoprefixer])
-      .process(css, { from: path.join(root, 'index.css') });
-    writeFileSync(path.join(dir, 'app.css'), compiled.css);
-    await esbuild.build({
-      absWorkingDir: root,
-      entryPoints: [path.join(__dirname, 'handoffReachability.fixture.tsx')],
-      bundle: true,
-      format: 'esm',
-      outfile: path.join(dir, 'fixture.js'),
-      jsx: 'automatic',
-      define: { 'process.env.NODE_ENV': '"development"' },
-    });
-    writeFileSync(path.join(dir, 'index.html'), `<!doctype html><html class="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/app.css"></head><body><div id="root"></div><script type="module" src="/fixture.js"></script></body></html>`);
+    await compileFixture(session, dir);
+    const opened = await openFixtureServer(session, dir);
+    server = opened.server;
+    port = opened.port;
+    assertBootOpen(session, 'chrome launch');
 
-    server = createServer((req, res) => {
-      const url = new URL(req.url || '/', 'http://127.0.0.1');
-      const file = path.join(dir, url.pathname === '/' ? 'index.html' : url.pathname);
-      try {
-        const body = readFileSync(file);
-        const type = file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/html';
-        res.writeHead(200, { 'content-type': type });
-        res.end(body);
-      } catch {
-        res.writeHead(404);
-        res.end('missing');
-      }
-    });
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    port = (server.address() as { port: number }).port;
-
-    const profileDir = path.join(dir, 'profile');
-    const activePortFile = path.join(profileDir, 'DevToolsActivePort');
-    chromeStderr = '';
-    chrome = spawn(chromeBin!, [
+    const launched = await launchChromeWithDevTools(session, dir, [
       '--headless=new', '--disable-gpu', '--no-sandbox', '--no-first-run', '--disable-dev-shm-usage',
-      `--user-data-dir=${profileDir}`,
-      '--remote-debugging-port=0',
-    ], { stdio: ['ignore', 'ignore', 'pipe'] });
-    chrome.stderr?.on('data', (chunk) => {
-      chromeStderr = (chromeStderr + String(chunk)).slice(-4000);
-    });
-
-    let debugPort = 0;
-    let browserPath = '';
-    for (let i = 0; i < 150 && (!debugPort || !browserPath); i++) {
-      if (chrome.exitCode !== null || chrome.signalCode !== null) break;
-      try {
-        const [portLine, pathLine] = readFileSync(activePortFile, 'utf8').trim().split(/\r?\n/);
-        const parsedPort = Number(portLine);
-        if (Number.isInteger(parsedPort) && parsedPort > 0 && pathLine) {
-          debugPort = parsedPort;
-          browserPath = pathLine;
-          break;
-        }
-      } catch {
-        // Chrome writes DevToolsActivePort only after the DevTools endpoint is ready.
-      }
-      await sleep(100);
-    }
-    if (!debugPort || !browserPath) {
-      const diagnostic = chromeStderr.replace(/\s+/g, ' ').trim().slice(-1000);
-      throw new Error(`Chrome DevTools did not start${diagnostic ? `: ${diagnostic}` : ''}`);
-    }
+    ]);
+    chrome = launched.chrome;
+    const { debugPort, browserPath } = launched;
+    assertBootOpen(session, 'devtools connection');
 
     const browserWs = new WebSocket(
       `ws://127.0.0.1:${debugPort}${browserPath.startsWith('/') ? browserPath : `/${browserPath}`}`,
@@ -192,6 +496,12 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
       browserWs.addEventListener('error', () => reject(new Error('browser socket')));
     });
     browser = wire(browserWs);
+    try {
+      const version = await browser('Browser.getVersion');
+      harnessLog(`${session.name}: CDP Browser.getVersion product=${version.product} protocol=${version.protocolVersion} revision=${version.revision}`);
+    } catch (error) {
+      harnessLog(`${session.name}: CDP Browser.getVersion unavailable: ${tail(String((error as Error).message), 200)}`);
+    }
     const { targetId } = await browser('Target.createTarget', { url: 'about:blank' });
     let target: { id: string; webSocketDebuggerUrl: string } | undefined;
     for (let i = 0; i < 50 && !target; i++) {
@@ -367,7 +677,7 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
     await page('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await new Promise((r) => setTimeout(r, 150));
     const touchResult = await ev<{ picked: string | null; prevented: string[]; viewport: string; short: boolean }>(
-      '({ picked: window.__picked, prevented: window.__pd, viewport: innerWidth + "x" + innerHeight, short: matchMedia("(orientation: landscape) and (max-height: 430px) and (max-width: 767px)").matches })',
+      '({ picked: window.__picked, prevented: window.__pd, viewport: innerWidth + "x" + innerHeight, short: matchMedia("(max-height: 500px)").matches })',
     );
     expect(touchResult.short, JSON.stringify(touchResult)).toBe(true);
     expect(touchResult.prevented, JSON.stringify(touchResult)).not.toContain('touchmove');
@@ -382,85 +692,31 @@ describe.skipIf(!chromeBin)('handoff reachability in Chrome', () => {
 // below run only after DevTools is up, and they require pointer:fine and hover:hover.
 describe.skipIf(!chromeBin || !xvfbBin)('handoff failure reasons in a resized desktop window', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'handoff-desktop-'));
+  const session = createHarnessSession('desktop');
   let server: Server;
   let chrome: ChildProcess;
-  let chromeStderr = '';
   let browser: ((method: string, params?: Record<string, unknown>) => Promise<any>) | undefined;
   let xvfb: ChildProcess;
   let page: (method: string, params?: Record<string, unknown>) => Promise<any>;
   let port = 0;
 
   beforeAll(async () => {
-    const esbuild = require('esbuild') as typeof import('esbuild');
-    const postcss = require('postcss') as typeof import('postcss').default;
-    const tailwind = require('tailwindcss');
-    const autoprefixer = require('autoprefixer');
-    const compiled = await postcss([tailwind(path.join(root, 'tailwind.config.js')), autoprefixer])
-      .process(css, { from: path.join(root, 'index.css') });
-    writeFileSync(path.join(dir, 'app.css'), compiled.css);
-    await esbuild.build({
-      absWorkingDir: root,
-      entryPoints: [path.join(__dirname, 'handoffReachability.fixture.tsx')],
-      bundle: true,
-      format: 'esm',
-      outfile: path.join(dir, 'fixture.js'),
-      jsx: 'automatic',
-      define: { 'process.env.NODE_ENV': '"development"' },
-    });
-    writeFileSync(path.join(dir, 'index.html'), `<!doctype html><html class="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/app.css"></head><body><div id="root"></div><script type="module" src="/fixture.js"></script></body></html>`);
-    server = createServer((req, res) => {
-      const url = new URL(req.url || '/', 'http://127.0.0.1');
-      const file = path.join(dir, url.pathname === '/' ? 'index.html' : url.pathname);
-      try {
-        const body = readFileSync(file);
-        const type = file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/html';
-        res.writeHead(200, { 'content-type': type });
-        res.end(body);
-      } catch {
-        res.writeHead(404);
-        res.end('missing');
-      }
-    });
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    port = (server.address() as { port: number }).port;
-
-    const profileDir = path.join(dir, 'profile');
-    const activePortFile = path.join(profileDir, 'DevToolsActivePort');
-    chromeStderr = '';
-    const display = 50 + Math.floor(Math.random() * 20);
-    xvfb = spawn('Xvfb', [`:${display}`, '-screen', '0', '1280x800x24', '-ac'], { stdio: 'ignore' });
-    await sleep(300);
-    chrome = spawn(chromeBin!, [
+    printEnvironmentOnce(session);
+    try {
+      await compileFixture(session, dir);
+      const opened = await openFixtureServer(session, dir);
+      server = opened.server;
+      port = opened.port;
+      assertBootOpen(session, 'xvfb');
+      const started = await startXvfb(session);
+    xvfb = started.xvfb;
+    const launched = await launchChromeWithDevTools(session, dir, [
       '--disable-gpu', '--no-sandbox', '--no-first-run', '--disable-dev-shm-usage',
       '--window-size=420,780', '--window-position=0,0',
-      `--user-data-dir=${profileDir}`,
-      '--remote-debugging-port=0',
-    ], { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, DISPLAY: `:${display}` } });
-    chrome.stderr?.on('data', (chunk) => {
-      chromeStderr = (chromeStderr + String(chunk)).slice(-4000);
-    });
-
-    let debugPort = 0;
-    let browserPath = '';
-    for (let i = 0; i < 150 && (!debugPort || !browserPath); i++) {
-      if (chrome.exitCode !== null || chrome.signalCode !== null) break;
-      try {
-        const [portLine, pathLine] = readFileSync(activePortFile, 'utf8').trim().split(/\r?\n/);
-        const parsedPort = Number(portLine);
-        if (Number.isInteger(parsedPort) && parsedPort > 0 && pathLine) {
-          debugPort = parsedPort;
-          browserPath = pathLine;
-          break;
-        }
-      } catch {
-        // Chrome writes DevToolsActivePort only after the DevTools endpoint is ready.
-      }
-      await sleep(100);
-    }
-    if (!debugPort || !browserPath) {
-      const diagnostic = chromeStderr.replace(/\s+/g, ' ').trim().slice(-1000);
-      throw new Error(`Chrome DevTools did not start${diagnostic ? `: ${diagnostic}` : ''}`);
-    }
+    ], { ...process.env, DISPLAY: started.display });
+    chrome = launched.chrome;
+    const { debugPort, browserPath } = launched;
+    assertBootOpen(session, 'devtools connection');
 
     const browserWs = new WebSocket(
       `ws://127.0.0.1:${debugPort}${browserPath.startsWith('/') ? browserPath : `/${browserPath}`}`,
@@ -470,6 +726,12 @@ describe.skipIf(!chromeBin || !xvfbBin)('handoff failure reasons in a resized de
       browserWs.addEventListener('error', () => reject(new Error('browser socket')));
     });
     browser = wire(browserWs);
+    try {
+      const version = await browser('Browser.getVersion');
+      harnessLog(`${session.name}: CDP Browser.getVersion product=${version.product} protocol=${version.protocolVersion} revision=${version.revision}`);
+    } catch (error) {
+      harnessLog(`${session.name}: CDP Browser.getVersion unavailable: ${tail(String((error as Error).message), 200)}`);
+    }
     const { targetId } = await browser('Target.createTarget', { url: 'about:blank' });
     let target: { id: string; webSocketDebuggerUrl: string } | undefined;
     for (let i = 0; i < 50 && !target; i++) {
@@ -490,9 +752,14 @@ describe.skipIf(!chromeBin || !xvfbBin)('handoff failure reasons in a resized de
     page = wire(pageWs);
     await page('Page.enable');
     await page('Runtime.enable');
-  }, 60000);
+    } catch (error) {
+      if (!session.closed) throw error;
+      await abandonBoot(session, dir, server, error);
+    }
+  }, BROWSER_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
+    const teardownStartedAt = Date.now();
     const waitForChromeExit = (timeoutMs: number) => new Promise<boolean>((resolve) => {
       if (!chrome || chrome.exitCode !== null || chrome.signalCode !== null) {
         resolve(true);
@@ -510,42 +777,30 @@ describe.skipIf(!chromeBin || !xvfbBin)('handoff failure reasons in a resized de
     });
 
     let chromeExited = !chrome || chrome.exitCode !== null || chrome.signalCode !== null;
-    if (!chromeExited) {
-      try {
-        await browser?.('Browser.close');
-      } catch {
-        // Browser.close can sever the DevTools socket before its response arrives.
+    try {
+      if (!chromeExited) {
+        await closeBrowserWithin(session, browser, chrome);
+        chromeExited = await waitForChromeExit(CHROME_EXIT_WAIT_MS);
       }
-      chromeExited = await waitForChromeExit(3000);
+      if (!chromeExited && chrome && chrome.exitCode === null && chrome.signalCode === null) {
+        chrome.kill('SIGKILL');
+        chromeExited = await waitForChromeExit(CHROME_EXIT_WAIT_MS);
+      }
+    } finally {
+      // Also covers a beforeAll that timed out mid-launch: kills every tracked Chrome/Xvfb
+      // process group, including ones the suite variables never received, and blocks new spawns.
+      reapSession(session, 'afterAll');
     }
-    if (!chromeExited && chrome && chrome.exitCode === null && chrome.signalCode === null) {
-      chrome.kill('SIGKILL');
-      chromeExited = await waitForChromeExit(3000);
-    }
+    if (!chromeExited) chromeExited = await waitForChromeExit(CHROME_EXIT_WAIT_MS);
     if (xvfb && xvfb.exitCode === null && xvfb.signalCode === null) {
       xvfb.kill('SIGKILL');
     }
 
-    await new Promise<void>((resolve) => {
-      if (!server) {
-        resolve();
-        return;
-      }
-      server.close(() => resolve());
-    });
-
-    // CI runners occasionally keep Chrome profile files busy for a moment after
-    // process exit. Cleanup is hygiene, not part of the reachability assertion.
-    // Never turn otherwise-passing product assertions red for that OS race.
-    if (chromeExited) {
-      try {
-        rmSync(dir, { recursive: true, force: true, maxRetries: 40, retryDelay: 100 });
-      } catch (error) {
-        const code = error && typeof error === 'object' ? (error as NodeJS.ErrnoException).code : undefined;
-        if (code !== 'ENOTEMPTY' && code !== 'EBUSY' && code !== 'EPERM') throw error;
-      }
-    }
-  });
+    await closeServerWithin(session, server);
+    if (chromeExited) await removeProfileWithin(session, dir);
+    else skipProfileRemoval(session, dir);
+    harnessLog(`${session.name}: teardown finished in ${Date.now() - teardownStartedAt}ms (limit ${SUITE_TEARDOWN_TIMEOUT_MS}ms) chrome exited=${chromeExited}`);
+  }, SUITE_TEARDOWN_TIMEOUT_MS);
 
   async function ev<T>(expression: string): Promise<T> {
     const res = await page('Runtime.evaluate', { expression, returnByValue: true });

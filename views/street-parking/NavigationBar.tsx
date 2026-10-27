@@ -94,7 +94,7 @@ export const NavigationBar: React.FC<NavigationBarProps> = ({
     };
 
     return (
-        <nav className="mobile-primary-nav md:hidden" aria-label={t('nav.primary')}>
+        <nav className="mobile-primary-nav" aria-label={t('nav.primary')}>
             <div className="mobile-primary-nav-surface">
                 {items.slice(0, 2).map(renderItem)}
                 <button
