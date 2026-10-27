@@ -1,4 +1,5 @@
 // Changed-file guard for private 26C provenance.
+// Enforcement probe. This pull request must not be merged.
 //
 // The general PR suite may omit only
 // functions/curbIntelligence/provenanceAndConflict.test.cjs.
