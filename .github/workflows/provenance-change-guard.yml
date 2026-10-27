@@ -1,0 +1,42 @@
+name: Provenance change guard
+
+# Durable control for the CI test-scope policy. pull_request_target uses the
+# workflow and guard script from the base branch, so a pull request cannot
+# delete this check in the same change that edits provenance-critical code.
+# The job reads the diff only. It does not check out pull-request code, run
+# its tests, receive production credentials, or record a private 26C result.
+#
+# GitHub runs this file only after it is on the base branch. Until then,
+# provenance-critical changes stay blocked. Independent Security/QA acceptance
+# is required before this policy is merged.
+
+on:
+  pull_request_target:
+    branches:
+      - main
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: private provenance required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fail closed for provenance-critical changes
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: node scripts/ci/provenance-change-guard.mjs

@@ -1,13 +1,17 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const test = require('node:test');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const ROOT = 'C:/Users/jayca/AppData/Local/ParQueen/si-source-26c-05a/repo';
-const SUCCESSOR_PATH = 'C:/Users/jayca/AppData/Local/ParQueen/si-source-26c-04c/artifacts/candidate-26c-pass1.json';
-const ARTIFACT = path.join(ROOT, 'data/runtime-source/runtime-source-artifact.json');
+const ROOT = path.join(__dirname, '..', '..');
+const SUCCESSOR_SHA256 = 'e1ca91f7ba05e874449f168242509908ab7d587be3fc7f3352c66c0851cbc225';
+const SUCCESSOR_PATH = process.env.PARQUEEN_PROVENANCE_SUCCESSOR;
+if (!SUCCESSOR_PATH) {
+  throw new Error('PARQUEEN_PROVENANCE_SUCCESSOR is required. The genuine successor is not in the repository.');
+}
+const ARTIFACT = path.join(ROOT, 'data', 'runtime-source', 'runtime-source-artifact.json');
 const {
   bindServerSourceEvidence,
   coverServerSourceEvidence,
@@ -28,6 +32,10 @@ const {
 
 const AMBIGUOUS = ['40227', '79167', '89943', '189709'];
 const successorBytes = fs.readFileSync(SUCCESSOR_PATH);
+const successorDigest = crypto.createHash('sha256').update(successorBytes).digest('hex');
+if (successorDigest !== SUCCESSOR_SHA256) {
+  throw new Error('genuine successor SHA256 mismatch');
+}
 const successor = JSON.parse(successorBytes.toString('utf8'));
 const outcomes = successor.coverageManifest.authoritativeOutcomes;
 const expanded = expandCoverageRecords(successor);
@@ -36,7 +44,16 @@ const coveredIds = expanded.map(record => record.onStreet.physicalId);
 const bound = bindServerSourceEvidence(expanded);
 const admission = successor.successorRelease.decision;
 const indexed = coverServerSourceEvidence(bound, coveredIds, admission, outcomes);
-const runtimeBytes = fs.readFileSync(ARTIFACT);
+function pinnedArtifactBytes(bytes) {
+  const hash = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+  if (hash(bytes) === PINNED_ARTIFACT_SHA256) return bytes;
+  if (bytes.length > 1 && bytes[bytes.length - 2] === 13 && bytes[bytes.length - 1] === 10) {
+    const normalized = Buffer.concat([bytes.subarray(0, bytes.length - 2), Buffer.from('\n')]);
+    if (hash(normalized) === PINNED_ARTIFACT_SHA256) return normalized;
+  }
+  throw new Error('runtime artifact SHA256 does not match the pinned 26B artifact');
+}
+const runtimeBytes = pinnedArtifactBytes(fs.readFileSync(ARTIFACT));
 const trusted = openRuntimeSourceArtifact(runtimeBytes);
 const runtimeDocument = JSON.parse(runtimeBytes.toString('utf8'));
 
@@ -307,8 +324,4 @@ test('compact Melville identity is unchanged on the original successor', () => {
   assert.equal(record26c.street, 'MELVILLE STREET');
   assert.equal(Object.hasOwn(record26c, 'coordinates'), false);
   record('melville-compact', 'PASS', { segmentId: record26c.segmentId });
-});
-
-test.after(() => {
-  fs.writeFileSync('C:/Users/jayca/AppData/Local/ParQueen/si-source-26c-05a/scratch/provenance-case-log.json', JSON.stringify(results, null, 2));
 });
