@@ -1,0 +1,338 @@
+# SI-RELEASE-01 — Street Intelligence product completion
+
+Audit baseline: committed `main` at `a1db518fd31b9a88fc6424b9ce55939074d56cf6`.
+
+Audit worktree: `C:\Users\jayca\GitWorktrees\ParQueen-si-release-01`.
+
+Audit branch: `codex/si-release-01-product-completion`.
+
+This document is the product-release boundary. It does not change benchmark design, sampling, scoring, or `functions/curbIntelligence/**`.
+
+## Release and benchmark are separate
+
+`SI_LAUNCH_03_BLOCKS_PRODUCT_COMPLETION = FALSE`
+
+`SI_LAUNCH_03_BLOCKS_APP_RELEASE_AUTOMATICALLY = FALSE`
+
+`PROSPECTIVE_PERFORMANCE_CLAIMS_ALLOWED = FALSE`
+
+SI-LAUNCH-03 remains `WAITING_FOR_SOURCE_CONSISTENCY`. The latest readiness observation is catalog `26B`, metadata `26C`, package `26B`, node `26B`. No prospective challenge set exists. No prospective scoring occurred. `PARQUEEN_PROSPECTIVE_ACCURACY_INFORMATION_LEARNED = NONE`.
+
+That source mismatch is independent validation work. It is not a product P0.
+
+No release copy may say or imply a measured prospective accuracy, coverage, or block-side count from that study. Shipping a fail-closed Street Intelligence feature is allowed. Shipping a performance claim is not.
+
+## Frozen core
+
+Canonical authority core remains frozen at `ac788490e4f0d103b3dc06c91fccd35d7c7f9afd` (`Require Function 3C curb identity proof`).
+
+That commit is in the SI-LAUNCH repository. It is not an object in the ParQueen product repository. At the product baseline, `functions/curbIntelligence/canonicalCurbResolver.js` is blob `dc1f8a8c2ab11475218d4047c5f2037642fa52c1`. At `ac788` the same path is blob `17c0c1c75bc89ffdf2407df811aa689bc0c788f8`. The product tree has no `proveCanonicalCurbIdentity`.
+
+Do not edit the frozen core to make integration easier. The product must call that core. The next phase ports the frozen modules onto this product branch without weakening:
+
+- `TOPOLOGY_PRIMARY_REQUIRED`
+- `FUNCTION3C_VALID_IDENTITY_REQUIRED`
+- `EXACT_BFI_EQUALITY_REQUIRED`
+- `BFI_MISMATCH_FAILS_CLOSED`
+- `FUNCTION3C_BFI_UNAVAILABLE_FAILS_CLOSED`
+- `FUNCTION3C_CONTRACT_FAILURE_FAILS_CLOSED`
+- `FUNCTION3C_CANNOT_RESCUE_UNPROVEN_TOPOLOGY`
+- `CACHE_CANNOT_BYPASS_FUNCTION3C_PROOF`
+- `PERSISTENCE_CANNOT_BYPASS_FUNCTION3C_PROOF`
+- `VISUAL_SELECTION_CANNOT_BYPASS_FUNCTION3C_PROOF`
+- `FUNCTION3C_PROOF_PRECEDES_BFI_DEPENDENT_SIDE_EFFECTS`
+- `CANONICAL_FUNCTION3C_PROOF_CALL_COUNT = 1`
+- `NO_BENCHMARK_LEAKAGE`
+
+## Fail-closed release rule
+
+A user-visible parking answer requires one successful canonical Function 3C proof for that resolution. Missing topology, ambiguous topology, unavailable proof, invalid proof, BFI mismatch, contract failure, timeout, network failure, and a malformed payload stay non-answers. Cache, persistence, visual selection, and the cleaning card cannot create or restore an answer the proof did not authorize.
+
+## Actual product architecture
+
+The paragraphs in this section describe the `a1db518` baseline that SI-RELEASE-01 audited. SI-RELEASE-02 replaces that callable path. The current chain is in "SI-RELEASE-02 result".
+
+Committed call chain for My Car save at the SI-RELEASE-01 baseline:
+
+1. `saveMySpot` and `saveMySpotFromCoords` in `views/StreetParkingView.tsx` call `requestCanonicalCurb`.
+2. `requestCanonicalCurb` calls `resolveCanonicalCurbWithLocation` in `utils/canonicalCurbClient.ts`.
+3. The client sends `protocolVersion: 2` to the callable `createSegmentFromSweepNYC` (`functions/index.js`).
+4. `selectCanonicalV2Handler` routes protocol 2 to `_runCanonicalCurbV2`.
+5. `_runCanonicalCurbV2` returns `unsupported` / `source_unavailable` unless `CURB_RESOLVER_MODE=shadow` and `CURB_PRODUCT_PATH=on`. Both are set in `functions/.env.parkqueen-46475363-ccf36`. Code defaults are `off`.
+6. When the gate is on, `runCanonicalCurbOrchestrator` calls `resolveCanonicalCurb`.
+7. `resolveCanonicalCurb` ranks CSCL roadway geometry and `classifyCanonicalCurb`. `SUPPORTED` carries `createCanonicalCurbIdentity` from the CSCL block-face id. It does not call Function 3C.
+8. After `SUPPORTED`, the orchestrator may read `curbIdentities/{key}` and `streetSegments/{key}`, load rules, and `persistCanonicalCurb`.
+9. The client stores the public response on the local saved spot. `high_confidence` renders `StreetIntelligenceCard`. `ambiguous` renders `VisualCurbSelector`. `unsupported` renders the non-answer retry state.
+
+`applyVisualCurbSelection` re-runs that same unproven resolver and promotes a matching candidate token to `SUPPORTED`.
+
+`privateBlockfaceResolver` is a Geosupport-style client used by sweep, DOT, and rule helpers. It is not the frozen `proveCanonicalCurbIdentity`, and `resolveCanonicalCurb` does not call it before `SUPPORTED`.
+
+| Surface | Classification | Evidence |
+| --- | --- | --- |
+| Callable boundary | COMPLETE | `exports.createSegmentFromSweepNYC` |
+| Client invocation for My Car | COMPLETE | `requestCanonicalCurb` → protocol 2 |
+| Location gate | COMPLETE | `isCanonicalLocationReady`; client returns `location_quality` |
+| Topology authority | PARTIAL | CSCL geometry plus policy; not the frozen topology-primary proof |
+| Function 3C proof | NOT_WIRED | module absent from this commit |
+| Cache and persistence | PARTIAL | after unproven `SUPPORTED` |
+| Firestore rules for curb identity | COMPLETE | `curbIdentities` client read/write denied |
+| Public segment reads | COMPLETE | `streetSegments` and `streetRules` world-readable, client writes denied |
+| UI presentation | PARTIAL | protocol states render; proof failures are not distinct |
+| Visual selection | PARTIAL | wired, then treated as authority |
+| Safe Until / cleaning card | PARTIAL | renders after a segment id exists |
+| Alternate-side product | NOT_APPLICABLE | no separate ASP flow; cleaning is the card |
+| Feature gate | COMPLETE | `CURB_PRODUCT_PATH` / `CURB_RESOLVER_MODE` |
+| App Check on this callable | NOT_WIRED | options omit `enforceAppCheck` |
+| Auth and rate limit | COMPLETE | sign-in required; 30 calls / hour |
+| Observability | PARTIAL | curb telemetry has attempt, high, ambiguous, unsupported, cache mismatch, latency buckets; no proof-specific events |
+| Deployment of the live revision | UNKNOWN_PRODUCTION_STATE | repo contains code and params; this audit did not query production |
+
+## Wiring
+
+`STREET_INTELLIGENCE_PRODUCTION_CALLABLE_EXISTS = TRUE`
+
+`CLIENT_CALLS_STREET_INTELLIGENCE_PRODUCTION_PATH = TRUE`
+
+`FROZEN_CORE_REACHABLE_FROM_REAL_USER_FLOW = TRUE`
+
+`AUTHORITATIVE_RESULT_REACHES_UI = TRUE`
+
+`FAIL_CLOSED_RESULT_REACHES_UI = TRUE`
+
+After SI-RELEASE-02, protocol 2 reaches the frozen orchestrator. `proveCanonicalCurbIdentity` runs once after primary topology and before cache and persistence. A high-confidence card is that proven public result.
+
+Fail-closed UI remains. Location failure, a thrown callable, an invalid payload, and every proof failure become `unsupported`, clear the segment id, and show `street_intel.could_not_verify` with retry. They do not invent a curb. Proof failures use the public reason `source_unavailable` and do not expose BFI or Function 3C internals.
+
+## Authority bypass
+
+| Finding | Severity |
+| --- | --- |
+| `resolveCanonicalCurb` can return `SUPPORTED` from CSCL distance, side, and policy with no Function 3C proof | P0 |
+| Cache read and `persistCanonicalCurb` run on that unproven identity | P0 |
+| `StreetIntelligenceCard` and cleaning reminders run once `segmentId` and `segmentStreetName` are stored | P0 |
+| `applyVisualCurbSelection` converts a candidate token into `SUPPORTED` after a second unproven resolution | P0 |
+| Requests without `protocolVersion: 2` still execute `_tryCreateFromSweepNYC` / NYC Open Data and can return `success: true` | P0 |
+| `readCanonicalCache` treats key equality as a hit. No TTL. No proof binding | P1 |
+| `createSegmentFromSweepNYC` does not set `enforceAppCheck: true` | P1 |
+
+The legacy client matcher `matchNearestSegment` is only reached from debug `simulateMyCarSave`. The shipped `saveMySpot` path does not call it. The server branch is still reachable by any signed-in caller.
+
+## Cache and persistence
+
+Object: `curbIdentities/{publicCurbKey}` plus `streetSegments/{publicCurbKey}` and `streetRules`.
+
+- Prerequisite today: resolver `SUPPORTED`. Required prerequisite: one Function 3C proof.
+- Key: `publicCurbKey(identity)`, pattern `curb2_` plus 32 hex characters.
+- TTL: none.
+- Source, protocol, and BFI binding on read: public key equality and `segmentId` equality only.
+- Provenance: private identity document is server-only. Public segment carries the public curb fields and `ruleSummary.cleaningAvailable`.
+- Stale behavior: a matching key is a hit until overwritten.
+- Invalidation: mismatch reason `cache_curb_mismatch` only.
+
+`CACHE_CANNOT_BYPASS_FUNCTION3C_PROOF = FALSE` on this baseline.
+
+`PERSISTENCE_CANNOT_BYPASS_FUNCTION3C_PROOF = FALSE` on this baseline.
+
+Saved-spot state in local storage is a client projection of the callable response. It is not a second authority. A reload shows the last stored public fields; retry calls the callable again.
+
+## Firestore and security
+
+Collections: `curbIdentities`, `streetSegments`, `streetSegments/{id}/streetRules`.
+
+Server writes the canonical documents through the Admin SDK in `persistCanonicalCurb`. Clients cannot write them. Clients can read segments and rules. Clients cannot read `curbIdentities`.
+
+The callable requires Firebase Auth and a per-user rate limit. It does not enforce App Check. The committed private-preferences rule change in the dirty app worktree is unrelated; it is not part of this baseline.
+
+No production deploy and no rules deploy were performed.
+
+## Observability
+
+Present when the v2 gate runs: `curb_resolution_attempted`, `curb_resolution_high`, `curb_resolution_ambiguous`, `curb_resolution_unsupported` (with public reason and `failureDetail`), `cache_curb_mismatch`, and latency buckets.
+
+Absent: Function 3C unavailable, invalid, mismatch, and contract-failure events, and a cache hit/miss that is conditional on proof. Do not add analytics for its own sake. Add those four proof outcomes to the existing structured curb log when the frozen core is wired.
+
+## Product test matrix
+
+| Case | Status |
+| --- | --- |
+| Authoritative success through Function 3C | NO_TEST |
+| Safe abstention for protocol `unsupported` | PASSING_TEST_EXISTS |
+| Topology ambiguity UI and selector | PASSING_TEST_EXISTS |
+| Function 3C unavailable / invalid / mismatch | NO_TEST |
+| Cache after valid proof | NO_TEST |
+| Cache cannot bypass proof | NO_TEST |
+| Persistence cannot bypass proof | NO_TEST |
+| Stale cache | NO_TEST |
+| Network failure and malformed response mapped to non-answer | PASSING_TEST_EXISTS |
+| App restart of a stored spot | PARTIAL_TEST |
+| Auth failure | PARTIAL_TEST |
+| App Check failure | NO_TEST |
+| Location denied / low quality | PASSING_TEST_EXISTS |
+| Multiple rapid saves | PARTIAL_TEST |
+| Offline recovery | PARTIAL_TEST |
+| UI withholds a segment on non-answer | PASSING_TEST_EXISTS |
+
+Existing tests cover the unproven protocol. They do not prove the frozen core.
+
+## Deployment reality
+
+| Component | State |
+| --- | --- |
+| `createSegmentFromSweepNYC` source and `CURB_*` params in repo | CODE_EXISTS_NOT_DEPLOYED as evidence of source only |
+| Live Cloud Function revision and Cloud Run resolver revision | UNKNOWN_PRODUCTION_STATE |
+| Frozen core image | NOT_REQUIRED until the product branch contains that core |
+| SI-LAUNCH benchmark workers | NOT_REQUIRED for product completion |
+
+This phase did not query production.
+
+## Pending app diff
+
+`PENDING_APP_DIFF_AFFECTS_SI_RELEASE_AUDIT = FALSE`
+
+Read-only inspection of the dirty `main` worktree found analytics-only edits in `views/StreetParkingView.tsx` and `views/street-parking/useInterestFlow.ts`, plus an `analyticsConsent` field on the user private-preferences rule. Class `PENDING_UNCOMMITTED_APP_CHANGE` / A. Those edits do not change the curb callable, the resolver, cache, persistence, or curb rules. They were not copied here.
+
+## Smallest remaining backlog
+
+### P0 release blockers
+
+None. SI-RELEASE-02 put the frozen `ac788` orchestrator on protocol 2 and stopped the callable from returning legacy `success: true`.
+
+### P1 before release
+
+1. Deploy the SI-RELEASE-03 function revision on purpose and smoke the signed-in My Car save. Repository source is not evidence that the live revision is current. App Check enforcement and the cache TTL are in this branch. They are not closed in production until that revision is the one serving traffic.
+
+### P2 follow-up
+
+1. Remove the debug-only `matchNearestSegment` legacy client path.
+2. Keep `confirmedParkingSide` as a local label. It must not satisfy the proof.
+
+### Validation only
+
+1. SI-LAUNCH-03 source consistency. Not a product blocker.
+
+`P0_COUNT = 0`
+
+`P1_COUNT = 1`
+
+`P2_COUNT = 2`
+
+`VALIDATION_ONLY_COUNT = 1`
+
+## STREET_INTELLIGENCE_PRODUCT_COMPLETE
+
+The predicate is true only when every line below is true. SI-LAUNCH-03 completion is not one of them.
+
+1. The shipped My Car save, handoff save, visual reselection, and retry call protocol 2 on `createSegmentFromSweepNYC`.
+2. `functions/curbIntelligence/canonicalCurbResolver.js`, `canonicalCurbIdentityProof.js`, `canonicalCurbOrchestrator.js`, `visualCurbSelection.js`, and `canonicalCurbPersistence.js` match `ac788490e4f0d103b3dc06c91fccd35d7c7f9afd`. `functions/index.js` calls that orchestrator for protocol 2. No other edit inside `functions/curbIntelligence/**` is part of this release.
+3. Canonical resolution calls Function 3C exactly once, and only after topology is primary.
+4. Cache, persistence, visual selection, and the cleaning card cannot run from an unproven identity.
+5. Topology failure, proof failure, timeout, network failure, malformed payload, denied location, and low-quality location render a non-answer and a retry, with no fabricated curb.
+6. `curbIdentities` stay server-only. Segment writes stay server-only. The callable requires auth, App Check, and the existing rate limit.
+7. Structured logs distinguish attempt, authoritative success, safe abstention, topology unavailable, topology ambiguous, Function 3C unavailable, Function 3C invalid, BFI mismatch, contract failure, cache hit, cache miss, and unexpected exception.
+8. The product test matrix rows above are green on the wired path.
+9. The function revision and params are the deployed revision. A signed-in smoke save shows one authoritative success and one forced non-answer.
+10. Critical findings are 0. High release blockers are 0.
+11. No prospective accuracy, coverage, or block-side claim is present.
+
+`STREET_INTELLIGENCE_PRODUCT_COMPLETE = FALSE` after SI-RELEASE-03. The code-level App Check and cache TTL items are closed. The live function revision is still unknown because this phase did not deploy.
+
+## SI-RELEASE-02 result
+
+The product branch materializes `functions/curbIntelligence/**` production files from `ac788490e4f0d103b3dc06c91fccd35d7c7f9afd`. Production blob drift is 0. Those files were not hand-edited. External runtime dependencies `nycOpenDataNormalizer.js`, `nycOpenDataRestriction.js`, and `streetIntelStructuredLog.js` were already identical and were not copied from the benchmark repository.
+
+`createSegmentFromSweepNYC` now returns `{ protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' }` when `protocolVersion` is missing or not 2. It does not call SweepNYC, NYC Open Data fallback, or the shadow observer. Protocol 2 calls `_runCanonicalCurbV2`, which calls `runCanonicalCurbOrchestrator` from the frozen core. That orchestrator resolves topology, calls `proveCanonicalCurbIdentity` once only after primary topology, and only then reads cache or persists.
+
+Every `createSegmentFromSweepNYC` call site in `views/StreetParkingView.tsx` sends protocol 2. My Car save, handoff, retry, refresh, and visual reselection go through `resolveCanonicalCurbWithLocation`. `high_confidence` is the only response that stores a segment id for the card. Unsupported responses clear the segment and render `street_intel.could_not_verify`.
+
+`privateResolverCallableComposition.test.js` is the one file under `functions/curbIntelligence/**` whose blob differs from `ac788`. It previously required the legacy success path to remain in the callable. That assertion was replaced with the fail-closed contract. No authority module was edited.
+
+Closed:
+
+- P0 frozen core not on the product path.
+- P0 legacy `success: true` for a missing protocol.
+- P1 gap for Function 3C, cache, and persistence product tests. `functions/siRelease02ProductPath.test.js` covers that matrix.
+
+Open at the end of SI-RELEASE-02, and closed or carried by SI-RELEASE-03 below:
+
+- P1 App Check was not enforced on `createSegmentFromSweepNYC`.
+- P1 cache reads required proof and source-version equality, and had no TTL.
+- P1 the live Cloud Function revision was unknown.
+- P2 debug-only `matchNearestSegment` remains in the client.
+- P2 `confirmedParkingSide` remains a local label.
+- Validation only: SI-LAUNCH-03 source consistency.
+
+## SI-RELEASE-03 result
+
+App Check and the cache TTL are product-boundary controls. No file under `functions/curbIntelligence/**` was edited.
+
+### App Check
+
+`createSegmentFromSweepNYC` declares `enforceAppCheck: true` on the same Firebase Functions v2 `onCall` options used by `checkHydrantDistance`. The handler also rejects a request whose runtime `request.app.appId` is missing before rate limit, protocol selection, topology, Function 3C, cache, or persistence. A caller-supplied field cannot satisfy that check. The declaration is the literal `true`. It is not switched off for the emulator.
+
+Shipping clients already initialize App Check before callable traffic:
+
+- Web and PWA: `initializeParQueenAppCheck` in `firebaseConfig.ts` uses `ReCaptchaEnterpriseProvider` when `VITE_FIREBASE_APPCHECK_SITE_KEY` is present. Production builds keep that key.
+- iOS: `ParQueenAppCheckProviderFactory` installs App Attest on device and DeviceCheck before iOS 14. The JS bridge forwards the native token.
+- Android: release builds install Play Integrity. The JS bridge forwards that token.
+
+`WEB_APP_CHECK_READY = TRUE`
+
+`IOS_APP_CHECK_READY = TRUE`
+
+`ANDROID_APP_CHECK_READY = TRUE`
+
+There is no product fallback when App Check is missing or invalid.
+
+### Cache TTL
+
+The frozen cache is unchanged.
+
+`CACHE_LOCATION = curbIdentities/{publicCurbKey} and streetSegments/{publicCurbKey}`
+
+`CACHE_KEY = publicCurbKey`, pattern `curb2_[a-f0-9]{32}`
+
+`CACHE_CREATED_AT_FIELD = streetSegments.updatedAt`
+
+`CACHE_CURRENT_VALIDATION = readCanonicalCache` requires primary topology authority, a proof bound to that topology result, schema 2, protocol 2, cache compatibility, geometry, names, side, and the public key.
+
+`CACHE_CURRENT_SOURCE_VERSION_BINDING = stored.sourceVersion.resourceId and stored.sourceVersion.version equal the current identity`
+
+`CACHE_CURRENT_PROOF_BINDING = hasCanonicalCurbIdentityProof(identityProof, topologyResult)`
+
+There was no existing Street Intelligence TTL. The product constant is one day:
+
+`STREET_INTELLIGENCE_CACHE_TTL_MS = 86400000`
+
+Street rules and cleaning change on a day scale. A shorter window would repeat Function 3C on every save of the same proven curb. The value is not taken from benchmark timings or from the 26B/26C source mismatch.
+
+`CACHE_TTL_BOUNDARY_RULE = inclusive: now - updatedAt <= 86400000 is eligible; now - updatedAt > 86400000 is expired`
+
+`CACHE_CREATED_AT_TRUST_MODEL = Admin SDK Timestamp.now() written by the frozen persist, read back only through Timestamp.toMillis(). The read clock is the same Admin SDK Timestamp.now() inside the product boundary. Request data cannot supply either clock. A missing, non-Timestamp, non-finite, or future timestamp more than 120000 ms ahead is not eligible. That 120000 ms figure is clock skew, not a grace period for old entries.`
+
+An authoritative hit still requires the frozen proof and source-version checks. The TTL is an additional condition. An expired entry returns `hit: false` and the request continues through the current frozen path. A failed or abstained resolution does not call persist, so it cannot refresh `updatedAt`.
+
+### Remaining release items
+
+- P1 `LIVE_FUNCTION_REVISION_UNKNOWN`. This phase did not query or deploy production.
+- P2 debug-only `matchNearestSegment`.
+- P2 `confirmedParkingSide` as a local label.
+- Validation only: SI-LAUNCH-03 source consistency.
+
+`P0_COUNT = 0`
+
+`P1_COUNT = 1`
+
+`P2_COUNT = 2`
+
+`VALIDATION_ONLY_COUNT = 1`
+
+`P0_ITEMS = none`
+
+`P1_ITEMS = LIVE_FUNCTION_REVISION_UNKNOWN`
+
+## Next implementation phase
+
+`NEXT_PRODUCT_PHASE = CONTROLLED_PRODUCTION_REVISION_VERIFICATION`
+
+Deploy the SI-RELEASE-03 revision on purpose, record the live function revision, and smoke one signed-in authoritative save and one forced non-answer. Do not start from the dirty `main` worktree or the SI-LAUNCH worktree. Do not treat this source branch as proof that production is current.

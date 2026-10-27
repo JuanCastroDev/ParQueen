@@ -27,6 +27,7 @@ import {
     type UnfinishedHandoff,
 } from './unfinishedHandoff';
 import { ARRIVAL_DISTANCE_KM } from './arrivalLocation';
+import { isConfirmedServerHandoffSuccess, recordParkingAnalyticsEvent } from '../../utils/parkingAnalytics';
 
 interface UseInterestFlowOptions {
     selectedItem: any;
@@ -104,6 +105,7 @@ export function useInterestFlow({
     const optimisticTerminalRef = useRef<Set<string>>(new Set());
     const awardUnsubRef = useRef<(() => void) | null>(null);
     const awardDeliveredRef = useRef<Set<string>>(new Set());
+    const successAnalyticsRecordedRef = useRef<Set<string>>(new Set());
     const resumeReadyRef = useRef({ spots: false, feedback: false });
     const resumeUserIdRef = useRef<string | undefined>(user?.id);
     resumeUserIdRef.current = user?.id;
@@ -174,6 +176,7 @@ export function useInterestFlow({
             terminalSpotIdsRef.current = new Set();
             optimisticTerminalRef.current = new Set();
             awardDeliveredRef.current = new Set();
+            successAnalyticsRecordedRef.current = new Set();
             awardUnsubRef.current?.();
             awardUnsubRef.current = null;
             resumeReadyRef.current = { spots: false, feedback: false };
@@ -186,6 +189,7 @@ export function useInterestFlow({
         terminalSpotIdsRef.current = new Set();
         optimisticTerminalRef.current = new Set();
         awardDeliveredRef.current = new Set();
+        successAnalyticsRecordedRef.current = new Set();
         awardUnsubRef.current?.();
         awardUnsubRef.current = null;
         resumeReadyRef.current = { spots: false, feedback: false };
@@ -407,7 +411,7 @@ export function useInterestFlow({
 
             try {
                 const claimMinutes = Math.min(etaMinutes + 5, MAX_CLAIM_MINUTES);
-                await acquireActiveIncomingClaim(db, {
+                const claimResult = await acquireActiveIncomingClaim(db, {
                     spotId: spot.id,
                     uid: user.id,
                     unavailableMessage: 'Someone already got this spot',
@@ -418,6 +422,7 @@ export function useInterestFlow({
                         interestExpiresAt: Timestamp.fromMillis(Date.now() + claimMinutes * 60000),
                     }),
                 });
+                if (claimResult === 'claimed') recordParkingAnalyticsEvent('parking_claim_started');
 
                 const dest: [number, number] = [spot.lng, spot.lat];
                 activeRouteDestinationRef.current = dest;
@@ -497,9 +502,21 @@ export function useInterestFlow({
                 return;
             }
             if (claimState !== 'completed_success') return;
-            if (awardDeliveredRef.current.has(spotId)) return;
-            awardDeliveredRef.current.add(spotId);
-            showAwardedCrowns(role, claimerName);
+            const serverConfirmed = isConfirmedServerHandoffSuccess(claimState, snap.metadata);
+            // A cached success may be displayed by the existing Crown UI, but
+            // cannot count as an analytics completion or close the claimer's
+            // observer. Wait for fresh server metadata before recording.
+            if (role === 'claimer' && serverConfirmed && !successAnalyticsRecordedRef.current.has(spotId)) {
+                successAnalyticsRecordedRef.current.add(spotId);
+                recordParkingAnalyticsEvent('handoff_success_recorded');
+            }
+            if (!awardDeliveredRef.current.has(spotId)) {
+                awardDeliveredRef.current.add(spotId);
+                showAwardedCrowns(role, claimerName);
+            }
+            // The finder never records this event. For the claimer, keep the
+            // listener alive after cache-only success until server confirmation.
+            if (role === 'claimer' && !serverConfirmed) return;
             unsubscribe();
             if (awardUnsubRef.current === unsubscribe) awardUnsubRef.current = null;
         }, () => {});
@@ -740,7 +757,7 @@ export function useInterestFlow({
         setHandoffSubmitting(true);
         setHandoffSubmitError(null);
         try {
-            await completeTerminalHandoff(db, {
+            const recorded = await completeTerminalHandoff(db, {
                 spotId: spotSnap.id,
                 driverId: user.id,
                 driverName: user.username || 'Someone',
@@ -749,6 +766,7 @@ export function useInterestFlow({
                 outcome: 'failed',
                 failureReason: reason,
             });
+            if (recorded === 'created') recordParkingAnalyticsEvent('handoff_failure_recorded');
 
             noteTerminalHandoff(spotSnap.id);
             setHandoffStep(null);
@@ -790,6 +808,7 @@ export function useInterestFlow({
         const now = Date.now();
         const reportedAt = Timestamp.fromMillis(now + durationMinutes * 60000);
         const expiresAt = Timestamp.fromMillis(getPingExpiresAtMs(reportedAt));
+        recordParkingAnalyticsEvent('ping_creation_started');
 
         try {
             await commitPingCreate(db, {
@@ -811,6 +830,7 @@ export function useInterestFlow({
                     originSpotId: spotSnap.id,
                 },
             });
+            recordParkingAnalyticsEvent('ping_creation_succeeded');
         } catch (error) {
             // Rules stay the authority. Preflight already labels rate vs origin;
             // a generic permission-denied still has to be visible.
@@ -840,7 +860,7 @@ export function useInterestFlow({
             }
 
             try {
-                await acquireActiveIncomingClaim(db, {
+                const claimResult = await acquireActiveIncomingClaim(db, {
                     spotId: spot.id,
                     uid: user.id,
                     unavailableMessage: 'Someone already claimed this spot',
@@ -867,6 +887,7 @@ export function useInterestFlow({
                         };
                     },
                 });
+                if (claimResult === 'claimed') recordParkingAnalyticsEvent('parking_claim_started');
 
                 // Track for snapshot disappearance detection — no route drawn yet
                 setTrackedItemId(spot.id);

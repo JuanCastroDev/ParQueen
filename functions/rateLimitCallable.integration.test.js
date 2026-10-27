@@ -79,6 +79,7 @@ function fakeRequest(uid, claims = {}, data = {}) {
             uid,
             token: { uid, auth_time: NOW - 30, iat: NOW - 30, exp: NOW + 3600, ...claims },
         } : null,
+        app: { appId: 'test-app', token: 'test-token' },
         rawRequest: {},
     };
 }
@@ -125,7 +126,8 @@ describe('RL-C createSegmentFromSweepNYC â€” callable behavioral tests', ()
         indexModule._callableHooks.sweepNYCResult = async () => ({ success: true, segmentId: 'test-seg' });
         const { result, error } = await callDirect(indexModule.createSegmentFromSweepNYC, uid, {}, { lat: NYC_LAT, lng: NYC_LNG });
         expect(error).toBeUndefined();
-        expect(result.success).toBe(true);
+        expect(result.success).not.toBe(true);
+        expect(result.status).toBe('unsupported');
     });
 
     it('RL-C3: request at limit (30) succeeds', async () => {
@@ -134,7 +136,8 @@ describe('RL-C createSegmentFromSweepNYC â€” callable behavioral tests', ()
         seededDocId = await seedCounter(OP, uid, WIN, LIMIT - 1);
         const { result, error } = await callDirect(indexModule.createSegmentFromSweepNYC, uid, {}, { lat: NYC_LAT, lng: NYC_LNG });
         expect(error).toBeUndefined();
-        expect(result.success).toBe(true);
+        expect(result.success).not.toBe(true);
+        expect(result.status).toBe('unsupported');
     });
 
     it('RL-C4: request beyond limit returns resource-exhausted without calling SweepNYC', async () => {
@@ -156,18 +159,21 @@ describe('RL-C createSegmentFromSweepNYC â€” callable behavioral tests', ()
         const { result: r2, error: e2 } = await callDirect(indexModule.createSegmentFromSweepNYC, uid2, {}, { lat: NYC_LAT, lng: NYC_LNG });
         expect(e1.code).toBe('resource-exhausted');
         expect(e2).toBeUndefined();
-        expect(r2.success).toBe(true);
+        expect(r2.success).not.toBe(true);
+        expect(r2.status).toBe('unsupported');
         // cleanup uid2 counter
         const wk = currentWindowKey(WIN);
         await db.collection('rateLimits').doc(`${OP}_${wk}_${uid2}`).delete().catch(() => {});
     });
 
-    it('RL-C6: coordinates outside NYC bounds are rejected before provider call', async () => {
+    it('RL-C6: a non-v2 request does not call the legacy provider or return success', async () => {
         if (!indexModule) return;
         let providerCalled = false;
         indexModule._callableHooks.sweepNYCResult = async () => { providerCalled = true; return { success: true }; };
-        const { error } = await callDirect(indexModule.createSegmentFromSweepNYC, uid, {}, { lat: 34.0, lng: -118.2 });
-        expect(error.code).toBe('invalid-argument');
+        const { result, error } = await callDirect(indexModule.createSegmentFromSweepNYC, uid, {}, { lat: 34.0, lng: -118.2 });
+        expect(error).toBeUndefined();
+        expect(result.success).not.toBe(true);
+        expect(result.status).toBe('unsupported');
         expect(providerCalled).toBe(false);
     });
 

@@ -105,7 +105,7 @@ paste any debug secret into chat, CI, or this document.
 
 ```bash
 npm ci
-npm run cap:sync
+npm run cap:sync:android
 # Android Studio / ./gradlew :app:assembleDebug
 ```
 

@@ -179,10 +179,9 @@ describe('regressions: upstream call discipline', () => {
   it('a SweepNYC success returns before Socrata is ever queried', () => {
     const start = INDEX_SRC.indexOf('exports.createSegmentFromSweepNYC');
     const seg = INDEX_SRC.slice(start, INDEX_SRC.indexOf('function _existingNYCOpenDataResult', start));
-    const successGate = seg.indexOf('if (sweepResult.success || !_SWEEPNYC_FALLBACK_REASONS.has(sweepResult.reason))');
-    const fallback = seg.search(/_fallbackToNYCOpenData\(\s*lat,\s*lng/);
-    expect(successGate).toBeGreaterThan(-1);
-    expect(fallback).toBeGreaterThan(successGate);
+    expect(seg).toContain('request.data?.protocolVersion !== 2');
+    expect(seg).not.toContain('_fallbackToNYCOpenData');
+    expect(seg).not.toContain('_tryCreateFromSweepNYC');
   });
 
   it('a cached NYC Open Data segment means the populate callable is not invoked before nearest selection', () => {

@@ -35,6 +35,29 @@ service cloud.firestore {
         && resource.data.get('holdRequestedBy', null) == null;
     }
 
+    // S-SPOT-1: a claimer cancel (Arms 3/3b) must leave EVERY claimer field
+    // null in the result. The shipped client (cancelClaimTransaction.ts)
+    // writes explicit nulls, and absent fields read as null via get(), so
+    // both "set to null" and "never present" pass; any retained value fails.
+    // Without this, {status:'available'} alone kept interestedUserId and
+    // froze the Ping (isAvailableForClaim() refuses every other claimer).
+    function claimerMetadataClearedAfter() {
+      // MapDiff against an all-null map: changedKeys() = claimer fields that
+      // are PRESENT in the result with a non-null value. Fields that are
+      // absent are removedKeys(), which is fine. Single diff keeps this arm
+      // well under the 1000-expression evaluation limit of the spot update
+      // OR-chain (16 separate get() checks exceeded it).
+      return request.resource.data.diff({
+        'interestedUserId': null, 'interestedUserName': null,
+        'interestedUserVehicleColor': null, 'interestedUserVehicleType': null,
+        'interestedUserVehicleBrand': null, 'interestedUserTitle': null,
+        'claimState': null, 'claimStartedAt': null, 'etaMinutes': null,
+        'interestExpiresAt': null, 'ownerLeavingNow': null, 'ownerLeavingNowAt': null,
+        'claimReminderAt': null, 'claimReminderSentAt': null,
+        'claimAutoReleaseAt': null, 'claimAutoReleasedAt': null
+      }).changedKeys().size() == 0;
+    }
+
     // One active incoming claim per user. The lock lives at
     // users/{uid}/activeIncomingClaims/current and must be written in the
     // same commit as the Ping claim. get()/exists() see pre-commit state;
@@ -401,19 +424,14 @@ service cloud.firestore {
       // does, so an unrestricted isAdmin() write here would let a stale
       // admin token mutate any field (including crowns/title) directly.
       //
-      // username/fullName removed from this allowlist — claimUsername and
-      // updateDisplayName are now the sole authoritative writers of those
-      // two identity fields (Admin SDK writes bypass these Rules entirely).
-      // An ordinary owner update touching either field is denied outright,
-      // even alongside otherwise-legitimate unrelated field changes.
+      // username/fullName are authoritative via claimUsername and
+      // updateDisplayName; all avatar metadata is authoritative via
+      // moderateAvatarUpload (Admin SDK bypasses these client Rules).
+      // Owners may still edit vehicle fields, but cannot set, overwrite, or
+      // delete moderation-owned avatar fields, even in a mixed update.
       allow update: if signedIn() && request.auth.uid == userId
             && request.resource.data.diff(resource.data).affectedKeys()
-                 .hasOnly([
-                   // Vehicle
-                   'vehicleType', 'vehicleBrand', 'vehicleColor',
-                   // Avatar
-                   'avatarUrl', 'avatarManifestId', 'avatarAgeGroup', 'avatarUpdatedAt',
-                 ]);
+                 .hasOnly(['vehicleType', 'vehicleBrand', 'vehicleColor']);
       allow delete: if false;
 
       match /processedTrustEvents/{eventId} {
@@ -449,7 +467,7 @@ service cloud.firestore {
         allow write: if signedIn() && request.auth.uid == userId
           && request.resource.data.keys().hasOnly([
                'notificationRadius', 'notificationsEnabled', 'sharePreciseLocation',
-               'lang', 'fcmToken'])
+               'lang', 'fcmToken', 'analyticsConsent'])
           && (!('notificationRadius' in request.resource.data)
                || (request.resource.data.notificationRadius is number
                    && request.resource.data.notificationRadius >= 0.1
@@ -460,6 +478,8 @@ service cloud.firestore {
                || request.resource.data.sharePreciseLocation is bool)
           && (!('lang' in request.resource.data)
                || request.resource.data.lang in ['en', 'es'])
+          && (!('analyticsConsent' in request.resource.data)
+              || request.resource.data.analyticsConsent is bool)
           && (!('fcmToken' in request.resource.data)
                || (request.resource.data.fcmToken is string
                    && request.resource.data.fcmToken.size() <= 4096));
@@ -667,6 +687,7 @@ service cloud.firestore {
           && (resource.data.get('expiresAt', null) == null
               || resource.data.expiresAt > request.time)
           && matchingActiveClaimLockReleased(spotId)
+          && claimerMetadataClearedAfter()
           && onlyChanges(['status', 'claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
                           'interestedUserId', 'interestedUserName',
                           'interestedUserVehicleColor', 'interestedUserVehicleType',
@@ -685,6 +706,7 @@ service cloud.firestore {
           && resource.data.get('expiresAt', null) != null
           && resource.data.expiresAt <= request.time
           && matchingActiveClaimLockReleased(spotId)
+          && claimerMetadataClearedAfter()
           && onlyChanges(['claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
                           'interestedUserId', 'interestedUserName',
                           'interestedUserVehicleColor', 'interestedUserVehicleType',
@@ -801,7 +823,13 @@ service cloud.firestore {
     }
 
     match /usernames/{usernameId} {
-      allow read: if signedIn();
+      // F8: exact-doc get only. Clients check availability with
+      // getDoc(usernames/{normalized}) (NameEntryView, EditProfileView);
+      // nothing lists or queries this registry. Denying list stops a
+      // signed-in client from enumerating every username -> uid pair.
+      // claimUsername (Admin SDK) remains the sole writer.
+      allow get: if signedIn();
+      allow list: if false;
       allow write: if false;
     }
 
@@ -1070,7 +1098,38 @@ service cloud.firestore {
       // requireCurrentAdmin-gated adminReadView callable. Owner self-read
       // preserved.
       allow read: if signedIn() && request.auth.uid == userId;
-      allow write: if signedIn() && request.auth.uid == userId;
+      // F7: strict owner-only schema. Accepts exactly the shipped client
+      // shapes (StreetParkingView.tsx writeCleaningReminder full setDoc,
+      // byte-identical since 2bd192a/c640477, and the merges
+      // {reminderEnabled:false,nextCleaningAt:null,reminderAt:null},
+      // {active:false}, {reminderEnabled:<bool>}). fcmToken stays ALLOWED
+      // (type/size-checked) for legacy native bundles that still write it;
+      // scheduleCleaningReminders ignores it and reads the owner's
+      // users/{uid}/private/preferences token instead. reminderAt must be a
+      // timestamp or null (R3 poison-doc fix, defense in depth).
+      allow create, update: if signedIn() && request.auth.uid == userId
+        && validParkingSession(request.resource.data, userId);
+      allow delete: if signedIn() && request.auth.uid == userId;
+    }
+
+    function validParkingSession(d, userId) {
+      return d.keys().hasOnly(['userId', 'fcmToken', 'streetName', 'nextCleaningAt',
+                               'reminderAt', 'reminderMinutesBefore', 'reminderEnabled',
+                               'reminderSent', 'active', 'savedAt'])
+        && (!('userId' in d) || d.userId == userId)
+        && (!('fcmToken' in d) || d.fcmToken == null
+            || (d.fcmToken is string && d.fcmToken.size() <= 4096))
+        && (!('streetName' in d) || d.streetName == null
+            || (d.streetName is string && d.streetName.size() <= 200))
+        && (!('nextCleaningAt' in d) || d.nextCleaningAt == null || d.nextCleaningAt is timestamp)
+        && (!('reminderAt' in d) || d.reminderAt == null || d.reminderAt is timestamp)
+        && (!('reminderMinutesBefore' in d)
+            || (d.reminderMinutesBefore is int
+                && d.reminderMinutesBefore >= 0 && d.reminderMinutesBefore <= 1440))
+        && (!('reminderEnabled' in d) || d.reminderEnabled is bool)
+        && (!('reminderSent' in d) || d.reminderSent is bool)
+        && (!('active' in d) || d.active is bool)
+        && (!('savedAt' in d) || d.savedAt is timestamp);
     }
 
     match /parseFailures/{failureId} {
@@ -1170,6 +1229,15 @@ service cloud.firestore {
         && request.resource.data.participants[0] is string
         && request.resource.data.participants[1] is string
         && request.auth.uid in request.resource.data.participants
+        // X-1: the ID must be the canonical sorted '_' join of two DISTINCT
+        // participants (utils/chatShell.ts chatIdForPair). Without this a
+        // third user could pre-create chats/A_B holding [M, A] and intercept
+        // A's messages meant for B while locking B out (create-once).
+        // Participants may be stored in either order.
+        && request.resource.data.participants[0] != request.resource.data.participants[1]
+        && chatId == (request.resource.data.participants[0] < request.resource.data.participants[1]
+             ? request.resource.data.participants[0] + '_' + request.resource.data.participants[1]
+             : request.resource.data.participants[1] + '_' + request.resource.data.participants[0])
         && !directChatIsBlocked(request.resource.data.participants);
       allow update: if false;
       // Direct client deletion disabled — deleteChat (functions/index.js) is

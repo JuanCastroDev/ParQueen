@@ -80,6 +80,29 @@ describe('applyProductionBuildConfigGuard', () => {
     })).not.toThrow();
   });
 
+  it('does not require the Android token for an ordinary Web/PWA build', () => {
+    expect(() => applyProductionBuildConfigGuard('build', {
+      VITE_MAPBOX_TOKEN: 'pk.web-configured',
+      VITE_MAPBOX_ANDROID_TOKEN: '',
+    })).not.toThrow();
+  });
+
+  it.each([undefined, '', '   '])('blocks an Android build when its token is %j', androidToken => {
+    expect(() => applyProductionBuildConfigGuard('build', {
+      VITE_MAPBOX_TOKEN: 'pk.web-configured',
+      VITE_MAPBOX_ANDROID_TOKEN: androidToken,
+      PARQUEEN_ANDROID_BUILD: '1',
+    })).toThrow('[configuration] Production build requires VITE_MAPBOX_ANDROID_TOKEN.');
+  });
+
+  it('allows an Android build when both required public tokens are nonblank', () => {
+    expect(() => applyProductionBuildConfigGuard('build', {
+      VITE_MAPBOX_TOKEN: 'pk.web-configured',
+      VITE_MAPBOX_ANDROID_TOKEN: 'pk.android-configured',
+      PARQUEEN_ANDROID_BUILD: '1',
+    })).not.toThrow();
+  });
+
   it('does not block command=serve when VITE_MAPBOX_TOKEN is missing', () => {
     expect(() => applyProductionBuildConfigGuard('serve', {})).not.toThrow();
     expect(() => applyProductionBuildConfigGuard('serve', { VITE_MAPBOX_TOKEN: '' })).not.toThrow();

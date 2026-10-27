@@ -2,17 +2,26 @@
 
 const { createHash, randomUUID } = require('node:crypto');
 const { publicCurbKey, toPublicCurb } = require('./canonicalCurbIdentity');
-const { resolveCanonicalCurb } = require('./canonicalCurbResolver');
+const {
+  resolveCanonicalCurb,
+  hasPrimaryTopologyAuthority,
+  hasAmbiguousTopologyAuthority,
+} = require('./canonicalCurbResolver');
 const { applyVisualCurbSelection } = require('./visualCurbSelection');
 const { loadCanonicalRules } = require('./canonicalRuleSources');
 const { readCanonicalCache, persistCanonicalCurb } = require('./canonicalCurbPersistence');
+const {
+  proveCanonicalCurbIdentity,
+  hasCanonicalCurbIdentityProof,
+} = require('./canonicalCurbIdentityProof');
 
 const defaultInFlight = new Map();
 const OVERALL_DEADLINE_MS = 8000;
 
 const unsupported = reason => ({ protocolVersion: 2, status: 'unsupported', reason });
 
-function publicReason(reasons) {
+function mapCanonicalAuthorityFailure(value) {
+  const reasons = Array.isArray(value) ? value : value?.reasons;
   const values = Array.isArray(reasons) ? reasons : [];
   if (values.some(reason => [
     'reported_accuracy_exceeds_limit', 'insufficient_samples', 'inconsistent_samples',
@@ -25,7 +34,9 @@ function publicReason(reasons) {
   if (values.some(reason => [
     'candidate_coverage_incomplete', 'candidate_incomplete', 'candidate_selection_stale',
     'candidate_token_invalid', 'candidate_token_unavailable', 'canonical_candidate_missing',
-    'official_face_missing', 'ambiguity_unresolved',
+    'official_face_missing', 'ambiguity_unresolved', 'duplicate_candidate_identity',
+    'duplicate_canonical_identity', 'source_query_truncated', 'invalid_candidate_row',
+    'authority_population_mismatch', 'authority_envelope_mismatch', 'authority_attestation_invalid',
   ].includes(reason))) return 'candidate_incomplete';
   return 'source_unavailable';
 }
@@ -94,6 +105,13 @@ async function execute(request, dependencies) {
 
   if (dependencies.signal?.aborted) return unsupported('source_unavailable');
 
+  if (resolution?.state === 'AMBIGUOUS' && !hasAmbiguousTopologyAuthority(resolution)) {
+    resolution = { state: 'UNSUPPORTED', reasons: ['authority_invalid'] };
+  }
+  if (resolution?.state === 'SUPPORTED' && !hasPrimaryTopologyAuthority(resolution)) {
+    resolution = { state: 'UNSUPPORTED', reasons: ['authority_invalid'] };
+  }
+
   if (resolution?.state === 'AMBIGUOUS') {
     emit(dependencies.telemetry, 'curb_candidate_count', {
       protocolVersion: 2, candidateCount: resolution.candidates?.length || 0,
@@ -116,7 +134,7 @@ async function execute(request, dependencies) {
     };
   }
   if (resolution?.state !== 'SUPPORTED' || !resolution.identity) {
-    const reason = publicReason(resolution?.reasons);
+    const reason = mapCanonicalAuthorityFailure(resolution);
     if (resolution?.reasons?.includes('street_identity_conflict')) {
       emit(dependencies.telemetry, 'street_name_conflict', {
         protocolVersion: 2, reason: 'street_name_conflict',
@@ -125,12 +143,24 @@ async function execute(request, dependencies) {
     emit(dependencies.telemetry, 'curb_resolution_unsupported', {
       protocolVersion: 2,
       reason,
-      failureDetail: resolution?.reasons?.[0],
       candidateCount: resolution?.candidateCount,
       ...(request.candidateToken ? {} : { sourceCategory: 'cscl' }),
       latencyMs: Date.now() - startedAt,
     });
     return unsupported(reason);
+  }
+
+  const identityProof = await proveCanonicalCurbIdentity(resolution, {
+    blockfaceResolver: dependencies.blockfaceResolver,
+    signal: dependencies.signal,
+  });
+  if (!hasCanonicalCurbIdentityProof(identityProof, resolution)) {
+    emit(dependencies.telemetry, 'curb_resolution_unsupported', {
+      protocolVersion: 2,
+      reason: 'source_unavailable',
+      latencyMs: Date.now() - startedAt,
+    });
+    return unsupported('source_unavailable');
   }
 
   const identity = resolution.identity;
@@ -143,7 +173,11 @@ async function execute(request, dependencies) {
   const readCache = dependencies.readCanonicalCache || readCanonicalCache;
   let cache = null;
   try {
-    cache = await readCache({ db: dependencies.db, publicCurbKey: key });
+    cache = await readCache({
+      db: dependencies.db,
+      topologyResult: resolution,
+      identityProof,
+    });
   } catch {
     cache = { hit: false, reason: 'cache_unavailable' };
   }
@@ -187,7 +221,8 @@ async function execute(request, dependencies) {
     persisted = await persist({
       db: dependencies.db,
       Timestamp: dependencies.Timestamp,
-      identity,
+      topologyResult: resolution,
+      identityProof,
       selectedRules,
     });
   } catch {
@@ -232,4 +267,4 @@ async function runCanonicalCurbOrchestrator(request, dependencies = {}) {
   return pending;
 }
 
-module.exports = { runCanonicalCurbOrchestrator, OVERALL_DEADLINE_MS };
+module.exports = { runCanonicalCurbOrchestrator, OVERALL_DEADLINE_MS, mapCanonicalAuthorityFailure };

@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
+import { beginAnalyticsConsentSession, receiveAnalyticsConsentSnapshot, invalidateAnalyticsConsent } from './utils/analyticsConsentSession';
+import { observePendingAnalyticsOptOut, reconcilePendingAnalyticsOptOut } from './utils/analyticsConsentReconciliation';
 import { LoadingScreen } from './components/LoadingScreen';
 import { AuthStartupRecovery } from './components/AuthStartupRecovery';
 import { OnboardingView } from './views/OnboardingView';
@@ -27,10 +29,6 @@ const SettingsView = lazy(() => import('./views/SettingsView').then(m => ({ defa
 const AdminDashboardView = lazy(() => import('./views/AdminDashboardView').then(m => ({ default: m.AdminDashboardView })));
 const AdminLoginView = lazy(() => import('./views/AdminLoginView').then(m => ({ default: m.AdminLoginView })));
 
-// Admin portal lives at admin.parqueen.app. On localhost, add ?admin to test it.
-const isAdminDomain = window.location.hostname === 'admin.parqueen.app'
-  || (window.location.hostname === 'localhost' && new URLSearchParams(window.location.search).has('admin'));
-
 const ActivitiesView = lazy(() => import('./views/ActivitiesView').then(m => ({ default: m.ActivitiesView })));
 const EditVehicleView = lazy(() => import('./views/EditVehicleView').then(m => ({ default: m.EditVehicleView })));
 const PrivacyPolicyView = lazy(() => import('./views/PrivacyPolicyView').then(m => ({ default: m.PrivacyPolicyView })));
@@ -49,6 +47,8 @@ import {
   decideLoggedOutStartupView,
   isExpectedBootstrapUnavailable,
   lookupProfileBootstrapStatus,
+  projectPrivatePreferencesSnapshot,
+  projectPublicProfileSnapshot,
 } from './utils/authBootstrap';
 import { withTimeout } from './utils/withTimeout';
 import { captureClientException } from './utils/errorReporting';
@@ -113,6 +113,9 @@ const clearLocalAccountState = () => {
 };
 
 export default function App() {
+  // Admin portal lives at admin.parqueen.app. On localhost, add ?admin to test it.
+  const isAdminDomain = window.location.hostname === 'admin.parqueen.app'
+    || (window.location.hostname === 'localhost' && new URLSearchParams(window.location.search).has('admin'));
   const [currentView, setCurrentView] = useState(AppView.CREATE_ACCOUNT);
   const [vehicleOnboarding, setVehicleOnboarding] = useState(false);
   const [locationAccess, setLocationAccess] = useState<LocationAccess>(() => readPersistedAccess());
@@ -194,13 +197,15 @@ export default function App() {
   const pushToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [notificationRuntime, setNotificationRuntime] = useState<NotificationRuntimeState | null>(null);
   const [notificationBusy, setNotificationBusy] = useState(false);
-  const notificationAccountRef = useRef<{ uid: string | null; productPreferenceEnabled: boolean }>({
+  const notificationAccountRef = useRef<{
+    uid: string | null;
+    preferenceStatus?: 'enabled' | 'disabled';
+  }>({
     uid: null,
-    productPreferenceEnabled: true,
   });
   notificationAccountRef.current = {
     uid: user?.id ?? null,
-    productPreferenceEnabled: user?.notificationsEnabled !== false,
+    preferenceStatus: user?.notificationPreferenceStatus,
   };
   const notificationIntentQueueRef = useRef<ReturnType<typeof createNotificationIntentQueue> | null>(null);
   const [titleUnlock, setTitleUnlock] = useState<string | null>(null);
@@ -251,6 +256,7 @@ export default function App() {
       captureClientException(error, { component: 'App', route });
     };
 
+    const stopAnalyticsConsentReconciliation = observePendingAnalyticsOptOut();
     let active = true;
     let sawInitialAuthState = false;
     const initialStateTimer = setTimeout(() => {
@@ -273,6 +279,8 @@ export default function App() {
       if (!active) return;
       setAuthStartupTimedOut(false);
       const generation = bootstrapGenerations.begin();
+      beginAnalyticsConsentSession(firebaseUser?.uid ?? null);
+      if (firebaseUser) void reconcilePendingAnalyticsOptOut(firebaseUser.uid).catch(() => {});
       const deadline = createBootstrapDeadline(AUTH_BOOTSTRAP_TIMEOUT_MS);
       userProfileUnsubscribe();
       privateAccountUnsubscribe();
@@ -280,6 +288,9 @@ export default function App() {
       privateSocialUnsubscribe();
       privateEmailRef.current = undefined;
       setLoading(true);
+      if (firebaseUser && !isAdminDomain) {
+        setUser(prev => prev?.id === firebaseUser.uid ? prev : { id: firebaseUser.uid });
+      }
 
       try {
         if (firebaseUser) {
@@ -323,7 +334,12 @@ export default function App() {
                 const emailOverride = privateEmailRef.current !== undefined
                   ? { email: privateEmailRef.current }
                   : {};
-                setUser({ id: userDoc.id, ...userData, ...emailOverride });
+                setUser(prev => projectPublicProfileSnapshot(
+                  prev,
+                  userDoc.id,
+                  userData,
+                  emailOverride,
+                ));
                 const newTitle = userData.title || 'Newcomer';
                 if (prevTitleRef.current && prevTitleRef.current !== newTitle && newTitle !== 'Newcomer') {
                   setTitleUnlock(newTitle);
@@ -331,7 +347,7 @@ export default function App() {
                 }
                 prevTitleRef.current = newTitle;
               } else {
-                setUser({ id: firebaseUser.uid });
+                setUser(prev => projectPublicProfileSnapshot(prev, firebaseUser.uid, {}, {}));
               }
             },
             (error) => reportBootstrapListenerError(error, 'auth_bootstrap_profile_listener'),
@@ -354,18 +370,32 @@ export default function App() {
           const privatePrefsRef = doc(db, 'users', firebaseUser.uid, 'private', 'preferences');
           privatePreferencesUnsubscribe = onSnapshot(
             privatePrefsRef,
+            { includeMetadataChanges: true },
             (snap) => {
               if (!generation.isCurrent()) return;
-              if (!snap.exists()) return;
-              const prefs = snap.data();
-              setUser(prev => prev ? {
-                ...prev,
-                notificationsEnabled: prefs.notificationsEnabled,
-                notificationRadius: prefs.notificationRadius,
-                sharePreciseLocation: prefs.sharePreciseLocation,
-              } : prev);
+              receiveAnalyticsConsentSnapshot(
+                firebaseUser.uid,
+                snap.exists() ? snap.data() : null,
+                snap.metadata,
+              );
+              // Any fresh preference event is an opportunity to reconcile a
+              // durable OFF intent after reconnect; never clear it here.
+              if (!snap.metadata.fromCache && !snap.metadata.hasPendingWrites) {
+                void reconcilePendingAnalyticsOptOut(firebaseUser.uid).catch(() => {});
+              }
+              const prefs = snap.exists() ? snap.data() : {};
+              setUser(prev => projectPrivatePreferencesSnapshot(
+                prev,
+                firebaseUser.uid,
+                prefs,
+                snap.metadata,
+              ));
             },
-            (error) => reportBootstrapListenerError(error, 'auth_bootstrap_private_prefs_listener'),
+            (error) => {
+              if (!generation.isCurrent()) return;
+              invalidateAnalyticsConsent();
+              reportBootstrapListenerError(error, 'auth_bootstrap_private_prefs_listener');
+            },
           );
 
           // Listen for private social (blockedUsers) — owner-only
@@ -477,6 +507,8 @@ export default function App() {
       if (reauthCooldownRef.current) clearInterval(reauthCooldownRef.current);
       clearRecaptchaVerifier(reauthRecaptchaRef);
       bootstrapGenerations.begin(); // invalidate any in-flight bootstrap
+      beginAnalyticsConsentSession(null);
+      stopAnalyticsConsentReconciliation();
       authStateUnsubscribe();
       userProfileUnsubscribe();
       privateAccountUnsubscribe();
@@ -509,29 +541,37 @@ export default function App() {
     });
     void lifecycle.setUser(user?.id ? {
       uid: user.id,
-      productPreferenceEnabled: user.notificationsEnabled !== false,
+      productPreferenceEnabled: user.notificationPreferenceStatus === 'enabled'
+        ? true
+        : user.notificationPreferenceStatus === 'disabled'
+          ? false
+          : null,
     } : null);
     return () => {
       lifecycle.dispose();
       if (pushToastTimerRef.current) clearTimeout(pushToastTimerRef.current);
       pushToastTimerRef.current = null;
     };
-  }, [user?.id, user?.notificationsEnabled]);
+  }, [user?.id, user?.notificationPreferenceStatus]);
 
   // Recover OS notification permission after Android Settings changes.
   // Inspect / silent refresh only — never prompt on resume.
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return;
-      const { uid, productPreferenceEnabled } = notificationAccountRef.current;
-      if (!uid) return;
+      const { uid, preferenceStatus } = notificationAccountRef.current;
+      if (!uid || !preferenceStatus) return;
       void (async () => {
         const inspected = await notificationRegistration.inspect();
-        setNotificationRuntime(
-          inspected.capability === 'supported' && inspected.permission === 'granted'
-            ? await notificationRegistration.refreshGranted(uid, productPreferenceEnabled)
-            : inspected,
-        );
+        if (notificationAccountRef.current.uid !== uid
+          || notificationAccountRef.current.preferenceStatus !== preferenceStatus) return;
+        const runtime = inspected.capability === 'supported' && inspected.permission === 'granted'
+          ? await notificationRegistration.refreshGranted(uid, preferenceStatus === 'enabled')
+          : inspected;
+        if (notificationAccountRef.current.uid === uid
+          && notificationAccountRef.current.preferenceStatus === preferenceStatus) {
+          setNotificationRuntime(runtime);
+        }
       })();
     };
     document.addEventListener('visibilitychange', onVisible);
@@ -629,9 +669,11 @@ export default function App() {
 
   const handleEnableNotifications = async () => {
     if (!user?.id || notificationBusy) return;
+    const uid = user.id;
     setNotificationBusy(true);
     try {
-      setNotificationRuntime(await notificationRegistration.enable(user.id));
+      const runtime = await notificationRegistration.enable(uid);
+      if (notificationAccountRef.current.uid === uid) setNotificationRuntime(runtime);
     } finally {
       setNotificationBusy(false);
     }
@@ -639,14 +681,22 @@ export default function App() {
 
   const handleRecheckNotifications = async () => {
     if (!user?.id || notificationBusy) return;
+    const uid = user.id;
+    const preferenceStatus = user.notificationPreferenceStatus as 'enabled' | 'disabled' | undefined;
     setNotificationBusy(true);
     try {
       const inspected = await notificationRegistration.inspect();
-      setNotificationRuntime(
-        inspected.capability === 'supported' && inspected.permission === 'granted'
-          ? await notificationRegistration.refreshGranted(user.id, user.notificationsEnabled !== false)
-          : inspected,
-      );
+      if (notificationAccountRef.current.uid !== uid
+        || notificationAccountRef.current.preferenceStatus !== preferenceStatus) return;
+      const runtime = inspected.capability === 'supported'
+        && inspected.permission === 'granted'
+        && preferenceStatus
+        ? await notificationRegistration.refreshGranted(uid, preferenceStatus === 'enabled')
+        : inspected;
+      if (notificationAccountRef.current.uid === uid
+        && notificationAccountRef.current.preferenceStatus === preferenceStatus) {
+        setNotificationRuntime(runtime);
+      }
     } finally {
       setNotificationBusy(false);
     }
@@ -1008,7 +1058,7 @@ export default function App() {
             if (!uid) { setCurrentView(AppView.SETUP_PROFILE); return; }
             const userDoc = await getDoc(doc(db, 'users', uid));
             if (userDoc.exists()) {
-              setUser({ id: uid, ...userDoc.data() });
+              setUser(prev => projectPublicProfileSnapshot(prev, uid, userDoc.data(), {}));
               setCurrentView(locationAccess === 'unknown' ? AppView.LOCATION_PROMPT : AppView.MAP);
             } else {
               setCurrentView(AppView.SETUP_PROFILE);

@@ -4,6 +4,7 @@ import App from './App';
 import './index.css';
 import { handleVitePreloadError } from './utils/staleChunkRecovery';
 import { initSentry } from './utils/sentryInit';
+import { prepareProductAnalyticsRuntime } from './utils/posthogAnalyticsRuntime';
 import { PublicLegalRoute } from './components/PublicLegalRoute';
 import { resolvePublicLegalRoute } from './utils/legalRoutes';
 
@@ -14,6 +15,11 @@ initSentry({
   dsn: import.meta.env.VITE_SENTRY_DSN,
   release: __APP_RELEASE__,
 });
+
+// Privacy-first product analytics.
+// Dormant unless explicitly enabled with a project token.
+// The adapter still requires server-confirmed user consent.
+prepareProductAnalyticsRuntime();
 
 // Polyfill process for browser environment to prevent "process is not defined" errors
 // This is necessary because the Gemini SDK and other libs might reference 'process'

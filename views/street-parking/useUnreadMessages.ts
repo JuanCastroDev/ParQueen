@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
+import { chatReadMarkerKey } from '../../utils/chatReadMarker';
 
 const CHAT_READ_EVENT = 'parqueen:chat-read';
 
@@ -13,11 +14,13 @@ export function useUnreadMessages(userId: string | undefined) {
     const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
 
     useEffect(() => {
+        setUnreadMessagesCount(0);
         if (!userId || !db) return;
         const q = query(
             collection(db, "chats"),
             where("participants", "array-contains", userId)
         );
+        let active = true;
         let latestDocs: Array<{ id: string; data: () => any }> = [];
         const recompute = () => {
             let count = 0;
@@ -36,7 +39,7 @@ export function useUnreadMessages(userId: string | undefined) {
                     }
                 }
 
-                const lastReadStr = localStorage.getItem(`lastReadChat_${chatId}`);
+                const lastReadStr = localStorage.getItem(chatReadMarkerKey(userId, chatId));
                 const lastReadTime = lastReadStr ? parseInt(lastReadStr, 10) : 0;
 
                 if (timestampMillis > lastReadTime && data.lastSenderId !== userId) {
@@ -46,13 +49,16 @@ export function useUnreadMessages(userId: string | undefined) {
             setUnreadMessagesCount(count);
         };
         const unsubscribe = onSnapshot(q, (snap) => {
+            if (!active) return;
             latestDocs = snap.docs;
             recompute();
         }, (err) => {
+            if (!active) return;
             console.warn("Chats snapshot listener error:", err);
         });
         window.addEventListener(CHAT_READ_EVENT, recompute);
         return () => {
+            active = false;
             window.removeEventListener(CHAT_READ_EVENT, recompute);
             unsubscribe();
         };

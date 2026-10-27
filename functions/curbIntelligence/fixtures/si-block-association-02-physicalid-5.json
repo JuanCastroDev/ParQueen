@@ -1,0 +1,118 @@
+{
+  "evidenceClass": "PUBLIC_DIAGNOSTIC_GEOMETRY",
+  "approvedTopologyArtifact": false,
+  "releaseCertification": "BLOCKED",
+  "productionAuthoritative": false,
+  "authoritativeDirectionProven": false,
+  "authoritativeSideMatch": false,
+  "streetNameIdentity": "UNRESOLVED",
+  "rwTypeAuthority": "UNRESOLVED",
+  "sources": {
+    "lion": {
+      "url": "https://data.cityofnewyork.us/api/views/2v4z-66xt/files/30298730-5064-447c-8c39-a3981409d9b3?filename=nyclion.zip",
+      "retrievedAtUtc": "2026-10-19T20:59:58.832Z",
+      "sha256": "14a2514303f0c53419cdc370bfd851db41dec038450b88b19d0897a35dad0660",
+      "byteLength": 45981902,
+      "crs": "EPSG:2263",
+      "units": "US survey feet",
+      "axisOrder": "easting,northing",
+      "physicalId": 5,
+      "segmentId": "0018126",
+      "nodeIdFrom": "0012380",
+      "nodeIdTo": "0012383",
+      "street": "BATTERY PLACE",
+      "leftBfi": "1222600642",
+      "rightBfi": "1222604562",
+      "vertexOrder": "stored feature order",
+      "coordinates": [
+        [
+          979377.4639784694,
+          196797.79586538672
+        ],
+        [
+          979503.3397844583,
+          197024.62607616186
+        ]
+      ]
+    },
+    "cscl": {
+      "url": "https://data.cityofnewyork.us/api/geospatial/inkn-q76z?method=export&format=GeoJSON",
+      "retrievedAtUtc": "2026-10-19T20:59:07.071Z",
+      "sha256": "c268891fb36135e99577f4d2b428eae6d664641ffe64bf5d0b2c4c4af40cc0af",
+      "byteLength": 196959978,
+      "crs": "EPSG:4326",
+      "units": "degrees",
+      "axisOrder": "longitude,latitude",
+      "physicalId": "5",
+      "leftBfi": "1222600642",
+      "rightBfi": "1222604562",
+      "vertexOrder": "stored feature order",
+      "coordinates": [
+        [
+          -74.017575674546,
+          40.706848105307
+        ],
+        [
+          -74.017121822757,
+          40.707470769174
+        ]
+      ]
+    }
+  },
+  "transformation": {
+    "pipeline": "pinned EPSG:2263 to EPSG:4326",
+    "proj4": "2.22.0",
+    "datum": "reverse Esri WKID 108190",
+    "outputRoundingDecimals": 12,
+    "transformedLionCoordinates": [
+      [
+        -74.017575822385,
+        40.706848122056
+      ],
+      [
+        -74.017121970554,
+        40.707470785951
+      ]
+    ]
+  },
+  "comparison": {
+    "distance": "local equirectangular meters using radius 6371008.8",
+    "orientationTest": "directed endpoint-to-endpoint residuals",
+    "coherenceBoundMeters": 0.0001,
+    "coherenceBoundMeaning": "demonstrated sub-millimeter numeric agreement bound, not an identity tolerance",
+    "exactBfiValuesMatch": true,
+    "forward": {
+      "startMeters": 0.01260006665937933,
+      "endMeters": 0.012596910225837907,
+      "startVectorMeters": [
+        0.012461666132295511,
+        -0.00186240624676832
+      ],
+      "endVectorMeters": [
+        0.012458008766267084,
+        -0.001865519985803466
+      ],
+      "vectorDisagreementMeters": 0.0000048033006406931415
+    },
+    "reverse": {
+      "startMeters": 79.10759791425151,
+      "endMeters": 79.09863620811562,
+      "startVectorMeters": [
+        38.26860073064171,
+        69.23529624318523
+      ],
+      "endVectorMeters": [
+        -38.24332336566211,
+        -69.2390241694178
+      ],
+      "vectorDisagreementMeters": 158.20623231292376
+    },
+    "forwardMaxMeters": 0.01260006665937933,
+    "reverseMaxMeters": 79.10759791425151,
+    "wholeSegmentMeters": 0.012600066662479018,
+    "coherentTranslation": true,
+    "geometricDirectionDistinguished": true,
+    "closerPairing": "FORWARD"
+  },
+  "evidenceSha256": "a502dc38d140afbfa07b0033422644685bc20e3d67c35b8655b44e5faef6bba1"
+}

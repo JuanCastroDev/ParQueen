@@ -265,6 +265,9 @@ describe('Ping notification/privacy Function contract', () => {
 
         const firstReminderAt = Timestamp.fromMillis(Date.now() - 120000);
         const firstSavedAt = Timestamp.fromMillis(Date.now() - 240000);
+        // F7: the recipient token now comes from the owner's private
+        // preferences (doc id = owner uid); the session doc token is ignored.
+        await db.doc(`users/${sessionId}/private/preferences`).set({ fcmToken: `token_${sessionId}` });
         await sessionRef.set({
             active: true,
             reminderEnabled: true,

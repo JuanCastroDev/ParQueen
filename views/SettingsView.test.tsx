@@ -2,6 +2,11 @@ import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+const nativeShare = vi.hoisted(() => ({
+    getPlatform: vi.fn(() => 'web'),
+    share: vi.fn(),
+}));
+
 const store = vi.hoisted(() => {
     const map = new Map<string, string>();
     Object.defineProperty(globalThis, 'localStorage', {
@@ -21,6 +26,8 @@ vi.mock('../firebase', () => ({ db: {} }));
 vi.mock('firebase/firestore', () => ({ doc: vi.fn(), updateDoc: vi.fn() }));
 vi.mock('firebase/functions', () => ({ getFunctions: vi.fn(), httpsCallable: vi.fn() }));
 vi.mock('firebase/app', () => ({ getApp: vi.fn() }));
+vi.mock('@capacitor/core', () => ({ Capacitor: { getPlatform: nativeShare.getPlatform } }));
+vi.mock('@capacitor/share', () => ({ Share: { share: nativeShare.share } }));
 
 import { SettingsView } from './SettingsView';
 import { AppView } from '../types';
@@ -40,7 +47,180 @@ function render(props: Partial<React.ComponentProps<typeof SettingsView>> = {}) 
     return { r, spies, rowNamed };
 }
 
-afterEach(() => setLang('en'));
+afterEach(() => {
+    setLang('en');
+    nativeShare.getPlatform.mockReturnValue('web');
+    nativeShare.share.mockReset();
+    vi.unstubAllGlobals();
+});
+
+describe('SettingsView — Share ParQueen', () => {
+    it('opens the Android share chooser with the public ParQueen URL', async () => {
+        nativeShare.getPlatform.mockReturnValue('android');
+        nativeShare.share.mockResolvedValue({ activityType: 'com.example.target' });
+        const webShare = vi.fn();
+        vi.stubGlobal('navigator', { share: webShare });
+        const { r, rowNamed } = render();
+
+        await act(async () => rowNamed('Share ParQueen').props.onClick());
+
+        expect(nativeShare.share).toHaveBeenCalledWith({
+            title: 'ParQueen',
+            text: 'Street parking, figured out. See what ParQueen can do.',
+            url: 'https://parqueen.app/',
+            dialogTitle: 'Share ParQueen',
+        });
+        expect(webShare).not.toHaveBeenCalled();
+        expect(textOf(r.toJSON())).toContain('Shared.');
+    });
+
+    it('treats closing the Android share chooser as cancellation, not an error', async () => {
+        nativeShare.getPlatform.mockReturnValue('android');
+        nativeShare.share.mockRejectedValue(new Error('Share canceled'));
+        const writeText = vi.fn();
+        vi.stubGlobal('navigator', { clipboard: { writeText } });
+        const { r, rowNamed } = render();
+
+        await act(async () => rowNamed('Share ParQueen').props.onClick());
+
+        expect(writeText).not.toHaveBeenCalled();
+        expect(r.root.findAllByProps({ href: 'https://parqueen.app/' })).toHaveLength(0);
+    });
+
+    it('does not report success when the Android chooser closes without a target', async () => {
+        nativeShare.getPlatform.mockReturnValue('android');
+        nativeShare.share.mockResolvedValue({ activityType: '' });
+        const writeText = vi.fn();
+        vi.stubGlobal('navigator', { clipboard: { writeText } });
+        const { r, rowNamed } = render();
+
+        await act(async () => rowNamed('Share ParQueen').props.onClick());
+
+        expect(writeText).not.toHaveBeenCalled();
+        expect(textOf(r.toJSON())).not.toContain('Shared.');
+        expect(r.root.findAllByProps({ href: 'https://parqueen.app/' })).toHaveLength(0);
+    });
+
+    it('copies the link when Android native sharing fails', async () => {
+        nativeShare.getPlatform.mockReturnValue('android');
+        nativeShare.share.mockRejectedValue(new Error('share failed'));
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        vi.stubGlobal('navigator', { clipboard: { writeText } });
+        const { r, rowNamed } = render();
+
+        await act(async () => rowNamed('Share ParQueen').props.onClick());
+
+        expect(writeText).toHaveBeenCalledWith('https://parqueen.app/');
+        expect(textOf(r.toJSON())).toContain('Link copied.');
+    });
+
+    it('uses Web Share directly on Web/PWA with the public ParQueen URL', async () => {
+        const share = vi.fn().mockResolvedValue(undefined);
+        vi.stubGlobal('navigator', { share });
+        const { r, rowNamed } = render();
+
+        await act(async () => rowNamed('Share ParQueen').props.onClick());
+
+        expect(share).toHaveBeenCalledWith({
+            title: 'ParQueen',
+            text: 'Street parking, figured out. See what ParQueen can do.',
+            url: 'https://parqueen.app/',
+        });
+        expect(nativeShare.share).not.toHaveBeenCalled();
+        expect(textOf(r.toJSON())).toContain('Shared.');
+    });
+
+    it('keeps Capacitor iOS on the existing Web Share path', async () => {
+        nativeShare.getPlatform.mockReturnValue('ios');
+        const share = vi.fn().mockResolvedValue(undefined);
+        vi.stubGlobal('navigator', { share });
+        const { r, rowNamed } = render();
+
+        await act(async () => rowNamed('Share ParQueen').props.onClick());
+
+        expect(share).toHaveBeenCalledWith({
+            title: 'ParQueen',
+            text: 'Street parking, figured out. See what ParQueen can do.',
+            url: 'https://parqueen.app/',
+        });
+        expect(nativeShare.share).not.toHaveBeenCalled();
+        expect(textOf(r.toJSON())).toContain('Shared.');
+    });
+
+    it('treats closing the share menu as cancellation, not an error', async () => {
+        const writeText = vi.fn();
+        vi.stubGlobal('navigator', {
+            share: vi.fn().mockRejectedValue(Object.assign(new Error('cancelled'), { name: 'AbortError' })),
+            clipboard: { writeText },
+        });
+        const { r, rowNamed } = render();
+
+        await act(async () => rowNamed('Share ParQueen').props.onClick());
+
+        expect(writeText).not.toHaveBeenCalled();
+        expect(textOf(r.toJSON())).not.toContain("Couldn't share");
+        expect(r.root.findAllByProps({ href: 'https://parqueen.app/' })).toHaveLength(0);
+    });
+
+    it('copies the link when native sharing fails', async () => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        vi.stubGlobal('navigator', {
+            share: vi.fn().mockRejectedValue(new Error('share failed')),
+            clipboard: { writeText },
+        });
+        const { r, rowNamed } = render();
+
+        await act(async () => rowNamed('Share ParQueen').props.onClick());
+
+        expect(writeText).toHaveBeenCalledWith('https://parqueen.app/');
+        expect(textOf(r.toJSON())).toContain('Link copied.');
+    });
+
+    it('copies the link when native sharing is unavailable', async () => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        vi.stubGlobal('navigator', { clipboard: { writeText } });
+        const { r, rowNamed } = render();
+
+        await act(async () => rowNamed('Share ParQueen').props.onClick());
+
+        expect(writeText).toHaveBeenCalledWith('https://parqueen.app/');
+        expect(textOf(r.toJSON())).toContain('Link copied.');
+    });
+
+    it('offers an accessible manual link when sharing and copying fail', async () => {
+        vi.stubGlobal('navigator', {
+            share: vi.fn().mockRejectedValue(new Error('share failed')),
+            clipboard: { writeText: vi.fn().mockRejectedValue(new Error('copy failed')) },
+        });
+        const { r, rowNamed } = render();
+
+        await act(async () => rowNamed('Share ParQueen').props.onClick());
+
+        const link = r.root.findByProps({ href: 'https://parqueen.app/' });
+        expect(link.props.target).toBe('_blank');
+        expect(link.props.rel).toBe('noopener noreferrer');
+        expect(textOf(r.toJSON())).toContain("Couldn't share automatically. Open or copy this link:");
+    });
+
+    it('renders the Share ParQueen row and result copy in Spanish', async () => {
+        act(() => setLang('es'));
+        nativeShare.getPlatform.mockReturnValue('android');
+        nativeShare.share.mockResolvedValue({ activityType: 'com.example.target' });
+        vi.stubGlobal('navigator', {});
+        const { r, rowNamed } = render();
+
+        await act(async () => rowNamed('Compartir ParQueen').props.onClick());
+
+        expect(nativeShare.share).toHaveBeenCalledWith({
+            title: 'ParQueen',
+            text: 'Estacionamiento en la calle, resuelto. Mira lo que ParQueen puede hacer.',
+            url: 'https://parqueen.app/',
+            dialogTitle: 'Compartir ParQueen',
+        });
+        expect(textOf(r.toJSON())).toContain('Compartido.');
+        expect(textOf(r.toJSON())).not.toMatch(/settings\.share_[a-z_]+/);
+    });
+});
 
 describe('SettingsView — blocked users', () => {
     it('BU-01: always displays the Blocked users row', () => {
@@ -116,13 +296,13 @@ describe('SettingsView — structure and navigation', () => {
 describe('SettingsView — preferences', () => {
     it('Dark theme is a real switch with name and state, and toggles', () => {
         const { r, spies } = render({ theme: 'dark' });
-        const sw = r.root.findByProps({ role: 'switch' });
+        const sw = r.root.findByProps({ role: 'switch', 'aria-label': 'Dark theme' });
         expect(sw.props['aria-label']).toBe('Dark theme');
         expect(sw.props['aria-checked']).toBe(true);
         act(() => sw.props.onClick());
         expect(spies.toggleTheme).toHaveBeenCalledTimes(1);
         const light = render({ theme: 'light' });
-        expect(light.r.root.findByProps({ role: 'switch' }).props['aria-checked']).toBe(false);
+        expect(light.r.root.findByProps({ role: 'switch', 'aria-label': 'Dark theme' }).props['aria-checked']).toBe(false);
     });
 
     it('Notifications shows the derived status and radius when ready', () => {

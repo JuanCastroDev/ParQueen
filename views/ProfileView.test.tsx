@@ -20,6 +20,10 @@ vi.mock('firebase/storage', () => ({
     uploadBytes: async () => ({}),
 }));
 
+let avatarModerationListener: ((snapshot: { data: () => any }) => void) | null = null;
+let pendingAvatarUploadId: string | null = null;
+let avatarUnsubscribeCalls = 0;
+
 let spotsDocs: Array<{ id: string; data: () => any }> = [];
 let feedbackDocs: Array<{ id: string; data: () => any }> = [];
 let spotsFoundCount: number | 'reject' | 'hang' = 0;
@@ -29,9 +33,14 @@ const countQueryLog: Array<{ name: string; constraints: any[] }> = [];
 
 vi.mock('firebase/firestore', () => ({
     doc: (..._args: any[]) => ({}),
-    setDoc: async () => { },
+    setDoc: async (_ref: any, data: any) => {
+        if (data?.pendingUploadId) pendingAvatarUploadId = data.pendingUploadId;
+    },
     serverTimestamp: () => ({}),
-    onSnapshot: () => () => { },
+    onSnapshot: (_ref: any, callback: (snapshot: { data: () => any }) => void) => {
+        avatarModerationListener = callback;
+        return () => { avatarUnsubscribeCalls += 1; avatarModerationListener = null; };
+    },
     collection: (_db: any, name: string) => ({ __name: name }),
     query: (base: any, ...constraints: any[]) => ({ __name: base.__name, __constraints: constraints }),
     where: (field: string, op: string, value: any) => ({ __kind: 'where', field, op, value }),
@@ -52,6 +61,7 @@ vi.mock('firebase/firestore', () => ({
 
 import { ProfileView, describeJourney } from './ProfileView';
 import { AppView } from '../types';
+import { setLang } from '../i18n';
 
 function spotDoc(id: string, ts: number, overrides: any = {}) {
     return { id, data: () => ({ finderId: 'me', status: 'available', address: `spot-${id}`, reportedAt: { toMillis: () => ts }, ...overrides }) };
@@ -89,6 +99,17 @@ function activityAddresses(renderer: TestRenderer.ReactTestRenderer): string[] {
     )
         .map(n => (Array.isArray(n.props.children) ? n.props.children.join('') : String(n.props.children)))
         .filter(s => s.includes('spot-') || s.includes('fb-'));
+}
+
+function activityRows(renderer: TestRenderer.ReactTestRenderer) {
+    return renderer.root.findAll(
+        node => node.type === 'li' && typeof node.props.className === 'string' && node.props.className.includes('pq-activity-row'),
+    );
+}
+
+function nodeText(node: any): string {
+    if (typeof node === 'string' || typeof node === 'number') return String(node);
+    return (node?.children ?? []).map(nodeText).join('');
 }
 
 function queryFor(name: string) {
@@ -192,6 +213,7 @@ describe('ProfileView — impact card sourcing', () => {
 
 describe('ProfileView — RecentActivity bounded queries', () => {
     beforeEach(() => {
+        setLang('en');
         getDocsCalls.length = 0;
         queryLog.length = 0;
         countQueryLog.length = 0;
@@ -316,6 +338,85 @@ describe('ProfileView — RecentActivity bounded queries', () => {
         const renderer = await renderProfile({ id: 'me' });
         expect(activityAddresses(renderer)).toEqual(['spot-a']);
         act(() => renderer.unmount());
+    });
+
+    it('shows Parked and +1 Crown only for successful parking feedback', async () => {
+        feedbackDocs = [feedbackDoc('success', Date.now(), 'success')];
+        const renderer = await renderProfile({ id: 'me' });
+        const [row] = activityRows(renderer);
+
+        expect(nodeText(row)).toContain('Parked');
+        expect(row.findAll(node => typeof node.props.className === 'string' && node.props.className.includes('pq-reward'))).toHaveLength(1);
+        expect(nodeText(row)).toContain('+1');
+        act(() => renderer.unmount());
+    });
+
+    it('shows an unsuccessful parking label and no Crown reward for failed feedback', async () => {
+        feedbackDocs = [feedbackDoc('failed', Date.now(), 'failed')];
+        const renderer = await renderProfile({ id: 'me' });
+        const [row] = activityRows(renderer);
+
+        expect(nodeText(row)).toContain('Parking unsuccessful');
+        expect(nodeText(row)).not.toContain('Parked');
+        expect(row.findAll(node => typeof node.props.className === 'string' && node.props.className.includes('pq-reward'))).toHaveLength(0);
+        act(() => renderer.unmount());
+    });
+
+    it.each([undefined, 'participant_success', 'unexpected'])('shows neutral completed copy and no reward for outcome %s', async outcome => {
+        feedbackDocs = [{
+            id: 'unknown',
+            data: () => ({ userId: 'me', ...(outcome === undefined ? {} : { outcome }), address: 'fb-unknown', createdAt: { toMillis: () => Date.now() } }),
+        }];
+        const renderer = await renderProfile({ id: 'me' });
+        const [row] = activityRows(renderer);
+
+        expect(nodeText(row)).toContain('Parking completed');
+        expect(nodeText(row)).not.toContain('Parked');
+        expect(row.findAll(node => typeof node.props.className === 'string' && node.props.className.includes('pq-reward'))).toHaveLength(0);
+        act(() => renderer.unmount());
+    });
+
+    it('preserves mixed-source ordering while applying outcome-specific display', async () => {
+        const now = Date.now();
+        spotsDocs = [spotDoc('middle', now - 2000)];
+        feedbackDocs = [
+            feedbackDoc('newest-failed', now - 1000, 'failed'),
+            feedbackDoc('oldest-success', now - 3000, 'success'),
+        ];
+        const renderer = await renderProfile({ id: 'me' });
+
+        expect(activityAddresses(renderer)).toEqual(['fb-newest-failed', 'spot-middle', 'fb-oldest-success']);
+        const rows = activityRows(renderer);
+        expect(nodeText(rows[0])).toContain('Parking unsuccessful');
+        expect(nodeText(rows[2])).toContain('+1');
+        act(() => renderer.unmount());
+    });
+
+    it('keeps successful, failed, and neutral feedback labels in English/Spanish parity', async () => {
+        const now = Date.now();
+        feedbackDocs = [
+            feedbackDoc('success', now, 'success'),
+            feedbackDoc('failed', now - 1000, 'failed'),
+            feedbackDoc('unknown', now - 2000, 'unexpected'),
+        ];
+
+        const english = await renderProfile({ id: 'me' });
+        expect(activityRows(english).map(nodeText)).toEqual(expect.arrayContaining([
+            expect.stringContaining('Parked'),
+            expect.stringContaining('Parking unsuccessful'),
+            expect.stringContaining('Parking completed'),
+        ]));
+        act(() => english.unmount());
+
+        setLang('es');
+        const spanish = await renderProfile({ id: 'me' });
+        expect(activityRows(spanish).map(nodeText)).toEqual(expect.arrayContaining([
+            expect.stringContaining('Estacionado'),
+            expect.stringContaining('Estacionamiento sin éxito'),
+            expect.stringContaining('Estacionamiento completado'),
+        ]));
+        act(() => spanish.unmount());
+        setLang('en');
     });
 
     it('15/16/17: a rejected count aggregation does not show a fake zero, does not fall back to the recent-feedback success count, and reaches the existing Profile error state', async () => {
@@ -526,5 +627,79 @@ describe('ProfileView — revamped screen', () => {
         const classes = r.root.findAll(n => typeof n.props.className === 'string').map(n => n.props.className).join(' ');
         for (const c of ['pq-journey', 'pq-progress-track', 'pq-util-card', 'pq-avatar-ring']) expect(classes).toContain(c);
         act(() => r.unmount());
+    });
+});
+
+
+describe('ProfileView — avatar moderation timeout matches the 120-second server window', () => {
+    const validJpeg = { size: 3, type: 'image/jpeg', name: 'safe.jpg' } as File;
+    const avatarButton = (r: TestRenderer.ReactTestRenderer) =>
+        r.root.findByProps({ 'aria-label': 'Change profile photo' });
+    const visibleText = (n: any): string => typeof n === 'string' ? n
+        : Array.isArray(n) ? n.map(visibleText).join('')
+        : (n?.children ?? []).map(visibleText).join('');
+
+    beforeEach(() => {
+        avatarModerationListener = null;
+        pendingAvatarUploadId = null;
+        avatarUnsubscribeCalls = 0;
+    });
+
+    it('remains in review beyond 120 seconds and honors approval without a late timeout', async () => {
+        const r = await renderProfile({ id: 'me', username: 'tester' });
+        vi.useFakeTimers();
+        try {
+            const fileInput = r.root.findByType('input');
+            await act(async () => {
+                await fileInput.props.onChange({ target: { files: [validJpeg] } });
+            });
+            expect(pendingAvatarUploadId).toEqual(expect.any(String));
+            expect(avatarModerationListener).toBeTypeOf('function');
+            expect(avatarButton(r).props.disabled).toBe(true);
+
+            await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+            expect(avatarButton(r).props.disabled).toBe(true);
+            expect(visibleText(r.toJSON())).not.toContain('Photo check timed out');
+
+            await act(async () => {
+                avatarModerationListener!({
+                    data: () => ({ uploadId: pendingAvatarUploadId, status: 'approved' }),
+                });
+            });
+            expect(avatarUnsubscribeCalls).toBe(1);
+            expect(avatarButton(r).props.disabled).toBe(false);
+
+            await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
+            expect(visibleText(r.toJSON())).not.toContain('Photo check timed out');
+            expect(avatarUnsubscribeCalls).toBe(1);
+        } finally {
+            vi.clearAllTimers();
+            vi.useRealTimers();
+            act(() => r.unmount());
+        }
+    });
+
+    it('times out at three minutes when no terminal moderation event arrives', async () => {
+        const r = await renderProfile({ id: 'me', username: 'tester' });
+        vi.useFakeTimers();
+        try {
+            const fileInput = r.root.findByType('input');
+            await act(async () => {
+                await fileInput.props.onChange({ target: { files: [validJpeg] } });
+            });
+            expect(avatarButton(r).props.disabled).toBe(true);
+            await act(async () => { await vi.advanceTimersByTimeAsync(179_999); });
+            expect(avatarButton(r).props.disabled).toBe(true);
+            expect(visibleText(r.toJSON())).not.toContain('Photo check timed out');
+
+            await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+            expect(avatarButton(r).props.disabled).toBe(false);
+            expect(visibleText(r.toJSON())).toContain('Photo check timed out');
+            expect(avatarUnsubscribeCalls).toBe(1);
+        } finally {
+            vi.clearAllTimers();
+            vi.useRealTimers();
+            act(() => r.unmount());
+        }
     });
 });

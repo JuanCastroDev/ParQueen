@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:android": "node scripts/build-android.mjs",
     "build:preflight:windows": "node scripts/release-preflight/run-production-build.mjs",
     "check:knip": "knip --dependencies --files",
     "check:knip:preflight:windows": "node scripts/release-preflight/run-knip.mjs",
@@ -24,6 +25,7 @@
     "test:curb-topology": "vitest run scripts/curb-topology && python scripts/curb-topology/extract_cscl_test.py",
     "build:curb-topology": "node --max-old-space-size=4096 scripts/curb-topology/build.js",
     "cap:sync": "npm run build && npx cap sync",
+    "cap:sync:android": "npm run build:android && npx cap sync android",
     "cap:copy": "npm run build && npx cap copy",
     "cap:open:android": "npx cap open android",
     "cap:open:ios": "npx cap open ios",
@@ -38,6 +40,7 @@
     "@capacitor/geolocation": "^8.2.1",
     "@capacitor/ios": "^8.5.2",
     "@capacitor/push-notifications": "^8.1.2",
+    "@capacitor/share": "8.0.3",
     "@sentry/react": "^10.72.0",
     "firebase": "^10.8.0",
     "geofire-common": "^6.0.0",

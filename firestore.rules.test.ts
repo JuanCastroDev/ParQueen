@@ -1153,7 +1153,7 @@ describe('chats and messages — participant isolation', () => {
     });
 
     it('CM-33: a signed-in stranger cannot create a chat they are not a participant of', async () => {
-        const strangerChatId = `${OWNER_UID}_${OTHER_UID}_stranger`;
+        const strangerChatId = [OWNER_UID, OTHER_UID].sort().join('_');
         await assertFails(
             setDoc(doc(thirdDb(), 'chats', strangerChatId), {
                 id: strangerChatId,
@@ -1164,7 +1164,7 @@ describe('chats and messages — participant isolation', () => {
     });
 
     it('CM-34: an unauthenticated client cannot create a chat', async () => {
-        const anonChatId = `${OWNER_UID}_${OTHER_UID}_anon`;
+        const anonChatId = [OWNER_UID, OTHER_UID].sort().join('_');
         await assertFails(
             setDoc(doc(anonDb(), 'chats', anonChatId), {
                 id: anonChatId,
@@ -1186,7 +1186,7 @@ describe('chats and messages — participant isolation', () => {
     });
 
     it('CM-16c: after creating a new shell, only participants can read it — signed-in strangers remain denied (no read widening)', async () => {
-        const newChatId = `${OWNER_UID}_${THIRD_UID}_postcreate`;
+        const newChatId = [OWNER_UID, THIRD_UID].sort().join('_');
         await assertSucceeds(
             setDoc(doc(ownerDb(), 'chats', newChatId), {
                 id: newChatId,
@@ -1201,7 +1201,7 @@ describe('chats and messages — participant isolation', () => {
     });
 
     it('CM-16b: creating a new chat with a participantNames field included is denied (removed from schema)', async () => {
-        const newChatId = `${OWNER_UID}_${THIRD_UID}_pn`;
+        const newChatId = [OWNER_UID, THIRD_UID].sort().join('_');
         await assertFails(
             setDoc(doc(ownerDb(), 'chats', newChatId), {
                 id: newChatId,
@@ -1212,7 +1212,7 @@ describe('chats and messages — participant isolation', () => {
     });
 
     it('CM-17: creating a new chat with a lastMessage field included is denied (legacy shape no longer accepted)', async () => {
-        const newChatId = `${OWNER_UID}_${THIRD_UID}_legacy`;
+        const newChatId = [OWNER_UID, THIRD_UID].sort().join('_');
         await assertFails(
             setDoc(doc(ownerDb(), 'chats', newChatId), {
                 id: newChatId,
@@ -1342,51 +1342,58 @@ describe('chats — mutual user block on conversation create', () => {
         ));
     }
 
+    // X-1: chat IDs must be the canonical sorted pair, so each pair has
+    // exactly one creatable ID. Tests that previously used per-creator IDs
+    // now remove the shell (rules disabled) between creators.
+    const pairId = (a: string, b: string) => [a, b].sort().join('_');
+    async function removeShell(id: string) {
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            await deleteDoc(doc(ctx.firestore(), 'chats', id));
+        });
+    }
+
     it('HB-01: with no block relationship, either participant can create the direct chat', async () => {
-        const createdByA = `hb01-a-${OWNER_UID}`;
-        const createdByB = `hb01-b-${OTHER_UID}`;
-        await assertSucceeds(setDoc(doc(ownerDb(), 'chats', createdByA), shell(createdByA, [OWNER_UID, OTHER_UID])));
-        await assertSucceeds(setDoc(doc(otherDb(), 'chats', createdByB), shell(createdByB, [OTHER_UID, OWNER_UID])));
+        const id = pairId(OWNER_UID, OTHER_UID);
+        await assertSucceeds(setDoc(doc(ownerDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
+        await removeShell(id);
+        await assertSucceeds(setDoc(doc(otherDb(), 'chats', id), shell(id, [OTHER_UID, OWNER_UID])));
     });
 
     it('HB-02: when A blocks B, A cannot create a new chat with B in either participant order', async () => {
         await writeBlock(OWNER_UID, OTHER_UID);
-        const id1 = `hb02-a-${OWNER_UID}`;
-        const id2 = `hb02-b-${OWNER_UID}`;
-        await assertFails(setDoc(doc(ownerDb(), 'chats', id1), shell(id1, [OWNER_UID, OTHER_UID])));
-        await assertFails(setDoc(doc(ownerDb(), 'chats', id2), shell(id2, [OTHER_UID, OWNER_UID])));
+        const id = pairId(OWNER_UID, OTHER_UID);
+        await assertFails(setDoc(doc(ownerDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
+        await assertFails(setDoc(doc(ownerDb(), 'chats', id), shell(id, [OTHER_UID, OWNER_UID])));
     });
 
     it('HB-03: when A blocks B, B cannot create a new chat with A in either participant order', async () => {
         await writeBlock(OWNER_UID, OTHER_UID);
-        const id1 = `hb03-a-${OTHER_UID}`;
-        const id2 = `hb03-b-${OTHER_UID}`;
-        await assertFails(setDoc(doc(otherDb(), 'chats', id1), shell(id1, [OTHER_UID, OWNER_UID])));
-        await assertFails(setDoc(doc(otherDb(), 'chats', id2), shell(id2, [OWNER_UID, OTHER_UID])));
+        const id = pairId(OWNER_UID, OTHER_UID);
+        await assertFails(setDoc(doc(otherDb(), 'chats', id), shell(id, [OTHER_UID, OWNER_UID])));
+        await assertFails(setDoc(doc(otherDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
         await assertFails(getDoc(doc(otherDb(), 'users', OWNER_UID, 'private', 'social')));
     });
 
     it('HB-04: when B blocks A, neither A nor B can create a new chat with the other', async () => {
         await writeBlock(OTHER_UID, OWNER_UID);
-        const byA = `hb04-a-${OWNER_UID}`;
-        const byB = `hb04-b-${OTHER_UID}`;
-        await assertFails(setDoc(doc(ownerDb(), 'chats', byA), shell(byA, [OWNER_UID, OTHER_UID])));
-        await assertFails(setDoc(doc(otherDb(), 'chats', byB), shell(byB, [OTHER_UID, OWNER_UID])));
+        const id = pairId(OWNER_UID, OTHER_UID);
+        await assertFails(setDoc(doc(ownerDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
+        await assertFails(setDoc(doc(otherDb(), 'chats', id), shell(id, [OTHER_UID, OWNER_UID])));
     });
 
     it('HB-05: a block between A and B does not stop either of them from starting a chat with C', async () => {
         await writeBlock(OWNER_UID, OTHER_UID);
-        const aWithC = `hb05-ac-${OWNER_UID}`;
-        const bWithC = `hb05-bc-${OTHER_UID}`;
-        const cWithA = `hb05-ca-${THIRD_UID}`;
+        const aWithC = pairId(OWNER_UID, THIRD_UID);
+        const bWithC = pairId(OTHER_UID, THIRD_UID);
         await assertSucceeds(setDoc(doc(ownerDb(), 'chats', aWithC), shell(aWithC, [OWNER_UID, THIRD_UID])));
         await assertSucceeds(setDoc(doc(otherDb(), 'chats', bWithC), shell(bWithC, [OTHER_UID, THIRD_UID])));
-        await assertSucceeds(setDoc(doc(thirdDb(), 'chats', cWithA), shell(cWithA, [THIRD_UID, OWNER_UID])));
+        await removeShell(aWithC);
+        await assertSucceeds(setDoc(doc(thirdDb(), 'chats', aWithC), shell(aWithC, [THIRD_UID, OWNER_UID])));
     });
 
     it('HB-06: clearing blockedUsers restores create with no other backend cleanup', async () => {
         await writeBlock(OWNER_UID, OTHER_UID);
-        const id = `hb06-${OWNER_UID}`;
+        const id = pairId(OWNER_UID, OTHER_UID);
         await assertFails(setDoc(doc(ownerDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
         await assertFails(setDoc(doc(otherDb(), 'chats', id), shell(id, [OTHER_UID, OWNER_UID])));
         await assertSucceeds(setDoc(
@@ -1394,8 +1401,8 @@ describe('chats — mutual user block on conversation create', () => {
             { blockedUsers: [] },
         ));
         await assertSucceeds(setDoc(doc(ownerDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
-        const otherId = `hb06b-${OTHER_UID}`;
-        await assertSucceeds(setDoc(doc(otherDb(), 'chats', otherId), shell(otherId, [OTHER_UID, OWNER_UID])));
+        await removeShell(id);
+        await assertSucceeds(setDoc(doc(otherDb(), 'chats', id), shell(id, [OTHER_UID, OWNER_UID])));
     });
 
     it('HB-07: an existing chat and its historical message stay readable and are not deleted when a block is added', async () => {
@@ -1455,6 +1462,69 @@ describe('chats — mutual user block on conversation create', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// X-1 — canonical sorted-pair chat IDs (no squatting, no self-chats)
+// A new chats/{chatId} shell is creatable only when chatId equals the sorted
+// '_' join of its two DISTINCT participants. Existing (legacy/forged) shells
+// stay readable to their stored participants; sendMessage refuses to deliver
+// into them (functions/sendMessage.integration.test.js X1-SM-*).
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('X-1 — chats create requires canonical sorted-pair ID', () => {
+    const pairId = (a: string, b: string) => [a, b].sort().join('_');
+    const shell = (id: string, participants: string[]) => ({ id, participants, relatedSpotTitle: 'Street Spot' });
+
+    it('X1-01: attacker M cannot squat chats/{sorted(A,B)} with participants [M, A] (or [A, M], [M, B])', async () => {
+        const squat = pairId(OWNER_UID, OTHER_UID);
+        await assertFails(setDoc(doc(thirdDb(), 'chats', squat), shell(squat, [THIRD_UID, OWNER_UID])));
+        await assertFails(setDoc(doc(thirdDb(), 'chats', squat), shell(squat, [OWNER_UID, THIRD_UID])));
+        await assertFails(setDoc(doc(thirdDb(), 'chats', squat), shell(squat, [THIRD_UID, OTHER_UID])));
+    });
+
+    it('X1-02: either real participant can create the canonical pair ID, participants in either order (positive)', async () => {
+        const id = pairId(OWNER_UID, OTHER_UID);
+        await assertSucceeds(setDoc(doc(ownerDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
+        await testEnv.withSecurityRulesDisabled(async (ctx) => { await deleteDoc(doc(ctx.firestore(), 'chats', id)); });
+        await assertSucceeds(setDoc(doc(otherDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
+    });
+
+    it('X1-03: reversed (unsorted) pair ID is rejected even for the real pair', async () => {
+        const reversed = [OWNER_UID, OTHER_UID].sort().reverse().join('_');
+        await assertFails(setDoc(doc(ownerDb(), 'chats', reversed), shell(reversed, [OWNER_UID, OTHER_UID])));
+    });
+
+    it('X1-04: self-chat [A, A] is rejected', async () => {
+        const self = `${OWNER_UID}_${OWNER_UID}`;
+        await assertFails(setDoc(doc(ownerDb(), 'chats', self), shell(self, [OWNER_UID, OWNER_UID])));
+    });
+
+    it('X1-05: arbitrary / suffixed / random chat IDs are rejected for new creates', async () => {
+        for (const id of [`${pairId(OWNER_UID, OTHER_UID)}_x`, 'randomAutoId12345678', `x_${pairId(OWNER_UID, OTHER_UID)}`]) {
+            await assertFails(setDoc(doc(ownerDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
+        }
+    });
+
+    it('X1-06: legacy-compat — an existing non-canonical shell stays readable by its stored participants only', async () => {
+        const legacy = 'legacyChatId0000001';
+        await seed('chats', legacy, shell(legacy, [OWNER_UID, OTHER_UID]));
+        await assertSucceeds(getDoc(doc(ownerDb(), 'chats', legacy)));
+        await assertSucceeds(getDoc(doc(otherDb(), 'chats', legacy)));
+        await assertFails(getDoc(doc(thirdDb(), 'chats', legacy)));
+    });
+
+    it('X1-07: a pre-existing squatted shell is unreadable to the excluded real participant B (client must treat as open-failed)', async () => {
+        const squat = pairId(OWNER_UID, OTHER_UID);
+        await seed('chats', squat, shell(squat, [THIRD_UID, OWNER_UID]));
+        await assertFails(getDoc(doc(otherDb(), 'chats', squat)));
+        await assertFails(setDoc(doc(otherDb(), 'chats', squat), shell(squat, [OWNER_UID, OTHER_UID])));
+    });
+
+    it('X1-08: the existing mutual-block check still applies to canonical IDs', async () => {
+        await assertSucceeds(setDoc(doc(ownerDb(), 'users', OWNER_UID, 'private', 'social'), { blockedUsers: [OTHER_UID] }));
+        const id = pairId(OWNER_UID, OTHER_UID);
+        await assertFails(setDoc(doc(otherDb(), 'chats', id), shell(id, [OWNER_UID, OTHER_UID])));
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SPOTS — claimant cancellation (Arm 3 / Arm 3b)
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('spots — claimer cancellation', () => {
@@ -1474,6 +1544,9 @@ describe('spots — claimer cancellation', () => {
         claimReminderSentAt: null,
         claimAutoReleaseAt: null,
         claimAutoReleasedAt: null,
+        // S-SPOT-1: the shipped client (cancelClaimTransaction.ts) also
+        // nulls claimStartedAt; rules now require the complete cleanup.
+        claimStartedAt: null,
     };
 
     it('CC1: current claimant can cancel a non-expired claim — Ping returns to available', async () => {
@@ -1573,6 +1646,145 @@ describe('spots — claimer cancellation', () => {
         });
         expect(stored?.claimStartedAt?.isEqual(claimedAt)).toBe(true);
         expect(stored?.claimStartedAt?.isEqual(CLAIM_STARTED_AT)).toBe(false);
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// S-SPOT-1 — a claimer cancel must clear ALL claimer metadata (== null)
+// A cancel that reopened the Ping but kept interestedUserId (or any other
+// claimer field) froze it: isAvailableForClaim() refused every other claimer.
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('S-SPOT-1 — claimer cancel requires complete claimer-metadata cleanup', () => {
+    const fullClear = {
+        claimState: null, ownerLeavingNow: null, ownerLeavingNowAt: null,
+        interestedUserId: null, interestedUserName: null,
+        interestedUserVehicleColor: null, interestedUserVehicleType: null,
+        interestedUserVehicleBrand: null, interestedUserTitle: null,
+        etaMinutes: null, interestExpiresAt: null, claimStartedAt: null,
+        claimReminderAt: null, claimReminderSentAt: null,
+        claimAutoReleaseAt: null, claimAutoReleasedAt: null,
+    };
+    const headingSpot = {
+        ...committedScheduledSpot,
+        pingMode: 'now',
+        reportedAt: PAST,
+        expiresAt: FUTURE,
+        claimState: 'heading',
+        interestedUserName: 'bob',
+        interestedUserVehicleType: 'sedan',
+        etaMinutes: 5,
+        interestExpiresAt: FUTURE,
+    };
+
+    async function readSpot(id: string) {
+        let data: any;
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            data = (await getDoc(doc(ctx.firestore(), 'spots', id))).data();
+        });
+        return data;
+    }
+
+    async function thirdClaims(spotId: string) {
+        const db = thirdDb();
+        const claimedAt = Timestamp.now();
+        return runTransaction(db, async (tx) => {
+            tx.update(doc(db, 'spots', spotId), {
+                status: 'interested', claimState: 'heading', interestedUserId: THIRD_UID,
+                // A canceled Ping keeps the claimer identity keys as explicit
+                // nulls, so the next claim must carry its own (profile-bound)
+                // identity values, exactly as the real claim client does.
+                interestedUserName: 'carol', interestedUserTitle: getTitleForCrowns(0),
+                interestExpiresAt: FUTURE, claimStartedAt: claimedAt,
+            });
+            tx.set(doc(db, 'users', THIRD_UID, 'activeIncomingClaims', 'current'), {
+                spotId, claimStartedAt: claimedAt, claimState: 'heading', updatedAt: claimedAt,
+            });
+        });
+    }
+
+    it('SS1-01 (exploit, negative): cancel to available that RETAINS interestedUserId is denied', async () => {
+        await seed('spots', 'ss1', headingSpot);
+        await assertFails(updateDoc(doc(otherDb(), 'spots', 'ss1'), { status: 'available' }));
+        await assertFails(updateDoc(doc(otherDb(), 'spots', 'ss1'), { ...fullClear, interestedUserId: OTHER_UID, status: 'available' }));
+        expect((await readSpot('ss1')).status).toBe('interested');
+    });
+
+    it('SS1-02 (negative): retaining ANY single claimer field on cancel is denied', async () => {
+        await seed('spots', 'ss2', headingSpot);
+        for (const [k, v] of Object.entries({
+            interestedUserName: 'bob', interestedUserVehicleType: 'sedan', claimState: 'heading',
+            etaMinutes: 5, interestExpiresAt: FUTURE, claimStartedAt: CLAIM_STARTED_AT,
+            claimAutoReleaseAt: FUTURE, ownerLeavingNow: true,
+        })) {
+            await assertFails(updateDoc(doc(otherDb(), 'spots', 'ss2'), { ...fullClear, [k]: v, status: 'available' }));
+        }
+    });
+
+    it('SS1-03 (positive): full null cleanup reopens the Ping, and a third user can then claim it', async () => {
+        await seed('users', THIRD_UID, { username: 'carol', crowns: 0 });
+        await seed('spots', 'ss3', headingSpot);
+        await assertSucceeds(updateDoc(doc(otherDb(), 'spots', 'ss3'), { ...fullClear, status: 'available' }));
+        const after = await readSpot('ss3');
+        expect(after.status).toBe('available');
+        expect(after.interestedUserId).toBeNull();
+        await assertSucceeds(thirdClaims('ss3'));
+    });
+
+    it('SS1-04 (exploit chain, negative): a phantom-available Ping (seeded) cannot be claimed by others — the state the sweep repairs', async () => {
+        await seed('users', THIRD_UID, { username: 'carol', crowns: 0 });
+        await seed('spots', 'ss4', { ...headingSpot, status: 'available' });
+        await assertFails(thirdClaims('ss4'));
+    });
+
+    it('SS1-05 (positive): the real cancelClaimTransaction client write passes the stricter rule', async () => {
+        await seed('spots', 'ss5', headingSpot);
+        const outcome = await cancelClaimTransaction(otherDb(), {
+            spotId: 'ss5', claimantId: OTHER_UID, finderId: OWNER_UID,
+            fingerprint: CLAIM_STARTED_AT.toMillis(), message: 'cancelled',
+        } as any);
+        expect(outcome).toBe('cancelled');
+        const after = await readSpot('ss5');
+        expect(after.status).toBe('available');
+        expect(after.interestedUserId).toBeNull();
+        expect(after.claimStartedAt).toBeNull();
+    });
+
+    it('SS1-06 (scheduled, positive+negative): a committed scheduled claim cancels only with full cleanup', async () => {
+        await seed('spots', 'ss6', committedScheduledSpot);
+        await assertFails(updateDoc(doc(otherDb(), 'spots', 'ss6'), { status: 'available', claimState: null }));
+        await assertSucceeds(updateDoc(doc(otherDb(), 'spots', 'ss6'), { ...fullClear, status: 'available' }));
+    });
+
+    it('SS1-07 (expired Ping, Arm 3b): full cleanup without reopening succeeds; partial cleanup or reopening fails', async () => {
+        const expired = { ...headingSpot, reportedAt: PAST, expiresAt: PAST };
+        await seed('spots', 'ss7', expired);
+        await assertFails(updateDoc(doc(otherDb(), 'spots', 'ss7'), { ...fullClear, interestedUserId: OTHER_UID }));
+        await assertFails(updateDoc(doc(otherDb(), 'spots', 'ss7'), { ...fullClear, status: 'available' }));
+        await assertSucceeds(updateDoc(doc(otherDb(), 'spots', 'ss7'), fullClear));
+        const after = await readSpot('ss7');
+        expect(after.status).toBe('interested');
+        expect(after.interestedUserId).toBeNull();
+    });
+
+    it('SS1-08 (arrived handoff preserved): an arrived_pending_outcome / occupied claim cannot be cancelled even with full cleanup', async () => {
+        await seed('spots', 'ss8a', { ...headingSpot, claimState: 'arrived_pending_outcome' });
+        await seed('spots', 'ss8b', { ...headingSpot, status: 'occupied', claimState: 'arrived_pending_outcome', arrivedAt: Timestamp.now() });
+        await assertFails(updateDoc(doc(otherDb(), 'spots', 'ss8a'), { ...fullClear, status: 'available' }));
+        await assertFails(updateDoc(doc(otherDb(), 'spots', 'ss8a'), fullClear));
+        await assertFails(updateDoc(doc(otherDb(), 'spots', 'ss8b'), { ...fullClear, status: 'available' }));
+    });
+
+    it('SS1-09 (authorization, negative): finder and unrelated users still cannot perform the cancel', async () => {
+        await seed('spots', 'ss9', headingSpot);
+        await assertFails(updateDoc(doc(ownerDb(), 'spots', 'ss9'), { ...fullClear, status: 'available' }));
+        await assertFails(updateDoc(doc(thirdDb(), 'spots', 'ss9'), { ...fullClear, status: 'available' }));
+    });
+
+    it('SS1-10 (invalid transition, negative): cancel cannot move the Ping to any status other than available', async () => {
+        await seed('spots', 'ss10', headingSpot);
+        for (const status of ['occupied', 'completed', 'expired']) {
+            await assertFails(updateDoc(doc(otherDb(), 'spots', 'ss10'), { ...fullClear, status }));
+        }
     });
 });
 
@@ -2050,6 +2262,8 @@ describe('spotNotifications — participant-bound creation', () => {
                 claimReminderSentAt: null,
                 claimAutoReleaseAt: null,
                 claimAutoReleasedAt: null,
+                // S-SPOT-1: complete cleanup, exactly as cancelClaimTransaction.ts writes.
+                claimStartedAt: null,
             })
         );
     });
@@ -2083,12 +2297,20 @@ describe('spotNotifications — participant-bound creation', () => {
 // PARKING SESSIONS — path-keyed owner-only
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('parkingSessions', () => {
+    // F7: fixture is now the real shipped client shape (StreetParkingView
+    // writeCleaningReminder). The previous lat/lng/address/startedAt fixture
+    // was never written by any client and is rejected by the strict schema.
     const sessionData = {
-        active:    true,
-        lat:       40.71,
-        lng:       -74.0,
-        address:   '42 Session St',
-        startedAt: Timestamp.now(),
+        userId:                OWNER_UID,
+        fcmToken:              'legacy-client-token',
+        streetName:            'W 42 St',
+        nextCleaningAt:        Timestamp.fromMillis(Date.now() + 7_200_000),
+        reminderAt:            Timestamp.fromMillis(Date.now() + 3_600_000),
+        reminderMinutesBefore: 60,
+        reminderEnabled:       true,
+        reminderSent:          false,
+        active:                true,
+        savedAt:               Timestamp.now(),
     };
 
     beforeEach(async () => {
@@ -2125,6 +2347,101 @@ describe('parkingSessions', () => {
 
     it('P6: admin token can no longer directly read another user\'s session (coordinated remediation — moved to adminReadView userDetail/dashboardCounts callable)', async () => {
         await assertFails(getDoc(doc(adminDb(), 'parkingSessions', OWNER_UID)));
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// F7 / R3 — parkingSessions strict schema. Compatibility proof: every shape
+// the shipped client writes (StreetParkingView.tsx writeCleaningReminder full
+// setDoc incl. legacy fcmToken; deactivate merge; endSession merge; the older
+// c640477 reminderEnabled toggle merge) is accepted; poison/oversized/foreign
+// shapes are denied.
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('F7 — parkingSessions schema (client-compatible, poison-proof)', () => {
+    const clientFullWrite = () => ({
+        userId: OWNER_UID,
+        fcmToken: 'legacy-client-token',
+        streetName: 'Broadway',
+        nextCleaningAt: Timestamp.fromMillis(Date.now() + 7_200_000),
+        reminderAt: Timestamp.fromMillis(Date.now() + 3_600_000),
+        reminderMinutesBefore: 60,
+        reminderEnabled: true,
+        reminderSent: false,
+        active: true,
+        savedAt: Timestamp.now(),
+    });
+    const ref = () => doc(ownerDb(), 'parkingSessions', OWNER_UID);
+
+    it('F7-C1 (compat): the exact writeCleaningReminder full setDoc (with legacy fcmToken) is accepted on create and overwrite', async () => {
+        await assertSucceeds(setDoc(ref(), clientFullWrite()));
+        await assertSucceeds(setDoc(ref(), clientFullWrite()));
+    });
+
+    it('F7-C2 (compat): the same full write WITHOUT fcmToken (future client) is accepted', async () => {
+        const { fcmToken, ...rest } = clientFullWrite();
+        void fcmToken;
+        await assertSucceeds(setDoc(ref(), rest));
+    });
+
+    it('F7-C3 (compat): deactivateCleaningReminder merge {reminderEnabled:false, nextCleaningAt:null, reminderAt:null} is accepted (with and without an existing doc)', async () => {
+        await assertSucceeds(setDoc(ref(), { reminderEnabled: false, nextCleaningAt: null, reminderAt: null }, { merge: true }));
+        await assertSucceeds(setDoc(ref(), clientFullWrite()));
+        await assertSucceeds(setDoc(ref(), { reminderEnabled: false, nextCleaningAt: null, reminderAt: null }, { merge: true }));
+    });
+
+    it('F7-C4 (compat): endSession merge {active:false} and legacy toggle merge {reminderEnabled:<bool>} are accepted', async () => {
+        await assertSucceeds(setDoc(ref(), clientFullWrite()));
+        await assertSucceeds(setDoc(ref(), { active: false }, { merge: true }));
+        await assertSucceeds(setDoc(ref(), { reminderEnabled: true }, { merge: true }));
+    });
+
+    it('F7-C5 (compat): a doc already marked reminderSent:true / quarantined reminderEnabled:false by the server still accepts client merges', async () => {
+        await seed('parkingSessions', OWNER_UID, { ...clientFullWrite(), reminderSent: true, reminderEnabled: false });
+        await assertSucceeds(setDoc(ref(), { active: false }, { merge: true }));
+    });
+
+    it('F7-N1 (R3 poison): non-timestamp reminderAt is denied (string, number, map, bool)', async () => {
+        for (const bad of ['not-a-timestamp', 12345, { seconds: 1 }, true]) {
+            await assertFails(setDoc(ref(), { ...clientFullWrite(), reminderAt: bad }));
+        }
+        await assertFails(setDoc(ref(), { reminderAt: 'x' }, { merge: true }));
+    });
+
+    it('F7-N2: unknown keys are denied (hasOnly)', async () => {
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), recipientUid: OTHER_UID }));
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), lat: 40.7 }));
+    });
+
+    it('F7-N3: streetName must be a string of at most 200 chars', async () => {
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), streetName: 'x'.repeat(201) }));
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), streetName: 42 }));
+        await assertSucceeds(setDoc(ref(), { ...clientFullWrite(), streetName: 'x'.repeat(200) }));
+    });
+
+    it('F7-N4: fcmToken, when present, must be a string of at most 4096 chars', async () => {
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), fcmToken: 'x'.repeat(4097) }));
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), fcmToken: { token: 'x' } }));
+    });
+
+    it('F7-N5: wrong types for flags / minutes / savedAt are denied', async () => {
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), reminderSent: 'false' }));
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), active: 1 }));
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), reminderMinutesBefore: '60' }));
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), reminderMinutesBefore: 100000 }));
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), savedAt: 'now' }));
+    });
+
+    it('F7-N6: userId field, when present, must equal the path owner', async () => {
+        await assertFails(setDoc(ref(), { ...clientFullWrite(), userId: OTHER_UID }));
+    });
+
+    it('F7-A1 (authorization): another user cannot create/update/delete the owner session; owner can delete', async () => {
+        await assertFails(setDoc(doc(otherDb(), 'parkingSessions', OWNER_UID), { ...clientFullWrite() }));
+        await seed('parkingSessions', OWNER_UID, clientFullWrite());
+        await assertFails(setDoc(doc(otherDb(), 'parkingSessions', OWNER_UID), { active: false }, { merge: true }));
+        await assertFails(deleteDoc(doc(otherDb(), 'parkingSessions', OWNER_UID)));
+        await assertFails(setDoc(doc(anonDb(), 'parkingSessions', OWNER_UID), { active: false }, { merge: true }));
+        await assertSucceeds(deleteDoc(ref()));
     });
 });
 
@@ -2430,6 +2747,57 @@ describe('users — update allowlist (TM-11)', () => {
     it('TM11-G: admin token can no longer bypass the allowlist directly (coordinated remediation — direct admin writes removed)', async () => {
         const { updateDoc: upd } = await import('firebase/firestore');
         await assertFails(upd(doc(adminDb(), 'users', OWNER_UID), { crowns: 999999 }));
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// F3 — suspension who/why/when is admin-only (users/{uid}/private/moderation)
+// adminSuspendUser/adminUnsuspendUser (Admin SDK) write it; no client rule
+// matches the path, so every client — the user, peers, a stale admin token —
+// is denied by default. The public users/{uid} doc keeps only `status`.
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('F3 — users/{uid}/private/moderation is admin-only', () => {
+    const modDoc = {
+        status: 'Suspended', suspendedAt: new Date('2026-10-01T00:00:00Z'), suspendedBy: ADMIN_UID,
+        suspensionReason: 'spam', unsuspendedAt: null, unsuspendedBy: null,
+    };
+
+    beforeEach(async () => {
+        await testEnv.withSecurityRulesDisabled(async ctx => {
+            const fs = ctx.firestore();
+            await setDoc(doc(fs, 'users', OWNER_UID), { username: 'alice99', status: 'Suspended' });
+            await setDoc(doc(fs, 'users', OWNER_UID, 'private', 'moderation'), modDoc);
+        });
+    });
+
+    it('F3-R-01: a peer cannot read another user\'s moderation record', async () => {
+        await assertFails(getDoc(doc(otherDb(), 'users', OWNER_UID, 'private', 'moderation')));
+    });
+
+    it('F3-R-02: the suspended user cannot read their own moderation record (admin uid stays private)', async () => {
+        await assertFails(getDoc(doc(ownerDb(), 'users', OWNER_UID, 'private', 'moderation')));
+    });
+
+    it('F3-R-03: an admin-claim token cannot read it directly either (admin UI uses adminReadView)', async () => {
+        await assertFails(getDoc(doc(adminDb(), 'users', OWNER_UID, 'private', 'moderation')));
+    });
+
+    it('F3-R-04: nobody can write it from a client (create / overwrite / delete)', async () => {
+        const { deleteDoc: del } = await import('firebase/firestore');
+        await assertFails(setDoc(doc(ownerDb(), 'users', OWNER_UID, 'private', 'moderation'), { status: 'Active' }));
+        await assertFails(setDoc(doc(adminDb(), 'users', OTHER_UID, 'private', 'moderation'), modDoc));
+        await assertFails(del(doc(ownerDb(), 'users', OWNER_UID, 'private', 'moderation')));
+    });
+
+    it('F3-R-05: the suspended user cannot clear their own public status', async () => {
+        const { updateDoc: upd } = await import('firebase/firestore');
+        await assertFails(upd(doc(ownerDb(), 'users', OWNER_UID), { status: 'Active' }));
+    });
+
+    it('F3-R-06: peers can still get the public doc (status only) — positive control', async () => {
+        const snap = await assertSucceeds(getDoc(doc(otherDb(), 'users', OWNER_UID)));
+        expect(snap.data()?.status).toBe('Suspended');
+        expect(snap.data()).not.toHaveProperty('suspendedBy');
     });
 });
 
@@ -2747,6 +3115,11 @@ describe('spots — identity-display authority (SP)', () => {
                     interestedUserVehicleType: null,
                     interestedUserVehicleBrand: null,
                     interestedUserTitle: null,
+                    // S-SPOT-1: a legitimate cancel clears every claimer field
+                    // (cancelClaimTransaction.ts). Leaving claimState/
+                    // claimStartedAt behind is now denied (SS1-02).
+                    claimState: null,
+                    claimStartedAt: null,
                 });
                 tx.delete(lockRef);
             }));
@@ -3176,6 +3549,47 @@ describe('TM-04 — private user data isolation', () => {
         await assertSucceeds(getDoc(doc(ownerDb(), 'users', OWNER_UID, 'private', 'preferences')));
     });
 
+    it('AN-CONSENT-1: owner can enable and disable analytics while preserving preferences', async () => {
+        const ref = doc(ownerDb(), 'users', OWNER_UID, 'private', 'preferences');
+
+        await assertSucceeds(setDoc(ref, {
+            notificationRadius: 2,
+            notificationsEnabled: true,
+        }));
+
+        await assertSucceeds(setDoc(ref, { analyticsConsent: true }, { merge: true }));
+
+        let snap = await assertSucceeds(getDoc(ref));
+        expect(snap.data()?.analyticsConsent).toBe(true);
+        expect(snap.data()?.notificationRadius).toBe(2);
+        expect(snap.data()?.notificationsEnabled).toBe(true);
+
+        await assertSucceeds(setDoc(ref, { analyticsConsent: false }, { merge: true }));
+
+        snap = await assertSucceeds(getDoc(ref));
+        expect(snap.data()?.analyticsConsent).toBe(false);
+        expect(snap.data()?.notificationRadius).toBe(2);
+    });
+
+    it('AN-CONSENT-2: invalid analytics consent values are rejected', async () => {
+        const ref = doc(ownerDb(), 'users', OWNER_UID, 'private', 'preferences');
+
+        for (const invalid of ['yes', 1, null]) {
+            await assertFails(setDoc(ref, { analyticsConsent: invalid }));
+        }
+    });
+
+    it('AN-CONSENT-3: unauthorized analytics consent writes are rejected', async () => {
+        await assertFails(setDoc(
+            doc(otherDb(), 'users', OWNER_UID, 'private', 'preferences'),
+            { analyticsConsent: true }
+        ));
+
+        await assertFails(setDoc(
+            doc(anonDb(), 'users', OWNER_UID, 'private', 'preferences'),
+            { analyticsConsent: true }
+        ));
+    });
     it('TM04-G: other user cannot read private/preferences', async () => {
         await assertFails(getDoc(doc(otherDb(), 'users', OWNER_UID, 'private', 'preferences')));
     });
@@ -3390,8 +3804,9 @@ describe('TM-04 — private user data isolation', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// §4 — User schema: vehicle and avatar fields in create/update allowlists.
+// §4 — User schema: client-writable vehicle fields; server-owned avatar fields.
 //
+// Avatar fields are published by the moderation Function (Admin SDK) only.
 // vehicleBrand and vehicleColor are intentionally public: spot finders post
 // their vehicle so claimers know which car is pulling out. Product decision;
 // not a privacy gap. Documented here so future reviewers don't re-open it.
@@ -3426,16 +3841,51 @@ describe('§4 — users/{uid} vehicle and avatar allowlists', () => {
         await assertSucceeds(upd(doc(ownerDb(), 'users', OWNER_UID), { vehicleColor: 'silver' }));
     });
 
-    // ── update allowlist: avatar fields ───────────────────────────────────────
+    // ── moderation-owned avatar metadata: no direct client writes ────────────
 
-    it('SC-4: owner can update avatarUrl (in update allowlist)', async () => {
+    it('SC-4: owner cannot bypass moderation by setting an external avatarUrl', async () => {
         const { updateDoc: upd } = await import('firebase/firestore');
-        await assertSucceeds(upd(doc(ownerDb(), 'users', OWNER_UID), { avatarUrl: 'https://example.com/a.jpg' }));
+        await assertFails(upd(doc(ownerDb(), 'users', OWNER_UID), { avatarUrl: 'https://example.com/a.jpg' }));
     });
 
-    it('SC-5: owner can update avatarManifestId (in update allowlist)', async () => {
+    it('SC-5: owner cannot set avatarManifestId', async () => {
         const { updateDoc: upd } = await import('firebase/firestore');
-        await assertSucceeds(upd(doc(ownerDb(), 'users', OWNER_UID), { avatarManifestId: 'manifest_abc' }));
+        await assertFails(upd(doc(ownerDb(), 'users', OWNER_UID), { avatarManifestId: 'manifest_abc' }));
+    });
+
+    it('SC-5a: owner cannot set avatarAgeGroup', async () => {
+        const { updateDoc: upd } = await import('firebase/firestore');
+        await assertFails(upd(doc(ownerDb(), 'users', OWNER_UID), { avatarAgeGroup: 'adult' }));
+    });
+
+    it('SC-5b: owner cannot set avatarUpdatedAt', async () => {
+        const { updateDoc: upd } = await import('firebase/firestore');
+        await assertFails(upd(doc(ownerDb(), 'users', OWNER_UID), { avatarUpdatedAt: Timestamp.now() }));
+    });
+
+    it('SC-5c: owner cannot remove an existing approved avatarUrl', async () => {
+        const { updateDoc: upd, deleteField } = await import('firebase/firestore');
+        await seed('users', OWNER_UID, { ...baseDoc, avatarUrl: 'https://example.com/approved.jpg' });
+        await assertFails(upd(doc(ownerDb(), 'users', OWNER_UID), { avatarUrl: deleteField() }));
+    });
+
+    it('SC-5d: owner cannot combine an allowed vehicle change with a forged avatarUrl', async () => {
+        const { updateDoc: upd } = await import('firebase/firestore');
+        await assertFails(upd(doc(ownerDb(), 'users', OWNER_UID), {
+            vehicleType: 'sedan',
+            avatarUrl: 'https://example.com/unmoderated.jpg',
+        }));
+        const snap = await getDoc(doc(ownerDb(), 'users', OWNER_UID));
+        expect(snap.data()?.vehicleType).toBeUndefined();
+    });
+
+    it('SC-5e: owner can still update a vehicle field when a server-approved avatar exists', async () => {
+        const { updateDoc: upd } = await import('firebase/firestore');
+        const serverAvatarUrl = 'https://example.com/approved.jpg';
+        await seed('users', OWNER_UID, { ...baseDoc, avatarUrl: serverAvatarUrl });
+        await assertSucceeds(upd(doc(ownerDb(), 'users', OWNER_UID), { vehicleColor: 'blue' }));
+        const snap = await getDoc(doc(ownerDb(), 'users', OWNER_UID));
+        expect(snap.data()?.avatarUrl).toBe(serverAvatarUrl);
     });
 
     // ── update denylist: immutable fields ─────────────────────────────────────
@@ -3498,6 +3948,57 @@ describe('users/{uid} directory — Phase A list deny / get-by-id', () => {
 
     it('UD-06: unauthenticated list of users remains denied', async () => {
         await assertFails(getDocs(collection(anonDb(), 'users')));
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// F8 — usernames/{normalized} registry: exact-doc get only, list/query denied.
+// Availability checks (NameEntryView, EditProfileView) are single-doc getDoc;
+// claimUsername (Admin SDK) writes the registry and is unaffected by rules.
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('F8 — usernames registry get-only (list/query denied)', () => {
+    beforeEach(async () => {
+        // Seed exactly the shape claimUsername writes: { uid, claimedAt }.
+        await seed('usernames', 'alice', { uid: OWNER_UID, claimedAt: Timestamp.now() });
+        await seed('usernames', 'bob', { uid: OTHER_UID, claimedAt: Timestamp.now() });
+    });
+
+    it('F8-01: signed-in user can get a taken username doc (availability = taken)', async () => {
+        const snap = await assertSucceeds(getDoc(doc(otherDb(), 'usernames', 'alice')));
+        expect(snap.exists()).toBe(true);
+    });
+
+    it('F8-02: signed-in user can get a free username doc (availability = available)', async () => {
+        const snap = await assertSucceeds(getDoc(doc(thirdDb(), 'usernames', 'free_name')));
+        expect(snap.exists()).toBe(false);
+    });
+
+    it('F8-03: signed-in user cannot list the usernames collection', async () => {
+        await assertFails(getDocs(collection(ownerDb(), 'usernames')));
+        await assertFails(getDocs(collection(thirdDb(), 'usernames')));
+    });
+
+    it('F8-04: signed-in user cannot query usernames by uid (reverse lookup)', async () => {
+        await assertFails(getDocs(query(collection(thirdDb(), 'usernames'), where('uid', '==', OWNER_UID))));
+    });
+
+    it('F8-05: unauthenticated get and list remain denied', async () => {
+        await assertFails(getDoc(doc(anonDb(), 'usernames', 'alice')));
+        await assertFails(getDocs(collection(anonDb(), 'usernames')));
+    });
+
+    it('F8-06: client writes to the registry remain denied (create, update, delete)', async () => {
+        await assertFails(setDoc(doc(thirdDb(), 'usernames', 'newname'), { uid: THIRD_UID, claimedAt: Timestamp.now() }));
+        await assertFails(updateDoc(doc(ownerDb(), 'usernames', 'alice'), { uid: THIRD_UID }));
+        await assertFails(deleteDoc(doc(ownerDb(), 'usernames', 'alice')));
+    });
+
+    it('F8-07: a doc written by the server (rules disabled, as claimUsername does) is immediately get-able by its owner', async () => {
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            await setDoc(doc(ctx.firestore(), 'usernames', 'third_new'), { uid: THIRD_UID, claimedAt: Timestamp.now() });
+        });
+        const snap = await assertSucceeds(getDoc(doc(thirdDb(), 'usernames', 'third_new')));
+        expect(snap.data()?.uid).toBe(THIRD_UID);
     });
 });
 

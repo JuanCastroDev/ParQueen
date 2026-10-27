@@ -1,4 +1,6 @@
-'use strict';
+// ES module: the only implementation. Browser/Vite and vitest import this file
+// (extensionless imports resolve to .mjs). Node require() callers use the thin
+// commitToHeadingDecision.cjs wrapper. Types: commitToHeadingDecision.d.ts.
 
 /**
  * Shared decision for committed → heading.
@@ -7,7 +9,7 @@
  *
  * @returns {'commit' | 'already_heading' | 'rejected'}
  */
-function decideCommitToHeading(spot, uid) {
+export function decideCommitToHeading(spot, uid) {
   if (!spot || typeof uid !== 'string' || uid.length === 0) return 'rejected';
   const isThisClaimer = spot.status === 'interested' && spot.interestedUserId === uid;
   if (!isThisClaimer) return 'rejected';
@@ -21,7 +23,7 @@ function decideCommitToHeading(spot, uid) {
  * status, interestedUserId, claimStartedAt, or the active-claim lock.
  * interestExpiresAt is a Firestore Timestamp built by the caller.
  */
-function buildHeadingUpdate(etaMinutes, interestExpiresAt) {
+export function buildHeadingUpdate(etaMinutes, interestExpiresAt) {
   return {
     claimState: 'heading',
     ownerLeavingNow: null,
@@ -33,8 +35,3 @@ function buildHeadingUpdate(etaMinutes, interestExpiresAt) {
     claimAutoReleaseAt: null,
   };
 }
-
-module.exports = {
-  decideCommitToHeading,
-  buildHeadingUpdate,
-};

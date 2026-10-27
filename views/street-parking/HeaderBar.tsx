@@ -67,9 +67,11 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
     useLang();
     return (
         <header style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }} className="map-mobile-header w-full flex flex-col gap-2.5 pointer-events-auto">
-            <div className="map-header-search-row max-w-none md:max-w-[380px] mx-auto flex items-center gap-2.5">
+            <div className="map-header-search-row max-w-none md:max-w-[var(--shell-content-max)] mx-auto flex items-center gap-2.5">
                 <div data-tour="search" className="map-search-shell relative flex-1 min-w-0 flex items-center transition-all duration-300">
-                    <span data-tour="profile" className="hidden md:inline-flex shrink-0 ml-1">
+                    {/* Stage A: the docked nav Profile tab replaces this at every width (same setView(PROFILE)).
+                        Kept in the DOM, hidden, so the tour target is not deleted. */}
+                    <span data-tour="profile" className="hidden shrink-0 ml-1">
                         <UserAvatar user={user} onClick={() => setView(AppView.PROFILE)} />
                     </span>
 
@@ -127,7 +129,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
                     aria-label="Chat"
                     title="Chat"
                     onClick={() => setView(AppView.MESSAGES)}
-                    className="hidden md:inline-flex p-1.5 text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-overlay)] rounded-full transition-colors relative shrink-0"
+                    className="hidden p-1.5 text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-overlay)] rounded-full transition-colors relative shrink-0"
                 >
                     <div className="relative">
                         <MessageSquare size={17} />
@@ -148,7 +150,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
                         setPendingUpdatesCount(0);
                         setView(AppView.NOTIFICATIONS);
                     }}
-                    className="hidden md:inline-flex p-1.5 text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-overlay)] rounded-full transition-colors relative shrink-0"
+                    className="hidden p-1.5 text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-overlay)] rounded-full transition-colors relative shrink-0"
                 >
                     <div className="relative">
                         <Bell size={17} />
