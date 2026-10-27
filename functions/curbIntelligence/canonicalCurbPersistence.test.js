@@ -8,6 +8,7 @@ const {
   migrateCompatibleLegacyRules,
   canonicalGeometry,
 } = require('./canonicalCurbPersistence');
+const { userRecordDenies } = require('../productAccess');
 const { publicCurbKey } = require('./canonicalCurbIdentity');
 const { resolveCanonicalCurb } = require('./canonicalCurbResolver');
 const { createPrivateBlockfaceResolver } = require('./privateBlockfaceResolver');
@@ -65,6 +66,21 @@ function memoryDb(seed = {}) {
           }
         },
       };
+    },
+    async runTransaction(fn) {
+      const pending = [];
+      const tx = {
+        async get(ref) {
+          const value = docs.get(ref.path);
+          return { exists: value !== undefined, data: () => value };
+        },
+        set(ref, value) { pending.push({ path: ref.path, value }); },
+      };
+      await fn(tx);
+      for (const write of pending) {
+        docs.set(write.path, write.value);
+        writes.push(write);
+      }
     },
   };
 }
@@ -368,5 +384,48 @@ describe('canonical curb persistence', () => {
 
     expect(result).toMatchObject({ copied: true, reason: 'compatible' });
     expect(result.rules).toHaveLength(1);
+  });
+
+  it('writes a user-initiated curb when the caller is active inside the commit transaction', async () => {
+    const db = memoryDb();
+    const topologyResult = await topology();
+    const identityProof = await proofFor(topologyResult);
+    db.docs.set('users/caller-active', { status: 'Active' });
+    const result = await persistCanonicalCurb({
+      db, Timestamp, topologyResult, identityProof, selectedRules: { rules: [] }, callerUid: 'caller-active',
+    });
+    const key = publicCurbKey(topologyResult.identity);
+    expect(result).toEqual({ success: true, publicCurbKey: key, ruleCount: 0 });
+    expect(db.docs.get(`streetSegments/${key}`)).toMatchObject({ status: 'active', protocolVersion: 2 });
+  });
+
+  it('refuses a user-initiated write when suspension commits before the persistence transaction', async () => {
+    const db = memoryDb();
+    db.batch = vi.fn(db.batch);
+    const topologyResult = await topology();
+    const identityProof = await proofFor(topologyResult);
+    const uid = 'caller-race';
+    db.docs.set(`users/${uid}`, { status: 'Active' });
+    expect(userRecordDenies(db.docs.get(`users/${uid}`))).toBe(false);
+    db.docs.set(`users/${uid}`, { status: 'Active', productAccessBlocked: true });
+    const result = await persistCanonicalCurb({
+      db, Timestamp, topologyResult, identityProof, selectedRules: { rules: [] }, callerUid: uid,
+    });
+    expect(result).toEqual({ success: false, reason: 'product_access_denied' });
+    expect(db.batch).not.toHaveBeenCalled();
+    expect(db.writes).toHaveLength(0);
+  });
+
+  it('keeps the batch path for a trusted internal caller that does not name a user', async () => {
+    const db = memoryDb();
+    const topologyResult = await topology();
+    const identityProof = await proofFor(topologyResult);
+    db.docs.set('users/blocked-internal', { status: 'Suspended', productAccessBlocked: true });
+    const result = await persistCanonicalCurb({
+      db, Timestamp, topologyResult, identityProof, selectedRules: { rules: [] },
+    });
+    const key = publicCurbKey(topologyResult.identity);
+    expect(result).toEqual({ success: true, publicCurbKey: key, ruleCount: 0 });
+    expect(db.docs.get(`curbIdentities/${key}`)).toMatchObject({ publicCurbKey: key });
   });
 });

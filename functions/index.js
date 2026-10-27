@@ -1938,13 +1938,18 @@ const SEND_MESSAGE_ID_RE = /^[A-Za-z0-9_-]{1,100}$/;
 // partial failure here leaves the parent doc in place (still marked
 // deleting) as the resumable retry point, and it is never possible for the
 // parent to be gone while orphaned message docs remain unswept.
-async function markChatDeletingAndRecursiveDelete(chatRef) {
+async function markChatDeletingAndRecursiveDelete(chatRef, uid) {
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(chatRef);
     if (!snap.exists) return;
-    if (!snap.data().deleting) {
-      tx.set(chatRef, { deleting: true, deletingAt: FieldValue.serverTimestamp() }, { merge: true });
+    // A deletion that already started stays resumable. A later suspension
+    // must not strand the messages that cleanup still has to remove.
+    if (snap.data().deleting) return;
+    const caller = await tx.get(db.doc(`users/${uid}`));
+    if (userRecordDenies(caller.exists ? caller.data() : null)) {
+      throw new HttpsError('permission-denied', 'Product access is not available.');
     }
+    tx.set(chatRef, { deleting: true, deletingAt: FieldValue.serverTimestamp() }, { merge: true });
   });
 
   await db.recursiveDelete(chatRef.collection('messages'));
@@ -1972,7 +1977,6 @@ const DELETE_CHAT_ID_RE = /^[A-Za-z0-9_-]{1,200}$/;
 // marker committed cannot successfully write after it.
 async function deleteChatHandler(request) {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
-  await assertProductAccess(request.auth.uid);
 
   const { chatId } = request.data || {};
   if (typeof chatId !== 'string' || !DELETE_CHAT_ID_RE.test(chatId)) {
@@ -1980,28 +1984,35 @@ async function deleteChatHandler(request) {
   }
 
   const uid = request.auth.uid;
+  const chatRef = db.collection('chats').doc(chatId);
+  const chatSnap = await chatRef.get();
+  const chatData = chatSnap.exists ? chatSnap.data() : null;
+  const alreadyDeleting = !!chatData
+    && chatData.deleting === true
+    && Array.isArray(chatData.participants)
+    && chatData.participants.includes(uid);
+  // A new deletion is denied before any quota use. Cleanup of a deletion
+  // that already started must still run for this participant.
+  if (!alreadyDeleting) await assertProductAccess(uid);
+
   // 10/hour: deleting a conversation is a deliberate, infrequent action —
   // generous headroom over any legitimate usage pattern while bounding a
   // scripted caller to a fixed ceiling per account.
   await checkRateLimit(uid, 'deleteChat', { limit: 10, windowSec: 3600 });
 
-  const chatRef = db.collection('chats').doc(chatId);
-  const chatSnap = await chatRef.get();
   if (!chatSnap.exists) {
     // Already gone (prior success, or never existed) — indistinguishable
     // end states from the caller's perspective; both resolve as success.
     return { success: true };
   }
-  const chatData = chatSnap.data();
   if (!Array.isArray(chatData.participants) || !chatData.participants.includes(uid)) {
     throw new HttpsError('permission-denied', 'Not a participant in this chat.');
   }
 
-  if (typeof exports._productAccessHooks.beforeProtectedWrite === 'function') {
+  if (!alreadyDeleting && typeof exports._productAccessHooks.beforeProtectedWrite === 'function') {
     await exports._productAccessHooks.beforeProtectedWrite({ uid, op: 'deleteChat' });
   }
-  await assertProductAccess(uid);
-  await markChatDeletingAndRecursiveDelete(chatRef);
+  await markChatDeletingAndRecursiveDelete(chatRef, uid);
   return { success: true };
 }
 
@@ -5015,11 +5026,16 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
     telemetry: createCurbTelemetry(),
     requestNonceFactory: randomUUID,
     readCanonicalCache: streetIntelligenceCache.readCanonicalCache,
-    // The orchestrator fetches external evidence before this write. Re-check
-    // the caller immediately before the privileged persist.
+    // The orchestrator fetches external evidence before this write. The
+    // authenticated uid is applied here, over any field in the orchestrator
+    // payload, and persistCanonicalCurb reads that user inside the commit
+    // transaction. Scheduled and internal callers do not set callerUid.
     persistCanonicalCurb: async (input) => {
-      await assertProductAccess(verifiedUid);
-      return streetIntelligenceCache.persistCanonicalCurb(input);
+      const supplied = input && typeof input === 'object' ? input : {};
+      return streetIntelligenceCache.persistCanonicalCurb({
+        ...supplied,
+        callerUid: verifiedUid,
+      });
     },
   };
   if (process.env.FUNCTIONS_EMULATOR === 'true') {

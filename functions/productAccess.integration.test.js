@@ -13,6 +13,7 @@ const { requireEmulatorProjectId } = require('./emulatorProjectId');
 const { userRecordDenies, assertProductAccess, PRODUCT_ACCESS_DENIED } = require('./productAccess');
 const {
   _sendMessageHandler,
+  _deleteChatHandler,
   _productAccessHooks,
   _suspensionConcurrencyHooks,
   adminSuspendUser,
@@ -305,6 +306,58 @@ describe('product access enforcement', () => {
     const messages = await db.collection(`chats/${chatId}/messages`).get();
     expect(messages.empty).toBe(true);
     await db.doc(`chats/${chatId}`).delete();
+  });
+
+  async function chatFor(uid) {
+    const chatId = `chat_${uid}`;
+    await db.doc(`chats/${chatId}`).set({ id: chatId, participants: [uid] });
+    await db.doc(`chats/${chatId}/messages/m1`).set({ text: 'hi', senderId: uid });
+    return chatId;
+  }
+
+  it('deleteChat succeeds for an active caller and removes messages', async () => {
+    const uid = await user('delok', { status: 'Active', username: 'd' });
+    const chatId = await chatFor(uid);
+    await expect(_deleteChatHandler(req(uid, { chatId }))).resolves.toEqual({ success: true });
+    expect((await db.doc(`chats/${chatId}`).get()).exists).toBe(false);
+    expect((await db.collection(`chats/${chatId}/messages`).get()).empty).toBe(true);
+  });
+
+  it('deleteChat denies a blocked caller and does not mark the chat', async () => {
+    const uid = await user('delblock', { status: 'Active', productAccessBlocked: true, username: 'd' });
+    const chatId = await chatFor(uid);
+    const err = await _deleteChatHandler(req(uid, { chatId })).catch((e) => e);
+    expect(err.code).toBe('permission-denied');
+    const chat = await db.doc(`chats/${chatId}`).get();
+    expect(chat.exists).toBe(true);
+    expect(chat.data().deleting).toBeUndefined();
+    expect((await db.collection(`chats/${chatId}/messages`).get()).size).toBe(1);
+    await db.recursiveDelete(db.doc(`chats/${chatId}`));
+  });
+
+  it('deleteChat does not start when suspension commits before the deleting transaction', async () => {
+    const uid = await user('delrace', { status: 'Active', username: 'd' });
+    const chatId = await chatFor(uid);
+    _productAccessHooks.beforeProtectedWrite = async () => {
+      await db.doc(`users/${uid}`).update({ status: 'Suspended', productAccessBlocked: true });
+    };
+    const err = await _deleteChatHandler(req(uid, { chatId })).catch((e) => e);
+    expect(err.code).toBe('permission-denied');
+    const chat = await db.doc(`chats/${chatId}`).get();
+    expect(chat.exists).toBe(true);
+    expect(chat.data().deleting).toBeUndefined();
+    expect((await db.collection(`chats/${chatId}/messages`).get()).size).toBe(1);
+    await db.recursiveDelete(db.doc(`chats/${chatId}`));
+  });
+
+  it('deleteChat finishes cleanup after an authorized deleting mark', async () => {
+    const uid = await user('delclean', { status: 'Active', username: 'd' });
+    const chatId = await chatFor(uid);
+    await db.doc(`chats/${chatId}`).update({ deleting: true });
+    await db.doc(`users/${uid}`).update({ status: 'Suspended', productAccessBlocked: true });
+    await expect(_deleteChatHandler(req(uid, { chatId }))).resolves.toEqual({ success: true });
+    expect((await db.doc(`chats/${chatId}`).get()).exists).toBe(false);
+    expect((await db.collection(`chats/${chatId}/messages`).get()).empty).toBe(true);
   });
 
   it('does not treat a client-supplied flag as authority on a missing profile', async () => {
