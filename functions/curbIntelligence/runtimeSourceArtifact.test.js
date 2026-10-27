@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
+const fs = require('node:fs');
 const { resolveCanonicalCurb, hasPrimaryTopologyAuthority } = require('./canonicalCurbResolver');
 const { proveCanonicalCurbIdentity } = require('./canonicalCurbIdentityProof');
 const { runCanonicalCurbOrchestrator } = require('./canonicalCurbOrchestrator');
@@ -92,6 +93,8 @@ function readArtifact() {
 }
 
 describe('pinned runtime source artifact', () => {
+  // Parsing the pinned 43 MB artifact during the full suite exceeds Vitest's
+  // default 5s on a loaded Windows checkout. Every assertion below stays.
   it('verifies the artifact digest separately from source certification', () => {
     const bytes = readArtifact();
     const document = JSON.parse(bytes.toString('utf8'));
@@ -145,7 +148,7 @@ describe('pinned runtime source artifact', () => {
     expect(relative(functionsRoot, renderScript).startsWith('..')).toBe(true);
     const firebase = JSON.parse(readFileSync(new URL('../../firebase.json', import.meta.url), 'utf8'));
     expect(firebase.functions.source).toBe('functions');
-  });
+  }, 20_000);
 
   it('loads the artifact in emulator mode and reaches buildCandidate without primary authority', async () => {
     const row = batteryRow();
@@ -266,38 +269,50 @@ describe('pinned runtime source artifact', () => {
   });
 
   it('fails closed when the pinned artifact is missing or its digest does not match', async () => {
-    const original = readArtifact();
-    const altered = Buffer.from(original);
+    const originalRead = fs.readFileSync;
+    const pinned = originalRead(ARTIFACT_PATH);
+    const altered = Buffer.from(pinned);
     altered[altered.length - 2] ^= 1;
-    unlinkSync(ARTIFACT_PATH);
+    const simulatedReads = { missing: 0, mismatch: 0 };
+    let mode = 'missing';
+    fs.readFileSync = function readPinnedArtifact(filePath, ...rest) {
+      if (filePath !== ARTIFACT_PATH) return originalRead.call(this, filePath, ...rest);
+      simulatedReads[mode] += 1;
+      if (mode === 'missing') {
+        const error = new Error(`ENOENT: no such file or directory, open '${ARTIFACT_PATH}'`);
+        error.code = 'ENOENT';
+        throw error;
+      }
+      return Buffer.from(altered);
+    };
     try {
       const missing = emulatorDependencies();
       const missingResolution = await resolveCanonicalCurb(location(), resolverOptions(batteryRow(), {
         ...missing,
         privateSourceContextObserver: report => { missing.report = report; },
       }));
+      expect(simulatedReads.missing).toBeGreaterThan(0);
       expect(missing.privateSourceEvidence.reason).toBe('artifact_missing');
       expect(missingResolution).toMatchObject({ state: 'UNSUPPORTED', reasons: ['candidate_incomplete'] });
       expect(missing.report).toMatchObject({ enrichment: null, identityReason: 'artifact_missing' });
-    } finally {
-      writeFileSync(ARTIFACT_PATH, original);
-    }
 
-    writeFileSync(ARTIFACT_PATH, altered);
-    try {
+      mode = 'mismatch';
       const mismatched = emulatorDependencies();
       const mismatchedResolution = await resolveCanonicalCurb(location(), resolverOptions(batteryRow(), {
         ...mismatched,
         privateSourceContextObserver: report => { mismatched.report = report; },
       }));
+      expect(simulatedReads.mismatch).toBeGreaterThan(0);
       expect(openRuntimeSourceArtifact(altered).reason).toBe('artifact_digest_mismatch');
       expect(mismatched.privateSourceEvidence.reason).toBe('artifact_digest_mismatch');
       expect(mismatchedResolution).toMatchObject({ state: 'UNSUPPORTED', reasons: ['candidate_incomplete'] });
       expect(mismatched.report.identityReason).toBe('artifact_digest_mismatch');
       expect(hasPrimaryTopologyAuthority(mismatchedResolution)).toBe(false);
     } finally {
-      writeFileSync(ARTIFACT_PATH, original);
+      fs.readFileSync = originalRead;
     }
+    expect(fs.readFileSync).toBe(originalRead);
+    expect(Buffer.compare(originalRead(ARTIFACT_PATH), pinned)).toBe(0);
     expect(createHash('sha256').update(readArtifact()).digest('hex')).toBe(PINNED_ARTIFACT_SHA256);
   });
 

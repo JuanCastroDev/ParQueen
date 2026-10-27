@@ -65,5 +65,7 @@ jobs:
       - name: Install functions dependencies
         run: npm ci --prefix functions
 
-      - name: Run unit tests
-        run: npm test
+      # General PR suite only. The script reports the one excluded private
+      # provenance file. npm test itself is unchanged.
+      - name: Run general PR unit tests
+        run: node scripts/ci/general-pr-suite.mjs
