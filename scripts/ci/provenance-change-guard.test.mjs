@@ -1,4 +1,6 @@
 import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -6,19 +8,59 @@ import { decisionForPath, pathsFromNameStatus } from './provenance-change-guard.
 
 const guard = fileURLToPath(new URL('./provenance-change-guard.mjs', import.meta.url));
 const repo = path.resolve(path.dirname(guard), '../..');
-const mainSha = '84261ef46dd3babd8ac2942e90b448c47dd646fa';
-const pr297 = 'a4575c13d07ab194eaf67fbb37538beb1ac31976';
+const HARNESS_FILES = [
+  'views/street-parking/handoffReachability.regression.test.ts',
+  'views/street-parking/handoffHarnessTeardown.regression.test.ts',
+];
 
-function runGuard(args = [], env = {}) {
+function guardEnv(env = {}) {
   const childEnv = { ...process.env, ...env };
   for (const key of ['PR_BASE_SHA', 'PR_HEAD_SHA', 'PR_NUMBER', 'GITHUB_EVENT_NAME']) {
     if (!(key in env)) delete childEnv[key];
   }
+  for (const key of ['PR_NUMBER', 'GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_ENTERPRISE_TOKEN', 'GH_ENTERPRISE_TOKEN']) {
+    delete childEnv[key];
+  }
+  return childEnv;
+}
+
+function runGuard(args = [], env = {}, cwd = repo) {
   return spawnSync(process.execPath, [guard, ...args], {
-    cwd: repo,
-    env: childEnv,
+    cwd,
+    env: guardEnv(env),
     encoding: 'utf8',
   });
+}
+
+function gitIn(cwd, args) {
+  const result = spawnSync('git', [
+    '-c', 'user.name=provenance-guard-test',
+    '-c', 'user.email=provenance-guard-test@example.com',
+    '-c', 'commit.gpgsign=false',
+    ...args,
+  ], {
+    cwd,
+    encoding: 'utf8',
+    env: guardEnv(),
+  });
+  if (result.status !== 0) {
+    throw new Error(result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+  }
+  return result.stdout.trim();
+}
+
+function withSyntheticRepo(run) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'parqueen-guard-'));
+  try {
+    gitIn(dir, ['init', '-b', 'main']);
+    writeFileSync(path.join(dir, 'README.txt'), 'harmless fixture\n');
+    gitIn(dir, ['add', '--', 'README.txt']);
+    gitIn(dir, ['commit', '-m', 'base']);
+    const base = gitIn(dir, ['rev-parse', 'HEAD']);
+    run(dir, base);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 describe('provenance change classification', () => {
@@ -108,8 +150,6 @@ describe('provenance change guard command', () => {
   it('fails closed for workflow_dispatch and an unreadable file argument', () => {
     const dispatched = runGuard([], {
       GITHUB_EVENT_NAME: 'workflow_dispatch',
-      PR_BASE_SHA: mainSha,
-      PR_HEAD_SHA: pr297,
     });
     expect(dispatched.status).toBe(1);
     expect(dispatched.stderr).toContain('FAIL_CLOSED');
@@ -138,16 +178,60 @@ describe('provenance change guard command', () => {
     expect(result.stdout).not.toContain('PROVENANCE_GUARD: PASS');
   });
 
-  it('passes PR 297 harness files and keeps a portable test non-critical', () => {
-    const harness = runGuard([], {
-      GITHUB_EVENT_NAME: 'pull_request',
-      PR_BASE_SHA: mainSha,
-      PR_HEAD_SHA: pr297,
-    });
-    expect(harness.status).toBe(0);
-    expect(harness.stdout).toContain('PROVENANCE_GUARD: PASS');
-    expect(harness.stdout).toContain('GENERAL_PR_SUITE_EXCLUSION: functions/curbIntelligence/provenanceAndConflict.test.cjs');
+  it('passes a two-file harness diff through the real git classifier', () => {
+    withSyntheticRepo((dir, base) => {
+      for (const file of HARNESS_FILES) {
+        const full = path.join(dir, file);
+        mkdirSync(path.dirname(full), { recursive: true });
+        writeFileSync(full, 'export {}\n');
+      }
+      gitIn(dir, ['add', '--', ...HARNESS_FILES]);
+      gitIn(dir, ['commit', '-m', 'harness']);
+      const head = gitIn(dir, ['rev-parse', 'HEAD']);
+      const names = gitIn(dir, ['diff', '--name-only', `${base}...${head}`]);
+      expect(names.split(/\r?\n/).filter(Boolean).sort()).toEqual([...HARNESS_FILES].sort());
 
+      const harness = runGuard([], {
+        GITHUB_EVENT_NAME: 'pull_request',
+        PR_BASE_SHA: base,
+        PR_HEAD_SHA: head,
+      }, dir);
+      expect(harness.status).toBe(0);
+      expect(harness.stdout).toContain('PROVENANCE_GUARD: PASS');
+      expect(harness.stdout).toContain('GENERAL_PR_SUITE_EXCLUSION: functions/curbIntelligence/provenanceAndConflict.test.cjs');
+    });
+  });
+
+  it('fails closed when a synthetic diff modifies functions/index.js', () => {
+    withSyntheticRepo((dir, base) => {
+      const index = path.join(dir, 'functions', 'index.js');
+      mkdirSync(path.dirname(index), { recursive: true });
+      writeFileSync(index, 'export {}\n');
+      gitIn(dir, ['add', '--', 'functions/index.js']);
+      gitIn(dir, ['commit', '-m', 'add index']);
+      const added = gitIn(dir, ['rev-parse', 'HEAD']);
+      writeFileSync(index, 'export const marker = 1;\n');
+      gitIn(dir, ['add', '--', 'functions/index.js']);
+      gitIn(dir, ['commit', '-m', 'modify index']);
+      const head = gitIn(dir, ['rev-parse', 'HEAD']);
+      const names = gitIn(dir, ['diff', '--name-only', `${added}...${head}`]);
+      expect(names.trim()).toBe('functions/index.js');
+
+      const result = runGuard([], {
+        GITHUB_EVENT_NAME: 'pull_request',
+        PR_BASE_SHA: added,
+        PR_HEAD_SHA: head,
+      }, dir);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('PROVENANCE_GUARD: FAIL_CLOSED');
+      expect(result.stderr).toContain('PRIVATE_PROVENANCE_VERIFICATION_REQUIRED');
+      expect(result.stderr).toContain('CRITICAL functions/index.js');
+      expect(result.stdout).not.toContain('PROVENANCE_GUARD: PASS');
+      expect(base).toMatch(/^[0-9a-f]{40}$/);
+    });
+  });
+
+  it('keeps a portable test non-critical on the command path', () => {
     const portable = runGuard([
       '--file', 'functions/curbIntelligence/streetContextDryRun.test.js',
       '--file', 'functions/curbIntelligence/fixtures/si-block-association-02-physicalid-5.json',
