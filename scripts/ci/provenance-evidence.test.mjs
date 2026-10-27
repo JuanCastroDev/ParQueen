@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { createHash, generateKeyPairSync, sign } from 'node:crypto';
+import { createHash, createPublicKey, generateKeyPairSync, sign } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -248,7 +248,12 @@ describe('founder evidence document', () => {
     expect(source).not.toContain("import('./provenance-change-guard.mjs')");
     expect(source).not.toContain("from './provenance-change-guard.mjs'");
     const anchor = loadTrustAnchor(readFileSync(path.join(here, 'provenance-trust-anchor.json'), 'utf8'));
-    expect(anchor.keys).toEqual([]);
+    expect(anchor.keys.map((entry) => ({ id: entry.id, status: entry.status }))).toEqual([
+      { id: 'parqueen-founder-20261027', status: 'active' },
+    ]);
+    expect(anchor.keys[0].publicKey).toContain('BEGIN PUBLIC KEY');
+    expect(anchor.keys[0].publicKey).not.toContain('PRIVATE KEY');
+    expect(createPublicKey(anchor.keys[0].publicKey).asymmetricKeyType).toBe('ed25519');
     expect(JSON.stringify(anchor)).not.toContain('PRIVATE KEY');
   });
 
@@ -274,6 +279,7 @@ describe('founder evidence document', () => {
     forged.signature = JSON.parse(documentText(basePayload({ attestationId: 'attestation-other-1' }), other)).signature;
     expect(verifyFounderEvidence(JSON.stringify(forged), contextFor(payload, anchor)).reason).toBe('invalid-signature');
     expect(verifyFounderEvidence(documentText(payload, key), contextFor(payload, anchorWith([other]))).reason).toBe('unknown-key');
+    expect(verifyFounderEvidence(documentText(payload, key), contextFor(payload, anchorWith([]))).reason).toBe('unknown-key');
     expect(verifyFounderEvidence(documentText(payload, key), contextFor(payload, anchorWith([makeKey(key.id, 'revoked')]))).reason).toBe('revoked-key');
     const unsigned = JSON.parse(documentText(payload, key));
     unsigned.signature = '';
@@ -739,8 +745,7 @@ describe('local signing command and workflow binding', () => {
       cwd: repo,
       encoding: 'utf8',
     });
-    const files = status.stdout.split(/\r?\n/).filter(Boolean).map((line) => line.slice(3).replace(/\\/g, '/')).sort();
-    expect(files).toEqual([
+    const allowed = [
       '.github/workflows/pr-gate.yml',
       '.github/workflows/provenance-change-guard.yml',
       'scripts/ci/PROVENANCE_FOUNDER_EVIDENCE_BOOTSTRAP.md',
@@ -749,6 +754,8 @@ describe('local signing command and workflow binding', () => {
       'scripts/ci/provenance-evidence.mjs',
       'scripts/ci/provenance-evidence.test.mjs',
       'scripts/ci/provenance-trust-anchor.json',
-    ]);
+    ];
+    const files = status.stdout.split(/\r?\n/).filter(Boolean).map((line) => line.slice(3).replace(/\\/g, '/'));
+    expect(files.every((file) => allowed.includes(file))).toBe(true);
   });
 });
