@@ -3,7 +3,7 @@
 const { readFileSync } = require('fs');
 const { join } = require('path');
 const { initializeApp, getApps } = require('firebase-admin/app');
-const { getFirestore, FieldValue } = require('firebase-admin/firestore');
+const { getFirestore, FieldValue, Timestamp } = require('firebase-admin/firestore');
 const { getAuth } = require('firebase-admin/auth');
 const { initializeTestEnvironment, assertFails, assertSucceeds } = require('@firebase/rules-unit-testing');
 const { doc, setDoc } = require('firebase/firestore');
@@ -367,5 +367,404 @@ describe('product access enforcement', () => {
     await expect(assertProductAccess(fresh)).rejects.toMatchObject({ code: 'permission-denied' });
     await db.doc(`users/${fresh}`).update({ productAccessBlocked: FieldValue.delete() });
     await expect(assertProductAccess(fresh)).resolves.toBeUndefined();
+  });
+
+  async function audits(uid) {
+    const snap = await db.collection('adminAuditLog').where('targetUserId', '==', uid).get();
+    return snap.docs.map((docSnap) => docSnap.data());
+  }
+
+  function named(rows, action) {
+    return rows.filter((row) => row.action === action);
+  }
+
+  async function expectCallableDenied(uid) {
+    const sent = await _sendMessageHandler(req(uid, {
+      chatId: `race_${uid}`, clientRequestId: `req_${uid.slice(-12)}`, text: 'hi',
+    })).catch((err) => err);
+    expect(sent.code).toBe('permission-denied');
+    expect(sent.message).toBe(PRODUCT_ACCESS_DENIED);
+  }
+
+  async function expectRulesDenied(uid) {
+    const client = rulesEnv.authenticatedContext(uid);
+    await assertFails(setDoc(doc(client.firestore(), 'users', uid, 'private', 'preferences'), { lang: 'en' }));
+    await assertFails(uploadBytes(ref(client.storage(), `avatarUploads/${uid}/race/original`), JPEG, IMAGE));
+  }
+
+  async function expectRulesAllowed(uid) {
+    const client = rulesEnv.authenticatedContext(uid);
+    await assertSucceeds(setDoc(doc(client.firestore(), 'users', uid, 'private', 'preferences'), { lang: 'en' }));
+  }
+
+  function holdBeforeAuth(opName) {
+    let release = () => {};
+    const gate = new Promise((resolve) => { release = resolve; });
+    let holding = () => {};
+    const holdingP = new Promise((resolve) => { holding = resolve; });
+    _suspensionConcurrencyHooks.acquireAttempts = 1;
+    _suspensionConcurrencyHooks.beforeAuthRpc = async ({ op }) => {
+      if (op !== opName) return;
+      holding();
+      await gate;
+    };
+    return { release, holdingP };
+  }
+
+  async function expireLease(uid) {
+    const ref = db.doc(`users/${uid}/private/suspensionLock`);
+    const snap = await ref.get();
+    expect(snap.exists).toBe(true);
+    await ref.update({ leaseExpiresAt: Timestamp.fromMillis(Date.now() - 1000) });
+    return snap.data().ownerOperationId;
+  }
+
+  it('A: an in-flight suspend rejects unsuspend and denies access before Auth is disabled', async () => {
+    const admin = await adminCaller();
+    const target = await user('overlapA', { status: 'Active', username: 'a' });
+    const authCalls = [];
+    const auth = getAuth();
+    const orig = auth.updateUser.bind(auth);
+    auth.updateUser = async (uid, props) => {
+      if (uid === target) authCalls.push(props && props.disabled);
+      return orig(uid, props);
+    };
+    const held = holdBeforeAuth('suspend');
+    const suspendP = runCall(adminSuspendUser, req(admin, { userId: target, reason: 'spam' }, 'admin'));
+    try {
+      await held.holdingP;
+      const mid = (await db.doc(`users/${target}`).get()).data();
+      expect(mid.status).toBe('Suspended');
+      expect(mid.productAccessBlocked).toBe(true);
+      expect((await adminAuth.getUser(target)).disabled).toBe(false);
+      await expectCallableDenied(target);
+      await expectRulesDenied(target);
+      const raced = await runCall(adminUnsuspendUser, req(admin, { userId: target }, 'admin'));
+      expect(raced.error.code).toBe('aborted');
+      expect(raced.error.message).toMatch(/in progress/);
+      expect(authCalls).toEqual([]);
+    } finally {
+      held.release();
+      auth.updateUser = orig;
+    }
+    expect((await suspendP).result).toEqual({ success: true });
+    expect((await adminAuth.getUser(target)).disabled).toBe(true);
+    const rows = await audits(target);
+    expect(named(rows, 'user.suspend')).toHaveLength(1);
+    expect(named(rows, 'user.unsuspend')).toHaveLength(0);
+    expect((await db.doc(`users/${target}/private/suspensionLock`).get()).exists).toBe(false);
+
+    _suspensionConcurrencyHooks.beforeAuthRpc = null;
+    _suspensionConcurrencyHooks.acquireAttempts = null;
+    expect((await runCall(adminUnsuspendUser, req(admin, { userId: target }, 'admin'))).result).toEqual({ success: true });
+    const after = await audits(target);
+    expect(named(after, 'user.suspend')).toHaveLength(1);
+    expect(named(after, 'user.unsuspend')).toHaveLength(1);
+  });
+
+  it('B: an in-flight unsuspend rejects suspend, and a later suspend appends its own audit', async () => {
+    const admin = await adminCaller();
+    const target = await user('overlapB', { status: 'Active', username: 'b' });
+    expect((await runCall(adminSuspendUser, req(admin, { userId: target, reason: 'spam' }, 'admin'))).result).toEqual({ success: true });
+    const held = holdBeforeAuth('unsuspend');
+    const unsuspendP = runCall(adminUnsuspendUser, req(admin, { userId: target }, 'admin'));
+    try {
+      await held.holdingP;
+      const mid = (await db.doc(`users/${target}`).get()).data();
+      expect(mid.status).toBe('Active');
+      expect(mid.productAccessBlocked).toBe(true);
+      expect((await adminAuth.getUser(target)).disabled).toBe(true);
+      await expectCallableDenied(target);
+      const raced = await runCall(adminSuspendUser, req(admin, { userId: target, reason: 'again' }, 'admin'));
+      expect(raced.error.code).toBe('aborted');
+      expect(raced.error.message).toMatch(/in progress/);
+      expect(named(await audits(target), 'user.suspend')).toHaveLength(1);
+    } finally {
+      held.release();
+    }
+    expect((await unsuspendP).result).toEqual({ success: true });
+    expect((await db.doc(`users/${target}`).get()).data().productAccessBlocked).toBeUndefined();
+    expect((await adminAuth.getUser(target)).disabled).toBe(false);
+
+    _suspensionConcurrencyHooks.beforeAuthRpc = null;
+    _suspensionConcurrencyHooks.acquireAttempts = null;
+    expect((await runCall(adminSuspendUser, req(admin, { userId: target, reason: 'later' }, 'admin'))).result).toEqual({ success: true });
+    const rows = await audits(target);
+    expect(named(rows, 'user.suspend')).toHaveLength(2);
+    expect(named(rows, 'user.unsuspend')).toHaveLength(1);
+    expect(named(rows, 'user.suspend').every((row) => row.outcome !== 'partial')).toBe(true);
+  });
+
+  it('C, D, and H: a successor suspend replaces an expired unsuspend lease and the stale enable cannot clear it', async () => {
+    const admin = await adminCaller();
+    const target = await user('leaseD', { status: 'Active', username: 'd' });
+    expect((await runCall(adminSuspendUser, req(admin, { userId: target, reason: 'spam' }, 'admin'))).result).toEqual({ success: true });
+    const auth = getAuth();
+    const orig = auth.updateUser.bind(auth);
+    let releaseEnable = () => {};
+    const enableGate = new Promise((resolve) => { releaseEnable = resolve; });
+    let enableStarted = () => {};
+    const enableStartedP = new Promise((resolve) => { enableStarted = resolve; });
+    let sawEnabledAfterSuccessor = false;
+    auth.updateUser = async (uid, props) => {
+      if (uid === target && props && props.disabled === false && !sawEnabledAfterSuccessor) {
+        enableStarted();
+        await enableGate;
+        const result = await orig(uid, props);
+        sawEnabledAfterSuccessor = (await adminAuth.getUser(uid)).disabled === false;
+        return result;
+      }
+      return orig(uid, props);
+    };
+    const unsuspendP = runCall(adminUnsuspendUser, req(admin, { userId: target }, 'admin'));
+    try {
+      await enableStartedP;
+      const during = (await db.doc(`users/${target}`).get()).data();
+      expect(during.status).toBe('Active');
+      expect(during.productAccessBlocked).toBe(true);
+      expect((await adminAuth.getUser(target)).disabled).toBe(true);
+      await expectCallableDenied(target);
+      const staleOwner = await expireLease(target);
+      let replaced = () => {};
+      const replacedP = new Promise((resolve) => { replaced = resolve; });
+      let successorOwner = null;
+      _suspensionConcurrencyHooks.afterLockAcquired = async ({ ownerOperationId }) => {
+        successorOwner = ownerOperationId;
+        replaced();
+      };
+      const suspendP = runCall(adminSuspendUser, req(admin, { userId: target, reason: 'successor' }, 'admin'));
+      await replacedP;
+      expect(successorOwner).toBeTruthy();
+      expect(successorOwner).not.toBe(staleOwner);
+      expect((await suspendP).result).toEqual({ success: true });
+      const successor = (await db.doc(`users/${target}`).get()).data();
+      expect(successor.status).toBe('Suspended');
+      expect(successor.productAccessBlocked).toBe(true);
+      expect((await adminAuth.getUser(target)).disabled).toBe(true);
+      await expectCallableDenied(target);
+      releaseEnable();
+      const stale = await unsuspendP;
+      expect(stale.error.code).toBe('aborted');
+      expect(stale.error.message).toMatch(/ownership lost/i);
+      expect(sawEnabledAfterSuccessor).toBe(true);
+      const finalDoc = (await db.doc(`users/${target}`).get()).data();
+      expect(finalDoc.status).toBe('Suspended');
+      expect(finalDoc.productAccessBlocked).toBe(true);
+      expect((await adminAuth.getUser(target)).disabled).toBe(true);
+      const rows = await audits(target);
+      expect(named(rows, 'user.unsuspend')).toHaveLength(0);
+      expect(named(rows, 'user.unsuspend.pending')).toHaveLength(1);
+      expect(named(rows, 'user.suspend').length).toBeGreaterThanOrEqual(2);
+      await expectCallableDenied(target);
+    } finally {
+      releaseEnable();
+      auth.updateUser = orig;
+      _suspensionConcurrencyHooks.afterLockAcquired = null;
+    }
+  });
+
+  it('C and E: a successor unsuspend replaces an expired suspend lease, then the late disable leaves Active with Auth disabled', async () => {
+    const admin = await adminCaller();
+    const target = await user('leaseE', { status: 'Active', username: 'e' });
+    const auth = getAuth();
+    const orig = auth.updateUser.bind(auth);
+    let releaseDisable = () => {};
+    const disableGate = new Promise((resolve) => { releaseDisable = resolve; });
+    let disableStarted = () => {};
+    const disableStartedP = new Promise((resolve) => { disableStarted = resolve; });
+    let sawLateDisable = false;
+    let disableEntered = false;
+    auth.updateUser = async (uid, props) => {
+      if (uid === target && props && props.disabled === true && !disableEntered) {
+        disableEntered = true;
+        disableStarted();
+        await disableGate;
+        const result = await orig(uid, props);
+        sawLateDisable = (await adminAuth.getUser(uid)).disabled === true;
+        return result;
+      }
+      return orig(uid, props);
+    };
+    const suspendP = runCall(adminSuspendUser, req(admin, { userId: target, reason: 'spam' }, 'admin'));
+    try {
+      await disableStartedP;
+      const during = (await db.doc(`users/${target}`).get()).data();
+      expect(during.status).toBe('Suspended');
+      expect(during.productAccessBlocked).toBe(true);
+      expect((await adminAuth.getUser(target)).disabled).toBe(false);
+      await expectCallableDenied(target);
+      await expectRulesDenied(target);
+      const staleOwner = await expireLease(target);
+      let replaced = () => {};
+      const replacedP = new Promise((resolve) => { replaced = resolve; });
+      let successorOwner = null;
+      _suspensionConcurrencyHooks.afterLockAcquired = async ({ ownerOperationId }) => {
+        successorOwner = ownerOperationId;
+        replaced();
+      };
+      const unsuspendP = runCall(adminUnsuspendUser, req(admin, { userId: target }, 'admin'));
+      await replacedP;
+      expect(successorOwner).not.toBe(staleOwner);
+      expect((await unsuspendP).result).toEqual({ success: true });
+      const recovered = (await db.doc(`users/${target}`).get()).data();
+      expect(recovered.status).toBe('Active');
+      expect(recovered.productAccessBlocked).toBeUndefined();
+      expect((await adminAuth.getUser(target)).disabled).toBe(false);
+      releaseDisable();
+      const stale = await suspendP;
+      expect(stale.error.code).toBe('aborted');
+      expect(stale.error.message).toMatch(/ownership lost/i);
+      expect(sawLateDisable).toBe(true);
+      const finalDoc = (await db.doc(`users/${target}`).get()).data();
+      expect(finalDoc.status).toBe('Active');
+      expect(finalDoc.productAccessBlocked).toBeUndefined();
+      expect((await adminAuth.getUser(target)).disabled).toBe(true);
+      await expect(assertProductAccess(target)).resolves.toBeUndefined();
+      const sent = await _sendMessageHandler(req(target, {
+        chatId: `open_${target}`, clientRequestId: 'req_late_disable', text: 'hi',
+      })).catch((err) => err);
+      expect(sent.code).toBe('not-found');
+      await expectRulesAllowed(target);
+      const signIn = await fetch(
+        'http://localhost:9099/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=fake-key',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: await adminAuth.createCustomToken(target), returnSecureToken: true }),
+        },
+      );
+      const body = await signIn.json();
+      expect(body.idToken).toBeUndefined();
+      expect(JSON.stringify(body)).toMatch(/USER_DISABLED/);
+      const rows = await audits(target);
+      expect(named(rows, 'user.suspend')).toHaveLength(0);
+      expect(named(rows, 'user.suspend.pending')).toHaveLength(1);
+      expect(named(rows, 'user.unsuspend')).toHaveLength(1);
+    } finally {
+      releaseDisable();
+      auth.updateUser = orig;
+      _suspensionConcurrencyHooks.afterLockAcquired = null;
+    }
+  });
+
+  it('F: a disable that applies and then reports failure is confirmed from getUser', async () => {
+    const admin = await adminCaller();
+    const target = await user('ackF', { status: 'Active', username: 'f' });
+    const auth = getAuth();
+    const orig = auth.updateUser.bind(auth);
+    auth.updateUser = async (uid, props) => {
+      const result = await orig(uid, props);
+      if (uid === target && props && props.disabled === true) {
+        throw Object.assign(new Error('ack lost'), { code: 'auth/internal-error' });
+      }
+      return result;
+    };
+    try {
+      const result = await runCall(adminSuspendUser, req(admin, { userId: target, reason: 'spam' }, 'admin'));
+      expect(result.error).toBeUndefined();
+      expect(result.result).toEqual({ success: true });
+      expect((await adminAuth.getUser(target)).disabled).toBe(true);
+      const docData = (await db.doc(`users/${target}`).get()).data();
+      expect(docData.status).toBe('Suspended');
+      expect(docData.productAccessBlocked).toBe(true);
+      const rows = await audits(target);
+      expect(named(rows, 'user.suspend')).toHaveLength(1);
+      expect(named(rows, 'user.suspend.partial')).toHaveLength(0);
+      await expectCallableDenied(target);
+    } finally {
+      auth.updateUser = orig;
+    }
+  });
+
+  it('G: an unconfirmed Auth update stays unconfirmed and keeps the deny flag', async () => {
+    const admin = await adminCaller();
+    const suspendTarget = await user('ackG', { status: 'Active', username: 'g' });
+    const auth = getAuth();
+    const origUpdate = auth.updateUser.bind(auth);
+    const origGet = auth.getUser.bind(auth);
+    const reads = new Map();
+    auth.getUser = async (uid) => {
+      if (uid !== suspendTarget) return origGet(uid);
+      const seen = (reads.get(uid) || 0) + 1;
+      reads.set(uid, seen);
+      if (seen === 1) return origGet(uid);
+      throw Object.assign(new Error('readback failed'), { code: 'auth/internal-error' });
+    };
+    auth.updateUser = async (uid, props) => {
+      if (uid === suspendTarget) throw Object.assign(new Error('update failed'), { code: 'auth/internal-error' });
+      return origUpdate(uid, props);
+    };
+    try {
+      const failed = await runCall(adminSuspendUser, req(admin, { userId: suspendTarget, reason: 'spam' }, 'admin'));
+      expect(failed.error.code).toBe('aborted');
+      expect(failed.error.message).toMatch(/could not be confirmed/i);
+      expect(failed.error.message).not.toMatch(/Nothing was changed/);
+      expect(failed.error.details).toMatchObject({ partial: true, authDisabled: null, productAccessBlocked: true, recordWritten: true });
+      expect((await adminAuth.getUser(suspendTarget)).disabled).toBe(false);
+      const suspended = (await db.doc(`users/${suspendTarget}`).get()).data();
+      expect(suspended.status).toBe('Suspended');
+      expect(suspended.productAccessBlocked).toBe(true);
+      await expectCallableDenied(suspendTarget);
+      const suspendRows = await audits(suspendTarget);
+      expect(named(suspendRows, 'user.suspend')).toHaveLength(0);
+      expect(named(suspendRows, 'user.suspend.partial').some((row) => row.authDisabled === null && row.failedStep === 'disable')).toBe(true);
+    } finally {
+      auth.updateUser = origUpdate;
+      auth.getUser = origGet;
+    }
+
+    const unsuspendTarget = await user('ackG2', { status: 'Active', username: 'g2' });
+    expect((await runCall(adminSuspendUser, req(admin, { userId: unsuspendTarget, reason: 'spam' }, 'admin'))).result).toEqual({ success: true });
+    const readsAfter = new Map();
+    auth.getUser = async (uid) => {
+      if (uid !== unsuspendTarget) return origGet(uid);
+      const seen = (readsAfter.get(uid) || 0) + 1;
+      readsAfter.set(uid, seen);
+      if (seen === 1) return origGet(uid);
+      throw Object.assign(new Error('readback failed'), { code: 'auth/internal-error' });
+    };
+    auth.updateUser = async (uid, props) => {
+      if (uid === unsuspendTarget && props && props.disabled === false) {
+        throw Object.assign(new Error('enable failed'), { code: 'auth/internal-error' });
+      }
+      return origUpdate(uid, props);
+    };
+    try {
+      const failed = await runCall(adminUnsuspendUser, req(admin, { userId: unsuspendTarget }, 'admin'));
+      expect(failed.error.code).toBe('aborted');
+      expect(failed.error.message).toMatch(/could not be confirmed/i);
+      expect(failed.error.message).not.toMatch(/Nothing was changed/);
+      expect(failed.error.details).toMatchObject({
+        partial: true, authDisabled: null, productAccessBlocked: true, recordWritten: true,
+      });
+      expect(failed.error.details.authState).toBeUndefined();
+      const pending = (await db.doc(`users/${unsuspendTarget}`).get()).data();
+      expect(pending.status).toBe('Active');
+      expect(pending.productAccessBlocked).toBe(true);
+      expect((await adminAuth.getUser(unsuspendTarget)).disabled).toBe(true);
+      await expectCallableDenied(unsuspendTarget);
+      const rows = await audits(unsuspendTarget);
+      expect(named(rows, 'user.unsuspend')).toHaveLength(0);
+      expect(named(rows, 'user.unsuspend.partial').some((row) => row.authState === 'unconfirmed' && row.authDisabled === null)).toBe(true);
+    } finally {
+      auth.updateUser = origUpdate;
+      auth.getUser = origGet;
+    }
+  });
+
+  it('I: a completed suspension still denies product access after a delayed Auth enable', async () => {
+    const admin = await adminCaller();
+    const target = await user('lateI', { status: 'Active', username: 'i' });
+    expect((await runCall(adminSuspendUser, req(admin, { userId: target, reason: 'spam' }, 'admin'))).result).toEqual({ success: true });
+    await adminAuth.updateUser(target, { disabled: false });
+    expect((await adminAuth.getUser(target)).disabled).toBe(false);
+    const stored = (await db.doc(`users/${target}`).get()).data();
+    expect(stored.status).toBe('Suspended');
+    expect(stored.productAccessBlocked).toBe(true);
+    await expectCallableDenied(target);
+    await expectRulesDenied(target);
+    const rows = await audits(target);
+    expect(named(rows, 'user.suspend')).toHaveLength(1);
+    expect(named(rows, 'user.unsuspend')).toHaveLength(0);
   });
 });
