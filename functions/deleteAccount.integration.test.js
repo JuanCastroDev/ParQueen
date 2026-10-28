@@ -1266,14 +1266,72 @@ describe('deleteAccount — Storage cleanup integrity', () => {
 
     it('DAS-07 (scope): objects of a user whose UID merely starts with this UID are never touched', async () => {
         const neighbor = `${uid}x`;
+        // The live uploads marker stays inside avatarUploads/<neighbor>/ but is
+        // not named original. moderateAvatarUpload returns before deleting any
+        // other name. A non-slash-terminated uploads prefix still matches it.
+        const neighborPaths = [
+            `avatarUploads/${neighbor}/up1/scope-marker`,
+            `avatarCandidates/${neighbor}/up1.webp`,
+            `avatars/${neighbor}/up1.webp`,
+            `avatars/${neighbor}`,
+        ];
         await seedFiles(uid);
-        await seedFiles(neighbor);
+        for (const p of neighborPaths) {
+            await testBucket.file(p).save(Buffer.from('x'), { resumable: false, contentType: 'image/webp' });
+        }
         try {
             await callDirect(uid, Math.floor(Date.now() / 1000) - 30);
-            for (const p of paths(neighbor)) expect(await exists(p)).toBe(true);
+            for (const p of neighborPaths) expect(await exists(p), p).toBe(true);
         } finally {
-            for (const p of paths(neighbor)) await testBucket.file(p).delete().catch(() => {});
+            for (const p of neighborPaths) await testBucket.file(p).delete().catch(() => {});
         }
+    });
+
+    it('DAS-07 (prefix control): a missing trailing slash deletes the neighbor original and the slash-terminated helper does not', async () => {
+        const subject = 'das07subject';
+        const neighbor = `${subject}x`;
+        const neighborOriginal = `avatarUploads/${neighbor}/up1/original`;
+        const subjectOriginal = `avatarUploads/${subject}/up1/original`;
+        const preserved = [
+            neighborOriginal,
+            `avatarCandidates/${neighbor}/up1.webp`,
+            `avatars/${neighbor}/up1.webp`,
+            `avatars/${neighbor}`,
+        ];
+        const createPrefixBucket = (initial) => {
+            const names = new Set(initial);
+            const match = (prefix) => [...names].filter((name) => name.startsWith(prefix));
+            return {
+                names,
+                async deleteFiles({ prefix }) {
+                    for (const name of match(prefix)) names.delete(name);
+                },
+                async getFiles({ prefix, maxResults }) {
+                    const found = match(prefix);
+                    const page = Number.isInteger(maxResults) ? found.slice(0, maxResults) : found;
+                    return [page.map((name) => ({ name }))];
+                },
+                file(name) {
+                    return {
+                        name,
+                        async delete() { names.delete(name); },
+                    };
+                },
+            };
+        };
+
+        const unsafe = createPrefixBucket([subjectOriginal, ...preserved]);
+        const [unsafeMatches] = await unsafe.getFiles({ prefix: `avatarUploads/${subject}` });
+        expect(unsafeMatches.map((file) => file.name)).toContain(neighborOriginal);
+        await unsafe.deleteFiles({ prefix: `avatarUploads/${subject}`, force: true });
+        expect(unsafe.names.has(neighborOriginal)).toBe(false);
+        expect(unsafe.names.has(`avatarCandidates/${neighbor}/up1.webp`)).toBe(true);
+
+        const safe = createPrefixBucket([subjectOriginal, ...preserved]);
+        const mod = require('./index.js');
+        await mod._deleteStoragePrefixStrict(safe, `avatarUploads/${subject}/`);
+        expect(safe.names.has(subjectOriginal)).toBe(false);
+        for (const p of preserved) expect(safe.names.has(p), p).toBe(true);
     });
 
     it('DAS-08: strict helper refuses a non-slash-terminated prefix (no prefix over-match)', async () => {
