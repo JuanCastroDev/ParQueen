@@ -6,6 +6,11 @@
     {
       "id": "parqueen-founder-20261027",
       "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA3mg3ui/kNYNim3OtS1Qk6o2Zdy0KcpZXYA+bQDouQKQ=\n-----END PUBLIC KEY-----\n",
+      "status": "revoked"
+    },
+    {
+      "id": "parqueen-founder-20261028-r1",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAdiM0OaUg3sMzA4Wt2OPV42IFZ0njsBRcEUrmZ667StI=\n-----END PUBLIC KEY-----\n",
       "status": "active"
     }
   ]
