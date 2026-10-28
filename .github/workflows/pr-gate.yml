@@ -15,9 +15,9 @@ name: PR Gate
 # CI test-scope policy: the general client suite omits only
 # functions/curbIntelligence/provenanceAndConflict.test.cjs and reports that
 # exclusion. Provenance-critical changes fail closed because GitHub Actions
-# cannot run the genuine 26C successor. This policy requires independent
-# Security/QA acceptance before merge. npm test and release preflight still
-# include the private suite.
+# cannot run the genuine 26C successor. A critical diff passes only when
+# founder-signed FOUNDER-EXECUTED evidence verifies against the base-branch
+# verifier. npm test and release preflight still include the private suite.
 
 on:
   pull_request:
@@ -43,8 +43,27 @@ jobs:
           fetch-depth: 0
 
       # Fail closed when the diff is unknown or touches provenance-critical
-      # Street Intelligence paths. This does not run the private suite and
-      # must not be read as a successful private verification.
+      # paths. The verifier is archived from the base commit, not the pull
+      # request tree. Evidence is one fetched commit and is never executed.
+      - name: Fetch founder evidence as data
+        if: github.event_name != 'workflow_dispatch'
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set +e
+          head="${PR_HEAD_SHA}"
+          if ! printf '%s' "$head" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "FOUNDER_EVIDENCE: MALFORMED_HEAD"
+            exit 0
+          fi
+          ref="refs/parqueen-provenance/evidence/${head}"
+          git fetch --no-tags origin "${ref}:${ref}"
+          if [ "$?" -ne 0 ]; then
+            echo "FOUNDER_EVIDENCE: MISSING"
+          fi
+          exit 0
+
       - name: Provenance change guard
         shell: bash
         env:
@@ -52,7 +71,25 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
-        run: node scripts/ci/provenance-change-guard.mjs
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            node scripts/ci/provenance-change-guard.mjs
+            exit $?
+          fi
+          base="${PR_BASE_SHA}"
+          if ! printf '%s' "$base" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "PROVENANCE_GUARD: FAIL_CLOSED" >&2
+            echo "base sha is not a full commit SHA" >&2
+            exit 1
+          fi
+          work="$(mktemp -d)"
+          git archive "$base" \
+            scripts/ci/provenance-change-guard.mjs \
+            scripts/ci/provenance-evidence.mjs \
+            scripts/ci/provenance-trust-anchor.json \
+            | tar -x -C "$work"
+          node "$work/scripts/ci/provenance-change-guard.mjs"
 
       # Classifies the FULL pull-request diff (base...head, not just the
       # latest commit — see PR #69 for why single-commit diffing is wrong)

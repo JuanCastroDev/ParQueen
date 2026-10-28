@@ -5,10 +5,14 @@ name: Provenance change guard
 # delete this check in the same change that edits provenance-critical code.
 # The job reads the diff only. It does not check out pull-request code, run
 # its tests, receive production credentials, or record a private 26C result.
+# Founder evidence is fetched as one git commit. The job reads the
+# evidence.json blob inside that commit as data. It never executes that
+# blob, pull-request code, or the genuine successor.
 #
 # GitHub runs this file only after it is on the base branch. Until then,
-# provenance-critical changes stay blocked. Independent Security/QA acceptance
-# is required before this policy is merged.
+# provenance-critical changes stay blocked. A critical diff passes only when
+# founder-signed FOUNDER-EXECUTED evidence verifies. That is not a private
+# suite run on GitHub.
 
 on:
   pull_request_target:
@@ -32,11 +36,43 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Fail closed for provenance-critical changes
+      - name: Fetch founder evidence as data
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set +e
+          head="${PR_HEAD_SHA}"
+          if ! printf '%s' "$head" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "FOUNDER_EVIDENCE: MALFORMED_HEAD"
+            exit 0
+          fi
+          ref="refs/parqueen-provenance/evidence/${head}"
+          git fetch --no-tags origin "${ref}:${ref}"
+          if [ "$?" -ne 0 ]; then
+            echo "FOUNDER_EVIDENCE: MISSING"
+          fi
+          exit 0
+
+      - name: Verify founder evidence with the base-branch verifier
         shell: bash
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
-        run: node scripts/ci/provenance-change-guard.mjs
+        run: |
+          set -euo pipefail
+          base="${PR_BASE_SHA}"
+          if ! printf '%s' "$base" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "PROVENANCE_GUARD: FAIL_CLOSED" >&2
+            echo "base sha is not a full commit SHA" >&2
+            exit 1
+          fi
+          work="$(mktemp -d)"
+          git archive "$base" \
+            scripts/ci/provenance-change-guard.mjs \
+            scripts/ci/provenance-evidence.mjs \
+            scripts/ci/provenance-trust-anchor.json \
+            | tar -x -C "$work"
+          node "$work/scripts/ci/provenance-change-guard.mjs"
