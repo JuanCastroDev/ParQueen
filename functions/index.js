@@ -43,6 +43,7 @@ const { joinMutualSuccess } = require('./mutualSuccessJoin');
 const { releasedInterestPatch } = require('./activeIncomingClaimLogic');
 const { requireCurrentAdmin, requireCurrentAuthenticatedUser } = require('./adminAuth');
 const { assertProductAccess, userRecordDenies } = require('./productAccess');
+const { cancelClaim: cancelClaimHandler } = require('./cancelClaim');
 exports._productAccessHooks = { beforeProtectedWrite: null };
 const { isSweepNYCData, computeSegmentUpdate, computeRuleUpdate } = require('./backfillLogic');
 const {
@@ -2367,6 +2368,17 @@ exports.updateDisplayName = onCall(
     serviceAccount: 'parqueen-user@parkqueen-46475363-ccf36.iam.gserviceaccount.com',
   },
   updateDisplayNameHandler
+);
+
+// Claimer cancellation. The callable passes only the Firebase request.
+// Server deps and test hooks are not taken from request.data.
+exports.cancelClaim = onCall(
+  {
+    region: 'us-central1',
+    enforceAppCheck: true,
+    serviceAccount: 'parqueen-cancel@parkqueen-46475363-ccf36.iam.gserviceaccount.com',
+  },
+  (request) => cancelClaimHandler(request)
 );
 
 // 10) Award crowns on a mutual parking handoff.

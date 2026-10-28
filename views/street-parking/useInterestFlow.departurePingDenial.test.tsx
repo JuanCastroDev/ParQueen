@@ -74,7 +74,7 @@ vi.mock('firebase/firestore', () => ({
   where: vi.fn(),
 }));
 
-vi.mock('./cancelClaimTransaction', () => ({ cancelClaimTransaction: vi.fn() }));
+vi.mock('./cancelClaimCallable', () => ({ cancelClaimCallable: vi.fn() }));
 vi.mock('../../utils/errorReporting', () => ({ reportCriticalActionFailure: vi.fn() }));
 
 import { useInterestFlow } from './useInterestFlow';

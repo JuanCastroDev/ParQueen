@@ -61,8 +61,8 @@ vi.mock('firebase/firestore', () => ({
   increment: vi.fn((n: number) => ({ __increment: n })),
 }));
 
-const { cancelClaimTransaction } = vi.hoisted(() => ({ cancelClaimTransaction: vi.fn() }));
-vi.mock('./cancelClaimTransaction', () => ({ cancelClaimTransaction }));
+const { cancelClaimCallable } = vi.hoisted(() => ({ cancelClaimCallable: vi.fn() }));
+vi.mock('./cancelClaimCallable', () => ({ cancelClaimCallable }));
 
 const { reportCriticalActionFailure } = vi.hoisted(() => ({ reportCriticalActionFailure: vi.fn() }));
 vi.mock('../../utils/errorReporting', () => ({ reportCriticalActionFailure }));
@@ -100,7 +100,7 @@ describe('useInterestFlow — critical-action failure reporting', () => {
   beforeEach(() => {
     reportCriticalActionFailure.mockClear();
     runTransaction.mockReset();
-    cancelClaimTransaction.mockReset();
+    cancelClaimCallable.mockReset();
     getDocs.mockClear();
     updateDoc.mockClear();
     deleteDoc.mockClear();
@@ -160,7 +160,7 @@ describe('useInterestFlow — critical-action failure reporting', () => {
   });
 
   it('handleCancelByClaimer: a failed cancellation reports claim_cancel exactly once, with no spot/finder ids, and still shows the existing generic error copy', async () => {
-    cancelClaimTransaction.mockRejectedValue(txError);
+    cancelClaimCallable.mockRejectedValue(txError);
     const getFlow = mount();
 
     await act(async () => { await getFlow().handleCancelByClaimer('Changed my mind'); });
@@ -176,7 +176,7 @@ describe('useInterestFlow — critical-action failure reporting', () => {
   });
 
   it('handleCancelByClaimer: a successful cancellation reports zero failures', async () => {
-    cancelClaimTransaction.mockResolvedValue('cancelled');
+    cancelClaimCallable.mockResolvedValue('cancelled');
     const getFlow = mount();
 
     await act(async () => { await getFlow().handleCancelByClaimer('Changed my mind'); });
@@ -186,14 +186,14 @@ describe('useInterestFlow — critical-action failure reporting', () => {
 
   it('handleCancelByClaimer: duplicate-tap protection is unchanged — a second concurrent call is a no-op', async () => {
     let resolveCancel!: (v: string) => void;
-    cancelClaimTransaction.mockReturnValue(new Promise((resolve) => { resolveCancel = resolve; }));
+    cancelClaimCallable.mockReturnValue(new Promise((resolve) => { resolveCancel = resolve; }));
     const getFlow = mount();
 
     let firstCall!: Promise<void>;
     act(() => { firstCall = getFlow().handleCancelByClaimer('Changed my mind'); });
     // Second tap while the first is still in flight.
     await act(async () => { await getFlow().handleCancelByClaimer('Changed my mind'); });
-    expect(cancelClaimTransaction).toHaveBeenCalledTimes(1);
+    expect(cancelClaimCallable).toHaveBeenCalledTimes(1);
 
     resolveCancel('cancelled');
     await act(async () => { await firstCall; });

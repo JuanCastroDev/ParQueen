@@ -6,7 +6,7 @@ import { getDistance, drawRoute, clearRoute, NYC_CENTER } from './utils';
 import { getTitleForCrowns } from '../../utils/crowns';
 import { getPingExpiresAtMs, timestampToMillis } from '../../utils/pingLifecycle';
 import { commitPingCreate, PING_SCHEDULE_HORIZON_MS, PingCreateRejected } from './pingCreateBounds';
-import { cancelClaimTransaction } from './cancelClaimTransaction';
+import { cancelClaimCallable } from './cancelClaimCallable';
 import { acquireActiveIncomingClaim, ALREADY_CLAIMED_MESSAGE, markClaimArrived } from './activeIncomingClaim';
 import { commitClaimToHeading } from './commitToHeading';
 import { reportClaimFailure, reportClaimCancelFailure } from './claimFailureReporting';
@@ -605,24 +605,20 @@ export function useInterestFlow({
 
     const handleCancelByClaimer = async (reason: string) => {
         if (!selectedItem || !user || !db || cancelingClaimRef.current || claimingRef.current || arrivingRef.current) return;
-        const messages: Record<string, string> = {
-            "Found parking elsewhere": "The driver found parking elsewhere — your spot is available again.",
-            "Traffic is too heavy": "The driver got stuck in traffic — your spot is available again.",
-            "Changed my mind": "The driver changed their mind — your spot is available again.",
-        };
 
         cancelingClaimRef.current = true;
         setCancelingClaim(true);
         setInterestError(null);
 
         try {
-            await cancelClaimTransaction(db, {
+            const outcome = await cancelClaimCallable({
                 spotId: selectedItem.id,
-                claimantId: user.id,
-                finderId: selectedItem.finderId ?? null,
                 fingerprint: claimFingerprint(selectedItem),
-                message: messages[reason] ?? "The other driver canceled — your spot is available again.",
+                reason,
             });
+            if (outcome !== 'cancelled' && outcome !== 'already_resolved' && outcome !== 'stale_claim') {
+                throw new Error('Invalid cancellation response.');
+            }
 
             // 'cancelled' | 'already_resolved' | 'stale_claim' all mean the claim is
             // no longer active from this UI's perspective — reconcile and close.
