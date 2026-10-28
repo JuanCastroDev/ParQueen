@@ -274,12 +274,30 @@ describe('founder evidence document', () => {
     expect(source).not.toContain("import('./provenance-change-guard.mjs')");
     expect(source).not.toContain("from './provenance-change-guard.mjs'");
     const anchor = loadTrustAnchor(readFileSync(path.join(here, 'provenance-trust-anchor.json'), 'utf8'));
+    expect(anchor.schema).toBe(TRUST_ANCHOR_SCHEMA);
+    expect(anchor.repository).toBe(REPOSITORY);
+    expect(anchor.founderIdentity).toBe('parqueen-founder');
     expect(anchor.keys.map((entry) => ({ id: entry.id, status: entry.status }))).toEqual([
-      { id: 'parqueen-founder-20261027', status: 'active' },
+      { id: 'parqueen-founder-20261027', status: 'revoked' },
+      { id: 'parqueen-founder-20261028-r1', status: 'active' },
     ]);
-    expect(anchor.keys[0].publicKey).toContain('BEGIN PUBLIC KEY');
-    expect(anchor.keys[0].publicKey).not.toContain('PRIVATE KEY');
-    expect(createPublicKey(anchor.keys[0].publicKey).asymmetricKeyType).toBe('ed25519');
+    expect(anchor.keys.filter((entry) => entry.status === 'active')).toHaveLength(1);
+    expect(anchor.keys.filter((entry) => entry.status === 'revoked')).toHaveLength(1);
+    for (const entry of anchor.keys) {
+      expect(entry.publicKey).toContain('BEGIN PUBLIC KEY');
+      expect(entry.publicKey).not.toContain('PRIVATE KEY');
+      expect(createPublicKey(entry.publicKey).asymmetricKeyType).toBe('ed25519');
+    }
+    const active = anchor.keys.find((entry) => entry.id === 'parqueen-founder-20261028-r1');
+    const der = createPublicKey(active.publicKey).export({ type: 'spki', format: 'der' });
+    expect(createHash('sha256').update(der).digest('hex')).toBe('3bce3690dc775b6b9423cc59a8493c19fdd1a661ffd91054b4b90e0e50d73607');
+    const payload = basePayload();
+    const revokedNamed = makeKey('parqueen-founder-20261027');
+    expect(verifyFounderEvidence(documentText(payload, revokedNamed), contextFor(payload, anchor)).reason).toBe('revoked-key');
+    const unknown = makeKey('unknown-founder-key');
+    expect(verifyFounderEvidence(documentText(payload, unknown), contextFor(payload, anchor)).reason).toBe('unknown-key');
+    expect(verifyFounderEvidence('{', contextFor(payload, anchor)).reason).toBe('malformed');
+    expect(process.env.PARQUEEN_PROVENANCE_SIGNING_KEY ?? '').toBe('');
     expect(JSON.stringify(anchor)).not.toContain('PRIVATE KEY');
   });
 
@@ -637,10 +655,11 @@ describe('local signing command and workflow binding', () => {
       env: cleanEnv({ PARQUEEN_PROVENANCE_SIGNING_KEY: missingKey }),
     });
     expect(prohibited.status).toBe(1);
-    expect(prohibited.stderr).toContain('real signing is prohibited');
+    expect(prohibited.stdout ?? '').not.toContain('FOUNDER_EVIDENCE_SIGNED');
+    expect(prohibited.stderr).toMatch(/real signing is prohibited|running signer does not match main|an active trusted key id is required/);
     expect(prohibited.stderr).not.toContain('could not be read');
     expect(prohibited.stderr).not.toContain(missingKey);
-    expect(prohibited.stdout).not.toContain(missingKey);
+    expect(prohibited.stdout ?? '').not.toContain(missingKey);
 
     const commandLine = spawnSync(process.execPath, [
       signer, 'sign', '--key', missingKey, '--head', 'a'.repeat(40), '--base', 'b'.repeat(40),
