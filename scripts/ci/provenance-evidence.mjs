@@ -67,8 +67,6 @@ const ID_TEXT = /^[A-Za-z0-9._:-]{8,80}$/;
 const KEY_ID = /^[A-Za-z0-9._:-]{1,64}$/;
 const FOUNDER_ID = /^[a-z0-9.-]{1,80}$/;
 
-const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
-
 function sameKeys(value, expected) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const keys = Object.keys(value);

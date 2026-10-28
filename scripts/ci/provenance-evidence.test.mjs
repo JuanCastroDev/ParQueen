@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash, createPublicKey, generateKeyPairSync, sign } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -225,10 +225,20 @@ function payloadFromRepo(fixture, overrides = {}) {
   };
 }
 
+function writeOwnerOnly(file, contents) {
+  const handle = openSync(file, 'wx', 0o600);
+  try {
+    writeFileSync(handle, contents);
+  } finally {
+    closeSync(handle);
+  }
+}
+
 function writeAnchorFile(keys) {
-  const file = path.join(tmpdir(), `parqueen-anchor-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
+  const dir = mkdtempSync(path.join(tmpdir(), 'parqueen-anchor-'));
+  const file = path.join(dir, 'anchor.json');
   const anchor = anchorWith(keys);
-  writeFileSync(file, `${JSON.stringify({
+  writeOwnerOnly(file, `${JSON.stringify({
     schema: anchor.schema,
     repository: anchor.repository,
     founderIdentity: anchor.founderIdentity,
@@ -237,7 +247,23 @@ function writeAnchorFile(keys) {
   return file;
 }
 
+function removeAnchorFile(file) {
+  rmSync(path.dirname(file), { recursive: true, force: true });
+}
+
 describe('founder evidence document', () => {
+  it('creates a temporary trust anchor inside a private directory', () => {
+    const file = writeAnchorFile([makeKey()]);
+    try {
+      expect(path.basename(file)).toBe('anchor.json');
+      expect(path.dirname(file)).not.toBe(tmpdir());
+      expect(readFileSync(file, 'utf8')).not.toContain('PRIVATE KEY');
+      expect(() => openSync(file, 'wx', 0o600)).toThrow();
+    } finally {
+      removeAnchorFile(file);
+    }
+  });
+
   it('binds the runner contract without executing the private suite', () => {
     const runner = readFileSync(path.join(repo, RUNNER_PATH), 'utf8');
     expect(runner).toContain(String(ARTIFACT_SIZE));
@@ -412,7 +438,7 @@ describe('founder evidence guard', () => {
       expect(rejected.stdout).not.toContain('SIGNED_FOUNDER_EVIDENCE_ACCEPTED');
     } finally {
       rmSync(fixture.dir, { recursive: true, force: true });
-      rmSync(anchorFile, { force: true });
+      removeAnchorFile(anchorFile);
     }
   });
 
@@ -468,8 +494,8 @@ describe('founder evidence guard', () => {
       expect(revoked.stderr).toContain('revoked-key');
     } finally {
       rmSync(fixture.dir, { recursive: true, force: true });
-      rmSync(anchorFile, { force: true });
-      rmSync(revokedFile, { force: true });
+      removeAnchorFile(anchorFile);
+      removeAnchorFile(revokedFile);
     }
   });
 
@@ -642,10 +668,14 @@ describe('local signing command and workflow binding', () => {
       keys: [{ id: key.id, publicKey: key.publicKey, status: 'active' }],
     };
     const dir = mkdtempSync(path.join(tmpdir(), 'parqueen-trusted-sign-'));
-    const keyPath = path.join(tmpdir(), `parqueen-test-key-${Date.now()}.pem`);
-    const outPath = path.join(tmpdir(), `parqueen-test-evidence-${Date.now()}.json`);
+    const secretDir = mkdtempSync(path.join(tmpdir(), 'parqueen-test-key-'));
+    const keyPath = path.join(secretDir, 'signing-key.pem');
+    const outPath = path.join(secretDir, 'evidence.json');
     const marker = path.join(dir, 'untrusted-module-loaded');
-    writeFileSync(keyPath, key.privateKey.export({ type: 'pkcs8', format: 'pem' }));
+    writeOwnerOnly(keyPath, key.privateKey.export({ type: 'pkcs8', format: 'pem' }));
+    expect(path.dirname(keyPath)).toBe(secretDir);
+    expect(path.dirname(keyPath)).not.toBe(tmpdir());
+    expect(path.dirname(outPath)).toBe(secretDir);
     try {
       git(dir, ['init', '-b', 'main']);
       writeRepoFile(dir, RUNNER_PATH, 'runner-bytes\n');
@@ -708,8 +738,7 @@ describe('local signing command and workflow binding', () => {
       expect(accepted.stdout).toMatch(/evidenceCommit [0-9a-f]{40}/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
-      rmSync(keyPath, { force: true });
-      rmSync(outPath, { force: true });
+      rmSync(secretDir, { recursive: true, force: true });
     }
   });
 
