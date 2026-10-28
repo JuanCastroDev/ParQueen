@@ -1,7 +1,8 @@
 // General PR suite.
 // Omits only the private 26C provenance file. npm test is unchanged and
 // still runs that file. Release preflight also still calls vitest directly.
-// This policy change requires independent Security/QA acceptance before merge.
+// A provenance-critical change needs founder-signed FOUNDER-EXECUTED evidence.
+// This suite does not verify that evidence.
 
 import { spawnSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
@@ -19,7 +20,7 @@ const banner = [
   'The 11 genuine successor cases are not skipped inside that file.',
   'Run them with: node scripts/ci/private-provenance-suite.mjs',
   'npm test is unchanged and still includes the private suite.',
-  'CI test-scope policy: independent Security/QA acceptance is required before merge.',
+  'CI test-scope policy: a provenance-critical change needs founder-signed FOUNDER-EXECUTED evidence.',
 ].join('\n');
 
 console.log(banner);

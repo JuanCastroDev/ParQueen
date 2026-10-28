@@ -1,0 +1,12 @@
+{
+  "schema": "parqueen-provenance-trust-anchor/v1",
+  "repository": "JuanCastroDev/ParQueen",
+  "founderIdentity": "parqueen-founder",
+  "keys": [
+    {
+      "id": "parqueen-founder-20261027",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA3mg3ui/kNYNim3OtS1Qk6o2Zdy0KcpZXYA+bQDouQKQ=\n-----END PUBLIC KEY-----\n",
+      "status": "active"
+    }
+  ]
+}
