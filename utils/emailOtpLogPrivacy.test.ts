@@ -23,6 +23,44 @@ const failureCatch = (() => {
 const stripComments = (s: string) =>
   s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*/g, '');
 
+const APPROVED_DELIVERY_LOG = /^console\.error\((['"])Email OTP delivery failed\1(?:\s*,\s*\{\s*status\s*\})?\)$/;
+
+function consoleErrorCalls(source: string): string[] {
+  const calls: string[] = [];
+  const needle = 'console.error(';
+  let from = 0;
+  while (from < source.length) {
+    const start = source.indexOf(needle, from);
+    if (start < 0) break;
+    let cursor = start + needle.length;
+    let depth = 1;
+    let quote: string | null = null;
+    while (cursor < source.length && depth > 0) {
+      const ch = source[cursor];
+      if (quote) {
+        if (ch === '\\') {
+          cursor += 2;
+          continue;
+        }
+        if (ch === quote) quote = null;
+        cursor += 1;
+        continue;
+      }
+      if (ch === "'" || ch === '"' || ch === '`') {
+        quote = ch;
+        cursor += 1;
+        continue;
+      }
+      if (ch === '(') depth += 1;
+      else if (ch === ')') depth -= 1;
+      cursor += 1;
+    }
+    calls.push(source.slice(start, cursor));
+    from = cursor;
+  }
+  return calls;
+}
+
 /**
  * Static invariants, deliberately not emulator-dependent. GE-8a/b/c prove the
  * runtime behaviour; these prove the shape of the code can't drift back into
@@ -53,15 +91,27 @@ describe('email OTP delivery failure logging', () => {
     expect(deliver).not.toMatch(/await\s+res\.(text|json)/);
   });
 
-  it('never logs the recipient, the code, headers, the key or the payload', () => {
-    const forbidden = [
-      'email', 'code', 'recipient', 'to:',
-      'Authorization', 'Bearer', 'sendgridApiKey', 'apiKey',
-      'headers', 'body:', 'personalizations', 'payload',
+  it('sends only the approved delivery message and an optional numeric status', () => {
+    const calls = consoleErrorCalls(stripComments(failureCatch));
+    expect(calls).toEqual([
+      "console.error('Email OTP delivery failed')",
+      "console.error('Email OTP delivery failed', { status })",
+    ]);
+    expect(calls.every((call) => APPROVED_DELIVERY_LOG.test(call))).toBe(true);
+    const rejected = [
+      "console.error('Email OTP delivery failed', { status, email })",
+      "console.error('Email OTP delivery failed', { code })",
+      "console.error('Email OTP delivery failed', e)",
+      "console.error('Email OTP delivery failed', error)",
+      "console.error('Email OTP delivery failed', { headers })",
+      "console.error('Email OTP delivery failed', { body: res.body })",
+      "console.error('Email OTP delivery failed', { Authorization })",
+      "console.error('Email OTP delivery failed', { apiKey })",
+      "console.error('Email OTP delivery failed', { payload })",
+      "console.error(`Email OTP delivery failed ${email}`)",
     ];
-    const code = stripComments(failureCatch);
-    for (const token of forbidden) {
-      expect(code, `failure log must not reference ${token}`).not.toContain(token);
+    for (const sample of rejected) {
+      expect(APPROVED_DELIVERY_LOG.test(sample), sample).toBe(false);
     }
   });
 

@@ -149,7 +149,10 @@ describe('handoff harness teardown bounds', () => {
     // Browser.close is only ever sent through the bounded helper, and the reap runs in a finally.
     expect(harnessSource.match(/'Browser\.close'/g)).toHaveLength(1);
     expect(harnessSource).toMatch(/settleWithin\(Promise\.race\(\[browser\('Browser\.close'\), exited\]\), BROWSER_CLOSE_TIMEOUT_MS/);
-    expect(harnessSource.match(/\} finally \{\n(?: +\/\/.*\n)* +reapSession\(session, 'afterAll'\);/g)).toHaveLength(2);
+    const reapInFinally = /\} finally \{\r?\n(?: +\/\/.*\r?\n)* +reapSession\(session, 'afterAll'\);/g;
+    expect(harnessSource.match(reapInFinally)).toHaveLength(2);
+    expect('} finally {\n  close();\n'.match(reapInFinally)).toBeNull();
+    expect("} finally {\r\n  reapSession(session, 'later');\r\n".match(reapInFinally)).toBeNull();
     // Synchronous removal retries would block the event loop and with it the hook timer.
     expect(harnessSource).not.toMatch(/rmSync\(/);
     // The suites' own test and boot timeouts are unchanged.
