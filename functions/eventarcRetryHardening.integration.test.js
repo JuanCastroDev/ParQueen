@@ -25,6 +25,8 @@ const { initializeApp, getApps } = require('firebase-admin/app');
 const { getFirestore, Timestamp } = require('firebase-admin/firestore');
 
 const { requireEmulatorProjectId } = require('./emulatorProjectId');
+const { receiptDocumentId, receiptBody } = require('./finderCancelReceipt');
+const TRUST_GENERATION = 'ef'.repeat(32);
 const PROJECT_ID = requireEmulatorProjectId();
 const APP_NAME = '__eventarc_retry_hardening_intg__';
 const testApp = getApps().find(app => app.name === APP_NAME) ?? initializeApp({ projectId: PROJECT_ID }, APP_NAME);
@@ -194,10 +196,27 @@ describe('updateTrustOnSpotDelete duplicate-delivery safety', () => {
         await db.doc(`users/${finderId}`).set({ crowns: 0 });
 
         const futureExpiry = Timestamp.fromMillis(Date.now() + 60 * 60 * 1000);
+        const data = {
+            status: 'interested',
+            finderId,
+            interestedUserId: 'claimer-retry',
+            claimState: 'heading',
+            claimGenerationId: TRUST_GENERATION,
+            expiresAt: futureExpiry,
+        };
+        const identity = {
+            kind: 'generation',
+            finderId,
+            status: data.status,
+            interestedUserId: data.interestedUserId,
+            claimState: data.claimState,
+            claimGenerationId: TRUST_GENERATION,
+        };
+        await db.collection('finderCancelReceipts').doc(receiptDocumentId(spotId, identity)).set(receiptBody(spotId, identity));
         const event = deletedEvent(
             spotId,
             { spotId },
-            { status: 'interested', finderId, expiresAt: futureExpiry },
+            data,
             new Date().toISOString(),
         );
 
@@ -209,7 +228,7 @@ describe('updateTrustOnSpotDelete duplicate-delivery safety', () => {
 
         await cleanup(
             db.doc(`users/${finderId}`),
-            db.doc(`users/${finderId}/processedTrustEvents/${spotId}:finder-cancel`),
+            db.doc(`users/${finderId}/processedTrustEvents/${spotId}:finder-cancel:${TRUST_GENERATION}`),
         );
     });
 

@@ -1,7 +1,7 @@
 'use strict';
 
 const { initializeApp, getApps } = require('firebase-admin/app');
-const { getFirestore, Timestamp } = require('firebase-admin/firestore');
+const { getFirestore, Timestamp, FieldValue } = require('firebase-admin/firestore');
 const { HttpsError } = require('firebase-functions/v2/https');
 const { requireEmulatorProjectId } = require('./emulatorProjectId');
 const { checkRateLimit } = require('./rateLimiter');
@@ -13,12 +13,14 @@ const db = getFirestore();
 
 const FINDER = 'finder-int';
 const FINGERPRINT = 1_700_000_000_000;
+const GEN = 'a1'.repeat(32);
+const OTHER = 'b2'.repeat(32);
 const CLEAR_KEYS = [
   'interestedUserId', 'interestedUserName', 'interestedUserVehicleColor',
   'interestedUserVehicleType', 'interestedUserVehicleBrand', 'interestedUserTitle',
   'etaMinutes', 'interestExpiresAt', 'claimState', 'claimStartedAt',
   'ownerLeavingNow', 'ownerLeavingNowAt', 'claimReminderAt', 'claimReminderSentAt',
-  'claimAutoReleaseAt', 'claimAutoReleasedAt',
+  'claimAutoReleaseAt', 'claimAutoReleasedAt', 'claimGenerationId',
 ];
 
 let sequence = 0;
@@ -31,7 +33,7 @@ function ids() {
 function request(uid, spotId, extra = {}) {
   return {
     auth: { uid },
-    data: { spotId, fingerprint: FINGERPRINT, reason: 'found_elsewhere', ...extra },
+    data: { spotId, claimGenerationId: GEN, reason: 'found_elsewhere', ...extra },
   };
 }
 
@@ -43,6 +45,7 @@ async function seedLive(uid, spotId, extra = {}) {
     interestedUserId: uid,
     claimState: 'heading',
     claimStartedAt,
+    claimGenerationId: GEN,
     expiresAt: Timestamp.fromMillis(Date.now() + 60 * 60 * 1000),
     interestedUserName: 'bob',
     interestedUserVehicleColor: 'red',
@@ -72,6 +75,39 @@ async function invoke(uid, spotId, extra = {}, deps = {}) {
   });
 }
 
+// The Firestore emulator locks a document once this transaction reads it.
+// An afterReads write to that same document waits on the lock, and the
+// transaction waits on afterReads. Production Firestore instead retries the
+// callback when a read document changes. These tests roll the first attempt
+// back, commit the new state, and then run the callback again. They do not
+// claim the in-lock concurrent write was executed.
+async function invokeSecondAttempt(uid, spotId, observed, betweenAttempts) {
+  const original = db.runTransaction.bind(db);
+  let armed = true;
+  db.runTransaction = async (updateFunction, transactionOptions) => {
+    if (!armed) return original(updateFunction, transactionOptions);
+    armed = false;
+    const stop = new Error('test-abort-before-commit');
+    stop.code = 'test-abort-before-commit';
+    try {
+      await original(async (tx) => {
+        observed.firstPlan = await updateFunction(tx);
+        throw stop;
+      }, transactionOptions);
+      throw new Error('first attempt committed');
+    } catch (error) {
+      if (error !== stop && (!error || error.code !== 'test-abort-before-commit')) throw error;
+    }
+    await betweenAttempts();
+    return original(updateFunction, transactionOptions);
+  };
+  try {
+    return await invoke(uid, spotId);
+  } finally {
+    db.runTransaction = original;
+  }
+}
+
 describe('cancelClaim Admin SDK transaction', () => {
   it('cancels an unexpired claim, deletes the matching lock, and creates one notification', async () => {
     const { uid, spotId } = ids();
@@ -86,7 +122,7 @@ describe('cancelClaim Admin SDK transaction', () => {
     expect(lock.exists).toBe(false);
     const notes = await db.collection('spotNotifications').where('spotId', '==', spotId).get();
     expect(notes.size).toBe(1);
-    expect(notes.docs[0].id).toBe(`claimer_cancelled_${spotId}_${FINGERPRINT}`);
+    expect(notes.docs[0].id).toBe(`claimer_cancelled_${spotId}_${GEN}`);
     expect(notes.docs[0].data().targetUserId).toBe(FINDER);
   });
 
@@ -115,19 +151,24 @@ describe('cancelClaim Admin SDK transaction', () => {
     }
   });
 
-  it('sees a suspension that lands after the transaction read', async () => {
+  it('sees a suspension committed after the first attempt rolls back', async () => {
     const { uid, spotId } = ids();
     await db.collection('users').doc(uid).set({ status: 'Active', productAccessBlocked: false });
     await seedLive(uid, spotId);
-    await expect(invoke(uid, spotId, {}, {
-      allowTestHooks: true,
-      afterReads: async () => {
-        await db.collection('users').doc(uid).update({ status: 'Suspended' });
-      },
+    const observed = { firstPlan: null };
+    await expect(invokeSecondAttempt(uid, spotId, observed, async () => {
+      const mid = (await db.collection('spots').doc(spotId).get()).data();
+      expect(mid.status).toBe('interested');
+      expect(mid.interestedUserId).toBe(uid);
+      expect(mid.claimGenerationId).toBe(GEN);
+      expect((await db.collection('spotNotifications').where('spotId', '==', spotId).get()).size).toBe(0);
+      await db.collection('users').doc(uid).update({ status: 'Suspended' });
     })).rejects.toMatchObject({ code: 'permission-denied' });
+    expect(observed.firstPlan).toEqual({ outcome: 'cancelled' });
     const spot = (await db.collection('spots').doc(spotId).get()).data();
     expect(spot.status).toBe('interested');
     expect(spot.interestedUserId).toBe(uid);
+    expect(spot.claimGenerationId).toBe(GEN);
     const notes = await db.collection('spotNotifications').where('spotId', '==', spotId).get();
     expect(notes.size).toBe(0);
   });
@@ -142,20 +183,37 @@ describe('cancelClaim Admin SDK transaction', () => {
     expect(spot.claimStartedAt).toBeNull();
   });
 
-  it('lets an explicit null fingerprint cancel a newer claim of the same user', async () => {
+  it('does not let an older generation cancel a newer one with the same timestamp', async () => {
     const { uid, spotId } = ids();
-    const newerMs = FINGERPRINT + 80_000;
-    const newer = Timestamp.fromMillis(newerMs);
-    await seedLive(uid, spotId, { claimStartedAt: newer });
-    await expect(invoke(uid, spotId, { fingerprint: FINGERPRINT })).resolves.toMatchObject({ outcome: 'stale_claim' });
-    expect((await db.collection('spots').doc(spotId).get()).data().interestedUserId).toBe(uid);
-    await expect(invoke(uid, spotId, { fingerprint: null })).resolves.toMatchObject({ outcome: 'cancelled' });
+    await seedLive(uid, spotId, { claimGenerationId: OTHER });
+    await expect(invoke(uid, spotId, { claimGenerationId: GEN })).resolves.toMatchObject({ outcome: 'stale_claim' });
     const spot = (await db.collection('spots').doc(spotId).get()).data();
-    expect(spot.status).toBe('available');
-    expect(spot.interestedUserId).toBeNull();
-    const note = await db.collection('spotNotifications').doc(`claimer_cancelled_${spotId}_${newerMs}`).get();
-    expect(note.exists).toBe(true);
-    expect(note.data().targetUserId).toBe(FINDER);
+    expect(spot.status).toBe('interested');
+    expect(spot.interestedUserId).toBe(uid);
+    expect(spot.claimStartedAt.toMillis()).toBe(FINGERPRINT);
+    expect(spot.claimGenerationId).toBe(OTHER);
+    const note = await db.collection('spotNotifications').doc(`claimer_cancelled_${spotId}_${GEN}`).get();
+    expect(note.exists).toBe(false);
+    await expect(invoke(uid, spotId, { claimGenerationId: OTHER })).resolves.toMatchObject({ outcome: 'cancelled' });
+    expect((await db.collection('spots').doc(spotId).get()).data().claimGenerationId).toBeNull();
+  });
+
+  it('fails closed for an absent or malformed stored generation id', async () => {
+    const absent = ids();
+    await seedLive(absent.uid, absent.spotId);
+    await db.collection('spots').doc(absent.spotId).update({ claimGenerationId: FieldValue.delete() });
+    await expect(invoke(absent.uid, absent.spotId)).resolves.toMatchObject({ outcome: 'stale_claim' });
+    expect((await db.collection('spots').doc(absent.spotId).get()).data().interestedUserId).toBe(absent.uid);
+
+    const unreadable = ids();
+    await seedLive(unreadable.uid, unreadable.spotId, { claimGenerationId: 'not-a-generation' });
+    await expect(invoke(unreadable.uid, unreadable.spotId)).resolves.toMatchObject({ outcome: 'stale_claim' });
+    const spot = (await db.collection('spots').doc(unreadable.spotId).get()).data();
+    expect(spot.interestedUserId).toBe(unreadable.uid);
+    expect(spot.status).toBe('interested');
+    expect(spot.claimGenerationId).toBe('not-a-generation');
+    const notes = await db.collection('spotNotifications').where('spotId', '==', unreadable.spotId).get();
+    expect(notes.size).toBe(0);
   });
 
   it('keeps an expired Ping from reopening and preserves a lock that names another Ping', async () => {
@@ -186,7 +244,7 @@ describe('cancelClaim Admin SDK transaction', () => {
   it('aborts every write when the deterministic notification already exists', async () => {
     const { uid, spotId } = ids();
     await seedLive(uid, spotId);
-    const noteId = `claimer_cancelled_${spotId}_${FINGERPRINT}`;
+    const noteId = `claimer_cancelled_${spotId}_${GEN}`;
     await db.collection('spotNotifications').doc(noteId).set({ spotId, type: 'claimer_cancelled' });
     await expect(invoke(uid, spotId)).rejects.toMatchObject({ code: 'failed-precondition' });
     const spot = (await db.collection('spots').doc(spotId).get()).data();
@@ -208,7 +266,7 @@ describe('cancelClaim Admin SDK transaction', () => {
     await seedLive(swept.uid, swept.spotId, {
       interestedUserId: null, claimState: null, claimStartedAt: null, status: 'interested',
     });
-    await expect(invoke(swept.uid, swept.spotId, { fingerprint: null })).resolves.toMatchObject({ outcome: 'already_resolved' });
+    await expect(invoke(swept.uid, swept.spotId)).resolves.toMatchObject({ outcome: 'already_resolved' });
     expect((await db.collection('spotNotifications').where('spotId', '==', swept.spotId).get()).size).toBe(0);
 
     const replaced = ids();
@@ -217,23 +275,45 @@ describe('cancelClaim Admin SDK transaction', () => {
     expect((await db.collection('spots').doc(replaced.spotId).get()).data().interestedUserId).toBe('new-claimer');
   });
 
-  it('does not reopen a Ping that arrival marks occupied before commit', async () => {
+  it('does not reopen a Ping that is already occupied when the transaction reads it', async () => {
     const { uid, spotId } = ids();
-    await seedLive(uid, spotId);
-    await expect(invoke(uid, spotId, {}, {
-      allowTestHooks: true,
-      afterReads: async () => {
-        await db.collection('spots').doc(spotId).update({
-          status: 'occupied',
-          claimState: 'arrived_pending_outcome',
-          arrivedAt: Timestamp.now(),
-        });
-      },
-    })).resolves.toMatchObject({ outcome: 'already_resolved' });
+    await seedLive(uid, spotId, {
+      status: 'occupied',
+      claimState: 'arrived_pending_outcome',
+      arrivedAt: Timestamp.now(),
+    });
+    await expect(invoke(uid, spotId)).resolves.toMatchObject({ outcome: 'already_resolved' });
     const spot = (await db.collection('spots').doc(spotId).get()).data();
     expect(spot.status).toBe('occupied');
     expect(spot.claimState).toBe('arrived_pending_outcome');
     expect(spot.interestedUserId).toBe(uid);
+    expect(spot.claimGenerationId).toBe(GEN);
+    expect((await db.collection('spotNotifications').where('spotId', '==', spotId).get()).size).toBe(0);
+  });
+
+  it('does not reopen a Ping that arrival commits after the first attempt rolls back', async () => {
+    const { uid, spotId } = ids();
+    await seedLive(uid, spotId);
+    const observed = { firstPlan: null };
+    const result = await invokeSecondAttempt(uid, spotId, observed, async () => {
+      const mid = (await db.collection('spots').doc(spotId).get()).data();
+      expect(mid.status).toBe('interested');
+      expect(mid.interestedUserId).toBe(uid);
+      expect(mid.claimGenerationId).toBe(GEN);
+      expect((await db.collection('spotNotifications').where('spotId', '==', spotId).get()).size).toBe(0);
+      await db.collection('spots').doc(spotId).update({
+        status: 'occupied',
+        claimState: 'arrived_pending_outcome',
+        arrivedAt: Timestamp.now(),
+      });
+    });
+    expect(observed.firstPlan).toEqual({ outcome: 'cancelled' });
+    expect(result).toMatchObject({ outcome: 'already_resolved' });
+    const spot = (await db.collection('spots').doc(spotId).get()).data();
+    expect(spot.status).toBe('occupied');
+    expect(spot.claimState).toBe('arrived_pending_outcome');
+    expect(spot.interestedUserId).toBe(uid);
+    expect(spot.claimGenerationId).toBe(GEN);
     expect((await db.collection('spotNotifications').where('spotId', '==', spotId).get()).size).toBe(0);
   });
 

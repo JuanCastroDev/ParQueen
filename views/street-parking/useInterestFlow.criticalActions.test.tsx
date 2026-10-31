@@ -64,6 +64,20 @@ vi.mock('firebase/firestore', () => ({
 const { cancelClaimCallable } = vi.hoisted(() => ({ cancelClaimCallable: vi.fn() }));
 vi.mock('./cancelClaimCallable', () => ({ cancelClaimCallable }));
 
+const { claimSpotCallable, prepareClaimIntentCallable, revokeClaimIntentCallable } = vi.hoisted(() => ({
+  claimSpotCallable: vi.fn(async (input: { spotId: string; mode: 'immediate' | 'scheduled' }) => ({
+    outcome: 'claimed' as const,
+    claimGenerationId: 'a'.repeat(64),
+    spotId: input.spotId,
+    mode: input.mode,
+  })),
+  prepareClaimIntentCallable: vi.fn(async (input: { attemptId: string; spotId: string; mode: string }) => ({
+    state: 'prepared', attemptId: input.attemptId, spotId: input.spotId, mode: input.mode, expiresAt: 1,
+  })),
+  revokeClaimIntentCallable: vi.fn(async () => ({ outcome: 'revoked', attemptId: 'x', spotId: 'spot1', mode: 'immediate' })),
+}));
+vi.mock('./claimSpotCallable', () => ({ claimSpotCallable, prepareClaimIntentCallable, revokeClaimIntentCallable }));
+
 const { reportCriticalActionFailure } = vi.hoisted(() => ({ reportCriticalActionFailure: vi.fn() }));
 vi.mock('../../utils/errorReporting', () => ({ reportCriticalActionFailure }));
 
@@ -101,13 +115,31 @@ describe('useInterestFlow — critical-action failure reporting', () => {
     reportCriticalActionFailure.mockClear();
     runTransaction.mockReset();
     cancelClaimCallable.mockReset();
+    claimSpotCallable.mockReset();
+    claimSpotCallable.mockImplementation(async (input: { spotId: string; mode: 'immediate' | 'scheduled' }) => ({
+      outcome: 'claimed' as const,
+      claimGenerationId: 'a'.repeat(64),
+      spotId: input.spotId,
+      mode: input.mode,
+    }));
     getDocs.mockClear();
+    getDoc.mockReset();
+    getDoc.mockResolvedValue({
+      exists: () => true,
+      data: () => ({
+        status: 'occupied',
+        claimState: 'arrived_pending_outcome',
+        arrivedAt: { toMillis: () => Date.now() },
+        interestedUserId: 'u1',
+        finderId: 'finder1',
+      }),
+    });
     updateDoc.mockClear();
     deleteDoc.mockClear();
   });
 
   it('handleExpressInterest: a failed transaction reports spot_claim/immediate exactly once, with no ids/coordinates', async () => {
-    runTransaction.mockRejectedValue(txError);
+    claimSpotCallable.mockRejectedValue(txError);
     const getFlow = mount();
 
     await act(async () => { await getFlow().handleExpressInterest(5); });
@@ -122,11 +154,15 @@ describe('useInterestFlow — critical-action failure reporting', () => {
   });
 
   it('handleExpressInterest: a successful claim reports zero failures', async () => {
-    runTransaction.mockImplementation(async (_db, cb) => cb({
-      get: async () => ({ exists: () => true, data: () => ({ status: 'available' }) }),
-      update: vi.fn(),
-      set: vi.fn(),
-    }));
+    getDoc.mockResolvedValue({
+      exists: () => true,
+      data: () => ({
+        status: 'interested',
+        claimState: 'heading',
+        claimGenerationId: 'a'.repeat(64),
+        interestedUserId: 'u1',
+      }),
+    });
     const getFlow = mount();
 
     await act(async () => { await getFlow().handleExpressInterest(5); });
@@ -136,7 +172,7 @@ describe('useInterestFlow — critical-action failure reporting', () => {
   });
 
   it('handleScheduledClaim: a failed transaction reports spot_claim/scheduled exactly once', async () => {
-    runTransaction.mockRejectedValue(txError);
+    claimSpotCallable.mockRejectedValue(txError);
     const getFlow = mount();
 
     await act(async () => { await getFlow().handleScheduledClaim(); });
@@ -147,11 +183,15 @@ describe('useInterestFlow — critical-action failure reporting', () => {
   });
 
   it('handleScheduledClaim: a successful claim reports zero failures', async () => {
-    runTransaction.mockImplementation(async (_db, cb) => cb({
-      get: async () => ({ exists: () => true, data: () => ({ status: 'available', reportedAt: { toMillis: () => Date.now() + 3600_000 }, expiresAt: { toMillis: () => Date.now() + 7200_000 } }) }),
-      update: vi.fn(),
-      set: vi.fn(),
-    }));
+    getDoc.mockResolvedValue({
+      exists: () => true,
+      data: () => ({
+        status: 'interested',
+        claimState: 'committed',
+        claimGenerationId: 'a'.repeat(64),
+        interestedUserId: 'u1',
+      }),
+    });
     const getFlow = mount();
 
     await act(async () => { await getFlow().handleScheduledClaim(); });
@@ -160,6 +200,10 @@ describe('useInterestFlow — critical-action failure reporting', () => {
   });
 
   it('handleCancelByClaimer: a failed cancellation reports claim_cancel exactly once, with no spot/finder ids, and still shows the existing generic error copy', async () => {
+    getDoc.mockResolvedValue({
+      exists: () => true,
+      data: () => ({ claimGenerationId: 'a'.repeat(64), status: 'interested', interestedUserId: 'u1' }),
+    });
     cancelClaimCallable.mockRejectedValue(txError);
     const getFlow = mount();
 
@@ -176,6 +220,10 @@ describe('useInterestFlow — critical-action failure reporting', () => {
   });
 
   it('handleCancelByClaimer: a successful cancellation reports zero failures', async () => {
+    getDoc.mockResolvedValue({
+      exists: () => true,
+      data: () => ({ claimGenerationId: 'a'.repeat(64), status: 'interested', interestedUserId: 'u1' }),
+    });
     cancelClaimCallable.mockResolvedValue('cancelled');
     const getFlow = mount();
 
@@ -185,6 +233,10 @@ describe('useInterestFlow — critical-action failure reporting', () => {
   });
 
   it('handleCancelByClaimer: duplicate-tap protection is unchanged — a second concurrent call is a no-op', async () => {
+    getDoc.mockResolvedValue({
+      exists: () => true,
+      data: () => ({ claimGenerationId: 'a'.repeat(64), status: 'interested', interestedUserId: 'u1' }),
+    });
     let resolveCancel!: (v: string) => void;
     cancelClaimCallable.mockReturnValue(new Promise((resolve) => { resolveCancel = resolve; }));
     const getFlow = mount();

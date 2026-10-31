@@ -55,7 +55,7 @@ function claimantRequest(uid, spotId, extra = {}) {
       uid,
       token: { uid, auth_time: now - 120, iat: now - 120, exp: now + 3600 },
     },
-    data: { spotId, fingerprint: FINGERPRINT, reason: 'found_elsewhere', ...extra },
+    data: { spotId, claimGenerationId: 'a1'.repeat(32), reason: 'found_elsewhere', ...extra },
   };
 }
 
@@ -95,6 +95,7 @@ async function seedClaim(uid, spotExtra = {}) {
     interestedUserName: `claimant_secret_${uid}`,
     claimState: 'heading',
     claimStartedAt,
+    claimGenerationId: 'a1'.repeat(32),
     expiresAt: Timestamp.fromMillis(Date.now() + 60 * 60 * 1000),
     interestedUserVehicleColor: 'red',
     interestedUserVehicleType: 'sedan',
@@ -442,6 +443,7 @@ describe('cancelClaim suspension boundary', () => {
       interestedUserId: uid,
       claimState: 'heading',
       claimStartedAt: { toMillis: () => FINGERPRINT },
+      claimGenerationId: 'a1'.repeat(32),
     };
     const committedSpot = { ...liveSpot };
     function view(user) {

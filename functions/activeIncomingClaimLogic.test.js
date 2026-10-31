@@ -160,6 +160,8 @@ describe('active incoming claim lock logic', () => {
     expect(releasedInterestPatch(now + 1, now).status).toBe('available');
     expect(releasedInterestPatch(Number.NaN, now).status).toBe('available');
     expect(releasedInterestPatch(now + 1, now).claimStartedAt).toBeNull();
+    expect(releasedInterestPatch(now + 1, now).claimGenerationId).toBeNull();
+    expect(releasedInterestPatch(now - 1, now).claimGenerationId).toBeNull();
   });
 
   it('scheduled auto-release uses the interest-expiry clear set, including claimStartedAt', () => {

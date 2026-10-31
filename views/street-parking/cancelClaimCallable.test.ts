@@ -19,6 +19,9 @@ import { cancelClaimCallable, cancelClaimReasonForUi } from './cancelClaimCallab
 
 const app = { name: '[DEFAULT]' };
 
+const GENERATION = 'ab'.repeat(32);
+const OTHER_GENERATION = 'cd'.repeat(32);
+
 describe('cancelClaimCallable', () => {
   beforeEach(() => {
     getApp.mockClear();
@@ -39,10 +42,10 @@ describe('cancelClaimCallable', () => {
     expect(cancelClaimReasonForUi('found_elsewhere')).toBe('found_elsewhere');
   });
 
-  it('sends exactly spotId, a millisecond fingerprint or null, and the allowlisted reason', async () => {
+  it('sends exactly spotId, claimGenerationId, and the allowlisted reason', async () => {
     await expect(cancelClaimCallable({
       spotId: 'spot-1',
-      fingerprint: 1_700_000_000_000,
+      claimGenerationId: GENERATION,
       reason: 'Found parking elsewhere',
     })).resolves.toBe('cancelled');
 
@@ -50,24 +53,19 @@ describe('cancelClaimCallable', () => {
     expect(httpsCallable).toHaveBeenCalledWith({ region: 'us-central1' }, 'cancelClaim');
     expect(invoke).toHaveBeenCalledWith({
       spotId: 'spot-1',
-      fingerprint: 1_700_000_000_000,
+      claimGenerationId: GENERATION,
       reason: 'found_elsewhere',
     });
-    expect(Object.keys(invoke.mock.calls[0][0])).toEqual(['spotId', 'fingerprint', 'reason']);
-
-    await cancelClaimCallable({ spotId: 'spot-1', fingerprint: null, reason: 'Traffic is too heavy' });
-    expect(invoke).toHaveBeenLastCalledWith({
-      spotId: 'spot-1',
-      fingerprint: null,
-      reason: 'traffic',
-    });
+    expect(Object.keys(invoke.mock.calls[0][0])).toEqual(['spotId', 'claimGenerationId', 'reason']);
+    expect(invoke.mock.calls[0][0]).not.toHaveProperty('fingerprint');
   });
 
-  it('drops client-controlled fields, including test hooks, instead of forwarding them', async () => {
+  it('drops client-controlled fields, including a numeric fingerprint, instead of forwarding them', async () => {
     await cancelClaimCallable({
       spotId: 'spot-1',
-      fingerprint: 5,
+      claimGenerationId: GENERATION,
       reason: 'Changed my mind',
+      fingerprint: 1_700_000_000_000,
       claimantId: 'u1',
       finderId: 'finder',
       message: 'raw text',
@@ -76,23 +74,21 @@ describe('cancelClaimCallable', () => {
     } as never);
 
     const sent = invoke.mock.calls[0][0];
-    expect(sent).toEqual({ spotId: 'spot-1', fingerprint: 5, reason: 'changed_mind' });
+    expect(sent).toEqual({ spotId: 'spot-1', claimGenerationId: GENERATION, reason: 'changed_mind' });
+    expect(sent).not.toHaveProperty('fingerprint');
     expect(sent).not.toHaveProperty('allowTestHooks');
     expect(sent).not.toHaveProperty('afterReads');
     expect(sent).not.toHaveProperty('claimantId');
   });
 
-  it('rejects a fingerprint that is not null or a safe integer millisecond value', async () => {
-    await expect(cancelClaimCallable({
-      spotId: 'spot-1',
-      fingerprint: 1.5,
-      reason: 'unspecified',
-    })).rejects.toThrow('Invalid cancellation request.');
-    await expect(cancelClaimCallable({
-      spotId: 'spot-1',
-      fingerprint: -1,
-      reason: 'unspecified',
-    })).rejects.toThrow('Invalid cancellation request.');
+  it('rejects a missing or malformed generation id without calling the function', async () => {
+    for (const claimGenerationId of [null, undefined, '', '123', GENERATION.toUpperCase(), `${GENERATION}ff`]) {
+      await expect(cancelClaimCallable({
+        spotId: 'spot-1',
+        claimGenerationId,
+        reason: 'unspecified',
+      } as never)).rejects.toThrow('Invalid cancellation request.');
+    }
     expect(invoke).not.toHaveBeenCalled();
   });
 
@@ -101,7 +97,7 @@ describe('cancelClaimCallable', () => {
       invoke.mockResolvedValueOnce({ data: { outcome } });
       await expect(cancelClaimCallable({
         spotId: 'spot-1',
-        fingerprint: null,
+        claimGenerationId: OTHER_GENERATION,
         reason: 'unspecified',
       })).resolves.toBe(outcome);
     }
@@ -109,21 +105,21 @@ describe('cancelClaimCallable', () => {
     invoke.mockResolvedValueOnce({ data: {} });
     await expect(cancelClaimCallable({
       spotId: 'spot-1',
-      fingerprint: null,
+      claimGenerationId: GENERATION,
       reason: 'unspecified',
     })).rejects.toThrow('Invalid cancellation response.');
 
     invoke.mockResolvedValueOnce({ data: { outcome: 'success' } });
     await expect(cancelClaimCallable({
       spotId: 'spot-1',
-      fingerprint: null,
+      claimGenerationId: GENERATION,
       reason: 'unspecified',
     })).rejects.toThrow('Invalid cancellation response.');
 
     invoke.mockResolvedValueOnce(undefined);
     await expect(cancelClaimCallable({
       spotId: 'spot-1',
-      fingerprint: null,
+      claimGenerationId: GENERATION,
       reason: 'unspecified',
     })).rejects.toThrow('Invalid cancellation response.');
   });
@@ -133,7 +129,7 @@ describe('cancelClaimCallable', () => {
     invoke.mockRejectedValueOnce(unavailable);
     await expect(cancelClaimCallable({
       spotId: 'spot-1',
-      fingerprint: null,
+      claimGenerationId: GENERATION,
       reason: 'unspecified',
     })).rejects.toBe(unavailable);
   });

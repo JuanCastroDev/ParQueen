@@ -28,7 +28,7 @@ function ids() {
 }
 
 function payload(spotId, extra = {}) {
-  return { spotId, fingerprint: FINGERPRINT, reason: 'unspecified', ...extra };
+  return { spotId, claimGenerationId: 'a1'.repeat(32), reason: 'unspecified', ...extra };
 }
 
 async function seedLive(uid, spotId, user) {
@@ -39,6 +39,7 @@ async function seedLive(uid, spotId, user) {
     interestedUserId: uid,
     claimState: 'heading',
     claimStartedAt: Timestamp.fromMillis(FINGERPRINT),
+    claimGenerationId: 'a1'.repeat(32),
     expiresAt: Timestamp.fromMillis(Date.now() + 60 * 60 * 1000),
   });
 }

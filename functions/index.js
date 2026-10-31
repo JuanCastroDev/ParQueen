@@ -34,6 +34,10 @@ const {
   clearMatchingActiveIncomingClaim,
   repairActiveIncomingClaims,
 } = require('./activeIncomingClaim');
+const { sweepOrphanGenerations } = require('./orphanGenerationCleanup');
+const { writeFinderCancelNotice } = require('./finderCancelNotice');
+const { readFinderCancelAttribution } = require('./finderCancelReceipt');
+const { finderCancelSpot: finderCancelSpotHandler } = require('./finderCancelSpot');
 const {
   sweepAbandonedArrivedHandoffs,
   formatAbandonedArrivalSweepLog,
@@ -44,6 +48,11 @@ const { releasedInterestPatch } = require('./activeIncomingClaimLogic');
 const { requireCurrentAdmin, requireCurrentAuthenticatedUser } = require('./adminAuth');
 const { assertProductAccess, userRecordDenies } = require('./productAccess');
 const { cancelClaim: cancelClaimHandler } = require('./cancelClaim');
+const {
+  claimSpot: claimSpotHandler,
+  prepareClaimIntent: prepareClaimIntentHandler,
+  revokeClaimIntent: revokeClaimIntentHandler,
+} = require('./claimSpot');
 exports._productAccessHooks = { beforeProtectedWrite: null };
 const { isSweepNYCData, computeSegmentUpdate, computeRuleUpdate } = require('./backfillLogic');
 const {
@@ -374,6 +383,7 @@ const PHANTOM_CLAIM_CLEAR_FIELDS = Object.freeze({
   claimReminderSentAt: null,
   claimAutoReleaseAt: null,
   claimAutoReleasedAt: null,
+  claimGenerationId: null,
 });
 
 function isPhantomClaim(spot) {
@@ -467,25 +477,6 @@ exports.cleanupExpiredInterests = onSchedule(
 
           const lockSnap = await readActiveIncomingClaim(tx, db, spot.interestedUserId);
 
-          const clearFields = {
-            interestedUserId: null,
-            interestedUserName: null,
-            interestedUserVehicleColor: null,
-            interestedUserVehicleType: null,
-            interestedUserVehicleBrand: null,
-            interestedUserTitle: null,
-            etaMinutes: null,
-            interestExpiresAt: null,
-            claimState: null,
-            claimStartedAt: null,
-            ownerLeavingNow: null,
-            ownerLeavingNowAt: null,
-            claimReminderAt: null,
-            claimReminderSentAt: null,
-            claimAutoReleaseAt: null,
-            claimAutoReleasedAt: null,
-          };
-
           // Never reopen an already-expired Ping — only clear the stale claim.
           // Once cleared, interestExpiresAt is null, which Firestore's range
           // comparison never matches — so this document will not be selected
@@ -493,8 +484,10 @@ exports.cleanupExpiredInterests = onSchedule(
           // "interested" (an already-expired Ping is fully removed within the
           // hour by cleanupExpiredSpotsHourly, which still deletes every
           // non-arrival status. occupied + arrived_pending_outcome is kept).
-          const pingExpired = spot.expiresAt && spot.expiresAt.toMillis() <= now.toMillis();
-          tx.update(d.ref, pingExpired ? clearFields : { ...clearFields, status: "available" });
+          const expiresAtMs = spot.expiresAt && typeof spot.expiresAt.toMillis === 'function'
+            ? spot.expiresAt.toMillis()
+            : Number.NaN;
+          tx.update(d.ref, releasedInterestPatch(expiresAtMs, now.toMillis()));
           deleteMatchingActiveIncomingClaim(tx, lockSnap, d.id);
           return true;
         });
@@ -510,6 +503,11 @@ exports.cleanupExpiredInterests = onSchedule(
     }
     // S-SPOT-1: independent of the expired-interest pass above; never throws.
     await sweepPhantomClaims(db, now);
+    try {
+      await sweepOrphanGenerations(db, now);
+    } catch (e) {
+      console.error("cleanupExpiredInterests: orphan generation sweep failed", sanitizeError(e));
+    }
     try {
       const repair = await repairActiveIncomingClaims(db, now);
       console.log(
@@ -554,6 +552,7 @@ exports.cleanupExpiredHolds = onSchedule(
           holdRequestedBy: null,
           holdRequestedByName: null,
           holdRequestExpiresAt: null,
+          claimGenerationId: null,
           updatedAt: now,
         });
       });
@@ -612,6 +611,7 @@ async function releaseExpiredPendingHoldRequests(now) {
           holdRequestedByName: null,
           holdRequestExpiresAt: null,
           holdRequestStatus: null,
+          claimGenerationId: null,
           updatedAt: now,
         });
         return true;
@@ -2381,6 +2381,48 @@ exports.cancelClaim = onCall(
   (request) => cancelClaimHandler(request)
 );
 
+// Acquisition companion to cancelClaim. Same region and App Check switch.
+// No new service account: IAM changes are outside this implementation, and
+// this export is not deployed. The default function identity is not a
+// production grant.
+exports.claimSpot = onCall(
+  {
+    region: 'us-central1',
+    enforceAppCheck: true,
+  },
+  (request) => claimSpotHandler(request)
+);
+
+// Prepare and revoke are the intent protocol around claimSpot. Same region
+// and App Check switch. No service account is added. Neither export is deployed.
+exports.prepareClaimIntent = onCall(
+  {
+    region: 'us-central1',
+    enforceAppCheck: true,
+  },
+  (request) => prepareClaimIntentHandler(request)
+);
+
+exports.revokeClaimIntent = onCall(
+  {
+    region: 'us-central1',
+    enforceAppCheck: true,
+  },
+  (request) => revokeClaimIntentHandler(request)
+);
+
+// Finder cancellation. The confirmed claim is compared inside the transaction.
+// No service account is set: this proof does not choose a production runtime
+// identity, and this export is not deployed. The default function identity is
+// not a production grant.
+exports.finderCancelSpot = onCall(
+  {
+    region: 'us-central1',
+    enforceAppCheck: true,
+  },
+  (request) => finderCancelSpotHandler(request)
+);
+
 // 10) Award crowns on a mutual parking handoff.
 // One participant attestation does not award. The idempotency key is the
 // claimer attestation id `${spotId}_${claimerId}` (functionEvents/awardCrowns_
@@ -3483,6 +3525,7 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
                 interestedUserVehicleType: FieldValue.delete(),
                 interestedUserVehicleBrand: FieldValue.delete(),
                 interestedUserTitle: FieldValue.delete(),
+                claimGenerationId: FieldValue.delete(),
             };
             const activeClaimClear = {
                 claimState: null,
@@ -3495,6 +3538,7 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
                 claimReminderSentAt: null,
                 claimAutoReleaseAt: null,
                 claimAutoReleasedAt: null,
+                claimGenerationId: null,
             };
             for (let guard = 0; guard < 1000; guard++) {
                 const snap = await db.collection('spots')
@@ -3753,7 +3797,8 @@ exports.updateTrustOnFeedback = onDocumentCreated(
 
 // 12) Trust: record finder-cancelled-after-interest when a spot is deleted while claimed.
 // Only penalizes if status === 'interested' at deletion time — not for normal spot removal.
-// eventId: spotId + ':finder-cancel' is deterministic and unique for this transition.
+// eventId includes the confirmed generation. A reused spot id and a later
+// generation are separate trust events. A missing source is not finder intent.
 // F7 / R3: street-cleaning reminders.
 // - Recipient is ALWAYS the session owner (parkingSessions/{uid} doc id): the
 //   FCM token is read from users/{uid}/private/preferences.fcmToken at send
@@ -3897,10 +3942,9 @@ exports.updateTrustOnSpotDelete = onDocumentDeleted(
 
     if (data.status !== 'interested' || !data.finderId) return;
 
-    // Admin-triggered deletions must not penalize the finder.
-    // Requires the deletion path to set source: 'admin' on the spot before deleting.
-    const source = data.source || 'user';
-    if (source === 'admin') return;
+    // adminDeleteSpot sets source: 'admin' before it deletes. A missing
+    // source is not finder intent, and it does not authorize this penalty.
+    if (data.source === 'admin') return;
 
     // Natural-expiration exemption: handoffsCancelledByFinder measures
     // cancellation of an ACTIVE handoff. Once the spot's own expiresAt has
@@ -3910,21 +3954,38 @@ exports.updateTrustOnSpotDelete = onDocumentDeleted(
     // physically performs the delete. Fails closed: only exempts when BOTH
     // expiresAt and event.time are genuinely valid and parseable; missing,
     // null, or malformed expiresAt (or a missing/malformed event.time)
-    // preserves today's penalty behavior rather than silently granting a
-    // free exemption. <= (not <) at the boundary: a spot is no longer
-    // active at the exact instant it expires.
+    // does not grant this exemption. <= (not <) at the boundary: a spot is
+    // no longer active at the exact instant it expires.
     const expiresAt = data.expiresAt;
     const deletionTimeMs = Date.parse(event.time);
     if (expiresAt instanceof Timestamp && Number.isFinite(deletionTimeMs)) {
       if (expiresAt.toMillis() <= deletionTimeMs) return;
     }
 
+    // The penalty and the notice share the receipt written by finderCancelSpot.
+    // A missing source is not a user cancellation. Account deletion, a legacy
+    // client delete, and a G2 snapshot do not match a G1 receipt. A receipt
+    // read error skips attribution and cannot restore the Ping.
+    let attribution;
+    try {
+      attribution = await readFinderCancelAttribution(db, event.params.spotId, data);
+    } catch (receiptError) {
+      console.error('updateTrustOnSpotDelete: receipt read failed', sanitizeError(receiptError));
+      return;
+    }
+    if (!attribution) return;
+
     await applyTrustDelta(
       data.finderId,
       'handoffsCancelledByFinder',
-      `${event.params.spotId}:finder-cancel`,
-      source
+      attribution.eventId,
+      'finder_cancel_receipt'
     );
+    try {
+      await writeFinderCancelNotice(db, event.params.spotId, data, event.id, deletionTimeMs);
+    } catch (noticeError) {
+      console.error('updateTrustOnSpotDelete: cancellation notice failed', sanitizeError(noticeError));
+    }
   }
 );
 

@@ -1,5 +1,6 @@
 import { getApp } from 'firebase/app';
 import { getFunctions, httpsCallable } from 'firebase/functions';
+import { isClaimGenerationId } from './claimIdentity';
 
 export const CANCEL_CLAIM_REASONS = [
   'found_elsewhere',
@@ -29,10 +30,10 @@ export function cancelClaimReasonForUi(reason: string): CancelClaimReason {
 
 function cancellationRequest(input: {
   spotId: unknown;
-  fingerprint: unknown;
+  claimGenerationId: unknown;
   reason: unknown;
-}): { spotId: string; fingerprint: number | null; reason: CancelClaimReason } {
-  const { spotId, fingerprint } = input;
+}): { spotId: string; claimGenerationId: string; reason: CancelClaimReason } {
+  const { spotId, claimGenerationId } = input;
   if (
     typeof spotId !== 'string'
     || spotId.length < 1
@@ -43,17 +44,12 @@ function cancellationRequest(input: {
   ) {
     throw new Error('Invalid cancellation request.');
   }
-  let fingerprintValue: number | null;
-  if (fingerprint === null) {
-    fingerprintValue = null;
-  } else if (typeof fingerprint === 'number' && Number.isSafeInteger(fingerprint) && fingerprint >= 0) {
-    fingerprintValue = fingerprint;
-  } else {
+  if (!isClaimGenerationId(claimGenerationId)) {
     throw new Error('Invalid cancellation request.');
   }
   return {
     spotId,
-    fingerprint: fingerprintValue,
+    claimGenerationId,
     reason: cancelClaimReasonForUi(typeof input.reason === 'string' ? input.reason : ''),
   };
 }
@@ -68,11 +64,11 @@ function outcomeOf(response: { data?: { outcome?: unknown } } | null | undefined
 
 /**
  * Claimer cancellation through the us-central1 cancelClaim callable.
- * The payload is only spotId, fingerprint, and an allowlisted reason.
+ * The payload is only spotId, claimGenerationId, and an allowlisted reason.
  */
 export async function cancelClaimCallable(input: {
   spotId: string;
-  fingerprint: number | null;
+  claimGenerationId: string;
   reason: string;
 }): Promise<CancelClaimOutcome> {
   const request = cancellationRequest(input);

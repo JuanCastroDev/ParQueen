@@ -206,6 +206,10 @@ const ENFORCED_APP_CHECK_CALLABLES = [
     'adminReadView',
     'checkHydrantDistance',
     'createSegmentFromSweepNYC',
+    'claimSpot',
+    'prepareClaimIntent',
+    'revokeClaimIntent',
+    'finderCancelSpot',
 ];
 
 function expectReviewedAppCheckFleet(indexSrc) {

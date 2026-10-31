@@ -65,6 +65,7 @@ const RELEASED_INTEREST_CLEAR = Object.freeze({
   claimReminderSentAt: null,
   claimAutoReleaseAt: null,
   claimAutoReleasedAt: null,
+  claimGenerationId: null,
 });
 
 function compareActiveClaims(a, b) {

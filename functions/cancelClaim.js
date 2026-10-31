@@ -4,19 +4,23 @@ const { HttpsError } = require('firebase-functions/v2/https');
 const { userRecordDenies, PRODUCT_ACCESS_DENIED } = require('./productAccess');
 const { checkRateLimit } = require('./rateLimiter');
 const { sanitizeError } = require('./redactForLog');
+const { isClaimGenerationId } = require('./claimGeneration');
 
 // Outcome adjustment from the 29G contract:
 // stale_claim is returned only when the authenticated caller is still the
-// stored claimant and the supplied fingerprint is a different claim
-// generation. A caller who is not that claimant — missing Ping, cleared
-// claim, another claimant, occupied or other terminal history — receives
-// already_resolved and no write. The two outcomes are not an existence or
-// handoff probe. The sheet already closes for both.
+// stored claimant and the supplied claimGenerationId is not the stored id.
+// A caller who is not that claimant — missing Ping, cleared claim, another
+// claimant, occupied or other terminal history — receives already_resolved
+// and no write. The two outcomes are not an existence or handoff probe.
 //
-// A null fingerprint still matches the caller's current claim. A stale
-// client that omits the generation can therefore cancel a newer claim that
-// belongs to the same user. A different user's replacement is not cancelled
-// and is reported as already_resolved.
+// Fail closed. A cancellation write requires the submitted claimGenerationId
+// to equal the id stored on the spot. Missing, null, malformed, and wrong
+// ids do not authorize a write. A spot with no valid stored id cannot be
+// cancelled by this path. Timestamps are not compared. A different user's
+// replacement is already_resolved.
+//
+// Direct-write cancellation does not use this compare. Until Arms 1, 3, and
+// 3b are removed together, a client can still release a claim without an id.
 
 const REASONS = Object.freeze({
   found_elsewhere: 'The driver found parking elsewhere — your spot is available again.',
@@ -42,6 +46,7 @@ const CLEAR_FIELDS = Object.freeze({
   claimReminderSentAt: null,
   claimAutoReleaseAt: null,
   claimAutoReleasedAt: null,
+  claimGenerationId: null,
 });
 
 const LIVE_CLAIM_STATES = new Set(['committed', 'heading']);
@@ -66,23 +71,23 @@ function parseInput(data) {
     throw new HttpsError('invalid-argument', INVALID);
   }
   const keys = Object.keys(data);
-  if (keys.length !== 3 || keys.some((key) => key !== 'spotId' && key !== 'fingerprint' && key !== 'reason')) {
+  if (keys.length !== 3 || keys.some((key) => key !== 'spotId' && key !== 'claimGenerationId' && key !== 'reason')) {
     throw new HttpsError('invalid-argument', INVALID);
   }
-  const { spotId, fingerprint, reason } = data;
+  const { spotId, claimGenerationId, reason } = data;
   if (typeof spotId !== 'string' || spotId.length < 1 || spotId.length > SPOT_ID_MAX) {
     throw new HttpsError('invalid-argument', INVALID);
   }
   if (spotId.includes('/') || spotId === '.' || spotId === '..') {
     throw new HttpsError('invalid-argument', INVALID);
   }
-  if (fingerprint !== null && (!Number.isSafeInteger(fingerprint) || fingerprint < 0)) {
+  if (!isClaimGenerationId(claimGenerationId)) {
     throw new HttpsError('invalid-argument', INVALID);
   }
   if (!Object.prototype.hasOwnProperty.call(REASONS, reason)) {
     throw new HttpsError('invalid-argument', INVALID);
   }
-  return { spotId, fingerprint, reason };
+  return { spotId, claimGenerationId, reason };
 }
 
 function claimStateOf(spot) {
@@ -104,27 +109,25 @@ function isExpired(spot, now) {
   return ms <= now.toMillis();
 }
 
-function notificationId(spotId, claimStartedAt) {
-  const ms = timestampMillis(claimStartedAt);
-  return `claimer_cancelled_${spotId}_${ms == null ? 'x' : String(ms)}`;
+function notificationId(spotId, claimGenerationId) {
+  return `claimer_cancelled_${spotId}_${claimGenerationId}`;
 }
 
 function classify(uid, input, spotSnap) {
   if (!spotSnap.exists) return { action: 'return', outcome: 'already_resolved' };
   const spot = spotSnap.data() || {};
   if (spot.interestedUserId !== uid) return { action: 'return', outcome: 'already_resolved' };
-  const storedMs = timestampMillis(spot.claimStartedAt);
-  if (input.fingerprint !== null && storedMs !== input.fingerprint) {
+  if (!isLiveClaim(spot)) return { action: 'return', outcome: 'already_resolved' };
+  if (!isClaimGenerationId(spot.claimGenerationId) || spot.claimGenerationId !== input.claimGenerationId) {
     return { action: 'return', outcome: 'stale_claim' };
   }
-  if (!isLiveClaim(spot)) return { action: 'return', outcome: 'already_resolved' };
   const finderId = typeof spot.finderId === 'string' ? spot.finderId : '';
   return {
     action: 'cancel',
     outcome: 'cancelled',
     notify: finderId.length > 0 && finderId !== uid,
     finderId,
-    notificationId: notificationId(input.spotId, spot.claimStartedAt),
+    notificationId: notificationId(input.spotId, spot.claimGenerationId),
   };
 }
 

@@ -607,6 +607,22 @@ service cloud.firestore {
         && request.resource.data.lastGeohashUpdatedAt <= request.time + duration.value(1, 'm');
     }
 
+    // 31AF scratch. A client may delete only an available Ping that has no
+    // claimant, no claim state, and no stored generation. Claimed and
+    // generation-bearing Pings are deleted by the finderCancelSpot callable.
+    // Rules cannot see an unclaimed-to-unclaimed cycle, so that case is not
+    // distinguished here.
+    function clientMayDeleteUnclaimedSpot() {
+      return actorMayUseProduct()
+        && resource.data.finderId == request.auth.uid
+        && resource.data.status == 'available'
+        && (resource.data.get('interestedUserId', null) == null
+            || resource.data.get('interestedUserId', null) == '')
+        && (resource.data.get('claimState', null) == null
+            || resource.data.get('claimState', null) == '')
+        && resource.data.get('claimGenerationId', null) == null;
+    }
+
     match /spots/{spotId} {
       // Public-ish: available/interested spots are readable by any signed-in user (live Ping feed).
       // Occupied/history spots are private: only the finder or active claimer may read them directly.
@@ -667,54 +683,14 @@ service cloud.firestore {
         && matchesFinderIdentity(request.resource.data)
         && pingCreateRateRecorded(spotId)
         && originLinkRecorded(spotId);
-      allow delete: if actorMayUseProduct() && resource.data.finderId == request.auth.uid;
-      // Arm 3 is first. A live cancel then stops, and does not also evaluate
-      // the ETA diff in arm 2. That keeps the single-document access gate
-      // inside the 1000-expression cap. The allow is still the OR of every arm.
+      allow delete: if clientMayDeleteUnclaimedSpot();
+      // 31V candidate: Arms 1, 3, and 3b are removed. Arm 2 is the first
+      // remaining disjunct. No new predicate was added. The allow is still
+      // the OR of every remaining arm.
       allow update: if actorMayUseProduct() && (
 
-        // Arm 3: Claimer cancels — clears all claimer metadata, Ping reopens.
-        // Only valid while the Ping itself hasn't expired yet (an expired Ping
-        // must never be reopened to 'available' — see Arm 3b for that case).
-        // Once the claimer has arrived, cancel must not reopen the Ping.
-        (isClaimer()
-          && resource.data.status == 'interested'
-          && resource.data.get('claimState', null) != 'arrived_pending_outcome'
-          && request.resource.data.status == 'available'
-          && (resource.data.get('expiresAt', null) == null
-              || resource.data.expiresAt > request.time)
-          && matchingActiveClaimLockReleased(spotId)
-          && claimerMetadataClearedAfter()
-          && onlyChanges(['status', 'claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
-                          'interestedUserId', 'interestedUserName',
-                          'interestedUserVehicleColor', 'interestedUserVehicleType',
-                          'interestedUserVehicleBrand', 'interestedUserTitle',
-                          'etaMinutes', 'interestExpiresAt', 'claimStartedAt',
-                          'claimReminderAt', 'claimReminderSentAt',
-                          'claimAutoReleaseAt', 'claimAutoReleasedAt']))
-
-        // Arm 1: Claim an available spot (immediate or scheduled).
-        // The rollout gate must already be clean, and the same commit must
-        // point this user's lock at this Ping.
-        // HO-004: the finder cannot claim their own Ping. Client canClaim
-        // already hides the button; this is the server denial.
-        || (isAvailableForClaim()
-          && request.auth.uid != resource.data.finderId
-          && activeIncomingClaimInvariantEnforced()
-          && request.resource.data.interestedUserId == request.auth.uid
-          && request.resource.data.status == 'interested'
-          && matchesInterestedUserIdentity(request.resource.data)
-          && activeIncomingClaimLockAcquired(spotId)
-          && onlyChanges(['status', 'claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
-                          'interestedUserId', 'interestedUserName',
-                          'interestedUserVehicleColor', 'interestedUserVehicleType',
-                          'interestedUserVehicleBrand', 'interestedUserTitle',
-                          'etaMinutes', 'interestExpiresAt', 'claimStartedAt',
-                          'claimReminderAt', 'claimReminderSentAt',
-                          'claimAutoReleaseAt', 'claimAutoReleasedAt']))
-
         // Arm 2: Claimer updates ETA
-        || (isClaimer() && onlyChanges(['etaMinutes']))
+        (isClaimer() && onlyChanges(['etaMinutes']))
 
         // Arm 2b: Claimer commits to heading (scheduled → active).
         // The result claimState is heading. arrived_pending_outcome is Arm 4 only.
@@ -725,24 +701,6 @@ service cloud.firestore {
           && onlyChanges(['claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
                           'etaMinutes', 'interestExpiresAt',
                           'claimReminderAt', 'claimReminderSentAt', 'claimAutoReleaseAt']))
-
-        // Arm 3b: Claimer cancels a claim on an already-expired Ping — clears
-        // claimer metadata but leaves status untouched (never reopens it).
-        // Occupied / arrived_pending_outcome stays put.
-        || (isClaimer()
-          && resource.data.status == 'interested'
-          && resource.data.get('claimState', null) != 'arrived_pending_outcome'
-          && resource.data.get('expiresAt', null) != null
-          && resource.data.expiresAt <= request.time
-          && matchingActiveClaimLockReleased(spotId)
-          && claimerMetadataClearedAfter()
-          && onlyChanges(['claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
-                          'interestedUserId', 'interestedUserName',
-                          'interestedUserVehicleColor', 'interestedUserVehicleType',
-                          'interestedUserVehicleBrand', 'interestedUserTitle',
-                          'etaMinutes', 'interestExpiresAt', 'claimStartedAt',
-                          'claimReminderAt', 'claimReminderSentAt',
-                          'claimAutoReleaseAt', 'claimAutoReleasedAt']))
 
         // Arm 4: Claimer marks arrived. The same commit must set status
         // occupied, claimState arrived_pending_outcome, and arrivedAt, and
@@ -894,6 +852,12 @@ service cloud.firestore {
       allow update: if false;
     }
 
+    // 31AG scratch. Written only by the finderCancelSpot Admin SDK transaction.
+    // A client cannot forge the receipt the delete trigger requires.
+    match /finderCancelReceipts/{receiptId} {
+      allow read, write: if false;
+    }
+
     match /spotNotifications/{notifId} {
       allow read: if actorMayUseProduct()
         && (resource.data.targetUserId == request.auth.uid
@@ -905,8 +869,10 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(
              ['spotId', 'senderId', 'targetUserId', 'type', 'message', 'createdAt'])
         && request.resource.data.senderId == request.auth.uid
+        // type 'cancelled' is a server notice. The current web client writes
+        // claimer_cancelled, delayed, handoff_success, and owner_leaving_now.
         && request.resource.data.type in [
-             'cancelled', 'claimer_cancelled', 'delayed',
+             'claimer_cancelled', 'delayed',
              'handoff_success', 'owner_leaving_now']
         && request.resource.data.message is string
         && request.resource.data.message.size() > 0
@@ -950,7 +916,7 @@ service cloud.firestore {
         && data.address is string
         && data.address.size() <= 500
         && data.createdAt is timestamp
-        && data.createdAt <= request.time
+        && data.createdAt <= request.time + duration.value(1, 'm')
         && data.createdAt >= request.time - duration.value(5, 'm');
     }
 
@@ -994,7 +960,7 @@ service cloud.firestore {
         && data.address is string
         && data.address.size() <= 500
         && data.createdAt is timestamp
-        && data.createdAt <= request.time
+        && data.createdAt <= request.time + duration.value(1, 'm')
         && data.createdAt >= request.time - duration.value(5, 'm')
         && request.auth.uid == data.userId
         && feedbackId == data.spotId + '_' + data.userId

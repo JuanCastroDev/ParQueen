@@ -15,6 +15,8 @@ const fs = require('fs');
 const path = require('path');
 
 const { requireEmulatorProjectId } = require('./emulatorProjectId');
+const { prepareClaimIntent, claimSpot } = require('./claimSpot');
+const { isClaimGenerationId } = require('./claimGeneration');
 const PROJECT_ID = requireEmulatorProjectId();
 const APP_NAME = '__cleanup_expired_holds_intg__';
 const testApp = getApps().find(app => app.name === APP_NAME) ?? initializeApp({ projectId: PROJECT_ID }, APP_NAME);
@@ -298,13 +300,19 @@ describe('cleanupExpiredHolds Function contract', () => {
         expect(cleared.interestedUserId == null).toBe(true);
         expect((await lockRef.get()).exists).toBe(false);
 
-        await claimSpotAs(claimer, id);
+        const serverClaim = await claimThroughServer(claimer, id);
 
         const claimed = await getSpot(id);
+        expect(serverClaim.outcome).toBe('claimed');
+        expect(isClaimGenerationId(serverClaim.claimGenerationId)).toBe(true);
         expect(claimed.status).toBe('interested');
         expect(claimed.interestedUserId).toBe(claimer);
         expect(claimed.claimState).toBe('heading');
-        expect((await lockRef.get()).data().spotId).toBe(id);
+        expect(claimed.claimGenerationId).toBe(serverClaim.claimGenerationId);
+        const lock = (await lockRef.get()).data();
+        expect(lock.spotId).toBe(id);
+        expect(lock.claimState).toBe('heading');
+        expect(lock.claimGenerationId).toBe(serverClaim.claimGenerationId);
 
         const claimedSnapshot = await getSpot(id);
         const lockSnapshot = (await lockRef.get()).data();
@@ -346,6 +354,24 @@ function livePendingSpot(overrides = {}) {
         holdRequestExpiresAt: PAST,
         ...overrides,
     };
+}
+
+async function claimThroughServer(uid, spotId) {
+    const attemptId = `11111111-1111-4111-8111-${String(++sequence).padStart(12, '0')}`;
+    const request = {
+        auth: { uid },
+        data: { spotId, attemptId, mode: 'immediate', etaMinutes: 4 },
+    };
+    const deps = { db, checkRateLimit: async () => {} };
+    const prepared = await prepareClaimIntent(request, deps);
+    if (!prepared || prepared.state !== 'prepared') {
+        throw Object.assign(new Error('prepareClaimIntent did not prepare the attempt'), { outcome: prepared });
+    }
+    const result = await claimSpot(request, deps);
+    if (!result || result.outcome !== 'claimed') {
+        throw Object.assign(new Error('claimSpot did not claim the Ping'), { outcome: result });
+    }
+    return result;
 }
 
 async function claimSpotAs(uid, spotId) {
