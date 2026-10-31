@@ -81,11 +81,12 @@ describe('buildHeadingUpdate', () => {
     const rules = readFileSync('firestore.rules', 'utf8');
     const start = rules.indexOf('// Arm 2b:');
     expect(start, 'Arm 2b marker').toBeGreaterThan(-1);
-    // Arm 3 is written earlier in the file. The section after Arm 2b is Arm 3b.
-    const end = rules.indexOf('// Arm 3b:', start + '// Arm 2b:'.length);
+    // Arms 1, 3, and 3b are removed. The next remaining arm is Arm 4.
+    const end = rules.indexOf('// Arm 4:', start + '// Arm 2b:'.length);
     expect(end, 'Arm 2b following boundary').toBeGreaterThan(start);
     const arm = rules.slice(start, end);
     expect(arm).not.toContain('// Arm 3:');
+    expect(arm).not.toContain('// Arm 3b:');
     expect(arm).toContain("request.resource.data.claimState == 'heading'");
 
     const listMatch = arm.match(/onlyChanges\(\[([\s\S]*?)\]\)/);

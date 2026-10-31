@@ -10,6 +10,10 @@ const ENFORCED_CALLABLES = [
   'adminReadView',
   'checkHydrantDistance',
   'createSegmentFromSweepNYC',
+  'claimSpot',
+  'prepareClaimIntent',
+  'revokeClaimIntent',
+  'finderCancelSpot',
 ];
 
 describe('Android Phase 2E App Check contracts', () => {
