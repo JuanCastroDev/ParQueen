@@ -1,9 +1,9 @@
 import { getApp } from 'firebase/app';
 import { getFunctions, httpsCallable } from 'firebase/functions';
-import { doc } from 'firebase/firestore';
+import type { Firestore } from 'firebase/firestore';
 import { isClaimGenerationId } from './claimIdentity';
 
-type FirestoreDb = Parameters<typeof doc>[0];
+type FirestoreDb = Firestore;
 
 export type FinderCancelOutcome =
   | 'deleted'

@@ -21,7 +21,7 @@ const {
   getDocs, getDoc, runTransaction, onSnapshot, updateDoc, deleteDoc, addDoc, setDoc,
 } = vi.hoisted(() => ({
   getDocs: vi.fn(async () => ({ empty: true, docs: [] })),
-  getDoc: vi.fn(async () => ({
+  getDoc: vi.fn(async (): Promise<{ exists: () => boolean; data: () => Record<string, unknown> }> => ({
     exists: () => true,
     data: () => ({
       status: 'occupied',

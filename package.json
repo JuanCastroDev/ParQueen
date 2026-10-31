@@ -13,7 +13,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:preflight:windows": "node scripts/release-preflight/run-root-tests.mjs",
-    "test:rules:unit": "vitest run --config vite.rules.config.ts",
+    "test:rules:unit": "vitest run --config vite.rules.config.ts --project candidate-rules && vitest run --config vite.rules.config.ts --project original-30p --testNamePattern A1-15-30P",
     "test:rules": "firebase emulators:exec --only firestore --project demo-parkqueen-rules-test \"npm run test:rules:unit\"",
     "test:storage:rules:unit": "vitest run --config vite.storage-rules.config.ts",
     "test:storage:rules": "firebase emulators:exec --only firestore,storage --project demo-parkqueen-storage-test \"npm run test:storage:rules:unit\"",

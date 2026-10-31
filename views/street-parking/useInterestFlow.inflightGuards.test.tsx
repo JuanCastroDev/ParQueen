@@ -132,6 +132,13 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+type InFlightClaim = {
+  outcome: 'claimed';
+  claimGenerationId: string;
+  spotId: string;
+  mode: 'immediate' | 'scheduled';
+};
+
 describe('useInterestFlow in-flight claim and arrive guards', () => {
   beforeEach(() => {
     getDocs.mockReset();
@@ -152,7 +159,7 @@ describe('useInterestFlow in-flight claim and arrive guards', () => {
   });
 
   it('ignores a second claim tap while an immediate claim write is in flight', async () => {
-    const pending = deferred<'claimed'>();
+    const pending = deferred<InFlightClaim>();
     claimSpotCallable.mockReturnValue(pending.promise);
     const getFlow = mount();
 
@@ -174,7 +181,7 @@ describe('useInterestFlow in-flight claim and arrive guards', () => {
   });
 
   it('ignores a second scheduled-claim tap while that write is in flight', async () => {
-    const pending = deferred<'claimed'>();
+    const pending = deferred<InFlightClaim>();
     claimSpotCallable.mockReturnValue(pending.promise);
     const getFlow = mount();
 
@@ -298,7 +305,7 @@ describe('useInterestFlow in-flight claim and arrive guards', () => {
   });
 
   it('does not start a cancel while a claim or arrival write is in flight', async () => {
-    const claimPending = deferred<'claimed'>();
+    const claimPending = deferred<InFlightClaim>();
     claimSpotCallable.mockReturnValue(claimPending.promise);
     const claiming = mount();
 
@@ -331,7 +338,7 @@ describe('useInterestFlow in-flight claim and arrive guards', () => {
   });
 
   it('does not start an arrival while a claim write is still open', async () => {
-    const pending = deferred<'claimed'>();
+    const pending = deferred<InFlightClaim>();
     claimSpotCallable.mockReturnValue(pending.promise);
     const getFlow = mount();
 

@@ -95,6 +95,14 @@ function claimRequest(input: {
   return { spotId, attemptId, mode, etaMinutes: etaMinutes as number };
 }
 
+function optionalClaimGenerationId(value: unknown): string | null {
+  if (value == null) return null;
+  if (!isClaimGenerationId(value)) {
+    throw new Error('Invalid claim response.');
+  }
+  return value;
+}
+
 function resultOf(
   response: { data?: { outcome?: unknown; claimGenerationId?: unknown; spotId?: unknown; mode?: unknown } } | null | undefined,
   request: { spotId: string; mode: ClaimSpotMode },
@@ -107,10 +115,7 @@ function resultOf(
   if (data?.spotId !== request.spotId || data?.mode !== request.mode) {
     throw new Error('Invalid claim response.');
   }
-  const claimGenerationId = data?.claimGenerationId ?? null;
-  if (claimGenerationId !== null && !isClaimGenerationId(claimGenerationId)) {
-    throw new Error('Invalid claim response.');
-  }
+  const claimGenerationId = optionalClaimGenerationId(data?.claimGenerationId);
   if (outcome === 'claimed' && !isClaimGenerationId(claimGenerationId)) {
     throw new Error('Invalid claim response.');
   }

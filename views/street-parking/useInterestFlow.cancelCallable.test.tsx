@@ -21,8 +21,10 @@ const G1 = 'a'.repeat(64);
 const G2 = 'b'.repeat(64);
 const G3 = 'c'.repeat(64);
 
+type SpotSnapshot = { exists: () => boolean; data: () => Record<string, unknown> };
+
 const { getDoc, updateDoc, addDoc } = vi.hoisted(() => ({
-  getDoc: vi.fn(async () => ({
+  getDoc: vi.fn(async (): Promise<SpotSnapshot> => ({
     exists: () => true,
     data: () => ({ claimGenerationId: 'a'.repeat(64), status: 'interested', interestedUserId: 'u1' }),
   })),

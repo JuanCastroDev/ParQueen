@@ -1,8 +1,8 @@
 import { defineConfig } from 'vitest/config';
 
-// Candidate rules run in full. The original suite stays unmodified and is
-// filtered to the two A1-15-30P controls so the other historical cases are
-// not treated as the candidate contract.
+// Candidate rules run in full. testNamePattern is not a per-project option
+// in this Vitest version, so test:rules:unit applies A1-15-30P to
+// original-30p on the command line. The original suite file is unchanged.
 export default defineConfig({
   test: {
     projects: [
@@ -25,7 +25,6 @@ export default defineConfig({
           globals: true,
           fileParallelism: false,
           include: ['firestore.rules.test.original-suite.ts'],
-          testNamePattern: 'A1-15-30P',
         },
       },
     ],
