@@ -9,6 +9,8 @@ const APP_NAME = '__ping_notification_privacy_intg__';
 const testApp = getApps().find(app => app.name === APP_NAME) ?? initializeApp({ projectId: PROJECT_ID }, APP_NAME);
 const db = getFirestore(testApp);
 const indexModule = require('./index.js');
+const { receiptDocumentId, receiptBody } = require('./finderCancelReceipt');
+const TRUST_GENERATION = 'cd'.repeat(32);
 
 const RUN = `${process.pid}_${Date.now()}`;
 let sequence = 0;
@@ -16,6 +18,29 @@ const nextId = label => `pn_${label}_${RUN}_${++sequence}`;
 
 const PAST = Timestamp.fromMillis(Date.now() - 60_000);
 const FUTURE = Timestamp.fromMillis(Date.now() + 60 * 60_000);
+
+function claimed(finderId, extra = {}) {
+    return {
+        status: 'interested',
+        finderId,
+        interestedUserId: 'claimer-trust',
+        claimState: 'heading',
+        claimGenerationId: TRUST_GENERATION,
+        ...extra,
+    };
+}
+
+async function seedGenerationReceipt(spotId, data) {
+    const identity = {
+        kind: 'generation',
+        finderId: data.finderId,
+        status: data.status,
+        interestedUserId: data.interestedUserId,
+        claimState: data.claimState,
+        claimGenerationId: data.claimGenerationId,
+    };
+    await db.collection('finderCancelReceipts').doc(receiptDocumentId(spotId, identity)).set(receiptBody(spotId, identity));
+}
 
 function createdEvent(spotId, data, eventId = `event_${spotId}`, time = new Date().toISOString()) {
     return {
@@ -483,7 +508,7 @@ describe('Admin spot deletion — trust-penalty exemption contract (Wave 6B-3)',
         await cleanupUser(finderId, spotId);
     });
 
-    it('TD-2: an ordinary (explicit source:"user") deletion still applies the normal finder cancellation penalty', async () => {
+    it('TD-2: source:"user" without a cancellation receipt does not apply the finder penalty', async () => {
         const finderId = nextId('td_finder');
         const spotId = nextId('td_spot');
         await seedUser(finderId);
@@ -493,15 +518,14 @@ describe('Admin spot deletion — trust-penalty exemption contract (Wave 6B-3)',
         );
 
         const userSnap = await db.doc(`users/${finderId}`).get();
-        expect(userSnap.data().trustStats.handoffsCancelledByFinder).toBe(1);
+        expect(userSnap.data().trustStats).toBeUndefined();
         const processedSnap = await db.doc(`users/${finderId}/processedTrustEvents/${spotId}:finder-cancel`).get();
-        expect(processedSnap.exists).toBe(true);
-        expect(processedSnap.data().source).toBe('user');
+        expect(processedSnap.exists).toBe(false);
 
         await cleanupUser(finderId, spotId);
     });
 
-    it('TD-3: a deletion with no source field at all (the real shape of every non-admin deletion path) still applies the penalty', async () => {
+    it('TD-3: a deletion with no source field and no receipt does not apply the penalty', async () => {
         const finderId = nextId('td_finder');
         const spotId = nextId('td_spot');
         await seedUser(finderId);
@@ -511,9 +535,29 @@ describe('Admin spot deletion — trust-penalty exemption contract (Wave 6B-3)',
         );
 
         const userSnap = await db.doc(`users/${finderId}`).get();
-        expect(userSnap.data().trustStats.handoffsCancelledByFinder).toBe(1);
+        expect(userSnap.data().trustStats).toBeUndefined();
 
         await cleanupUser(finderId, spotId);
+    });
+
+    it('TD-5: a matching receipt applies one generation-scoped penalty and ignores the client source', async () => {
+        const finderId = nextId('td_finder');
+        const spotId = nextId('td_spot');
+        await seedUser(finderId);
+        const data = claimed(finderId, { source: 'user', expiresAt: FUTURE });
+        await seedGenerationReceipt(spotId, data);
+        const event = createdEvent(spotId, data, nextId('event'));
+
+        await indexModule.updateTrustOnSpotDelete.run(event);
+        await indexModule.updateTrustOnSpotDelete.run(event);
+
+        const userSnap = await db.doc(`users/${finderId}`).get();
+        expect(userSnap.data().trustStats.handoffsCancelledByFinder).toBe(1);
+        const processedSnap = await db.doc(`users/${finderId}/processedTrustEvents/${spotId}:finder-cancel:${TRUST_GENERATION}`).get();
+        expect(processedSnap.data().source).toBe('finder_cancel_receipt');
+
+        await cleanupUser(finderId, spotId);
+        await db.doc(`users/${finderId}/processedTrustEvents/${spotId}:finder-cancel:${TRUST_GENERATION}`).delete();
     });
 
     it('TD-4: source-contract — adminDeleteSpot sets source:"admin" before the hard delete (the exact write updateTrustOnSpotDelete depends on)', () => {
@@ -559,12 +603,14 @@ describe('Natural-expiration trust exemption — updateTrustOnSpotDelete', () =>
         }
     }
 
-    it('CASE 1: active spot (expiresAt in the future), no source — finder cancellation penalty APPLIES', async () => {
+    it('CASE 1: active spot with a matching receipt — finder cancellation penalty APPLIES', async () => {
         const finderId = nextId('exp_finder');
         const spotId = nextId('exp_spot');
         await seedUser(finderId);
+        const data = claimed(finderId, { expiresAt: FUTURE });
+        await seedGenerationReceipt(spotId, data);
         await indexModule.updateTrustOnSpotDelete.run(
-            createdEvent(spotId, { status: 'interested', finderId, expiresAt: FUTURE }, nextId('event')),
+            createdEvent(spotId, data, nextId('event')),
         );
         await expectPenalty(finderId, true);
         await cleanupUser(finderId, spotId);
@@ -617,35 +663,40 @@ describe('Natural-expiration trust exemption — updateTrustOnSpotDelete', () =>
         await cleanupUser(finderId, spotId);
     });
 
-    it('CASE 6: missing expiresAt — penalty behavior is preserved (no exemption merely because expiry is unavailable)', async () => {
+    it('CASE 6: missing expiresAt does not exempt a matching receipt', async () => {
         const finderId = nextId('exp_finder');
         const spotId = nextId('exp_spot');
         await seedUser(finderId);
+        const data = claimed(finderId);
+        await seedGenerationReceipt(spotId, data);
         await indexModule.updateTrustOnSpotDelete.run(
-            createdEvent(spotId, { status: 'interested', finderId }, nextId('event')), // no expiresAt at all
+            createdEvent(spotId, data, nextId('event')),
         );
         await expectPenalty(finderId, true);
         await cleanupUser(finderId, spotId);
     });
 
-    it('CASE 7: malformed expiresAt (wrong type) — does not crash, penalty behavior is preserved', async () => {
+    it('CASE 7: malformed expiresAt does not crash and does not exempt a matching receipt', async () => {
         const finderId = nextId('exp_finder');
         const spotId = nextId('exp_spot');
         await seedUser(finderId);
-        // Completing without throwing is itself proof of no crash.
+        const data = claimed(finderId, { expiresAt: 'not-a-timestamp' });
+        await seedGenerationReceipt(spotId, data);
         await indexModule.updateTrustOnSpotDelete.run(
-            createdEvent(spotId, { status: 'interested', finderId, expiresAt: 'not-a-timestamp' }, nextId('event')),
+            createdEvent(spotId, data, nextId('event')),
         );
         await expectPenalty(finderId, true);
         await cleanupUser(finderId, spotId);
     });
 
-    it('CASE 8: malformed/missing event.time — no exemption is granted, penalty behavior is preserved, no crash', async () => {
+    it('CASE 8: malformed event.time does not exempt a matching receipt and does not crash', async () => {
         const finderId = nextId('exp_finder');
         const spotId = nextId('exp_spot');
         await seedUser(finderId);
+        const data = claimed(finderId, { expiresAt: PAST });
+        await seedGenerationReceipt(spotId, data);
         await indexModule.updateTrustOnSpotDelete.run(
-            createdEvent(spotId, { status: 'interested', finderId, expiresAt: PAST }, nextId('event'), 'not-a-real-timestamp'),
+            createdEvent(spotId, data, nextId('event'), 'not-a-real-timestamp'),
         );
         await expectPenalty(finderId, true);
         await cleanupUser(finderId, spotId);
@@ -779,7 +830,9 @@ describe('Trust-event runtimes (Wave 7B-2)', () => {
         const finderId = nextId('tb2_finder');
         const spotId = nextId('tb2_spot');
         await seedUser(finderId);
-        const event = createdEvent(spotId, { status: 'interested', finderId }, nextId('event'));
+        const data = claimed(finderId);
+        await seedGenerationReceipt(spotId, data);
+        const event = createdEvent(spotId, data, nextId('event'));
 
         await indexModule.updateTrustOnSpotDelete.run(event);
         await indexModule.updateTrustOnSpotDelete.run(event);

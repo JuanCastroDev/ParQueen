@@ -53,10 +53,38 @@ describe('approved events are anchored to live parking flows', () => {
   it('counts only fresh claims from both immediate and scheduled paths', () => {
     const immediate = section(interest, 'const handleExpressInterest =', 'const handleCancelByFinder =');
     const scheduled = section(interest, 'const handleScheduledClaim =', 'const handleCommitToHeading =');
-    for (const path of [immediate, scheduled]) {
-      expect(path).toContain('const claimResult = await acquireActiveIncomingClaim(');
-      expect(path).toContain("if (claimResult === 'claimed') recordParkingAnalyticsEvent('parking_claim_started')");
+    expect(immediate).toContain("await acquirePreparedClaim(spot, 'immediate', etaMinutes, 'Someone already got this spot', true)");
+    expect(scheduled).toContain("await acquirePreparedClaim(spot, 'scheduled', null, 'Someone already claimed this spot', false)");
+    expect(occurrences(immediate, 'recordParkingAnalyticsEvent')).toBe(0);
+    expect(occurrences(scheduled, 'recordParkingAnalyticsEvent')).toBe(0);
+    expect(occurrences(immediate, 'acquirePreparedClaim(')).toBe(1);
+    expect(occurrences(scheduled, 'acquirePreparedClaim(')).toBe(1);
+
+    const reconcile = section(interest, 'const finishReconciledClaim =', 'const CONFIRMED_REVOKE');
+    const claimedAt = reconcile.indexOf("if (result.outcome === 'claimed') recordParkingAnalyticsEvent('parking_claim_started')");
+    expect(claimedAt).toBeGreaterThan(-1);
+    expect(occurrences(interest, "recordParkingAnalyticsEvent('parking_claim_started')")).toBe(1);
+    for (const earlier of [
+      'already_held',
+      'already_claimed',
+      'unavailable',
+      'refused_stale_generation',
+      'expired',
+      'revoked',
+      'released',
+      'stale_precondition',
+      'if (!active || !isClaimGenerationId(result.claimGenerationId))',
+    ]) {
+      const at = reconcile.indexOf(earlier);
+      expect(at, earlier).toBeGreaterThan(-1);
+      expect(at, earlier).toBeLessThan(claimedAt);
     }
+
+    const acquire = section(interest, 'const acquirePreparedClaim =', 'const handleExpressInterest =');
+    expect(occurrences(acquire, 'recordParkingAnalyticsEvent')).toBe(0);
+    expect(occurrences(acquire, 'prepareClaimIntentCallable(')).toBe(1);
+    expect(occurrences(acquire, 'claimSpotCallable(')).toBe(1);
+
     const heading = section(interest, 'const handleCommitToHeading =', 'const handleOwnerLeaveNow =');
     expect(heading).not.toContain('recordParkingAnalyticsEvent');
   });

@@ -58,7 +58,7 @@ vi.mock('firebase/firestore', () => ({
   where: vi.fn(),
 }));
 
-vi.mock('./cancelClaimTransaction', () => ({ cancelClaimTransaction: vi.fn() }));
+vi.mock('./cancelClaimCallable', () => ({ cancelClaimCallable: vi.fn() }));
 const { reportCriticalActionFailure } = vi.hoisted(() => ({ reportCriticalActionFailure: vi.fn() }));
 vi.mock('../../utils/errorReporting', () => ({ reportCriticalActionFailure }));
 

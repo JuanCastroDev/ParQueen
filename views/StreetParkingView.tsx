@@ -31,6 +31,7 @@ import {
     type CanonicalCurbResponse,
 } from '../utils/canonicalCurbClient';
 import { derivePingLifecycle, getPingExpiresAtMs, getPingPhase, timestampToMillis } from '../utils/pingLifecycle';
+import { finderCancelSpot } from './street-parking/finderCancelSpot';
 import { countUsableStreetIntelligence, shouldCallEmptyCacheRefresh, shouldCallRestrictionMigrationRefresh, hasRestrictionEvaluation, logStreetIntelEvent } from '../utils/streetIntelRefresh';
 
 function protocol2LocationRequest(lat: number, lng: number, accuracyMeters: number | null) {
@@ -62,6 +63,7 @@ import { localDateStr, combineDateAndTime } from './street-parking/dateUtils';
 import { useSearch } from './street-parking/useSearch';
 import { useSpotData } from './street-parking/useSpotData';
 import { useInterestFlow } from './street-parking/useInterestFlow';
+import { ActiveClaimRecovery } from './street-parking/ActiveClaimRecovery';
 import { checkPingRateLimit } from './street-parking/pingRateLimit';
 import { commitPingCreate, isReportedAtWithinHorizon, PingCreateRejected } from './street-parking/pingCreateBounds';
 import { reportPingCreationFailure } from './street-parking/pingFailureReporting';
@@ -1608,8 +1610,17 @@ export const MapView: React.FC<MapViewProps> = ({
             // Orphan cleanup: previous My Car pings orphaned when a new session overwrites
             // savedSpot without deleting the old linked ping (e.g. handoff auto-save)
             const orphans = candidates.filter(d => d.data().source === 'my_car');
-            if (orphans.length > 0) {
-                await Promise.all(orphans.map(d => deleteDoc(doc(db, 'spots', d.id))));
+            // Claimed and generation-bearing Pings are not client-deletable.
+            // An unclaimed available orphan still uses the constrained delete.
+            const unclaimedOrphans = orphans.filter((d) => {
+                const data = d.data();
+                return data.status === 'available'
+                    && !data.interestedUserId
+                    && !data.claimState
+                    && (data.claimGenerationId == null);
+            });
+            if (unclaimedOrphans.length > 0) {
+                await Promise.all(unclaimedOrphans.map(d => deleteDoc(doc(db, 'spots', d.id))));
             }
         } catch { /* non-fatal */ }
 
@@ -1874,11 +1885,39 @@ export const MapView: React.FC<MapViewProps> = ({
         setShowDeleteConfirm(true);
     };
 
+    const cancelConfirmedPing = async (spotId: string, confirmed: Record<string, unknown>) => {
+        if (!user) return 'not_owner' as const;
+        return finderCancelSpot({
+            db,
+            spotId,
+            finderId: user.id,
+            confirmedSpot: confirmed,
+        });
+    };
+
     const cancelLinkedPing = async () => {
-        if (!savedSpot?.linkedPingId) return;
+        if (!savedSpot?.linkedPingId || !user) return;
         setLinkedPingError(null);
         try {
-            await deleteDoc(doc(db, 'spots', savedSpot.linkedPingId));
+            const snap = await getDoc(doc(db, 'spots', savedSpot.linkedPingId));
+            if (!snap.exists()) {
+                const updated = { ...savedSpot, linkedPingId: null };
+                localStorage.setItem(SAVED_SPOT_KEY, JSON.stringify(updated));
+                setSavedSpot(updated);
+                return;
+            }
+            const data = snap.data() || {};
+            const outcome = await cancelConfirmedPing(savedSpot.linkedPingId, {
+                finderId: user.id,
+                status: data.status,
+                interestedUserId: data.interestedUserId ?? null,
+                claimState: data.claimState ?? null,
+                claimGenerationId: data.claimGenerationId ?? null,
+            });
+            if (outcome !== 'deleted' && outcome !== 'already_deleted') {
+                setLinkedPingError(t('my_car.cancel_shared_error'));
+                return;
+            }
         } catch (e) {
             console.error('Error canceling linked ping:', (e as any)?.code ?? 'unknown');
             setLinkedPingError(t('my_car.cancel_shared_error'));
@@ -1912,9 +1951,20 @@ export const MapView: React.FC<MapViewProps> = ({
             endSession();
             return;
         }
-        // Active ping — must delete from Firestore before removing My Car
+        // Active ping — server cancellation must commit before removing My Car.
         try {
-            await deleteDoc(doc(db, 'spots', savedSpot.linkedPingId));
+            const outcome = await cancelConfirmedPing(savedSpot.linkedPingId, {
+                finderId: user?.id,
+                status: snapData?.status,
+                interestedUserId: snapData?.interestedUserId ?? null,
+                claimState: snapData?.claimState ?? null,
+                claimGenerationId: snapData?.claimGenerationId ?? null,
+            });
+            if (outcome !== 'deleted' && outcome !== 'already_deleted') {
+                setLinkedPingError(t('my_car.remove_error'));
+                setRemoveCarLoading(false);
+                return;
+            }
         } catch (e) {
             console.error('Error canceling linked ping before remove:', (e as any)?.code ?? 'unknown');
             setLinkedPingError(t('my_car.remove_error'));
@@ -1925,10 +1975,24 @@ export const MapView: React.FC<MapViewProps> = ({
     };
 
     const changeLinkedPingTime = async () => {
-        if (!savedSpot?.linkedPingId) return;
+        if (!savedSpot?.linkedPingId || !user) return;
         setLinkedPingError(null);
         try {
-            await deleteDoc(doc(db, 'spots', savedSpot.linkedPingId));
+            const snap = await getDoc(doc(db, 'spots', savedSpot.linkedPingId));
+            if (snap.exists()) {
+                const data = snap.data() || {};
+                const outcome = await cancelConfirmedPing(savedSpot.linkedPingId, {
+                    finderId: user.id,
+                    status: data.status,
+                    interestedUserId: data.interestedUserId ?? null,
+                    claimState: data.claimState ?? null,
+                    claimGenerationId: data.claimGenerationId ?? null,
+                });
+                if (outcome !== 'deleted' && outcome !== 'already_deleted') {
+                    setLinkedPingError(t('my_car.update_error'));
+                    return;
+                }
+            }
         } catch (e) {
             console.error('Error updating linked ping:', (e as any)?.code ?? 'unknown');
             setLinkedPingError(t('my_car.update_error'));
@@ -1947,9 +2011,16 @@ export const MapView: React.FC<MapViewProps> = ({
         const spotToDelete = selectedItem || (spotData.activeSpots.length > 0 ? spotData.activeSpots[0] : null);
         if (!spotToDelete) return;
         setShowDeleteConfirm(false);
+        if (!user) return;
         try {
-            await deleteDoc(doc(db, "spots", spotToDelete.id));
-            setSelectedItem(null);
+            const outcome = await cancelConfirmedPing(spotToDelete.id, {
+                finderId: user.id,
+                status: spotToDelete.status,
+                interestedUserId: spotToDelete.interestedUserId ?? null,
+                claimState: spotToDelete.claimState ?? null,
+                claimGenerationId: spotToDelete.claimGenerationId ?? spotToDelete.rawSpot?.claimGenerationId ?? null,
+            });
+            if (outcome === 'deleted' || outcome === 'already_deleted') setSelectedItem(null);
         } catch (e) {
             console.error("Error deleting ping:", (e as any)?.code ?? 'unknown');
         }
@@ -2004,6 +2075,15 @@ export const MapView: React.FC<MapViewProps> = ({
 
     return (
         <div className="sp-page">
+            <ActiveClaimRecovery
+                claims={interestFlow.recoveredClaims}
+                error={interestFlow.recoveryError}
+                ack={interestFlow.recoveryAck}
+                releasing={interestFlow.cancelingClaim}
+                onInspect={interestFlow.inspectRecoveredClaim}
+                onRelease={interestFlow.releaseRecoveredClaim}
+                onDismissAck={interestFlow.dismissRecoveryAck}
+            />
             <SpotModal
                 isOpen={isSpotModalOpen}
                 onClose={() => {

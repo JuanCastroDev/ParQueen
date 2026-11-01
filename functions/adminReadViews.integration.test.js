@@ -33,7 +33,7 @@
  *   AR-16: a garbage/foreign cursor cannot escape the intended collection scope
  *   AR-17: client-requested field lists have no effect — server always returns its fixed minimized shape
  *   AR-18: source-contract — adminReadView is present, requireCurrentAdmin-gated, and the view enum matches
- *   AR-25: App Check canary config-contract — adminReadView, updateDisplayName, deleteChat, checkHydrantDistance, and createSegmentFromSweepNYC are the ONLY callables with enforceAppCheck:true; sendMessage is temporarily unenforced (claimUsername deliberately excluded — see docs/PROFILE_IDENTITY_HARDENING.md); consumeAppCheckToken is unused
+ *   AR-25: App Check canary config-contract — adminReadView, updateDisplayName, deleteChat, cancelClaim, checkHydrantDistance, and createSegmentFromSweepNYC are the ONLY callables with enforceAppCheck:true; sendMessage is temporarily unenforced (claimUsername deliberately excluded — see docs/PROFILE_IDENTITY_HARDENING.md); consumeAppCheckToken is unused
  *   AR-26: App Check canary — HTTP-level: a request with a valid admin ID token but no App Check token is rejected before the handler runs (proves Layer 1; missing App Check is testable against the emulator without reaching a real attestation provider — INVALID-token verification is not, since that requires the real App Check backend)
  *   AR-27: Runtime-IAM canary config-contract — adminReadView's onCall options declare serviceAccount: parqueen-admin-read@..., and enforceAppCheck/consumeAppCheckToken remain exactly as AR-25 requires alongside it
  *   AR-29: Runtime-IAM canary config-contract — moderateAvatarUpload's onObjectFinalized options declare serviceAccount: parqueen-avatar-moderator@..., with region/memory/retry unaffected and AR-25's fleet-wide App Check invariants unchanged
@@ -197,6 +197,37 @@ async function callViaHandler(idToken, data = {}) {
 
 function callView(idToken, view, params = {}) {
     return callViaHandler(idToken, { view, params });
+}
+
+const ENFORCED_APP_CHECK_CALLABLES = [
+    'deleteChat',
+    'updateDisplayName',
+    'cancelClaim',
+    'adminReadView',
+    'checkHydrantDistance',
+    'createSegmentFromSweepNYC',
+    'claimSpot',
+    'prepareClaimIntent',
+    'revokeClaimIntent',
+    'finderCancelSpot',
+];
+
+function expectReviewedAppCheckFleet(indexSrc) {
+    const enforced = indexSrc.match(/enforceAppCheck:\s*true/g) || [];
+    expect(enforced).toHaveLength(ENFORCED_APP_CHECK_CALLABLES.length);
+    for (const name of ENFORCED_APP_CHECK_CALLABLES) {
+        const start = indexSrc.indexOf(`exports.${name} = onCall(`);
+        expect(start, name).toBeGreaterThan(-1);
+        const slice = indexSrc.slice(start, start + 2500);
+        expect(slice, name).toMatch(/enforceAppCheck:\s*true/);
+        expect(slice, name).not.toMatch(/enforceAppCheck:\s*false/);
+    }
+    const sendStart = indexSrc.indexOf('exports.sendMessage = onCall(');
+    expect(sendStart).toBeGreaterThan(-1);
+    const sendSlice = indexSrc.slice(sendStart, sendStart + 2500);
+    expect(sendSlice).toMatch(/enforceAppCheck:\s*false/);
+    expect(sendSlice).not.toMatch(/enforceAppCheck:\s*true/);
+    expect(indexSrc.match(/consumeAppCheckToken:\s*true/g) || []).toHaveLength(0);
 }
 
 async function signInUser(uid) {
@@ -483,16 +514,16 @@ describe('adminReadView — coordinated read-side session hardening', () => {
 
         // adminReadView (Stage 4A) + updateDisplayName
         // (profile-identity hardening) + deleteChat (server-mediated
-        // conversation deletion) + checkHydrantDistance (paid NYC DEP lookup
+        // conversation deletion) + cancelClaim (secured claimant
+        // cancellation) + checkHydrantDistance (paid NYC DEP lookup
         // behind the app's Socrata token) and createSegmentFromSweepNYC
-        // (Street Intelligence) are the five currently enforced callables.
+        // (Street Intelligence) are the six currently enforced callables.
         // sendMessage is deliberately temporarily unenforced by
         // the release hotfix after production web and TestFlight iOS hit HTTP
         // 401 at the callable verification boundary. claimUsername is also
-        // deliberately NOT enforced. Any growth of this count must be a
+        // deliberately NOT enforced. Any growth of this set must be a
         // deliberate, reviewed enforcement decision.
-        const enforceTrueMatches = indexSrc.match(/enforceAppCheck:\s*true/g) || [];
-        expect(enforceTrueMatches.length).toBe(5);
+        expectReviewedAppCheckFleet(indexSrc);
 
         const adminReadViewCallStart = indexSrc.indexOf('exports.adminReadView = onCall(');
         expect(adminReadViewCallStart).toBeGreaterThan(-1);
@@ -520,7 +551,7 @@ describe('adminReadView — coordinated read-side session hardening', () => {
         // the App Check config sitting right next to it. sendMessage is the
         // deliberate temporary exception; see AR-25 for the fleet-wide count.
         expect(optionsSlice).toMatch(/enforceAppCheck:\s*true/);
-        expect((indexSrc.match(/enforceAppCheck:\s*true/g) || []).length).toBe(5);
+        expectReviewedAppCheckFleet(indexSrc);
         expect(indexSrc.match(/consumeAppCheckToken:\s*true/g) || []).toHaveLength(0);
 
         // Forty canaries should carry a serviceAccount override — adminReadView
@@ -581,8 +612,12 @@ describe('adminReadView — coordinated read-side session hardening', () => {
         // cleanupAbandonedArrivedHandoffs adds one more declaration of that
         // same parqueen-cleanup identity. It is not a new principal. This
         // counts serviceAccount declarations, not exported functions.
+        // cancelClaim adds the forty-sixth declaration, the dedicated
+        // parqueen-cancel identity. It is a new principal and must stay
+        // the only occurrence of that address.
         const allServiceAccountMatches = indexSrc.match(/serviceAccount:\s*'[^']+'/g) || [];
-        expect(allServiceAccountMatches).toHaveLength(45);
+        expect(indexSrc.match(/parqueen-cancel@parkqueen-46475363-ccf36\.iam\.gserviceaccount\.com/g) || []).toHaveLength(1);
+        expect(allServiceAccountMatches).toHaveLength(46);
     });
 
     it("AR-29: Runtime-IAM canary config-contract — moderateAvatarUpload's serviceAccount is the dedicated avatar-moderator identity, Storage-trigger config unaffected", () => {
@@ -599,7 +634,7 @@ describe('adminReadView — coordinated read-side session hardening', () => {
         expect(optionsSlice).toMatch(/region:\s*"us-central1"/);
         expect(optionsSlice).toMatch(/memory:\s*"512MiB"/);
         expect(optionsSlice).toMatch(/retry:\s*true/);
-        expect((indexSrc.match(/enforceAppCheck:\s*true/g) || []).length).toBe(5);
+        expectReviewedAppCheckFleet(indexSrc);
         expect(indexSrc.match(/consumeAppCheckToken:\s*true/g) || []).toHaveLength(0);
     });
 
@@ -615,7 +650,7 @@ describe('adminReadView — coordinated read-side session hardening', () => {
         expect(optionsSlice).toMatch(/region:\s*"us-central1"/);
         expect(optionsSlice).toMatch(/schedule:\s*"every 24 hours"/);
         expect(optionsSlice).toMatch(/memory:\s*"256MiB"/);
-        expect((indexSrc.match(/enforceAppCheck:\s*true/g) || []).length).toBe(5);
+        expectReviewedAppCheckFleet(indexSrc);
         expect(indexSrc.match(/consumeAppCheckToken:\s*true/g) || []).toHaveLength(0);
     });
 
@@ -632,7 +667,7 @@ describe('adminReadView — coordinated read-side session hardening', () => {
         expect(optionsSlice).toMatch(/region:\s*'us-central1'/);
         expect(optionsSlice).not.toMatch(/enforceAppCheck/);
         expect(optionsSlice).not.toMatch(/consumeAppCheckToken/);
-        expect((indexSrc.match(/enforceAppCheck:\s*true/g) || []).length).toBe(5);
+        expectReviewedAppCheckFleet(indexSrc);
         expect(indexSrc.match(/consumeAppCheckToken:\s*true/g) || []).toHaveLength(0);
     });
 
@@ -646,7 +681,7 @@ describe('adminReadView — coordinated read-side session hardening', () => {
         expect(optionsSlice).toMatch(/region:\s*'us-central1'/);
         expect(optionsSlice).not.toMatch(/enforceAppCheck/);
         expect(optionsSlice).not.toMatch(/consumeAppCheckToken/);
-        expect((indexSrc.match(/enforceAppCheck:\s*true/g) || []).length).toBe(5);
+        expectReviewedAppCheckFleet(indexSrc);
         expect(indexSrc.match(/consumeAppCheckToken:\s*true/g) || []).toHaveLength(0);
     });
 
@@ -660,7 +695,7 @@ describe('adminReadView — coordinated read-side session hardening', () => {
         expect(optionsSlice).toMatch(/region:\s*'us-central1'/);
         expect(optionsSlice).not.toMatch(/enforceAppCheck/);
         expect(optionsSlice).not.toMatch(/consumeAppCheckToken/);
-        expect((indexSrc.match(/enforceAppCheck:\s*true/g) || []).length).toBe(5);
+        expectReviewedAppCheckFleet(indexSrc);
         expect(indexSrc.match(/consumeAppCheckToken:\s*true/g) || []).toHaveLength(0);
     });
 
@@ -674,7 +709,7 @@ describe('adminReadView — coordinated read-side session hardening', () => {
         expect(optionsSlice).toMatch(/region:\s*'us-central1'/);
         expect(optionsSlice).not.toMatch(/enforceAppCheck/);
         expect(optionsSlice).not.toMatch(/consumeAppCheckToken/);
-        expect((indexSrc.match(/enforceAppCheck:\s*true/g) || []).length).toBe(5);
+        expectReviewedAppCheckFleet(indexSrc);
         expect(indexSrc.match(/consumeAppCheckToken:\s*true/g) || []).toHaveLength(0);
     });
 
@@ -690,7 +725,7 @@ describe('adminReadView — coordinated read-side session hardening', () => {
         expect(optionsSlice).toMatch(/secrets:\s*\[geminiApiKey\]/);
         expect(optionsSlice).toMatch(/enforceAppCheck:\s*false/);
         expect(optionsSlice).not.toMatch(/consumeAppCheckToken/);
-        expect((indexSrc.match(/enforceAppCheck:\s*true/g) || []).length).toBe(5);
+        expectReviewedAppCheckFleet(indexSrc);
         expect(indexSrc.match(/consumeAppCheckToken:\s*true/g) || []).toHaveLength(0);
     });
 
@@ -704,7 +739,7 @@ describe('adminReadView — coordinated read-side session hardening', () => {
         expect(optionsSlice).toMatch(/secrets:\s*\[geminiApiKey\]/);
         expect(optionsSlice).toMatch(/enforceAppCheck:\s*false/);
         expect(optionsSlice).not.toMatch(/consumeAppCheckToken/);
-        expect((indexSrc.match(/enforceAppCheck:\s*true/g) || []).length).toBe(5);
+        expectReviewedAppCheckFleet(indexSrc);
         expect(indexSrc.match(/consumeAppCheckToken:\s*true/g) || []).toHaveLength(0);
     });
 
@@ -718,7 +753,7 @@ describe('adminReadView — coordinated read-side session hardening', () => {
         expect(optionsSlice).toMatch(/secrets:\s*\[geminiApiKey\]/);
         expect(optionsSlice).toMatch(/enforceAppCheck:\s*false/);
         expect(optionsSlice).not.toMatch(/consumeAppCheckToken/);
-        expect((indexSrc.match(/enforceAppCheck:\s*true/g) || []).length).toBe(5);
+        expectReviewedAppCheckFleet(indexSrc);
         expect(indexSrc.match(/consumeAppCheckToken:\s*true/g) || []).toHaveLength(0);
     });
 
@@ -734,7 +769,7 @@ describe('adminReadView — coordinated read-side session hardening', () => {
         expect(optionsSlice).toMatch(/secrets:\s*\[sendgridApiKey,\s*emailRateLimitPepper\]/);
         expect(optionsSlice).not.toMatch(/enforceAppCheck/);
         expect(optionsSlice).not.toMatch(/consumeAppCheckToken/);
-        expect((indexSrc.match(/enforceAppCheck:\s*true/g) || []).length).toBe(5);
+        expectReviewedAppCheckFleet(indexSrc);
         expect(indexSrc.match(/consumeAppCheckToken:\s*true/g) || []).toHaveLength(0);
     });
 
@@ -754,7 +789,7 @@ describe('adminReadView — coordinated read-side session hardening', () => {
         expect(optionsSlice).not.toMatch(/emailRateLimitPepper/);
         expect(optionsSlice).not.toMatch(/enforceAppCheck/);
         expect(optionsSlice).not.toMatch(/consumeAppCheckToken/);
-        expect((indexSrc.match(/enforceAppCheck:\s*true/g) || []).length).toBe(5);
+        expectReviewedAppCheckFleet(indexSrc);
         expect(indexSrc.match(/consumeAppCheckToken:\s*true/g) || []).toHaveLength(0);
     });
 
@@ -769,7 +804,7 @@ describe('adminReadView — coordinated read-side session hardening', () => {
         // document path/region sitting right next to it.
         expect(optionsSlice).toMatch(/document:\s*"spots\/\{spotId\}"/);
         expect(optionsSlice).toMatch(/region:\s*"us-central1"/);
-        expect((indexSrc.match(/enforceAppCheck:\s*true/g) || []).length).toBe(5);
+        expectReviewedAppCheckFleet(indexSrc);
         expect(indexSrc.match(/consumeAppCheckToken:\s*true/g) || []).toHaveLength(0);
     });
 
@@ -783,7 +818,7 @@ describe('adminReadView — coordinated read-side session hardening', () => {
         expect(optionsSlice).toMatch(/schedule:\s*"every 5 minutes"/);
         expect(optionsSlice).toMatch(/timeZone:\s*"America\/Toronto"/);
         expect(optionsSlice).toMatch(/memory:\s*"256MiB"/);
-        expect((indexSrc.match(/enforceAppCheck:\s*true/g) || []).length).toBe(5);
+        expectReviewedAppCheckFleet(indexSrc);
         expect(indexSrc.match(/consumeAppCheckToken:\s*true/g) || []).toHaveLength(0);
     });
 
@@ -795,7 +830,7 @@ describe('adminReadView — coordinated read-side session hardening', () => {
 
         expect(optionsSlice).toMatch(/serviceAccount:\s*'parqueen-messaging@parkqueen-46475363-ccf36\.iam\.gserviceaccount\.com'/);
         expect(optionsSlice).toMatch(/schedule:\s*'every 15 minutes'/);
-        expect((indexSrc.match(/enforceAppCheck:\s*true/g) || []).length).toBe(5);
+        expectReviewedAppCheckFleet(indexSrc);
         expect(indexSrc.match(/consumeAppCheckToken:\s*true/g) || []).toHaveLength(0);
     });
 

@@ -73,6 +73,16 @@ vi.mock('firebase/firestore', () => ({
 
 vi.mock('../../utils/errorReporting', () => ({ reportCriticalActionFailure: vi.fn() }));
 
+const GENERATION = 'b'.repeat(64);
+const { claimSpotCallable, prepareClaimIntentCallable, revokeClaimIntentCallable } = vi.hoisted(() => ({
+  claimSpotCallable: vi.fn(),
+  prepareClaimIntentCallable: vi.fn(async (input: { attemptId: string; spotId: string; mode: string }) => ({
+    state: 'prepared', attemptId: input.attemptId, spotId: input.spotId, mode: input.mode, expiresAt: 1,
+  })),
+  revokeClaimIntentCallable: vi.fn(async () => ({ outcome: 'revoked', attemptId: 'x', spotId: 's', mode: 'immediate' })),
+}));
+vi.mock('./claimSpotCallable', () => ({ claimSpotCallable, prepareClaimIntentCallable, revokeClaimIntentCallable }));
+
 import { useInterestFlow } from './useInterestFlow';
 import { selectUnfinishedHandoff } from './unfinishedHandoff';
 
@@ -208,6 +218,23 @@ describe('useInterestFlow — resumable finish-your-handoff', () => {
     updateDoc.mockClear();
     deleteDoc.mockClear();
     runTransaction.mockReset();
+    claimSpotCallable.mockReset();
+    claimSpotCallable.mockImplementation(async (input: { spotId: string; mode: 'immediate' | 'scheduled' }) => {
+      const path = `spots/${input.spotId}`;
+      documents.set(path, {
+        ...(documents.get(path) ?? {}),
+        status: 'interested',
+        claimState: input.mode === 'scheduled' ? 'committed' : 'heading',
+        interestedUserId: user.id,
+        claimGenerationId: GENERATION,
+      });
+      return {
+        outcome: 'claimed' as const,
+        claimGenerationId: GENERATION,
+        spotId: input.spotId,
+        mode: input.mode,
+      };
+    });
     runTransaction.mockImplementation(async (_db: unknown, callback: (tx: any) => Promise<any>) => {
       const queued: Array<{ op: 'set' | 'update' | 'delete'; path: string; data?: Record<string, any> }> = [];
       const result = await callback({

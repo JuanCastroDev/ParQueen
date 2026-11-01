@@ -34,6 +34,7 @@ vi.mock('firebase/firestore', () => ({
   query: vi.fn((...args: unknown[]) => ({ __query: args })),
   where: vi.fn(),
   getDocs: vi.fn(async () => ({ empty: true, docs: [] })),
+  getDoc: vi.fn(async () => ({ exists: () => false, data: () => undefined })),
   addDoc: vi.fn(async () => ({ id: 'notif1' })),
   setDoc: vi.fn(async () => {}),
   onSnapshot: vi.fn(() => () => {}),

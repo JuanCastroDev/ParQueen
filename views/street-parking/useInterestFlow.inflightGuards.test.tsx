@@ -17,8 +17,19 @@ vi.hoisted(() => {
 
 vi.mock('../../firebase', () => ({ db: { __db: true } }));
 
-const { getDocs } = vi.hoisted(() => ({
+const GENERATION = 'a'.repeat(64);
+
+const { getDocs, getDoc } = vi.hoisted(() => ({
   getDocs: vi.fn(async () => ({ empty: true, docs: [] })),
+  getDoc: vi.fn(async () => ({
+    exists: () => true,
+    data: () => ({
+      interestedUserId: 'driver-1',
+      claimGenerationId: 'a'.repeat(64),
+      status: 'interested',
+      claimState: 'heading',
+    }),
+  })),
 }));
 
 vi.mock('firebase/firestore', () => ({
@@ -34,6 +45,7 @@ vi.mock('firebase/firestore', () => ({
   query: vi.fn((...args: unknown[]) => ({ __query: args })),
   where: vi.fn(),
   getDocs,
+  getDoc,
   addDoc: vi.fn(async () => ({ id: 'notif1' })),
   setDoc: vi.fn(async () => {}),
   onSnapshot: vi.fn(() => () => {}),
@@ -42,25 +54,37 @@ vi.mock('firebase/firestore', () => ({
   increment: vi.fn((n: number) => ({ __increment: n })),
 }));
 
-const { acquireActiveIncomingClaim, markClaimArrived } = vi.hoisted(() => ({
-  acquireActiveIncomingClaim: vi.fn(async () => 'claimed' as const),
+const { markClaimArrived } = vi.hoisted(() => ({
   markClaimArrived: vi.fn(async () => {}),
 }));
 vi.mock('./activeIncomingClaim', () => ({
-  acquireActiveIncomingClaim,
   markClaimArrived,
   ALREADY_CLAIMED_MESSAGE: 'You already have a claimed spot',
 }));
+
+const { claimSpotCallable, prepareClaimIntentCallable, revokeClaimIntentCallable } = vi.hoisted(() => ({
+  claimSpotCallable: vi.fn(async (input: { spotId: string; mode: 'immediate' | 'scheduled' }) => ({
+    outcome: 'claimed' as const,
+    claimGenerationId: 'a'.repeat(64),
+    spotId: input.spotId,
+    mode: input.mode,
+  })),
+  prepareClaimIntentCallable: vi.fn(async (input: { attemptId: string; spotId: string; mode: string }) => ({
+    state: 'prepared', attemptId: input.attemptId, spotId: input.spotId, mode: input.mode, expiresAt: 1,
+  })),
+  revokeClaimIntentCallable: vi.fn(async () => ({ outcome: 'revoked', attemptId: 'x', spotId: 's', mode: 'immediate' })),
+}));
+vi.mock('./claimSpotCallable', () => ({ claimSpotCallable, prepareClaimIntentCallable, revokeClaimIntentCallable }));
 
 const { commitClaimToHeading } = vi.hoisted(() => ({
   commitClaimToHeading: vi.fn(async () => 'committed' as const),
 }));
 vi.mock('./commitToHeading', () => ({ commitClaimToHeading }));
 
-const { cancelClaimTransaction } = vi.hoisted(() => ({
-  cancelClaimTransaction: vi.fn(async () => 'cancelled' as const),
+const { cancelClaimCallable } = vi.hoisted(() => ({
+  cancelClaimCallable: vi.fn(async () => 'cancelled' as const),
 }));
-vi.mock('./cancelClaimTransaction', () => ({ cancelClaimTransaction }));
+vi.mock('./cancelClaimCallable', () => ({ cancelClaimCallable }));
 
 vi.mock('../../utils/errorReporting', () => ({ reportCriticalActionFailure: vi.fn() }));
 
@@ -108,23 +132,35 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+type InFlightClaim = {
+  outcome: 'claimed';
+  claimGenerationId: string;
+  spotId: string;
+  mode: 'immediate' | 'scheduled';
+};
+
 describe('useInterestFlow in-flight claim and arrive guards', () => {
   beforeEach(() => {
     getDocs.mockReset();
     getDocs.mockResolvedValue({ empty: true, docs: [] });
-    acquireActiveIncomingClaim.mockReset();
-    acquireActiveIncomingClaim.mockResolvedValue('claimed');
+    claimSpotCallable.mockReset();
+    claimSpotCallable.mockImplementation(async (input: { spotId: string; mode: 'immediate' | 'scheduled' }) => ({
+      outcome: 'claimed' as const,
+      claimGenerationId: GENERATION,
+      spotId: input.spotId,
+      mode: input.mode,
+    }));
     markClaimArrived.mockReset();
     markClaimArrived.mockResolvedValue(undefined);
     commitClaimToHeading.mockReset();
     commitClaimToHeading.mockResolvedValue('committed');
-    cancelClaimTransaction.mockReset();
-    cancelClaimTransaction.mockResolvedValue('cancelled');
+    cancelClaimCallable.mockReset();
+    cancelClaimCallable.mockResolvedValue('cancelled');
   });
 
   it('ignores a second claim tap while an immediate claim write is in flight', async () => {
-    const pending = deferred<'claimed'>();
-    acquireActiveIncomingClaim.mockReturnValue(pending.promise);
+    const pending = deferred<InFlightClaim>();
+    claimSpotCallable.mockReturnValue(pending.promise);
     const getFlow = mount();
 
     let first!: Promise<void>;
@@ -132,25 +168,35 @@ describe('useInterestFlow in-flight claim and arrive guards', () => {
     expect(getFlow().claiming).toBe(true);
 
     await act(async () => { await getFlow().handleExpressInterest(5); });
-    expect(acquireActiveIncomingClaim).toHaveBeenCalledTimes(1);
+    expect(claimSpotCallable).toHaveBeenCalledTimes(1);
 
-    pending.resolve('claimed');
+    pending.resolve({
+      outcome: 'claimed',
+      claimGenerationId: GENERATION,
+      spotId: 'spot-1',
+      mode: 'immediate',
+    });
     await act(async () => { await first; });
     expect(getFlow().claiming).toBe(false);
   });
 
   it('ignores a second scheduled-claim tap while that write is in flight', async () => {
-    const pending = deferred<'claimed'>();
-    acquireActiveIncomingClaim.mockReturnValue(pending.promise);
+    const pending = deferred<InFlightClaim>();
+    claimSpotCallable.mockReturnValue(pending.promise);
     const getFlow = mount();
 
     let first!: Promise<void>;
     act(() => { first = getFlow().handleScheduledClaim(); });
     await act(async () => { await getFlow().handleScheduledClaim(); });
-    expect(acquireActiveIncomingClaim).toHaveBeenCalledTimes(1);
+    expect(claimSpotCallable).toHaveBeenCalledTimes(1);
     expect(getFlow().claiming).toBe(true);
 
-    pending.resolve('claimed');
+    pending.resolve({
+      outcome: 'claimed',
+      claimGenerationId: GENERATION,
+      spotId: 'spot-1',
+      mode: 'immediate',
+    });
     await act(async () => { await first; });
     expect(getFlow().claiming).toBe(false);
   });
@@ -189,16 +235,21 @@ describe('useInterestFlow in-flight claim and arrive guards', () => {
   });
 
   it('clears the claim guard after a failed immediate claim so the user can retry', async () => {
-    acquireActiveIncomingClaim.mockRejectedValueOnce(new Error('unavailable'));
+    claimSpotCallable.mockRejectedValueOnce(new Error('unavailable'));
     const getFlow = mount();
 
     await act(async () => { await getFlow().handleExpressInterest(5); });
     expect(getFlow().claiming).toBe(false);
     expect(getFlow().interestError).toBe('unavailable');
 
-    acquireActiveIncomingClaim.mockResolvedValueOnce('claimed');
+    claimSpotCallable.mockResolvedValueOnce({
+      outcome: 'claimed',
+      claimGenerationId: GENERATION,
+      spotId: 'spot-1',
+      mode: 'immediate',
+    });
     await act(async () => { await getFlow().handleExpressInterest(5); });
-    expect(acquireActiveIncomingClaim).toHaveBeenCalledTimes(2);
+    expect(claimSpotCallable).toHaveBeenCalledTimes(2);
     expect(getFlow().claiming).toBe(false);
     expect(getFlow().interestError).toBeNull();
   });
@@ -208,7 +259,7 @@ describe('useInterestFlow in-flight claim and arrive guards', () => {
     const getFlow = mount();
 
     await act(async () => { await getFlow().handleExpressInterest(5); });
-    expect(acquireActiveIncomingClaim).not.toHaveBeenCalled();
+    expect(claimSpotCallable).not.toHaveBeenCalled();
     expect(getFlow().claiming).toBe(false);
     expect(getFlow().interestError).toBe(ALREADY_CLAIMED_MESSAGE);
   });
@@ -238,7 +289,7 @@ describe('useInterestFlow in-flight claim and arrive guards', () => {
 
   it('does not start a claim while cancel is in flight', async () => {
     const pending = deferred<'cancelled'>();
-    cancelClaimTransaction.mockReturnValue(pending.promise);
+    cancelClaimCallable.mockReturnValue(pending.promise);
     const getFlow = mount();
 
     let cancel!: Promise<void>;
@@ -246,7 +297,7 @@ describe('useInterestFlow in-flight claim and arrive guards', () => {
     expect(getFlow().cancelingClaim).toBe(true);
 
     await act(async () => { await getFlow().handleExpressInterest(5); });
-    expect(acquireActiveIncomingClaim).not.toHaveBeenCalled();
+    expect(claimSpotCallable).not.toHaveBeenCalled();
 
     pending.resolve('cancelled');
     await act(async () => { await cancel; });
@@ -254,17 +305,22 @@ describe('useInterestFlow in-flight claim and arrive guards', () => {
   });
 
   it('does not start a cancel while a claim or arrival write is in flight', async () => {
-    const claimPending = deferred<'claimed'>();
-    acquireActiveIncomingClaim.mockReturnValue(claimPending.promise);
+    const claimPending = deferred<InFlightClaim>();
+    claimSpotCallable.mockReturnValue(claimPending.promise);
     const claiming = mount();
 
     let claim!: Promise<void>;
     act(() => { claim = claiming().handleExpressInterest(5); });
     await act(async () => { await claiming().handleCancelByClaimer('Changed my mind'); });
-    expect(cancelClaimTransaction).not.toHaveBeenCalled();
+    expect(cancelClaimCallable).not.toHaveBeenCalled();
     expect(claiming().cancelingClaim).toBe(false);
 
-    claimPending.resolve('claimed');
+    claimPending.resolve({
+      outcome: 'claimed',
+      claimGenerationId: GENERATION,
+      spotId: 'spot-1',
+      mode: 'immediate',
+    });
     await act(async () => { await claim; });
 
     const arrivePending = deferred<void>();
@@ -274,7 +330,7 @@ describe('useInterestFlow in-flight claim and arrive guards', () => {
     let arrival!: Promise<void>;
     act(() => { arrival = arriving().handleArrival(); });
     await act(async () => { await arriving().handleCancelByClaimer('Changed my mind'); });
-    expect(cancelClaimTransaction).not.toHaveBeenCalled();
+    expect(cancelClaimCallable).not.toHaveBeenCalled();
     expect(arriving().cancelingClaim).toBe(false);
 
     arrivePending.resolve();
@@ -282,8 +338,8 @@ describe('useInterestFlow in-flight claim and arrive guards', () => {
   });
 
   it('does not start an arrival while a claim write is still open', async () => {
-    const pending = deferred<'claimed'>();
-    acquireActiveIncomingClaim.mockReturnValue(pending.promise);
+    const pending = deferred<InFlightClaim>();
+    claimSpotCallable.mockReturnValue(pending.promise);
     const getFlow = mount();
 
     let claim!: Promise<void>;
@@ -292,26 +348,31 @@ describe('useInterestFlow in-flight claim and arrive guards', () => {
     expect(markClaimArrived).not.toHaveBeenCalled();
     expect(getFlow().arriving).toBe(false);
 
-    pending.resolve('claimed');
+    pending.resolve({
+      outcome: 'claimed',
+      claimGenerationId: GENERATION,
+      spotId: 'spot-1',
+      mode: 'immediate',
+    });
     await act(async () => { await claim; });
   });
 
   it('still ignores a second cancel tap and clears that guard after failure', async () => {
     const pending = deferred<'cancelled'>();
-    cancelClaimTransaction.mockReturnValueOnce(pending.promise);
+    cancelClaimCallable.mockReturnValueOnce(pending.promise);
     const getFlow = mount();
 
     let first!: Promise<void>;
     act(() => { first = getFlow().handleCancelByClaimer('Changed my mind'); });
     await act(async () => { await getFlow().handleCancelByClaimer('Traffic is too heavy'); });
-    expect(cancelClaimTransaction).toHaveBeenCalledTimes(1);
+    expect(cancelClaimCallable).toHaveBeenCalledTimes(1);
 
     pending.resolve('cancelled');
     await act(async () => { await first; });
 
-    cancelClaimTransaction.mockRejectedValueOnce(new Error('unavailable'));
+    cancelClaimCallable.mockRejectedValueOnce(new Error('unavailable'));
     await act(async () => { await getFlow().handleCancelByClaimer('Changed my mind'); });
     expect(getFlow().cancelingClaim).toBe(false);
-    expect(cancelClaimTransaction).toHaveBeenCalledTimes(2);
+    expect(cancelClaimCallable).toHaveBeenCalledTimes(2);
   });
 });

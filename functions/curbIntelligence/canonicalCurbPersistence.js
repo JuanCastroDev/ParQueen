@@ -143,7 +143,12 @@ async function readCanonicalCache({ db, topologyResult, identityProof }) {
   return { hit: true, identity: storedIdentity, publicSegment };
 }
 
-async function persistCanonicalCurb({ db, Timestamp, topologyResult, identityProof, selectedRules }) {
+function trustedProductCaller(uid) {
+  return typeof uid === 'string' && uid.length > 0 && uid.length <= 128 && !uid.includes('/');
+}
+
+async function persistCanonicalCurb(input = {}) {
+  const { db, Timestamp, topologyResult, identityProof, selectedRules } = input || {};
   if (!hasPrimaryTopologyAuthority(topologyResult)) {
     return { success: false, reason: 'authority_invalid' };
   }
@@ -161,33 +166,60 @@ async function persistCanonicalCurb({ db, Timestamp, topologyResult, identityPro
   const ruleSetVersion = `curbrules2_${createHash('sha256')
     .update(JSON.stringify(rules)).digest('hex').slice(0, 20)}`;
   const now = Timestamp.now();
-  const batch = db.batch();
-  batch.set(db.doc(`curbIdentities/${key}`), {
-    schemaVersion: 2,
-    cacheCompatibilityVersion: CACHE_COMPATIBILITY_VERSION,
-    publicCurbKey: key,
-    identity,
-    updatedAt: now,
-  });
-  batch.set(db.doc(`streetSegments/${key}`), {
-    ...publicCurb,
-    status: 'active',
-    protocolVersion: 2,
-    cacheCompatibilityVersion: CACHE_COMPATIBILITY_VERSION,
-    activeRuleSetVersion: ruleSetVersion,
-    ruleSummary: { cleaningAvailable: Boolean(selectedRules?.cleaning) },
-    updatedAt: now,
-  });
-  rules.forEach((rule, index) => {
-    batch.set(db.doc(`streetSegments/${key}/streetRules/${ruleSetVersion}_${index}`), {
+  const documents = [
+    [db.doc(`curbIdentities/${key}`), {
+      schemaVersion: 2,
+      cacheCompatibilityVersion: CACHE_COMPATIBILITY_VERSION,
+      publicCurbKey: key,
+      identity,
+      updatedAt: now,
+    }],
+    [db.doc(`streetSegments/${key}`), {
+      ...publicCurb,
+      status: 'active',
+      protocolVersion: 2,
+      cacheCompatibilityVersion: CACHE_COMPATIBILITY_VERSION,
+      activeRuleSetVersion: ruleSetVersion,
+      ruleSummary: { cleaningAvailable: Boolean(selectedRules?.cleaning) },
+      updatedAt: now,
+    }],
+    ...rules.map((rule, index) => [db.doc(`streetSegments/${key}/streetRules/${ruleSetVersion}_${index}`), {
       ...rule,
       protocolVersion: 2,
       ruleSetVersion,
       effectiveDate: now,
       supersededAt: null,
       updatedAt: now,
-    });
-  });
+    }]),
+  ];
+
+  // User-initiated saves name the authenticated caller. The access read and
+  // the curb writes commit in one transaction. Callers that do not supply
+  // callerUid are scheduled, internal, or test paths and keep the batch.
+  const userInitiated = Object.prototype.hasOwnProperty.call(input || {}, 'callerUid');
+  if (userInitiated) {
+    const callerUid = input.callerUid;
+    if (!trustedProductCaller(callerUid) || typeof db.runTransaction !== 'function') {
+      return { success: false, reason: 'product_access_denied' };
+    }
+    const { userRecordDenies } = require('../productAccess');
+    const denied = Symbol('product-access-denied');
+    try {
+      await db.runTransaction(async (tx) => {
+        const snap = await tx.get(db.doc(`users/${callerUid}`));
+        const data = snap && snap.exists && typeof snap.data === 'function' ? snap.data() : null;
+        if (userRecordDenies(data)) throw denied;
+        for (const [ref, value] of documents) tx.set(ref, value);
+      });
+    } catch (err) {
+      if (err === denied) return { success: false, reason: 'product_access_denied' };
+      throw err;
+    }
+    return { success: true, publicCurbKey: key, ruleCount: rules.length };
+  }
+
+  const batch = db.batch();
+  for (const [ref, value] of documents) batch.set(ref, value);
   await batch.commit();
   return { success: true, publicCurbKey: key, ruleCount: rules.length };
 }

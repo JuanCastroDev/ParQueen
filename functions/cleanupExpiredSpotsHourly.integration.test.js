@@ -96,14 +96,17 @@ function spot(overrides) {
 // file's creates have all been counted, then until the counter stops. The
 // expected delta stays 1.
 let spotsCreated = 0;
+const createdSpotIds = [];
 
 async function createSpot(id, data) {
     spotsCreated += 1;
+    createdSpotIds.push(id);
     await db.doc(`spots/${id}`).set(data);
 }
 
 function queueSpot(batch, id, data) {
     spotsCreated += 1;
+    createdSpotIds.push(id);
     batch.set(db.doc(`spots/${id}`), data);
 }
 
@@ -112,8 +115,10 @@ async function settleSpotCreateCounter(baseline) {
     const statsRef = db.doc('stats/global');
     let last = null;
     let stableReads = 0;
+    const samples = [];
     for (let attempt = 0; attempt < 200; attempt++) {
         const current = (await statsRef.get()).data()?.totalSpotsPinged || 0;
+        if (samples.length === 0 || samples[samples.length - 1] !== current) samples.push(current);
         const caughtUp = current - baseline >= spotsCreated;
         if (caughtUp && current === last) {
             stableReads += 1;
@@ -125,7 +130,21 @@ async function settleSpotCreateCounter(baseline) {
         await new Promise((resolve) => setTimeout(resolve, 200));
     }
     const current = (await statsRef.get()).data()?.totalSpotsPinged || 0;
-    throw new Error(`spot-create counter did not settle at ${current} after ${spotsCreated} creates from ${baseline}`);
+    const events = await db.collection('functionEvents').get();
+    const counted = new Set();
+    let duplicateSpotIds = 0;
+    for (const doc of events.docs) {
+        const data = doc.data() || {};
+        if (data.functionName !== 'incrementTotalSpotsPinged') continue;
+        if (counted.has(data.spotId)) duplicateSpotIds += 1;
+        counted.add(data.spotId);
+    }
+    const missing = createdSpotIds.filter((id) => !counted.has(id));
+    throw new Error(
+        `spot-create counter did not settle at ${current} after ${spotsCreated} creates from ${baseline}; `
+        + `samples=${samples.join(',')}; eventDocs=${counted.size}; duplicateSpotIds=${duplicateSpotIds}; `
+        + `missingCreates=${missing.length}; missingIds=${missing.slice(0, 8).join(',')}`
+    );
 }
 
 describe('cleanupExpiredSpotsHourly durability', () => {

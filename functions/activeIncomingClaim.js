@@ -18,6 +18,7 @@ const {
   invariantMayBeEnforced,
   releasedInterestPatch,
 } = require('./activeIncomingClaimLogic');
+const { isClaimGenerationId } = require('./claimGeneration');
 
 const INTERESTED_CLAIM_PAGE_SIZE = 200;
 const MAX_INTERESTED_CLAIM_SCAN = 2000;
@@ -202,9 +203,16 @@ async function scanInterestedClaims(db) {
   };
 }
 
+function generationForLock(spot) {
+  const id = spot && spot.claimGenerationId;
+  return isClaimGenerationId(id) ? id : null;
+}
+
 function lockAlreadyCanonical(existing, keep) {
   if (!existing || existing.spotId !== keep.spotId) return false;
   if (existing.claimState !== claimStateForLock(keep.spot)) return false;
+  const lockGeneration = isClaimGenerationId(existing.claimGenerationId) ? existing.claimGenerationId : null;
+  if (lockGeneration !== generationForLock(keep.spot)) return false;
   const pingStarted = millisOf(keep.spot && keep.spot.claimStartedAt);
   if (Number.isFinite(pingStarted)) return millisOf(existing.claimStartedAt) === pingStarted;
   return Number.isFinite(millisOf(existing.claimStartedAt));
@@ -240,11 +248,13 @@ async function reconcileUserClaims(db, uid, claims, now) {
     const existing = lockSnap.exists ? (lockSnap.data() || {}) : null;
     let locksEstablished = 0;
     if (!lockAlreadyCanonical(existing, keep)) {
+      const keptGeneration = generationForLock(keep.spot);
       tx.set(lockRef, {
         spotId: keep.spotId,
         claimStartedAt: claimStartedAtForLock(keep.spot, now),
         claimState: claimStateForLock(keep.spot),
         updatedAt: now,
+        ...(keptGeneration ? { claimGenerationId: keptGeneration } : {}),
       });
       locksEstablished = 1;
     }

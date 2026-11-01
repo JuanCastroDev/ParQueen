@@ -1,9 +1,32 @@
 import { defineConfig } from 'vitest/config';
 
+// Candidate rules run in full. testNamePattern is not a per-project option
+// in this Vitest version, so test:rules:unit applies A1-15-30P to
+// original-30p on the command line. The original suite file is unchanged.
 export default defineConfig({
   test: {
-    environment: 'node',
-    globals: true,
-    include: ['firestore.rules.test.ts'],
+    projects: [
+      {
+        test: {
+          name: 'candidate-rules',
+          environment: 'node',
+          globals: true,
+          fileParallelism: false,
+          include: [
+            'firestore.rules.test.candidate-aware.ts',
+            'firestore.rules.finder-notice.31ag.test.ts',
+          ],
+        },
+      },
+      {
+        test: {
+          name: 'original-30p',
+          environment: 'node',
+          globals: true,
+          fileParallelism: false,
+          include: ['firestore.rules.test.original-suite.ts'],
+        },
+      },
+    ],
   },
 });

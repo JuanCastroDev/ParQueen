@@ -61,7 +61,15 @@ async function exchangePhoneAuthSessionHandler(request, deps) {
   const nowMs = typeof deps.now === 'function' ? deps.now() : Date.now();
   assertFreshPhoneAuth(tokenAuthTime(request), nowMs);
 
+  // The callable supplies this. A missing check fails closed and does not
+  // mint. The second call is after the rate-limit write, immediately before
+  // the custom token, so a suspension that lands during the write is seen.
+  if (typeof deps.assertProductAccess !== 'function') {
+    throw new HttpsError('failed-precondition', 'Product access check is unavailable.');
+  }
+  await deps.assertProductAccess(uid);
   await deps.checkRateLimit(uid, 'exchangePhoneAuthSession', RATE_LIMIT);
+  await deps.assertProductAccess(uid);
   const token = await deps.createCustomToken(uid);
   if (typeof token !== 'string' || token.length === 0) {
     throw new HttpsError('internal', 'Token exchange failed.');

@@ -19,6 +19,7 @@ import {
     type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
 import { ref, uploadBytes, getBytes, deleteObject } from 'firebase/storage';
+import { doc, setDoc } from 'firebase/firestore';
 
 const OWNER_UID  = 'owner-st-111';
 const OTHER_UID  = 'other-st-222';
@@ -35,9 +36,14 @@ let testEnv: RulesTestEnvironment;
 beforeAll(async () => {
     testEnv = await initializeTestEnvironment({
         projectId: PROJECT_ID,
+        firestore: {
+            rules: readFileSync('firestore.rules', 'utf8'),
+            host: '127.0.0.1',
+            port: 8080,
+        },
         storage: {
             rules: readFileSync('storage.rules', 'utf8'),
-            host: 'localhost',
+            host: '127.0.0.1',
             port: 9199,
         },
     });
@@ -228,10 +234,10 @@ describe('ST-21 – ST-22: catch-all deny for paths outside avatar families', ()
 });
 
 // ── AV: Upload abuse controls ─────────────────────────────────────────────────
-// Storage Rules enforce: owner-only, MIME allowlist, 5 MB cap, create-only.
-// OPEN/TM-13: pendingUploadId match and requestedAt freshness require cross-
-// service Firestore reads, which Storage Rules do not support. Server-side
-// enforcement (Step 0 transaction in moderateAvatarUpload) provides that guard.
+// Storage Rules enforce: owner-only, MIME allowlist, 5 MB cap, create-only,
+// and the upload-time access gate (one users/{uid} document).
+// pendingUploadId match and requestedAt freshness stay in moderateAvatarUpload.
+// private/access is not read.
 
 describe('AV-01 – AV-06: upload abuse controls', () => {
     const AV_UID      = 'av-owner-777';
@@ -344,5 +350,86 @@ describe('AV-07: storage.rules static text assertion — update prohibition in e
                 expect(line).toContain('if false');
             }
         }
+    });
+});
+
+// Upload create reads users/{uid} only. Published avatar reads stay owner-only.
+describe('S7 access — Storage upload gate', () => {
+    async function seedProfile(uid: string, profile: object) {
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            await setDoc(doc(ctx.firestore(), 'users', uid), profile);
+        });
+    }
+
+    function storageFor(uid: string) {
+        return testEnv.authenticatedContext(uid).storage();
+    }
+
+    it('A: a user with no profile and no access doc can upload', async () => {
+        const uid = 's7-st-legacy';
+        await assertSucceeds(
+            uploadBytes(ref(storageFor(uid), uploadPath(uid, 's7-a')), JPEG_DATA, IMAGE_META),
+        );
+    });
+
+    it('B: Suspended denies a new upload even when productAccessBlocked is false', async () => {
+        const uid = 's7-st-susp';
+        await seedProfile(uid, { status: 'Suspended', productAccessBlocked: false });
+        await assertFails(
+            uploadBytes(ref(storageFor(uid), uploadPath(uid, 's7-b')), JPEG_DATA, IMAGE_META),
+        );
+    });
+
+    it('C: productAccessBlocked true denies a new upload while public status is Active', async () => {
+        const uid = 's7-st-blocked';
+        await seedProfile(uid, { status: 'Active', productAccessBlocked: true });
+        await assertFails(
+            uploadBytes(ref(storageFor(uid), uploadPath(uid, 's7-c')), JPEG_DATA, IMAGE_META),
+        );
+    });
+
+    it('D: the same auth context is denied after productAccessBlocked becomes true', async () => {
+        const uid = 's7-st-token';
+        const storage = storageFor(uid);
+        await seedProfile(uid, { status: 'Active', productAccessBlocked: false });
+        await assertSucceeds(
+            uploadBytes(ref(storage, uploadPath(uid, 's7-d1')), JPEG_DATA, IMAGE_META),
+        );
+        await seedProfile(uid, { status: 'Active', productAccessBlocked: true });
+        await assertFails(
+            uploadBytes(ref(storage, uploadPath(uid, 's7-d2')), JPEG_DATA, IMAGE_META),
+        );
+    });
+
+    it('I: a malformed productAccessBlocked fails closed, and boolean false does not', async () => {
+        const uid = 's7-st-malformed';
+        const bad = ['false', 1, null];
+        for (const [index, productAccessBlocked] of bad.entries()) {
+            await seedProfile(uid, { status: 'Active', productAccessBlocked });
+            await assertFails(
+                uploadBytes(ref(storageFor(uid), uploadPath(uid, `s7-i-${index}`)), JPEG_DATA, IMAGE_META),
+            );
+        }
+        await seedProfile(uid, { status: 'Active', productAccessBlocked: false });
+        await assertSucceeds(
+            uploadBytes(ref(storageFor(uid), uploadPath(uid, 's7-i-ok')), JPEG_DATA, IMAGE_META),
+        );
+        await seedProfile(uid, { status: 'Suspended', productAccessBlocked: false });
+        await assertFails(
+            uploadBytes(ref(storageFor(uid), uploadPath(uid, 's7-i-susp')), JPEG_DATA, IMAGE_META),
+        );
+    });
+
+    it('published avatar read stays available to a Suspended owner', async () => {
+        const uid = 's7-st-published';
+        const publishedPath = `avatars/${uid}`;
+        await seedProfile(uid, { status: 'Suspended', productAccessBlocked: true });
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            await uploadBytes(ref(ctx.storage(), publishedPath), JPEG_DATA, IMAGE_META);
+        });
+        await assertSucceeds(getBytes(ref(storageFor(uid), publishedPath)));
+        await assertFails(
+            uploadBytes(ref(storageFor(uid), uploadPath(uid, 's7-pub')), JPEG_DATA, IMAGE_META),
+        );
     });
 });

@@ -36,6 +36,7 @@ export interface MapItem {
     claimState?: 'committed' | 'heading' | 'arrived_pending_outcome' | null;
     arrivedAt?: any;
     claimStartedAt?: any;
+    claimGenerationId?: string | null;
     ownerLeavingNow?: boolean | null;
     ownerLeavingNowAt?: any;
     claimReminderAt?: any;

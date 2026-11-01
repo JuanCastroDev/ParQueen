@@ -314,6 +314,8 @@ const en: Record<string, string> = {
     'claim_flow.cancel': 'Cancel',
     'claim_flow.canceling': 'Canceling…',
     'claim_flow.cancel_error': "Couldn't cancel — please try again",
+    'claim_flow.cancel_stale': 'This spot changed. Review the current claim, then confirm cancellation again.',
+    'claim_flow.cancel_unproven': "This claim has no verified id, so it can't be cancelled from this screen.",
     'claim_flow.ive_arrived': "I've arrived",
     'claim_flow.dist_away': '{dist} away',
     'claim_flow.get_closer': 'Get closer',

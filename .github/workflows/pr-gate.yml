@@ -166,7 +166,7 @@ jobs:
               fi
 
               # FIRESTORE
-              if echo "$CHANGED_FILES" | grep -qE '^(firestore\.rules|firestore\.rules\.test\.ts|firestore\.indexes\.json|vite\.rules\.config\.ts)$'; then
+              if echo "$CHANGED_FILES" | grep -qE '^(firestore\.rules|firestore\.rules\.test\.ts|firestore\.rules\.test\.candidate-aware\.ts|firestore\.rules\.test\.original-suite\.ts|firestore\.rules\.finder-notice\.31ag\.test\.ts|firestore\.indexes\.json|vite\.rules\.config\.ts)$'; then
                 run_firestore=true
               fi
 

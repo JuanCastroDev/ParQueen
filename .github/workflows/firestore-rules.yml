@@ -5,6 +5,9 @@ on:
     paths:
       - firestore.rules
       - firestore.rules.test.ts
+      - firestore.rules.test.candidate-aware.ts
+      - firestore.rules.test.original-suite.ts
+      - firestore.rules.finder-notice.31ag.test.ts
       - firestore.indexes.json
       - firebase.json
       - .firebaserc
@@ -16,6 +19,9 @@ on:
     paths:
       - firestore.rules
       - firestore.rules.test.ts
+      - firestore.rules.test.candidate-aware.ts
+      - firestore.rules.test.original-suite.ts
+      - firestore.rules.finder-notice.31ag.test.ts
       - firestore.indexes.json
       - firebase.json
       - .firebaserc

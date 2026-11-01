@@ -5,6 +5,24 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // One user-document read. status Suspended denies. A missing
+    // productAccessBlocked preserves legacy access. Any present value other
+    // than boolean false denies, including true and malformed values.
+    // private/access is not an authorization source.
+    function userRecordDenies(data) {
+      return data.get('status', '') == 'Suspended'
+        || data.get('productAccessBlocked', false) != false;
+    }
+
+    function productAccessDenied() {
+      let profile = /databases/$(database)/documents/users/$(request.auth.uid);
+      return exists(profile) && userRecordDenies(get(profile).data);
+    }
+
+    function actorMayUseProduct() {
+      return request.auth != null && !productAccessDenied();
+    }
+
     // isAdmin() (token-only `request.auth.token.role == 'admin'`) has been
     // removed entirely. Firestore Rules cannot re-verify current server-side
     // Auth state, so a token-only admin check can never safely reject a
@@ -231,7 +249,7 @@ service cloud.firestore {
     }
 
     function chatParticipant(chatData) {
-      return signedIn()
+      return actorMayUseProduct()
         && request.auth.uid in chatData.participants;
     }
 
@@ -404,10 +422,12 @@ service cloud.firestore {
       // goes through the requireCurrentAdmin-gated adminReadView callable
       // instead, which is a genuine hardening improvement over the previous
       // any-signed-in-user-capable direct query.
-      // Phase A: stop client directory enumeration. Keep signed-in get-by-id
-      // (MessagesView). Deny list/query. Admin bulk reads use Admin SDK.
+      // Phase A: stop client directory enumeration. Keep get-by-id for a
+      // caller who passes actorMayUseProduct() (MessagesView). Deny list/query.
+      // A Suspended or access-blocked caller cannot read profiles. Admin bulk
+      // reads use Admin SDK.
       // Approach B (narrow peer projection) is a separate follow-up.
-      allow get: if signedIn();
+      allow get: if actorMayUseProduct();
       allow list: if false;
       // Direct client CREATE disabled — claimUsername (functions/index.js) is
       // now the sole authoritative writer of the initial users/{uid} doc
@@ -428,8 +448,8 @@ service cloud.firestore {
       // updateDisplayName; all avatar metadata is authoritative via
       // moderateAvatarUpload (Admin SDK bypasses these client Rules).
       // Owners may still edit vehicle fields, but cannot set, overwrite, or
-      // delete moderation-owned avatar fields, even in a mixed update.
-      allow update: if signedIn() && request.auth.uid == userId
+      // delete moderation-owned avatar fields or productAccessBlocked.
+      allow update: if actorMayUseProduct() && request.auth.uid == userId
             && request.resource.data.diff(resource.data).affectedKeys()
                  .hasOnly(['vehicleType', 'vehicleBrand', 'vehicleColor']);
       allow delete: if false;
@@ -438,11 +458,19 @@ service cloud.firestore {
         allow read, write: if false;
       }
 
+      // private/access is not consulted for authorization. Clients still
+      // cannot read or write it. The deny flag is users/{uid}.productAccessBlocked,
+      // which only the Admin SDK can set: client create/delete are false, and
+      // client update may touch vehicle fields only.
+      match /private/access {
+        allow read, write: if false;
+      }
+
       // private/avatar — client writes pendingUploadId before each upload attempt.
       // Server clears the record on successful publication. Strict field schema.
       match /private/avatar {
-        allow read: if signedIn() && request.auth.uid == userId;
-        allow write: if signedIn() && request.auth.uid == userId
+        allow read: if actorMayUseProduct() && request.auth.uid == userId;
+        allow write: if actorMayUseProduct() && request.auth.uid == userId
           && request.resource.data.keys().hasOnly(['pendingUploadId', 'requestedAt'])
           && request.resource.data.pendingUploadId is string
           && request.resource.data.pendingUploadId.size() >= 1
@@ -453,7 +481,7 @@ service cloud.firestore {
 
       // private/account — server-written only (moderationStatus, reportCount, emailVerified)
       match /private/account {
-        allow read: if signedIn() && request.auth.uid == userId;
+        allow read: if actorMayUseProduct() && request.auth.uid == userId;
         // Direct admin read removed: no Admin Dashboard component ever read
         // this document — confirmed via full-repo search. Confidential
         // moderation data must not remain directly readable by a stale
@@ -463,8 +491,8 @@ service cloud.firestore {
 
       // private/preferences — owner read/write; strict field schema
       match /private/preferences {
-        allow read: if signedIn() && request.auth.uid == userId;
-        allow write: if signedIn() && request.auth.uid == userId
+        allow read: if actorMayUseProduct() && request.auth.uid == userId;
+        allow write: if actorMayUseProduct() && request.auth.uid == userId
           && request.resource.data.keys().hasOnly([
                'notificationRadius', 'notificationsEnabled', 'sharePreciseLocation',
                'lang', 'fcmToken', 'analyticsConsent'])
@@ -487,8 +515,8 @@ service cloud.firestore {
 
       // private/social — owner read/write; bounded blockedUsers list
       match /private/social {
-        allow read: if signedIn() && request.auth.uid == userId;
-        allow write: if signedIn() && request.auth.uid == userId
+        allow read: if actorMayUseProduct() && request.auth.uid == userId;
+        allow write: if actorMayUseProduct() && request.auth.uid == userId
           && request.resource.data.keys().hasOnly(['blockedUsers'])
           && request.resource.data.blockedUsers is list
           && request.resource.data.blockedUsers.size() <= 500;
@@ -496,7 +524,7 @@ service cloud.firestore {
 
       // private/profile — owner-only demographic data (dob, gender, homeArea, etc.)
       match /private/profile {
-        allow read, write: if signedIn() && request.auth.uid == userId;
+        allow read, write: if actorMayUseProduct() && request.auth.uid == userId;
         // Direct admin read removed: no Admin Dashboard component ever read
         // this document — confirmed via full-repo search. Private
         // demographic data must not remain directly readable by a stale
@@ -508,10 +536,10 @@ service cloud.firestore {
       // social, or profile. deleteAccount recursiveDelete(users/{uid}) removes it.
       // Only the doc id "current" is writable — extra docs cannot bypass the lock.
       match /activeIncomingClaims/{claimId} {
-        allow get: if signedIn() && request.auth.uid == userId && claimId == 'current';
+        allow get: if actorMayUseProduct() && request.auth.uid == userId && claimId == 'current';
         allow list: if false;
 
-        allow create, update: if signedIn()
+        allow create, update: if actorMayUseProduct()
           && request.auth.uid == userId
           && claimId == 'current'
           && request.resource.data.keys().hasOnly(['spotId', 'claimStartedAt', 'claimState', 'updatedAt'])
@@ -532,7 +560,7 @@ service cloud.firestore {
 
         // Owner may delete only once this Ping is no longer an active claim
         // after the same commit (cancel, arrival, or an already-released Ping).
-        allow delete: if signedIn()
+        allow delete: if actorMayUseProduct()
           && request.auth.uid == userId
           && claimId == 'current'
           && resource.data.spotId is string
@@ -542,15 +570,15 @@ service cloud.firestore {
       // Rolling Ping-create quota. Clients cannot delete it to reset the hour,
       // and only the doc id "current" counts — extra docs are not a bypass.
       match /pingCreateRate/{rateId} {
-        allow get: if signedIn() && request.auth.uid == userId && rateId == 'current';
+        allow get: if actorMayUseProduct() && request.auth.uid == userId && rateId == 'current';
         allow list: if false;
         allow delete: if false;
-        allow create: if signedIn()
+        allow create: if actorMayUseProduct()
           && request.auth.uid == userId
           && rateId == 'current'
           && pingRateShape(request.resource.data)
           && request.resource.data.spotIds.size() == 1;
-        allow update: if signedIn()
+        allow update: if actorMayUseProduct()
           && request.auth.uid == userId
           && rateId == 'current'
           && resource.data.keys().hasOnly(['spotIds', 'createdAts'])
@@ -568,8 +596,8 @@ service cloud.firestore {
     }
 
     match /userLocations/{userId} {
-      allow read: if signedIn() && request.auth.uid == userId;
-      allow write: if signedIn() && request.auth.uid == userId
+      allow read: if actorMayUseProduct() && request.auth.uid == userId;
+      allow write: if actorMayUseProduct() && request.auth.uid == userId
         && request.resource.data.keys().hasOnly(['lastGeohash', 'lastGeohashUpdatedAt'])
         && request.resource.data.lastGeohash is string
         && request.resource.data.lastGeohash.size() >= 1
@@ -577,6 +605,22 @@ service cloud.firestore {
         && request.resource.data.lastGeohashUpdatedAt is timestamp
         && request.resource.data.lastGeohashUpdatedAt >= request.time - duration.value(5, 'm')
         && request.resource.data.lastGeohashUpdatedAt <= request.time + duration.value(1, 'm');
+    }
+
+    // 31AF scratch. A client may delete only an available Ping that has no
+    // claimant, no claim state, and no stored generation. Claimed and
+    // generation-bearing Pings are deleted by the finderCancelSpot callable.
+    // Rules cannot see an unclaimed-to-unclaimed cycle, so that case is not
+    // distinguished here.
+    function clientMayDeleteUnclaimedSpot() {
+      return actorMayUseProduct()
+        && resource.data.finderId == request.auth.uid
+        && resource.data.status == 'available'
+        && (resource.data.get('interestedUserId', null) == null
+            || resource.data.get('interestedUserId', null) == '')
+        && (resource.data.get('claimState', null) == null
+            || resource.data.get('claimState', null) == '')
+        && resource.data.get('claimGenerationId', null) == null;
     }
 
     match /spots/{spotId} {
@@ -587,14 +631,14 @@ service cloud.firestore {
       // only by PingsPage.tsx's "all pings" view — now the requireCurrentAdmin
       // -gated adminReadView('pingsList') callable, so a stale admin token no
       // longer retains this capability directly.
-      allow read: if signedIn() && (
+      allow read: if actorMayUseProduct() && (
         resource.data.status == 'available'
         || resource.data.status == 'interested'
         || resource.data.finderId == request.auth.uid
         || resource.data.get('interestedUserId', null) == request.auth.uid
         || resource.data.get('claimedBy', null) == request.auth.uid
       );
-      allow create: if signedIn()
+      allow create: if actorMayUseProduct()
         && request.resource.data.keys().hasAll([
              'lat', 'lng', 'type', 'status', 'finderId', 'finderName',
              'pingMode', 'reportedAt', 'expiresAt', 'geohash', 'address'])
@@ -639,31 +683,14 @@ service cloud.firestore {
         && matchesFinderIdentity(request.resource.data)
         && pingCreateRateRecorded(spotId)
         && originLinkRecorded(spotId);
-      allow delete: if signedIn() && resource.data.finderId == request.auth.uid;
-      allow update: if signedIn() && (
-
-        // Arm 1: Claim an available spot (immediate or scheduled).
-        // The rollout gate must already be clean, and the same commit must
-        // point this user's lock at this Ping.
-        // HO-004: the finder cannot claim their own Ping. Client canClaim
-        // already hides the button; this is the server denial.
-        (isAvailableForClaim()
-          && request.auth.uid != resource.data.finderId
-          && activeIncomingClaimInvariantEnforced()
-          && request.resource.data.interestedUserId == request.auth.uid
-          && request.resource.data.status == 'interested'
-          && matchesInterestedUserIdentity(request.resource.data)
-          && activeIncomingClaimLockAcquired(spotId)
-          && onlyChanges(['status', 'claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
-                          'interestedUserId', 'interestedUserName',
-                          'interestedUserVehicleColor', 'interestedUserVehicleType',
-                          'interestedUserVehicleBrand', 'interestedUserTitle',
-                          'etaMinutes', 'interestExpiresAt', 'claimStartedAt',
-                          'claimReminderAt', 'claimReminderSentAt',
-                          'claimAutoReleaseAt', 'claimAutoReleasedAt']))
+      allow delete: if clientMayDeleteUnclaimedSpot();
+      // 31V candidate: Arms 1, 3, and 3b are removed. Arm 2 is the first
+      // remaining disjunct. No new predicate was added. The allow is still
+      // the OR of every remaining arm.
+      allow update: if actorMayUseProduct() && (
 
         // Arm 2: Claimer updates ETA
-        || (isClaimer() && onlyChanges(['etaMinutes']))
+        (isClaimer() && onlyChanges(['etaMinutes']))
 
         // Arm 2b: Claimer commits to heading (scheduled → active).
         // The result claimState is heading. arrived_pending_outcome is Arm 4 only.
@@ -674,46 +701,6 @@ service cloud.firestore {
           && onlyChanges(['claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
                           'etaMinutes', 'interestExpiresAt',
                           'claimReminderAt', 'claimReminderSentAt', 'claimAutoReleaseAt']))
-
-        // Arm 3: Claimer cancels — clears all claimer metadata, Ping reopens.
-        // Only valid while the Ping itself hasn't expired yet (an expired Ping
-        // must never be reopened to 'available' — see Arm 3b for that case).
-        // Once the claimer has arrived, cancel must not reopen the Ping.
-        || (isClaimer()
-          && resource.data.status == 'interested'
-          && resource.data.get('claimState', null) != 'arrived_pending_outcome'
-          && request.resource.data.status == 'available'
-          && request.resource.data.get('claimState', null) != 'arrived_pending_outcome'
-          && (resource.data.get('expiresAt', null) == null
-              || resource.data.expiresAt > request.time)
-          && matchingActiveClaimLockReleased(spotId)
-          && claimerMetadataClearedAfter()
-          && onlyChanges(['status', 'claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
-                          'interestedUserId', 'interestedUserName',
-                          'interestedUserVehicleColor', 'interestedUserVehicleType',
-                          'interestedUserVehicleBrand', 'interestedUserTitle',
-                          'etaMinutes', 'interestExpiresAt', 'claimStartedAt',
-                          'claimReminderAt', 'claimReminderSentAt',
-                          'claimAutoReleaseAt', 'claimAutoReleasedAt']))
-
-        // Arm 3b: Claimer cancels a claim on an already-expired Ping — clears
-        // claimer metadata but leaves status untouched (never reopens it).
-        // Occupied / arrived_pending_outcome stays put.
-        || (isClaimer()
-          && resource.data.status == 'interested'
-          && resource.data.get('claimState', null) != 'arrived_pending_outcome'
-          && request.resource.data.get('claimState', null) != 'arrived_pending_outcome'
-          && resource.data.get('expiresAt', null) != null
-          && resource.data.expiresAt <= request.time
-          && matchingActiveClaimLockReleased(spotId)
-          && claimerMetadataClearedAfter()
-          && onlyChanges(['claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
-                          'interestedUserId', 'interestedUserName',
-                          'interestedUserVehicleColor', 'interestedUserVehicleType',
-                          'interestedUserVehicleBrand', 'interestedUserTitle',
-                          'etaMinutes', 'interestExpiresAt', 'claimStartedAt',
-                          'claimReminderAt', 'claimReminderSentAt',
-                          'claimAutoReleaseAt', 'claimAutoReleasedAt']))
 
         // Arm 4: Claimer marks arrived. The same commit must set status
         // occupied, claimState arrived_pending_outcome, and arrivedAt, and
@@ -814,7 +801,7 @@ service cloud.firestore {
     }
 
     match /avatarModeration/{userId} {
-      allow read: if signedIn() && request.auth.uid == userId;
+      allow read: if actorMayUseProduct() && request.auth.uid == userId;
       allow write: if false;
     }
 
@@ -828,7 +815,7 @@ service cloud.firestore {
       // nothing lists or queries this registry. Denying list stops a
       // signed-in client from enumerating every username -> uid pair.
       // claimUsername (Admin SDK) remains the sole writer.
-      allow get: if signedIn();
+      allow get: if actorMayUseProduct();
       allow list: if false;
       allow write: if false;
     }
@@ -838,7 +825,7 @@ service cloud.firestore {
     }
 
     match /reports/{reportId} {
-      allow create: if signedIn()
+      allow create: if actorMayUseProduct()
         && request.resource.data.keys().hasAll(
              ['reporterId', 'reportedUserId', 'type', 'reason', 'status', 'createdAt'])
         && request.resource.data.keys().hasOnly(
@@ -865,19 +852,27 @@ service cloud.firestore {
       allow update: if false;
     }
 
+    // 31AG scratch. Written only by the finderCancelSpot Admin SDK transaction.
+    // A client cannot forge the receipt the delete trigger requires.
+    match /finderCancelReceipts/{receiptId} {
+      allow read, write: if false;
+    }
+
     match /spotNotifications/{notifId} {
-      allow read: if signedIn()
+      allow read: if actorMayUseProduct()
         && (resource.data.targetUserId == request.auth.uid
           || (resource.data.senderId == request.auth.uid
             && resource.data.type == 'handoff_success'));
-      allow create: if signedIn()
+      allow create: if actorMayUseProduct()
         && request.resource.data.keys().hasAll(
              ['spotId', 'senderId', 'targetUserId', 'type', 'message', 'createdAt'])
         && request.resource.data.keys().hasOnly(
              ['spotId', 'senderId', 'targetUserId', 'type', 'message', 'createdAt'])
         && request.resource.data.senderId == request.auth.uid
+        // type 'cancelled' is a server notice. The current web client writes
+        // claimer_cancelled, delayed, handoff_success, and owner_leaving_now.
         && request.resource.data.type in [
-             'cancelled', 'claimer_cancelled', 'delayed',
+             'claimer_cancelled', 'delayed',
              'handoff_success', 'owner_leaving_now']
         && request.resource.data.message is string
         && request.resource.data.message.size() > 0
@@ -896,7 +891,7 @@ service cloud.firestore {
             && get(/databases/$(database)/documents/spots/$(request.resource.data.spotId)).data.finderId
                  == request.resource.data.targetUserId)
         );
-      allow delete: if signedIn() && resource.data.targetUserId == request.auth.uid;
+      allow delete: if actorMayUseProduct() && resource.data.targetUserId == request.auth.uid;
     }
 
     // Design A attestations. outcome is participant_success, not success:
@@ -921,7 +916,7 @@ service cloud.firestore {
         && data.address is string
         && data.address.size() <= 500
         && data.createdAt is timestamp
-        && data.createdAt <= request.time
+        && data.createdAt <= request.time + duration.value(1, 'm')
         && data.createdAt >= request.time - duration.value(5, 'm');
     }
 
@@ -938,7 +933,7 @@ service cloud.firestore {
       let data = request.resource.data;
       let path = /databases/$(database)/documents/spots/$(data.spotId);
       let spot = getAfter(path).data;
-      return signedIn()
+      return actorMayUseProduct()
         && data.keys().hasAll(
              ['spotId', 'userId', 'finderId', 'outcome', 'address', 'createdAt'])
         && data.keys().hasOnly(
@@ -965,7 +960,7 @@ service cloud.firestore {
         && data.address is string
         && data.address.size() <= 500
         && data.createdAt is timestamp
-        && data.createdAt <= request.time
+        && data.createdAt <= request.time + duration.value(1, 'm')
         && data.createdAt >= request.time - duration.value(5, 'm')
         && request.auth.uid == data.userId
         && feedbackId == data.spotId + '_' + data.userId
@@ -979,7 +974,7 @@ service cloud.firestore {
       let data = request.resource.data;
       let path = /databases/$(database)/documents/spots/$(data.spotId);
       let spot = getAfter(path).data;
-      return signedIn()
+      return actorMayUseProduct()
         && participantSuccessShape(data)
         && data.role == 'claimer'
         && request.auth.uid == data.userId
@@ -993,7 +988,7 @@ service cloud.firestore {
       let data = request.resource.data;
       let path = /databases/$(database)/documents/spots/$(data.spotId);
       let spot = getAfter(path).data;
-      return signedIn()
+      return actorMayUseProduct()
         && participantSuccessShape(data)
         && data.role == 'finder'
         && request.auth.uid == data.finderId
@@ -1012,7 +1007,7 @@ service cloud.firestore {
       // so either side can safely reconcile its deterministic retry.
       // Finder success lives on its own doc; confirmedByFinder remains the
       // legacy read for finder-authored success docs already in the wild.
-      allow read: if signedIn()
+      allow read: if actorMayUseProduct()
         && (resource.data.userId == request.auth.uid
           || (resource.data.finderId == request.auth.uid
             && resource.data.get('confirmedByFinder', false) == true)
@@ -1036,12 +1031,12 @@ service cloud.firestore {
     // of the occupied handoff is the document id, so a second link cannot
     // invent another doc for the same origin.
     match /originRePings/{originSpotId} {
-      allow get: if signedIn() && (
+      allow get: if actorMayUseProduct() && (
         resource == null || resource.data.finderId == request.auth.uid
       );
       allow list: if false;
       allow update, delete: if false;
-      allow create: if signedIn()
+      allow create: if actorMayUseProduct()
         && originSpotId.size() > 0
         && originSpotId.size() <= 200
         && request.resource.data.keys().hasOnly(['rePingSpotId', 'finderId', 'createdAt'])
@@ -1097,7 +1092,7 @@ service cloud.firestore {
       // DashboardPage.tsx's active-session count — both now go through the
       // requireCurrentAdmin-gated adminReadView callable. Owner self-read
       // preserved.
-      allow read: if signedIn() && request.auth.uid == userId;
+      allow read: if actorMayUseProduct() && request.auth.uid == userId;
       // F7: strict owner-only schema. Accepts exactly the shipped client
       // shapes (StreetParkingView.tsx writeCleaningReminder full setDoc,
       // byte-identical since 2bd192a/c640477, and the merges
@@ -1107,9 +1102,9 @@ service cloud.firestore {
       // scheduleCleaningReminders ignores it and reads the owner's
       // users/{uid}/private/preferences token instead. reminderAt must be a
       // timestamp or null (R3 poison-doc fix, defense in depth).
-      allow create, update: if signedIn() && request.auth.uid == userId
+      allow create, update: if actorMayUseProduct() && request.auth.uid == userId
         && validParkingSession(request.resource.data, userId);
-      allow delete: if signedIn() && request.auth.uid == userId;
+      allow delete: if actorMayUseProduct() && request.auth.uid == userId;
     }
 
     function validParkingSession(d, userId) {
@@ -1140,12 +1135,12 @@ service cloud.firestore {
       // exposure this task closes.
       allow read: if false;
       // Signed-in users may create new failure docs or increment count on existing ones
-      allow create: if signedIn();
+      allow create: if actorMayUseProduct();
       // Direct admin writes removed: adminResolveParseFailure/
       // adminReopenParseFailure (requireCurrentAdmin) are the only admin
       // mutation paths in the dashboard. No client code ever exercised the
       // isAdmin() branch here.
-      allow update: if signedIn()
+      allow update: if actorMayUseProduct()
         && request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['count', 'lastSeenAt', 'location']);
       allow delete: if false;
@@ -1219,7 +1214,7 @@ service cloud.firestore {
       // private/social.blockedUsers contains the other. That is the
       // trusted boundary for new direct conversations; message sends are
       // refused separately in sendMessage.
-      allow create: if signedIn()
+      allow create: if actorMayUseProduct()
         && request.resource.data.keys().hasAll(['id', 'participants'])
         && request.resource.data.keys().hasOnly(
              ['id', 'participants', 'relatedSpotTitle'])

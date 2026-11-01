@@ -79,11 +79,24 @@ describe('buildHeadingUpdate', () => {
     });
 
     const rules = readFileSync('firestore.rules', 'utf8');
-    const arm = rules.slice(rules.indexOf('Arm 2b:'), rules.indexOf('Arm 3:'));
-    for (const key of Object.keys(patch)) {
-      expect(arm).toContain(`'${key}'`);
-    }
-    expect(arm).not.toContain("'claimStartedAt'");
-    expect(arm).not.toContain("'interestedUserId'");
+    const start = rules.indexOf('// Arm 2b:');
+    expect(start, 'Arm 2b marker').toBeGreaterThan(-1);
+    // Arms 1, 3, and 3b are removed. The next remaining arm is Arm 4.
+    const end = rules.indexOf('// Arm 4:', start + '// Arm 2b:'.length);
+    expect(end, 'Arm 2b following boundary').toBeGreaterThan(start);
+    const arm = rules.slice(start, end);
+    expect(arm).not.toContain('// Arm 3:');
+    expect(arm).not.toContain('// Arm 3b:');
+    expect(arm).toContain("request.resource.data.claimState == 'heading'");
+
+    const listMatch = arm.match(/onlyChanges\(\[([\s\S]*?)\]\)/);
+    expect(listMatch).not.toBeNull();
+    const allowed = [...listMatch![1].matchAll(/'([^']+)'/g)].map((match) => match[1]);
+    const covers = (list: string[], keys: string[]) => keys.every((key) => list.includes(key));
+    const keys = Object.keys(patch);
+    expect(covers(allowed, keys)).toBe(true);
+    expect(allowed).not.toContain('claimStartedAt');
+    expect(allowed).not.toContain('interestedUserId');
+    expect(covers(allowed.filter((field) => field !== 'claimState'), keys)).toBe(false);
   });
 });

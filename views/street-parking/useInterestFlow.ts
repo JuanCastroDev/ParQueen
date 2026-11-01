@@ -1,16 +1,34 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { db } from '../../firebase';
-import { doc, updateDoc, deleteDoc, Timestamp, collection, query, where, getDocs, addDoc, setDoc, onSnapshot, orderBy, limit } from 'firebase/firestore';
+import { doc, updateDoc, deleteDoc, Timestamp, collection, query, where, getDocs, getDoc, addDoc, setDoc, onSnapshot, orderBy, limit } from 'firebase/firestore';
 import { MapItem } from './types';
 import { getDistance, drawRoute, clearRoute, NYC_CENTER } from './utils';
-import { getTitleForCrowns } from '../../utils/crowns';
-import { getPingExpiresAtMs, timestampToMillis } from '../../utils/pingLifecycle';
+import { getPingExpiresAtMs } from '../../utils/pingLifecycle';
 import { commitPingCreate, PING_SCHEDULE_HORIZON_MS, PingCreateRejected } from './pingCreateBounds';
-import { cancelClaimTransaction } from './cancelClaimTransaction';
-import { acquireActiveIncomingClaim, ALREADY_CLAIMED_MESSAGE, markClaimArrived } from './activeIncomingClaim';
+import { cancelClaimCallable } from './cancelClaimCallable';
+import {
+    claimSpotCallable,
+    prepareClaimIntentCallable,
+    revokeClaimIntentCallable,
+    type ClaimSpotMode,
+    type ClaimSpotOutcome,
+    type ClaimSpotResult,
+    type RevokeOutcome,
+} from './claimSpotCallable';
+import { createClaimAttemptId, isClaimGenerationId } from './claimIdentity';
+import {
+    recoverableClaim,
+    readRecoverableClaims,
+    RECOVERY_CHANGED,
+    RECOVERY_CHECK_FAILED,
+    RECOVERY_RELEASED,
+    type RecoveredClaim,
+} from './recoverActiveClaim';
+import { ALREADY_CLAIMED_MESSAGE, markClaimArrived } from './activeIncomingClaim';
 import { commitClaimToHeading } from './commitToHeading';
 import { reportClaimFailure, reportClaimCancelFailure } from './claimFailureReporting';
-import { reportCriticalActionFailure } from '../../utils/errorReporting';
+import { finderCancelSpot } from './finderCancelSpot';
+import { captureClientException, reportCriticalActionFailure } from '../../utils/errorReporting';
 import { t } from '../../i18n';
 import { completeTerminalHandoff } from './completeTerminalHandoff';
 import { attestParticipantSuccess } from './attestParticipantSuccess';
@@ -64,8 +82,35 @@ export function useInterestFlow({
 }: UseInterestFlowOptions) {
     const [trackedItemId, setTrackedItemId] = useState<string | null>(null);
     const [interestError, setInterestError] = useState<string | null>(null);
+    const [recoveredClaims, setRecoveredClaims] = useState<RecoveredClaim[]>([]);
+    const [recoveryError, setRecoveryError] = useState<string | null>(null);
+    const [recoveryAck, setRecoveryAck] = useState<string | null>(null);
+    const recoveredClaimsRef = useRef<RecoveredClaim[]>([]);
+    recoveredClaimsRef.current = recoveredClaims;
     const [cancelingClaim, setCancelingClaim] = useState(false);
     const cancelingClaimRef = useRef(false);
+    // In-memory only. A retry of this attempt keeps the spot and generation
+    // captured at confirmation. A listener refresh must not replace them.
+    // Sheet dismiss and dismissCancelAttempt drop the pair. It is not stored.
+    const cancelAttemptRef = useRef<{ spotId: string; claimGenerationId: string } | null>(null);
+    // In-memory only. A lost claimSpot response retries this attempt id.
+    // A completed response, a spot change, and sheet dismiss drop it.
+    const claimAttemptRef = useRef<{
+        spotId: string;
+        attemptId: string;
+        mode: ClaimSpotMode;
+        etaMinutes: number | null;
+        sent?: boolean;
+    } | null>(null);
+    const abandonedAttemptsRef = useRef(new Set<string>());
+    const pendingRevokeRef = useRef<{
+        spotId: string;
+        attemptId: string;
+        mode: ClaimSpotMode;
+        etaMinutes?: number;
+    } | null>(null);
+    const selectedSpotIdRef = useRef<string | null>(null);
+    selectedSpotIdRef.current = selectedItem?.id ?? null;
     // Session UX guards only. A1 still decides whether a claim or arrival write commits.
     const [claiming, setClaiming] = useState(false);
     const claimingRef = useRef(false);
@@ -373,21 +418,189 @@ export function useInterestFlow({
         return error?.message || fallback;
     };
 
-    const claimerFields = (claimStartedAt: Timestamp, claimState: 'heading' | 'committed') => ({
-        status: 'interested' as const,
-        claimState,
-        ownerLeavingNow: null,
-        interestedUserId: user.id,
-        interestedUserName: user.username || user.fullName || 'Someone',
-        interestedUserVehicleColor: user.vehicleColor || null,
-        interestedUserVehicleType: user.vehicleType || null,
-        interestedUserVehicleBrand: user.vehicleBrand || null,
-        interestedUserTitle: getTitleForCrowns(user.crowns || 0),
-        claimStartedAt,
-    });
-
     const claimOrArriveInFlight = () =>
         claimingRef.current || arrivingRef.current || cancelingClaimRef.current;
+
+    const beginClaimAttempt = (spotId: string, mode: ClaimSpotMode, etaMinutes: number | null) => {
+        const current = claimAttemptRef.current;
+        if (
+            current
+            && current.spotId === spotId
+            && current.mode === mode
+            && current.etaMinutes === etaMinutes
+            && !abandonedAttemptsRef.current.has(current.attemptId)
+        ) {
+            return current.attemptId;
+        }
+        const attemptId = createClaimAttemptId();
+        claimAttemptRef.current = { spotId, attemptId, mode, etaMinutes };
+        return attemptId;
+    };
+
+    const holdsDifferentSpot = async (spotId: string) => {
+        const q = query(collection(db, 'spots'), where('interestedUserId', '==', user.id), where('status', '==', 'interested'));
+        const snap = await getDocs(q);
+        return snap.docs.some((item) => item.id !== spotId);
+    };
+
+    const responseStillCurrent = (spotId: string, attemptId: string) => (
+        claimAttemptRef.current?.attemptId === attemptId && selectedSpotIdRef.current === spotId
+    );
+
+    const reconcileClaim = async (spotId: string, result: ClaimSpotResult) => {
+        if (result.spotId !== spotId) return false;
+        if (result.outcome !== 'claimed' && result.outcome !== 'already_held') return false;
+        if (!isClaimGenerationId(result.claimGenerationId)) return false;
+        const snap = await getDoc(doc(db, 'spots', spotId));
+        if (!snap.exists()) return false;
+        const data = snap.data() as Record<string, unknown>;
+        if (data.interestedUserId !== user.id) return false;
+        if (data.claimGenerationId !== result.claimGenerationId) return false;
+        if (data.status !== 'interested') return false;
+        const state = data.claimState;
+        return state == null || state === 'heading' || state === 'committed';
+    };
+
+    const finishReconciledClaim = async (
+        spot: { id: string; lat: number; lng: number },
+        attemptId: string,
+        result: ClaimSpotResult,
+        fallback: string,
+        drawNavigation: boolean,
+    ) => {
+        if (!responseStillCurrent(spot.id, attemptId)) return;
+        if (result.outcome === 'already_held') {
+            // Observation of a hold this attempt did not create. The returned
+            // id is not acquisition, navigation, analytics, or cancel authority.
+            claimAttemptRef.current = null;
+            return;
+        }
+        if (result.outcome === 'already_claimed') {
+            claimAttemptRef.current = null;
+            setInterestError(ALREADY_CLAIMED_MESSAGE);
+            return;
+        }
+        if (result.outcome === 'unavailable') {
+            claimAttemptRef.current = null;
+            setInterestError(fallback);
+            return;
+        }
+        if (
+            result.outcome === 'refused_stale_generation'
+            || result.outcome === 'expired'
+            || result.outcome === 'revoked'
+            || result.outcome === 'released'
+            || result.outcome === 'stale_precondition'
+        ) {
+            claimAttemptRef.current = null;
+            setInterestError(drawNavigation ? 'Failed to reserve spot' : 'Failed to claim spot');
+            return;
+        }
+        const active = await reconcileClaim(spot.id, result);
+        if (!responseStillCurrent(spot.id, attemptId)) return;
+        if (!active || !isClaimGenerationId(result.claimGenerationId)) {
+            claimAttemptRef.current = null;
+            setInterestError(drawNavigation ? 'Failed to reserve spot' : 'Failed to claim spot');
+            return;
+        }
+        if (result.outcome === 'claimed') recordParkingAnalyticsEvent('parking_claim_started');
+        claimAttemptRef.current = null;
+        setTrackedItemId(spot.id);
+        if (drawNavigation) {
+            const dest: [number, number] = [spot.lng, spot.lat];
+            activeRouteDestinationRef.current = dest;
+            if (mapRef.current) drawRoute(mapRef.current, userLocation || NYC_CENTER, dest);
+        }
+    };
+
+    const CONFIRMED_REVOKE = new Set<RevokeOutcome>([
+        'revoked',
+        'released',
+        'generation_unchanged',
+        'already_resolved',
+        'expired',
+        'unavailable',
+        'already_held',
+        'already_claimed',
+        'refused_stale_generation',
+        'stale_precondition',
+        'permission_denied',
+    ]);
+
+    const revokePayload = (attempt: { spotId: string; attemptId: string; mode: ClaimSpotMode; etaMinutes: number | null }) => ({
+        spotId: attempt.spotId,
+        attemptId: attempt.attemptId,
+        mode: attempt.mode,
+        ...(attempt.etaMinutes == null ? {} : { etaMinutes: attempt.etaMinutes }),
+    });
+
+    const retryPendingRevoke = async () => {
+        const pending = pendingRevokeRef.current;
+        if (!pending) return;
+        try {
+            const result = await revokeClaimIntentCallable(pending);
+            if (CONFIRMED_REVOKE.has(result.outcome)) pendingRevokeRef.current = null;
+        } catch {
+            // The server has not acknowledged the release. Leave it pending.
+        }
+    };
+
+    const abandonClaimAttempt = (attempt: NonNullable<typeof claimAttemptRef.current>) => {
+        if (!attempt.sent) {
+            if (claimAttemptRef.current?.attemptId === attempt.attemptId) claimAttemptRef.current = null;
+            return;
+        }
+        abandonedAttemptsRef.current.add(attempt.attemptId);
+        if (claimAttemptRef.current?.attemptId === attempt.attemptId) claimAttemptRef.current = null;
+        const payload = revokePayload(attempt);
+        void revokeClaimIntentCallable(payload).then((result) => {
+            if (!CONFIRMED_REVOKE.has(result.outcome)) {
+                pendingRevokeRef.current = payload;
+                setInterestError('Could not confirm the claim attempt was cancelled.');
+                return;
+            }
+            if (pendingRevokeRef.current?.attemptId === attempt.attemptId) pendingRevokeRef.current = null;
+        }).catch((error: { message?: string }) => {
+            pendingRevokeRef.current = payload;
+            setInterestError(error?.message || 'Could not confirm the claim attempt was cancelled.');
+        });
+    };
+
+    const acquirePreparedClaim = async (
+        spot: { id: string; lat: number; lng: number },
+        mode: ClaimSpotMode,
+        etaMinutes: number | null,
+        fallback: string,
+        drawNavigation: boolean,
+    ) => {
+        await retryPendingRevoke();
+        const attemptId = beginClaimAttempt(spot.id, mode, etaMinutes);
+        if (claimAttemptRef.current?.attemptId === attemptId) claimAttemptRef.current.sent = true;
+        const prepared = await prepareClaimIntentCallable({
+            spotId: spot.id,
+            attemptId,
+            mode,
+            ...(etaMinutes == null ? {} : { etaMinutes }),
+        });
+        if (abandonedAttemptsRef.current.has(attemptId) || !responseStillCurrent(spot.id, attemptId)) return;
+        if (prepared.state !== 'prepared' && prepared.state !== 'claimed') {
+            await finishReconciledClaim(spot, attemptId, {
+                outcome: prepared.state as ClaimSpotOutcome,
+                claimGenerationId: null,
+                spotId: spot.id,
+                mode,
+            }, fallback, drawNavigation);
+            return;
+        }
+        const claimResult = await claimSpotCallable({
+            spotId: spot.id,
+            attemptId,
+            mode,
+            ...(etaMinutes == null ? {} : { etaMinutes }),
+        });
+        if (abandonedAttemptsRef.current.has(attemptId) || !responseStillCurrent(spot.id, attemptId)) return;
+        await finishReconciledClaim(spot, attemptId, claimResult, fallback, drawNavigation);
+    };
 
     const handleExpressInterest = async (etaMinutes: number) => {
         const spot = selectedItem;
@@ -399,35 +612,20 @@ export function useInterestFlow({
             setInterestError("Too far to reserve this spot right now");
             return;
         }
+        if (!Number.isInteger(etaMinutes) || etaMinutes < 1 || etaMinutes > MAX_ETA_MINUTES) {
+            setInterestError('Failed to reserve spot');
+            return;
+        }
 
         claimingRef.current = true;
         setClaiming(true);
         try {
-            const alreadyActive = await checkAlreadyInterested();
-            if (alreadyActive) {
-                setInterestError(ALREADY_CLAIMED_MESSAGE);
-                return;
-            }
-
             try {
-                const claimMinutes = Math.min(etaMinutes + 5, MAX_CLAIM_MINUTES);
-                const claimResult = await acquireActiveIncomingClaim(db, {
-                    spotId: spot.id,
-                    uid: user.id,
-                    unavailableMessage: 'Someone already got this spot',
-                    missingMessage: 'Spot no longer exists',
-                    buildClaimFields: (_spot, claimStartedAt) => ({
-                        ...claimerFields(claimStartedAt, 'heading'),
-                        etaMinutes,
-                        interestExpiresAt: Timestamp.fromMillis(Date.now() + claimMinutes * 60000),
-                    }),
-                });
-                if (claimResult === 'claimed') recordParkingAnalyticsEvent('parking_claim_started');
-
-                const dest: [number, number] = [spot.lng, spot.lat];
-                activeRouteDestinationRef.current = dest;
-                setTrackedItemId(spot.id);
-                if (mapRef.current) drawRoute(mapRef.current, userLocation || NYC_CENTER, dest);
+                if (await holdsDifferentSpot(spot.id)) {
+                    setInterestError(ALREADY_CLAIMED_MESSAGE);
+                    return;
+                }
+                await acquirePreparedClaim(spot, 'immediate', etaMinutes, 'Someone already got this spot', true);
             } catch (e: any) {
                 reportClaimFailure(e, 'immediate');
                 setInterestError(await claimErrorMessage(e, 'Failed to reserve spot'));
@@ -438,25 +636,55 @@ export function useInterestFlow({
         }
     };
 
-    const handleCancelByFinder = async (reason: string) => {
+    const handleCancelByFinder = async (_reason: string) => {
         if (!selectedItem || !user || !db) return;
-        const interestedId = selectedItem.interestedUserId;
-        if (interestedId) {
-            const messages: Record<string, string> = {
-                "Can't wait anymore": "The driver couldn't wait any longer — your claim has been released.",
-                "Spot no longer available": "The spot is no longer available.",
-            };
-            await addDoc(collection(db, 'spotNotifications'), {
+        const confirmedSpot = {
+            finderId: user.id,
+            status: selectedItem.status,
+            interestedUserId: selectedItem.interestedUserId ?? null,
+            claimState: selectedItem.claimState ?? null,
+            claimGenerationId: selectedItem.claimGenerationId ?? selectedItem.rawSpot?.claimGenerationId ?? null,
+        };
+        try {
+            const outcome = await finderCancelSpot({
+                db,
                 spotId: selectedItem.id,
-                senderId: user.id,
-                targetUserId: interestedId,
-                type: 'cancelled',
-                message: messages[reason] ?? "The driver had to cancel.",
-                createdAt: Timestamp.now(),
+                finderId: user.id,
+                confirmedSpot,
             });
+            if (outcome === 'deleted' || outcome === 'already_deleted') {
+                setSelectedItem(null);
+                return;
+            }
+            try {
+                const fresh = await getDoc(doc(db, 'spots', selectedItem.id));
+                if (!fresh.exists()) {
+                    setSelectedItem(null);
+                    return;
+                }
+                const data = fresh.data() || {};
+                setSelectedItem({
+                    ...selectedItem,
+                    status: data.status || selectedItem.status,
+                    interestedUserId: data.interestedUserId ?? null,
+                    interestedUserName: data.interestedUserName ?? null,
+                    claimState: data.claimState ?? null,
+                    claimGenerationId: data.claimGenerationId ?? null,
+                    claimStartedAt: data.claimStartedAt ?? null,
+                    rawSpot: { id: selectedItem.id, ...data },
+                });
+            } catch (refreshError) {
+                captureClientException(refreshError, { component: 'finderCancelSpot' });
+            }
+            setInterestError(t(outcome === 'unproven_identity'
+                ? 'claim_flow.cancel_unproven'
+                : outcome === 'stale'
+                    ? 'claim_flow.cancel_stale'
+                    : 'claim_flow.cancel_error'));
+        } catch (error) {
+            captureClientException(error, { component: 'finderCancelSpot' });
+            setInterestError(t('claim_flow.cancel_error'));
         }
-        await deleteDoc(doc(db, 'spots', selectedItem.id));
-        setSelectedItem(null);
     };
 
     const showAwardedCrowns = (role: 'claimer' | 'finder', claimerName: string) => {
@@ -593,39 +821,179 @@ export function useInterestFlow({
 
     const handleFinderConfirmsArrival = () => submitFinderAttestation();
 
-    // Claim identity used to detect a stale/superseded claim. claimStartedAt is
-    // set once when a claim is created (handleExpressInterest / handleScheduledClaim)
-    // and is never touched by any other handler — unlike interestExpiresAt, which
-    // legitimately shifts under the *same* claim via handleDelayByFinder, so it
-    // can't be used to distinguish "stale" from "just extended".
-    const claimFingerprint = (spot: { claimStartedAt?: unknown }): number | null => {
-        const ms = timestampToMillis(spot.claimStartedAt);
-        return ms > 0 ? ms : null;
+    const selectedSpotId = selectedItem?.id ?? null;
+    useEffect(() => {
+        const pending = claimAttemptRef.current;
+        if (!selectedSpotId) {
+            if (pending) abandonClaimAttempt(pending);
+            else claimAttemptRef.current = null;
+            cancelAttemptRef.current = null;
+            setInterestError(null);
+            return;
+        }
+        if (cancelAttemptRef.current && cancelAttemptRef.current.spotId !== selectedSpotId) {
+            cancelAttemptRef.current = null;
+            setInterestError(null);
+        }
+        if (pending && pending.spotId !== selectedSpotId) {
+            abandonClaimAttempt(pending);
+            setInterestError(null);
+        }
+    }, [selectedSpotId]);
+
+    useEffect(() => {
+        let cancelled = false;
+        if (!user?.id || !db) {
+            setRecoveredClaims([]);
+            setRecoveryError(null);
+            setRecoveryAck(null);
+            return undefined;
+        }
+        const uid = user.id;
+        setRecoveredClaims([]);
+        setRecoveryAck(null);
+        void (async () => {
+            try {
+                const claims = await readRecoverableClaims(db, uid);
+                if (cancelled) return;
+                setRecoveredClaims(claims);
+                setRecoveryError(null);
+            } catch {
+                if (cancelled) return;
+                setRecoveryError(RECOVERY_CHECK_FAILED);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [user?.id]);
+
+    const inspectRecoveredClaim = (spotId: string) => {
+        const claim = recoveredClaimsRef.current.find((item) => item.spotId === spotId);
+        if (!claim || !user?.id) return;
+        setSelectedItem({
+            id: claim.spotId,
+            lat: claim.lat ?? 0,
+            lng: claim.lng ?? 0,
+            status: 'interested',
+            interestedUserId: user.id,
+            claimState: claim.claimState,
+            claimGenerationId: claim.claimGenerationId,
+            address: claim.label,
+            title: claim.label,
+            type: 'free',
+            finderId: claim.finderId,
+        });
     };
 
+    const releaseRecoveredClaim = async (spotId: string) => {
+        if (!user?.id || !db || cancelingClaimRef.current || claimingRef.current || arrivingRef.current) return;
+        const shown = recoveredClaimsRef.current.find((item) => item.spotId === spotId);
+        if (!shown) return;
+
+        cancelingClaimRef.current = true;
+        setCancelingClaim(true);
+        setRecoveryAck(null);
+        setRecoveryError(null);
+        try {
+            const snap = await getDoc(doc(db, 'spots', spotId));
+            const live = snap.exists()
+                ? recoverableClaim(spotId, snap.data() as Record<string, unknown>, user.id)
+                : null;
+            if (!live || live.claimGenerationId !== shown.claimGenerationId) {
+                setRecoveryError(RECOVERY_CHANGED);
+                try {
+                    setRecoveredClaims(await readRecoverableClaims(db, user.id));
+                } catch {
+                    setRecoveryError(RECOVERY_CHECK_FAILED);
+                }
+                return;
+            }
+            const claimGenerationId = shown.claimGenerationId;
+            cancelAttemptRef.current = { spotId, claimGenerationId };
+            const outcome = await cancelClaimCallable({
+                spotId,
+                claimGenerationId,
+                reason: 'changed_mind',
+            });
+            if (outcome !== 'cancelled' && outcome !== 'already_resolved' && outcome !== 'stale_claim') {
+                throw new Error('Invalid cancellation response.');
+            }
+            if (outcome === 'stale_claim') {
+                setRecoveryError(t('claim_flow.cancel_error'));
+                return;
+            }
+            cancelAttemptRef.current = null;
+            setRecoveryAck(RECOVERY_RELEASED);
+            setRecoveredClaims((current) => current.filter((item) => item.spotId !== spotId));
+            if (selectedSpotIdRef.current === spotId) {
+                setTrackedItemId(null);
+                activeRouteDestinationRef.current = null;
+                if (mapRef.current) clearRoute(mapRef.current);
+                setSelectedItem(null);
+            }
+        } catch (error) {
+            reportClaimCancelFailure(error);
+            setRecoveryError(t('claim_flow.cancel_error'));
+        } finally {
+            cancelingClaimRef.current = false;
+            setCancelingClaim(false);
+        }
+    };
+
+    const dismissRecoveryAck = useCallback(() => {
+        setRecoveryAck(null);
+    }, []);
+
+    const dismissCancelAttempt = useCallback(() => {
+        cancelAttemptRef.current = null;
+    }, []);
+
     const handleCancelByClaimer = async (reason: string) => {
-        if (!selectedItem || !user || !db || cancelingClaimRef.current || claimingRef.current || arrivingRef.current) return;
-        const messages: Record<string, string> = {
-            "Found parking elsewhere": "The driver found parking elsewhere — your spot is available again.",
-            "Traffic is too heavy": "The driver got stuck in traffic — your spot is available again.",
-            "Changed my mind": "The driver changed their mind — your spot is available again.",
-        };
+        if (!user || !db || cancelingClaimRef.current || claimingRef.current || arrivingRef.current) return;
+        const openAttempt = cancelAttemptRef.current;
+        if (!openAttempt && !selectedItem?.id) return;
 
         cancelingClaimRef.current = true;
         setCancelingClaim(true);
         setInterestError(null);
 
         try {
-            await cancelClaimTransaction(db, {
-                spotId: selectedItem.id,
-                claimantId: user.id,
-                finderId: selectedItem.finderId ?? null,
-                fingerprint: claimFingerprint(selectedItem),
-                message: messages[reason] ?? "The other driver canceled — your spot is available again.",
-            });
+            let spotId: string;
+            let claimGenerationId: string;
+            if (openAttempt) {
+                spotId = openAttempt.spotId;
+                claimGenerationId = openAttempt.claimGenerationId;
+            } else {
+                const currentId = selectedItem?.id;
+                if (!currentId) return;
+                spotId = currentId;
+                const snap = await getDoc(doc(db, 'spots', spotId));
+                const stored = snap.exists() ? (snap.data() as { claimGenerationId?: unknown }).claimGenerationId : undefined;
+                if (!isClaimGenerationId(stored)) {
+                    setInterestError(t('claim_flow.cancel_error'));
+                    return;
+                }
+                claimGenerationId = stored;
+                cancelAttemptRef.current = { spotId, claimGenerationId };
+            }
 
-            // 'cancelled' | 'already_resolved' | 'stale_claim' all mean the claim is
-            // no longer active from this UI's perspective — reconcile and close.
+            const outcome = await cancelClaimCallable({
+                spotId,
+                claimGenerationId,
+                reason,
+            });
+            if (outcome !== 'cancelled' && outcome !== 'already_resolved' && outcome !== 'stale_claim') {
+                throw new Error('Invalid cancellation response.');
+            }
+
+            // A refused generation leaves the live claim in place, so the sheet stays open.
+            // A response for a spot the user has left must not close or alter the newer selection.
+            if (selectedSpotIdRef.current !== spotId) return;
+            if (outcome === 'stale_claim') {
+                setInterestError(t('claim_flow.cancel_error'));
+                return;
+            }
+
+            cancelAttemptRef.current = null;
             setTrackedItemId(null);
             activeRouteDestinationRef.current = null;
             if (mapRef.current) clearRoute(mapRef.current);
@@ -853,44 +1221,12 @@ export function useInterestFlow({
         claimingRef.current = true;
         setClaiming(true);
         try {
-            const alreadyActive = await checkAlreadyInterested();
-            if (alreadyActive) {
-                setInterestError(ALREADY_CLAIMED_MESSAGE);
-                return;
-            }
-
             try {
-                const claimResult = await acquireActiveIncomingClaim(db, {
-                    spotId: spot.id,
-                    uid: user.id,
-                    unavailableMessage: 'Someone already claimed this spot',
-                    missingMessage: 'Spot no longer exists',
-                    buildClaimFields: (data, claimStartedAt) => {
-                        // Remind 20 min before departure; skip if already past
-                        const departureMs = data.reportedAt?.toMillis?.() ?? 0;
-                        const reminderMs = departureMs - 20 * 60 * 1000;
-                        const claimReminderAt = reminderMs > Date.now()
-                            ? Timestamp.fromMillis(reminderMs)
-                            : null;
-                        return {
-                            ...claimerFields(claimStartedAt, 'committed'),
-                            ownerLeavingNowAt: null,
-                            etaMinutes: null,
-                            // Claim lives as long as the spot itself — inherit spot's own expiry
-                            interestExpiresAt: data.expiresAt,
-                            claimReminderAt,
-                            claimReminderSentAt: null,
-                            claimAutoReleaseAt: departureMs
-                                ? Timestamp.fromMillis(departureMs + 10 * 60 * 1000)
-                                : null,
-                            claimAutoReleasedAt: null,
-                        };
-                    },
-                });
-                if (claimResult === 'claimed') recordParkingAnalyticsEvent('parking_claim_started');
-
-                // Track for snapshot disappearance detection — no route drawn yet
-                setTrackedItemId(spot.id);
+                if (await holdsDifferentSpot(spot.id)) {
+                    setInterestError(ALREADY_CLAIMED_MESSAGE);
+                    return;
+                }
+                await acquirePreparedClaim(spot, 'scheduled', null, 'Someone already claimed this spot', false);
             } catch (e: any) {
                 reportClaimFailure(e, 'scheduled');
                 setInterestError(await claimErrorMessage(e, 'Failed to claim spot'));
@@ -1007,6 +1343,13 @@ export function useInterestFlow({
         handleOwnerLeaveNow,
         handleCancelByFinder,
         handleCancelByClaimer,
+        dismissCancelAttempt,
+        recoveredClaims,
+        recoveryError,
+        recoveryAck,
+        inspectRecoveredClaim,
+        releaseRecoveredClaim,
+        dismissRecoveryAck,
         cancelingClaim,
         claiming,
         arriving,

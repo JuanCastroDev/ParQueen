@@ -79,8 +79,14 @@ export default defineConfig(({ command, mode }) => {
         globals: true,
         exclude: [
           '**/node_modules/**', '**/e2e/**',
-          'firestore.rules.test.ts', 'storage.rules.test.ts',
+          'firestore.rules.test.ts',
+          'firestore.rules.test.candidate-aware.ts',
+          'firestore.rules.test.original-suite.ts',
+          'firestore.rules.finder-notice.31ag.test.ts',
+          'storage.rules.test.ts',
           'functions/*.integration.test.*',
+          // Emulator-only. Still required by vite.functions.config.ts.
+          'functions/cancelClaim.export.test.js',
           ...(/^(localhost|127\.0\.0\.1):\d+$/.test(
             process.env.FIRESTORE_EMULATOR_HOST ?? ''
           ) ? [] : ['utils/analyticsConsentFirestore.emulator.test.ts']),

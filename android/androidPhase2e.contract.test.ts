@@ -6,9 +6,14 @@ const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf
 const ENFORCED_CALLABLES = [
   'deleteChat',
   'updateDisplayName',
+  'cancelClaim',
   'adminReadView',
   'checkHydrantDistance',
   'createSegmentFromSweepNYC',
+  'claimSpot',
+  'prepareClaimIntent',
+  'revokeClaimIntent',
+  'finderCancelSpot',
 ];
 
 describe('Android Phase 2E App Check contracts', () => {
@@ -110,11 +115,19 @@ describe('Android Phase 2E App Check contracts', () => {
 
   it('keeps the reviewed Cloud Functions App Check enforcement set', () => {
     const functions = read('../functions/index.js');
-    expect(functions.match(/enforceAppCheck:\s*true/g) || []).toHaveLength(5);
+    expect(functions.match(/enforceAppCheck:\s*true/g) || []).toHaveLength(ENFORCED_CALLABLES.length);
     for (const name of ENFORCED_CALLABLES) {
       const start = functions.indexOf(`exports.${name} = onCall(`);
       expect(start, name).toBeGreaterThan(-1);
-      expect(functions.slice(start, start + 2500)).toMatch(/enforceAppCheck:\s*true/);
+      const slice = functions.slice(start, start + 2500);
+      expect(slice, name).toMatch(/enforceAppCheck:\s*true/);
+      expect(slice, name).not.toMatch(/enforceAppCheck:\s*false/);
     }
+    const sendStart = functions.indexOf('exports.sendMessage = onCall(');
+    expect(sendStart).toBeGreaterThan(-1);
+    const sendSlice = functions.slice(sendStart, sendStart + 2500);
+    expect(sendSlice).toMatch(/enforceAppCheck:\s*false/);
+    expect(sendSlice).not.toMatch(/enforceAppCheck:\s*true/);
+    expect(functions.match(/consumeAppCheckToken:\s*true/g) || []).toHaveLength(0);
   });
 });

@@ -1,6 +1,13 @@
 import { readFileSync, readdirSync, statSync } from 'fs';
+import { createRequire } from 'node:module';
 import { join, resolve } from 'path';
 import { describe, expect, it } from 'vitest';
+
+const require = createRequire(import.meta.url);
+const palette = require('tailwindcss/colors') as {
+    slate: Record<string, string>;
+    [family: string]: Record<string, string>;
+};
 
 // Guards the accent-role palette. Before it existed, every screen picked its own
 // Tailwind -400 shade for "success"/"danger"/"info" text; those are tuned for a
@@ -68,12 +75,62 @@ describe('accent role contrast', () => {
 
     it('no view sets text to a raw dark-tuned accent shade', () => {
         const BANNED = /(?:^|[\s"'`:])text-(?:blue|sky|emerald|green|red|rose|amber|yellow)-(?:300|400)\b|text-\[#(?:38bdf8|7dd3fc|1e75ff)\](?!\/)/;
+        const NAMED = /text-(blue|sky|emerald|green|red|rose|amber|yellow)-(300|400)\b/;
+        const ARBITRARY = /text-\[#((?:38bdf8|7dd3fc|1e75ff))\](?!\/)/i;
+        const DARK_BG = /\bbg-(slate-950|slate-900|black)(?:\/(\d{1,3}))?\b/g;
+        const LATER_LIGHT_BG = /\bbg-(?:white|slate-(?:50|100|200)|gray-50)\b/;
         const offenders: string[] = [];
+        const measured: string[] = [];
         for (const file of sourceFiles(root)) {
-            readFileSync(file, 'utf-8').split('\n').forEach((line, i) => {
-                if (BANNED.test(line)) offenders.push(`${file.slice(root.length + 1)}:${i + 1}`);
+            const lines = readFileSync(file, 'utf-8').split('\n');
+            lines.forEach((line, i) => {
+                if (!BANNED.test(line)) return;
+                const named = line.match(NAMED);
+                const arbitrary = line.match(ARBITRARY);
+                const fg = named
+                    ? palette[named[1]]?.[named[2]]
+                    : arbitrary
+                        ? `#${arbitrary[1].toLowerCase()}`
+                        : '';
+                const windowText = lines.slice(Math.max(0, i - 15), i + 1).join('\n');
+                DARK_BG.lastIndex = 0;
+                const backgrounds = [...windowText.matchAll(DARK_BG)];
+                const background = backgrounds.at(-1);
+                const afterBackground = background
+                    ? windowText.slice(windowText.lastIndexOf(background[0]) + background[0].length)
+                    : windowText;
+                const alpha = background?.[2] ? Number(background[2]) : 100;
+                const solid = background?.[1] === 'black'
+                    ? '#000000'
+                    : background
+                        ? palette.slate[background[1].slice('slate-'.length)]
+                        : '';
+                const usable = Boolean(
+                    fg?.startsWith('#')
+                    && fg.length === 7
+                    && background
+                    && Number.isInteger(alpha)
+                    && alpha >= 1
+                    && alpha <= 100
+                    && solid?.startsWith('#')
+                    && solid.length === 7
+                    && !LATER_LIGHT_BG.test(afterBackground),
+                );
+                if (!usable) {
+                    offenders.push(`${file.slice(root.length + 1)}:${i + 1}`);
+                    return;
+                }
+                const [r, g, b] = rgba(solid);
+                const mix = [r, g, b].map((channel) => Math.round(channel * (alpha / 100) + 255 * (1 - alpha / 100)));
+                const ratio = contrast(fg, `rgb(${mix[0]}, ${mix[1]}, ${mix[2]})`);
+                if (ratio < 4.5) {
+                    offenders.push(`${file.slice(root.length + 1)}:${i + 1} (${ratio.toFixed(2)}:1 on explicit dark surface)`);
+                    return;
+                }
+                measured.push(`${file.slice(root.length + 1)}:${i + 1} ${ratio.toFixed(2)}:1`);
             });
         }
         expect(offenders).toEqual([]);
+        expect(measured.length).toBeGreaterThan(0);
     });
 });

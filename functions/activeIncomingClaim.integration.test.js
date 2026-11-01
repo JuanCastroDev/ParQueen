@@ -11,6 +11,8 @@ const { initializeApp, getApps } = require('firebase-admin/app');
 const { getFirestore, Timestamp } = require('firebase-admin/firestore');
 
 const { requireEmulatorProjectId } = require('./emulatorProjectId');
+const { receiptDocumentId, receiptBody } = require('./finderCancelReceipt');
+const TRUST_GENERATION = 'ab'.repeat(32);
 const PROJECT_ID = requireEmulatorProjectId();
 const APP_NAME = '__active_incoming_claim_intg__';
 const testApp = getApps().find(app => app.name === APP_NAME) ?? initializeApp({ projectId: PROJECT_ID }, APP_NAME);
@@ -251,19 +253,31 @@ describe('active incoming claim — release paths and 15-minute repair', () => {
     const spotId = nextId('deleted');
     await db.doc(`users/${finderId}`).set({ crowns: 0 });
     await lockRef(claimerId).set(lockData(spotId, Timestamp.now()));
+    const deleted = {
+      status: 'interested',
+      finderId,
+      interestedUserId: claimerId,
+      claimState: 'heading',
+      claimGenerationId: TRUST_GENERATION,
+      expiresAt: FUTURE,
+      source: 'user',
+    };
+    const identity = {
+      kind: 'generation',
+      finderId,
+      status: 'interested',
+      interestedUserId: claimerId,
+      claimState: 'heading',
+      claimGenerationId: TRUST_GENERATION,
+    };
+    await db.collection('finderCancelReceipts').doc(receiptDocumentId(spotId, identity)).set(receiptBody(spotId, identity));
 
     await indexModule.updateTrustOnSpotDelete.run({
       id: nextId('event'),
       params: { spotId },
       time: new Date().toISOString(),
       data: {
-        data: () => ({
-          status: 'interested',
-          finderId,
-          interestedUserId: claimerId,
-          expiresAt: FUTURE,
-          source: 'user',
-        }),
+        data: () => deleted,
       },
     });
 

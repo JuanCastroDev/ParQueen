@@ -108,6 +108,7 @@ export function useSpotData({ userId, blockedUsers, searchCenter, showFree, show
                     claimState: s.claimState || null,
                     arrivedAt: s.arrivedAt ?? null,
                     claimStartedAt: s.claimStartedAt ?? null,
+                    claimGenerationId: s.claimGenerationId ?? null,
                     ownerLeavingNow: s.ownerLeavingNow || null,
                     ownerLeavingNowAt: s.ownerLeavingNowAt || null,
                     claimReminderAt: s.claimReminderAt || null,

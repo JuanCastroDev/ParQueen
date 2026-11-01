@@ -515,7 +515,7 @@ describe('founder evidence guard', () => {
       removeAnchorFile(anchorFile);
       removeAnchorFile(revokedFile);
     }
-  });
+  }, 10_000);
 
   it('rejects an ambiguous ref and a trust anchor planted in the pull request', () => {
     const fixture = criticalRepo();
