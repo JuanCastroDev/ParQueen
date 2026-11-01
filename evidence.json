@@ -1,0 +1,56 @@
+{
+  "schema": "parqueen-founder-provenance-evidence/v1",
+  "evidenceClass": "FOUNDER-EXECUTED",
+  "keyId": "parqueen-founder-20261028-r1",
+  "payload": {
+    "schema": "parqueen-founder-provenance-evidence/v1",
+    "evidenceClass": "FOUNDER-EXECUTED",
+    "repository": "JuanCastroDev/ParQueen",
+    "head": "de661e6eeb2713148c191b93d08138be231d6de9",
+    "tree": "bff385837a723129ef15ffd3f3b8a8b4bf88631d",
+    "base": "a4d7f55992166e7d2e59e7c39e9c745977ca88f8",
+    "criticalPaths": [
+      ".github/workflows/pr-gate.yml",
+      "functions/activeIncomingClaim.js",
+      "functions/activeIncomingClaimLogic.js",
+      "functions/adminAuth.js",
+      "functions/cancelClaim.js",
+      "functions/claimGeneration.js",
+      "functions/claimSpot.js",
+      "functions/curbIntelligence/canonicalCurbPersistence.js",
+      "functions/exchangePhoneAuthSession.js",
+      "functions/finderCancelNotice.js",
+      "functions/finderCancelReceipt.js",
+      "functions/finderCancelSpot.js",
+      "functions/index.js",
+      "functions/orphanGenerationCleanup.js",
+      "functions/productAccess.js",
+      "functions/suspensionAccess.js",
+      "scripts/ci/provenance-evidence.test.mjs"
+    ],
+    "runner": {
+      "path": "scripts/ci/private-provenance-suite.mjs",
+      "sha256": "96a932f9c33482ac0a7ca43bb05f7e317e0c8e83e80bf40ce8a2f1395b10cd37"
+    },
+    "suite": {
+      "path": "functions/curbIntelligence/provenanceAndConflict.test.cjs",
+      "sha256": "ec331d80d5c29a4a367a9a4926d0f3fd7a5773bf030dd8388da3821e60d4c486"
+    },
+    "artifact": {
+      "size": 45710043,
+      "sha256": "e1ca91f7ba05e874449f168242509908ab7d587be3fc7f3352c66c0851cbc225"
+    },
+    "tests": {
+      "executed": 11,
+      "passed": 11,
+      "failed": 0,
+      "skipped": 0,
+      "exitCode": 0
+    },
+    "founderIdentity": "parqueen-founder",
+    "executedAt": "2026-11-01T17:54:25.505Z",
+    "attestationId": "91f03b2c-20a3-446b-b7ae-742bdf94b174",
+    "expiresAt": "2026-11-15T17:54:25.505Z"
+  },
+  "signature": "AOvdUWMg4lz4ocF/nHA6CxB8VVbhc2/QiiIPWZrh3U66sVboyjeDQup7zIR08rbooVddL4T62aofsG0H7FEWAQ=="
+}
