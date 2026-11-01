@@ -224,7 +224,9 @@ describe('product access enforcement', () => {
     const stale = await runCall(adminUnsuspendUser, req(admin, { userId: target }, 'admin'));
     expect(stale.error.code).toBe('aborted');
     expect((await db.doc(`users/${target}`).get()).data().productAccessBlocked).toBe(true);
-    expect((await adminAuth.getUser(target)).disabled).toBe(true);
+    // The enable matched the current intent. Losing the lock blocks flag
+    // clearance. It does not disable Auth again.
+    expect((await adminAuth.getUser(target)).disabled).toBe(false);
     const completions = (await db.collection('adminAuditLog').where('targetUserId', '==', target).get()).docs
       .map((d) => d.data()).filter((row) => row.action === 'user.unsuspend');
     expect(completions).toHaveLength(1);
@@ -506,8 +508,10 @@ describe('product access enforcement', () => {
     let enableStarted = () => {};
     const enableStartedP = new Promise((resolve) => { enableStarted = resolve; });
     let sawEnabledAfterSuccessor = false;
+    let heldEnable = false;
     auth.updateUser = async (uid, props) => {
-      if (uid === target && props && props.disabled === false && !sawEnabledAfterSuccessor) {
+      if (uid === target && props && props.disabled === false && !heldEnable) {
+        heldEnable = true;
         enableStarted();
         await enableGate;
         const result = await orig(uid, props);
@@ -563,7 +567,7 @@ describe('product access enforcement', () => {
     }
   });
 
-  it('C and E: a successor unsuspend replaces an expired suspend lease, then the late disable leaves Active with Auth disabled', async () => {
+  it('C and E: a successor unsuspend replaces an expired suspend lease, and the live stale disable is compensated', async () => {
     const admin = await adminCaller();
     const target = await user('leaseE', { status: 'Active', username: 'e' });
     const auth = getAuth();
@@ -573,10 +577,10 @@ describe('product access enforcement', () => {
     let disableStarted = () => {};
     const disableStartedP = new Promise((resolve) => { disableStarted = resolve; });
     let sawLateDisable = false;
-    let disableEntered = false;
+    let heldDisable = false;
     auth.updateUser = async (uid, props) => {
-      if (uid === target && props && props.disabled === true && !disableEntered) {
-        disableEntered = true;
+      if (uid === target && props && props.disabled === true && !heldDisable) {
+        heldDisable = true;
         disableStarted();
         await disableGate;
         const result = await orig(uid, props);
@@ -618,7 +622,10 @@ describe('product access enforcement', () => {
       const finalDoc = (await db.doc(`users/${target}`).get()).data();
       expect(finalDoc.status).toBe('Active');
       expect(finalDoc.productAccessBlocked).toBeUndefined();
-      expect((await adminAuth.getUser(target)).disabled).toBe(true);
+      // The late disable is applied, then the still-running caller compensates
+      // toward the successor unsuspend. The old split (product allowed, Auth
+      // disabled) is not an accepted end state while that caller is alive.
+      expect((await adminAuth.getUser(target)).disabled).toBe(false);
       await expect(assertProductAccess(target)).resolves.toBeUndefined();
       const sent = await _sendMessageHandler(req(target, {
         chatId: `open_${target}`, clientRequestId: 'req_late_disable', text: 'hi',
@@ -634,8 +641,8 @@ describe('product access enforcement', () => {
         },
       );
       const body = await signIn.json();
-      expect(body.idToken).toBeUndefined();
-      expect(JSON.stringify(body)).toMatch(/USER_DISABLED/);
+      expect(body.idToken).toBeTruthy();
+      expect(JSON.stringify(body)).not.toMatch(/USER_DISABLED/);
       const rows = await audits(target);
       expect(named(rows, 'user.suspend')).toHaveLength(0);
       expect(named(rows, 'user.suspend.pending')).toHaveLength(1);
@@ -715,16 +722,15 @@ describe('product access enforcement', () => {
 
     const unsuspendTarget = await user('ackG2', { status: 'Active', username: 'g2' });
     expect((await runCall(adminSuspendUser, req(admin, { userId: unsuspendTarget, reason: 'spam' }, 'admin'))).result).toEqual({ success: true });
-    const readsAfter = new Map();
+    let enableAttempted = false;
     auth.getUser = async (uid) => {
       if (uid !== unsuspendTarget) return origGet(uid);
-      const seen = (readsAfter.get(uid) || 0) + 1;
-      readsAfter.set(uid, seen);
-      if (seen === 1) return origGet(uid);
+      if (!enableAttempted) return origGet(uid);
       throw Object.assign(new Error('readback failed'), { code: 'auth/internal-error' });
     };
     auth.updateUser = async (uid, props) => {
       if (uid === unsuspendTarget && props && props.disabled === false) {
+        enableAttempted = true;
         throw Object.assign(new Error('enable failed'), { code: 'auth/internal-error' });
       }
       return origUpdate(uid, props);

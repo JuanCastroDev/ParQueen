@@ -3116,8 +3116,8 @@ const {
 exports._suspensionConcurrencyHooks = suspensionHooks;
 
 // 16) Admin suspend user. The deny flag is committed before Auth disable.
-// See functions/suspensionAccess.js for the lock, partial audits, and the
-// late Auth RPC limitation.
+// See functions/suspensionAccess.js for the generation fence and the late
+// Auth RPC residual, which this export does not close.
 exports.adminSuspendUser = onCall(
   { region: 'us-central1', timeoutSeconds: SUSPENSION_CALL_TIMEOUT_SEC, serviceAccount: 'parqueen-admin-auth@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
   async (request) => {

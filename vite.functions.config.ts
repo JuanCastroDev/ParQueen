@@ -29,6 +29,7 @@ export default defineConfig({
       'functions/adminSessionAuth.integration.test.js',
       'functions/adminSuspension.integration.test.js',
       'functions/productAccess.integration.test.js',
+      'functions/suspensionLeaseRace.integration.test.js',
       'functions/cancelClaim.test.js',
       'functions/cancelClaim.integration.test.js',
       'functions/cancelClaim.export.test.js',
