@@ -5078,17 +5078,20 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
     return { protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' };
   }
 
+  const { localStreetIntelligenceBinding } = require('./curbIntelligence/localGeosupportTransport');
+  const localBinding = localStreetIntelligenceBinding();
+  if (localBinding.mode === 'closed') {
+    return { protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' };
+  }
+
   const getSocrataToken = _socrataToken;
   const streetIntelligenceCache = createStreetIntelligenceCacheBoundary({ Timestamp });
-  const localFunction3c = process.env.FUNCTIONS_EMULATOR === 'true'
-    ? require('./curbIntelligence/localGeosupportTransport').createLocalGeosupportTransport()
-    : null;
   const blockfaceResolver = createPrivateBlockfaceResolver({
     mode: 'shadow',
     serviceUrl: config.serviceUrl,
-    ...(localFunction3c ? {
-      transport: localFunction3c.transport,
-      getIdToken: localFunction3c.getIdToken,
+    ...(localBinding.mode === 'local' ? {
+      transport: localBinding.transport,
+      getIdToken: localBinding.getIdToken,
     } : {}),
   });
   const orchestratorDependencies = {
@@ -5121,7 +5124,7 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
   if (process.env.FUNCTIONS_EMULATOR === 'true') {
     const { localRuntimeDependencies } = require('./curbIntelligence/runtimeSourceArtifact');
     Object.assign(orchestratorDependencies, localRuntimeDependencies());
-    if (process.env.CURB_OFFICIAL_LION_PRIMARY === 'local') {
+    if (localBinding.officialLionPrimary === true) {
       const { loadOfficialLionPrimary } = require('./curbIntelligence/officialLionPrimaryTopology');
       const admitted = await loadOfficialLionPrimary();
       if (admitted?.ok === true) orchestratorDependencies.officialLionPrimary = admitted;

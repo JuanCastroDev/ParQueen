@@ -4,15 +4,38 @@ const { spawn } = require('node:child_process');
 const { existsSync } = require('node:fs');
 const DEMO_PROJECT_ID = 'demo-parkqueen-functions-test';
 const PRODUCTION_PROJECT_ID = 'parkqueen-46475363-ccf36';
+const DEMO_AUTH_HOST = '127.0.0.1:9099';
+const DEMO_FIRESTORE_HOST = '127.0.0.1:8080';
+
+function localDemoSession(env = process.env) {
+  const project = typeof env.GCLOUD_PROJECT === 'string' ? env.GCLOUD_PROJECT : '';
+  return env.FUNCTIONS_EMULATOR === 'true'
+    && project === DEMO_PROJECT_ID
+    && project !== PRODUCTION_PROJECT_ID
+    && env.FIRESTORE_EMULATOR_HOST === DEMO_FIRESTORE_HOST
+    && env.FIREBASE_AUTH_EMULATOR_HOST === DEMO_AUTH_HOST
+    && env.K_REVISION === '1';
+}
+
+function localModeRequested(env = process.env) {
+  return env.CURB_LOCAL_FUNCTION3C === 'local' || env.CURB_OFFICIAL_LION_PRIMARY === 'local';
+}
 
 function localFunction3cAllowed(env) {
-  return env.FUNCTIONS_EMULATOR === 'true'
-    && env.CURB_LOCAL_FUNCTION3C === 'local'
-    && env.GCLOUD_PROJECT === DEMO_PROJECT_ID
-    && env.GCLOUD_PROJECT !== PRODUCTION_PROJECT_ID
-    && env.FIRESTORE_EMULATOR_HOST === '127.0.0.1:8080'
-    && env.FIREBASE_AUTH_EMULATOR_HOST === '127.0.0.1:9099'
-    && env.K_REVISION === '1';
+  return localDemoSession(env) && env.CURB_LOCAL_FUNCTION3C === 'local';
+}
+
+function localStreetIntelligenceBinding(env = process.env) {
+  if (!localModeRequested(env)) return { mode: 'production' };
+  if (!localDemoSession(env)) return { mode: 'closed' };
+  const local = createLocalGeosupportTransport(env);
+  if (!local) return { mode: 'closed' };
+  return {
+    mode: 'local',
+    transport: local.transport,
+    getIdToken: local.getIdToken,
+    officialLionPrimary: env.CURB_OFFICIAL_LION_PRIMARY === 'local',
+  };
 }
 
 function dockerBin(env = process.env) {
@@ -111,6 +134,13 @@ function createLocalGeosupportTransport(env = process.env) {
 }
 
 module.exports = {
+  DEMO_AUTH_HOST,
+  DEMO_FIRESTORE_HOST,
+  DEMO_PROJECT_ID,
+  PRODUCTION_PROJECT_ID,
+  localDemoSession,
+  localModeRequested,
   localFunction3cAllowed,
+  localStreetIntelligenceBinding,
   createLocalGeosupportTransport,
 };

@@ -1,15 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const require = createRequire(import.meta.url);
 const {
+  createCatalog,
   evaluateOfficialLionRelationship,
+  extractVerifiedBytes,
   loadOfficialLionPrimary,
   openApprovedLionArchive,
   readOfficialLionPrimary,
+  verifiedExtraction,
 } = require('./officialLionPrimaryTopology');
 const { nyLongIslandUsFtToWgs84 } = require('./lionStatePlane');
 const { resolveCanonicalCurb, hasPrimaryTopologyAuthority } = require('./canonicalCurbResolver');
@@ -148,6 +153,96 @@ describe('official LION primary topology', () => {
       CURB_OFFICIAL_LION_PRIMARY: 'local',
       CURB_LION_PRIMARY_ARCHIVE: 'unused.zip',
     })).toBeNull();
+    expect(await loadOfficialLionPrimary({
+      FUNCTIONS_EMULATOR: 'true',
+      CURB_OFFICIAL_LION_PRIMARY: 'local',
+      GCLOUD_PROJECT: 'parkqueen-46475363-ccf36',
+      FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080',
+      FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099',
+      K_REVISION: '1',
+      CURB_LION_PRIMARY_ARCHIVE: 'unused.zip',
+    })).toBeNull();
+  });
+
+  it('requires one official segment before querying incidents', async () => {
+    const queries = [];
+    const feature = (segmentId, nodeIdFrom, nodeIdTo) => ({
+      attributes: {
+        SegmentID: segmentId,
+        PhysicalID: '98053',
+        Street: 'MELVILLE STREET',
+        StreetCode: '250420',
+        NodeIDFrom: nodeIdFrom,
+        NodeIDTo: nodeIdTo,
+        LBlockFaceID: '1522611401',
+        RBlockFaceID: '1522607000',
+      },
+      geometry: null,
+    });
+    const session = {
+      async query(_directory, name, sql) {
+        queries.push({ name, sql });
+        if (name.startsWith('subject-')) return [feature('0085847', '0052416', '0048539')];
+        if (name.startsWith('incident-')) return [feature('0085847', '0052416', '0048539')];
+        return [{ attributes: { NODEID: '0052416', STNAME: 'VAN NEST AVENUE' } }];
+      },
+    };
+    const packet = await createCatalog('lion', session).packetFor('98053');
+    expect(packet.segments).toHaveLength(1);
+    expect(packet.segments[0]).toMatchObject({ physicalId: '98053', segmentId: '0085847' });
+    expect(queries.map(query => query.name)).toEqual(['subject-98053', 'incident-98053', 'names-98053']);
+
+    const duplicateQueries = [];
+    const duplicates = {
+      async query(_directory, name, sql) {
+        duplicateQueries.push({ name, sql });
+        return [
+          feature('0085847', '0052416', '0048539'),
+          feature('0099999', '0000002', '0000003'),
+        ];
+      },
+    };
+    const rejected = await createCatalog('lion', duplicates).packetFor('0098053');
+    expect(rejected).toBeNull();
+    expect(duplicateQueries).toHaveLength(1);
+    expect(duplicateQueries[0].name).toBe('subject-98053');
+    expect(duplicateQueries[0].sql).not.toContain('0000002');
+  });
+
+  it('binds GDAL input to the verified archive and rejects stale extraction', () => {
+    const root = mkdtempSync(join(tmpdir(), 'lion-verified-'));
+    const source = join(root, 'lion', 'lion.gdb');
+    mkdirSync(source, { recursive: true });
+    writeFileSync(join(source, 'a00000001.gdbtable'), 'verified-gdb');
+    const archive = join(root, 'archive.zip');
+    const packed = spawnSync('tar', ['-a', '-cf', archive, '-C', root, 'lion'], { windowsHide: true });
+    expect(packed.status).toBe(0);
+    const bytes = readFileSync(archive);
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    const stale = join(tmpdir(), `parqueen-lion-${digest.slice(0, 16)}`, 'lion', 'lion.gdb');
+    mkdirSync(stale, { recursive: true });
+    writeFileSync(join(stale, 'a00000001.gdbtable'), 'stale-gdb');
+
+    const extracted = extractVerifiedBytes(bytes, digest);
+    expect(extracted?.directory.startsWith(stale)).toBe(false);
+    expect(readFileSync(join(extracted.directory, 'lion.gdb', 'a00000001.gdbtable'), 'utf8')).toBe('verified-gdb');
+    writeFileSync(join(extracted.directory, 'lion.gdb', 'a00000001.gdbtable'), 'altered-gdb');
+    expect(verifiedExtraction(extracted.directory, extracted.treeSha256)).toBe(false);
+
+    const incompleteRoot = mkdtempSync(join(tmpdir(), 'lion-incomplete-'));
+    mkdirSync(join(incompleteRoot, 'lion'), { recursive: true });
+    writeFileSync(join(incompleteRoot, 'lion', 'readme.txt'), 'missing gdb');
+    const incompleteArchive = join(incompleteRoot, 'archive.zip');
+    const incompletePacked = spawnSync('tar', ['-a', '-cf', incompleteArchive, '-C', incompleteRoot, 'lion'], {
+      windowsHide: true,
+    });
+    expect(incompletePacked.status).toBe(0);
+    const incomplete = readFileSync(incompleteArchive);
+    expect(extractVerifiedBytes(incomplete, createHash('sha256').update(incomplete).digest('hex'))).toBeNull();
+    expect(extractVerifiedBytes(bytes, '0'.repeat(64))).toBeNull();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(incompleteRoot, { recursive: true, force: true });
+    rmSync(join(tmpdir(), `parqueen-lion-${digest.slice(0, 16)}`), { recursive: true, force: true });
   });
 
   it.skipIf(!liveLion)('resolves both Melville curbs from the approved archive and live CSCL, then fails closed without Function 3C', async () => {

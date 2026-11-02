@@ -6,6 +6,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const { APPROVED_LION } = require('./successorReleasePolicy');
+const { localDemoSession } = require('./localGeosupportTransport');
 const { normalizeBlockFaceId, CSCL_RESOURCE_ID } = require('./curbIdentity');
 const { nyLongIslandUsFtToWgs84 } = require('./lionStatePlane');
 
@@ -153,9 +154,12 @@ function evaluateOfficialLionRelationship(record, packet) {
   });
 }
 
-function hashFile(filePath) {
+const REQUIRED_GDB_FILE = ['lion.gdb', 'a00000001.gdbtable'];
+
+function readArchive(filePath) {
   const hash = createHash('sha256');
   const descriptor = fs.openSync(filePath, 'r');
+  const chunks = [];
   const buffer = Buffer.alloc(1024 * 1024);
   let position = 0;
   try {
@@ -163,19 +167,21 @@ function hashFile(filePath) {
     while (position < stat.size) {
       const read = fs.readSync(descriptor, buffer, 0, buffer.length, position);
       if (read <= 0) break;
-      hash.update(buffer.subarray(0, read));
+      const slice = Buffer.from(buffer.subarray(0, read));
+      hash.update(slice);
+      chunks.push(slice);
       position += read;
     }
   } finally {
     fs.closeSync(descriptor);
   }
-  return { byteLength: position, sha256: hash.digest('hex') };
+  return { byteLength: position, sha256: hash.digest('hex'), bytes: Buffer.concat(chunks, position) };
 }
 
 function approvedArchive(filePath) {
   let identity;
   try {
-    identity = hashFile(filePath);
+    identity = readArchive(filePath);
   } catch {
     return null;
   }
@@ -185,18 +191,94 @@ function approvedArchive(filePath) {
   return identity;
 }
 
-function extractArchive(archivePath, digest) {
-  const destination = path.join(os.tmpdir(), `parqueen-lion-${digest.slice(0, 16)}`);
-  const gdb = path.join(destination, 'lion', 'lion.gdb');
-  if (!fs.existsSync(path.join(gdb, 'a00000001.gdbtable'))) {
-    fs.mkdirSync(destination, { recursive: true });
-    const extracted = spawnSync('tar', ['-xf', archivePath, '-C', destination], {
+function relativeFiles(directory) {
+  if (!fs.existsSync(directory)) return null;
+  const files = [];
+  const pending = [''];
+  while (pending.length > 0) {
+    const relative = pending.pop();
+    const absolute = path.join(directory, relative);
+    let stat;
+    try {
+      stat = fs.lstatSync(absolute);
+    } catch {
+      return null;
+    }
+    if (stat.isSymbolicLink()) return null;
+    if (stat.isDirectory()) {
+      for (const name of fs.readdirSync(absolute)) pending.push(path.join(relative, name));
+      continue;
+    }
+    if (!stat.isFile()) return null;
+    files.push(relative.split(path.sep).join('/'));
+  }
+  files.sort();
+  return files;
+}
+
+function digestTree(directory) {
+  const files = relativeFiles(directory);
+  if (!files || files.length === 0) return null;
+  const hash = createHash('sha256');
+  for (const relative of files) {
+    const bytes = fs.readFileSync(path.join(directory, ...relative.split('/')));
+    hash.update(relative);
+    hash.update('\0');
+    hash.update(String(bytes.length));
+    hash.update('\0');
+    hash.update(bytes);
+  }
+  return { files, sha256: hash.digest('hex') };
+}
+
+function verifiedExtraction(directory, treeSha256) {
+  if (typeof directory !== 'string' || typeof treeSha256 !== 'string' || !treeSha256) return false;
+  const required = path.join(directory, ...REQUIRED_GDB_FILE);
+  let stat;
+  try {
+    stat = fs.lstatSync(required);
+  } catch {
+    return false;
+  }
+  if (!stat.isFile() || stat.size <= 0) return false;
+  const tree = digestTree(directory);
+  return Boolean(tree && tree.sha256 === treeSha256 && tree.files.includes(REQUIRED_GDB_FILE.join('/')));
+}
+
+function extractVerifiedBytes(bytes, digest) {
+  if (!Buffer.isBuffer(bytes) || bytes.length === 0 || typeof digest !== 'string') return null;
+  if (createHash('sha256').update(bytes).digest('hex') !== digest) return null;
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'parqueen-lion-bind-'));
+  const archiveCopy = path.join(scratch, 'verified.zip');
+  const destination = path.join(scratch, 'extracted');
+  try {
+    const archiveDescriptor = fs.openSync(archiveCopy, 'wx');
+    try {
+      fs.writeFileSync(archiveDescriptor, bytes);
+    } finally {
+      fs.closeSync(archiveDescriptor);
+    }
+    fs.mkdirSync(destination);
+    const extracted = spawnSync('tar', ['-xf', archiveCopy, '-C', destination], {
       stdio: 'pipe',
       windowsHide: true,
     });
-    if (extracted.status !== 0 || !fs.existsSync(path.join(gdb, 'a00000001.gdbtable'))) return null;
+    fs.rmSync(archiveCopy, { force: true });
+    const directory = path.join(destination, 'lion');
+    if (extracted.status !== 0) {
+      fs.rmSync(scratch, { recursive: true, force: true });
+      return null;
+    }
+    const tree = digestTree(directory);
+    if (!tree || !verifiedExtraction(directory, tree.sha256)) {
+      fs.rmSync(scratch, { recursive: true, force: true });
+      return null;
+    }
+    return { directory, treeSha256: tree.sha256, byteLength: bytes.length, sha256: digest };
+  } catch {
+    fs.rmSync(scratch, { recursive: true, force: true });
+    return null;
   }
-  return path.join(destination, 'lion');
 }
 
 function writeVrt(directory, name, sql) {
@@ -308,10 +390,17 @@ function createCatalog(directory, session) {
         `subject-${key}`,
         `SELECT SegmentID, PhysicalID, Street, StreetCode, NodeIDFrom, NodeIDTo, LBlockFaceID, RBlockFaceID FROM lion WHERE PhysicalID = ${key}`,
       );
-      const subject = subjectFeatures?.[0]?.attributes;
+      const matches = Array.isArray(subjectFeatures)
+        ? subjectFeatures.filter(feature => digitKey(feature?.attributes?.PhysicalID) === key)
+        : [];
+      if (matches.length !== 1) {
+        cache.set(key, null);
+        return null;
+      }
+      const subject = matches[0].attributes;
       const fromText = sqlNode(subject?.NodeIDFrom);
       const toText = sqlNode(subject?.NodeIDTo);
-      if (!subjectFeatures || !fromText || !toText) {
+      if (!fromText || !toText) {
         cache.set(key, null);
         return null;
       }
@@ -374,16 +463,17 @@ async function openApprovedLionArchive(archivePath) {
   if (typeof archivePath !== 'string' || !archivePath) return null;
   const identity = approvedArchive(archivePath);
   if (!identity) return null;
-  const directory = extractArchive(archivePath, identity.sha256);
+  const extracted = extractVerifiedBytes(identity.bytes, identity.sha256);
+  if (!extracted || !verifiedExtraction(extracted.directory, extracted.treeSha256)) return null;
   const session = await openGdalSession();
-  if (!directory || !session) return null;
-  return sealCatalog(createCatalog(directory, session));
+  if (!session || !verifiedExtraction(extracted.directory, extracted.treeSha256)) return null;
+  return sealCatalog(createCatalog(extracted.directory, session));
 }
 
 let admittedCatalog = null;
 
 async function loadOfficialLionPrimary(env = process.env) {
-  if (env.FUNCTIONS_EMULATOR !== 'true' || env.CURB_OFFICIAL_LION_PRIMARY !== 'local') return null;
+  if (!localDemoSession(env) || env.CURB_OFFICIAL_LION_PRIMARY !== 'local') return null;
   if (typeof env.CURB_LION_PRIMARY_ARCHIVE !== 'string') return null;
   if (admittedCatalog) return admittedCatalog;
   const admitted = await openApprovedLionArchive(env.CURB_LION_PRIMARY_ARCHIVE);
@@ -393,8 +483,11 @@ async function loadOfficialLionPrimary(env = process.env) {
 
 module.exports = {
   MAX_ENDPOINT_RESIDUAL_METERS,
+  createCatalog,
   evaluateOfficialLionRelationship,
+  extractVerifiedBytes,
   loadOfficialLionPrimary,
   openApprovedLionArchive,
   readOfficialLionPrimary,
+  verifiedExtraction,
 };
