@@ -210,39 +210,53 @@ describe('official LION primary topology', () => {
   });
 
   it('binds GDAL input to the verified archive and rejects stale extraction', () => {
-    const root = mkdtempSync(join(tmpdir(), 'lion-verified-'));
-    const source = join(root, 'lion', 'lion.gdb');
-    mkdirSync(source, { recursive: true });
-    writeFileSync(join(source, 'a00000001.gdbtable'), 'verified-gdb');
-    const archive = join(root, 'archive.zip');
-    const packed = spawnSync('tar', ['-a', '-cf', archive, '-C', root, 'lion'], { windowsHide: true });
-    expect(packed.status).toBe(0);
-    const bytes = readFileSync(archive);
-    const digest = createHash('sha256').update(bytes).digest('hex');
-    const stale = join(tmpdir(), `parqueen-lion-${digest.slice(0, 16)}`, 'lion', 'lion.gdb');
-    mkdirSync(stale, { recursive: true });
-    writeFileSync(join(stale, 'a00000001.gdbtable'), 'stale-gdb');
+    const owned = [];
+    const own = (prefix) => {
+      const directory = mkdtempSync(join(tmpdir(), prefix));
+      owned.push(directory);
+      return directory;
+    };
+    let extractionRoot = null;
+    try {
+      const root = own('lion-verified-');
+      const source = join(root, 'lion', 'lion.gdb');
+      mkdirSync(source, { recursive: true });
+      writeFileSync(join(source, 'a00000001.gdbtable'), 'verified-gdb');
+      const archive = join(root, 'archive.zip');
+      const packed = spawnSync('tar', ['-a', '-cf', archive, '-C', root, 'lion'], { windowsHide: true });
+      expect(packed.status).toBe(0);
+      const bytes = readFileSync(archive);
+      const digest = createHash('sha256').update(bytes).digest('hex');
+      const staleRoot = own('lion-stale-');
+      const stale = join(staleRoot, 'lion', 'lion.gdb');
+      mkdirSync(stale, { recursive: true });
+      writeFileSync(join(stale, 'a00000001.gdbtable'), 'stale-gdb');
 
-    const extracted = extractVerifiedBytes(bytes, digest);
-    expect(extracted?.directory.startsWith(stale)).toBe(false);
-    expect(readFileSync(join(extracted.directory, 'lion.gdb', 'a00000001.gdbtable'), 'utf8')).toBe('verified-gdb');
-    writeFileSync(join(extracted.directory, 'lion.gdb', 'a00000001.gdbtable'), 'altered-gdb');
-    expect(verifiedExtraction(extracted.directory, extracted.treeSha256)).toBe(false);
+      const extracted = extractVerifiedBytes(bytes, digest);
+      expect(extracted?.directory).toBeTruthy();
+      expect(extracted.directory.startsWith(staleRoot)).toBe(false);
+      expect(readFileSync(join(extracted.directory, 'lion.gdb', 'a00000001.gdbtable'), 'utf8')).toBe('verified-gdb');
+      expect(readFileSync(join(stale, 'a00000001.gdbtable'), 'utf8')).toBe('stale-gdb');
+      const scratch = join(extracted.directory, '..', '..');
+      if (scratch.startsWith(tmpdir()) && scratch !== tmpdir()) extractionRoot = scratch;
+      writeFileSync(join(extracted.directory, 'lion.gdb', 'a00000001.gdbtable'), 'altered-gdb');
+      expect(verifiedExtraction(extracted.directory, extracted.treeSha256)).toBe(false);
 
-    const incompleteRoot = mkdtempSync(join(tmpdir(), 'lion-incomplete-'));
-    mkdirSync(join(incompleteRoot, 'lion'), { recursive: true });
-    writeFileSync(join(incompleteRoot, 'lion', 'readme.txt'), 'missing gdb');
-    const incompleteArchive = join(incompleteRoot, 'archive.zip');
-    const incompletePacked = spawnSync('tar', ['-a', '-cf', incompleteArchive, '-C', incompleteRoot, 'lion'], {
-      windowsHide: true,
-    });
-    expect(incompletePacked.status).toBe(0);
-    const incomplete = readFileSync(incompleteArchive);
-    expect(extractVerifiedBytes(incomplete, createHash('sha256').update(incomplete).digest('hex'))).toBeNull();
-    expect(extractVerifiedBytes(bytes, '0'.repeat(64))).toBeNull();
-    rmSync(root, { recursive: true, force: true });
-    rmSync(incompleteRoot, { recursive: true, force: true });
-    rmSync(join(tmpdir(), `parqueen-lion-${digest.slice(0, 16)}`), { recursive: true, force: true });
+      const incompleteRoot = own('lion-incomplete-');
+      mkdirSync(join(incompleteRoot, 'lion'), { recursive: true });
+      writeFileSync(join(incompleteRoot, 'lion', 'readme.txt'), 'missing gdb');
+      const incompleteArchive = join(incompleteRoot, 'archive.zip');
+      const incompletePacked = spawnSync('tar', ['-a', '-cf', incompleteArchive, '-C', incompleteRoot, 'lion'], {
+        windowsHide: true,
+      });
+      expect(incompletePacked.status).toBe(0);
+      const incomplete = readFileSync(incompleteArchive);
+      expect(extractVerifiedBytes(incomplete, createHash('sha256').update(incomplete).digest('hex'))).toBeNull();
+      expect(extractVerifiedBytes(bytes, '0'.repeat(64))).toBeNull();
+    } finally {
+      if (extractionRoot) owned.push(extractionRoot);
+      for (const directory of owned) rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it.skipIf(!liveLion)('resolves both Melville curbs from the approved archive and live CSCL, then fails closed without Function 3C', async () => {
