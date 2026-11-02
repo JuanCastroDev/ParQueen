@@ -155,11 +155,11 @@ function evaluateOfficialLionRelationship(record, packet) {
 
 function hashFile(filePath) {
   const hash = createHash('sha256');
-  const stat = fs.statSync(filePath);
   const descriptor = fs.openSync(filePath, 'r');
   const buffer = Buffer.alloc(1024 * 1024);
   let position = 0;
   try {
+    const stat = fs.fstatSync(descriptor);
     while (position < stat.size) {
       const read = fs.readSync(descriptor, buffer, 0, buffer.length, position);
       if (read <= 0) break;
@@ -169,7 +169,7 @@ function hashFile(filePath) {
   } finally {
     fs.closeSync(descriptor);
   }
-  return { byteLength: stat.size, sha256: hash.digest('hex') };
+  return { byteLength: position, sha256: hash.digest('hex') };
 }
 
 function approvedArchive(filePath) {
