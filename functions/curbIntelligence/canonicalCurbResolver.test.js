@@ -343,4 +343,47 @@ describe('resolveCanonicalCurb', () => {
       candidateStore, planimetricStore, requestNonce: 'parallel',
     })).resolves.toMatchObject({ state: 'UNSUPPORTED', reasons: ['authority_attestation_invalid'] });
   });
+
+  const continuationPair = streetWidthFeet => ([
+    record({
+      globalId: 'block-west', physicalId: '501', b5sc: '200001',
+      streetName: 'CONTINUATION STREET', streetWidthFeet,
+      coordinates: [[[-74.002, 40.7], [-74.001, 40.7]]],
+      leftBlockFaceId: '4000000001', rightBlockFaceId: '4000000002',
+    }),
+    record({
+      globalId: 'block-east', physicalId: '502', b5sc: '200001',
+      streetName: 'CONTINUATION STREET', streetWidthFeet,
+      coordinates: [[[-74.001, 40.7], [-74, 40.7]]],
+      leftBlockFaceId: '4000000003', rightBlockFaceId: '4000000004',
+    }),
+  ]);
+
+  it('does not treat an ordinary continuation as a multilevel roadway', async () => {
+    const point = location({
+      lat: 40.7 + 5.5 / 111320,
+      lng: -74.0015,
+      accuracyMeters: 1,
+      sampleCount: 3,
+      consistencyMeters: 1,
+    });
+    await expect(resolveCanonicalCurb(point, options(continuationPair(40))))
+      .resolves.toMatchObject({ state: 'SUPPORTED', reasons: [] });
+  });
+
+  it('keeps centerline uncertainty unsupported after the continuation is recognized', async () => {
+    const point = location({
+      lat: 40.7 + 2.9 / 111320,
+      lng: -74.0015,
+      accuracyMeters: 7.6,
+      sampleCount: 3,
+      consistencyMeters: 1,
+    });
+    const result = await resolveCanonicalCurb(point, options(continuationPair(24)));
+    expect(result).toMatchObject({
+      state: 'UNSUPPORTED',
+      reasons: ['ambiguity_unresolved'],
+    });
+    expect(result.reasons).not.toContain('multilevel_or_roadbed_ambiguity');
+  });
 });
