@@ -4,8 +4,10 @@ import { getMessaging, isSupported } from 'firebase/messaging';
 import { initializeParQueenAppCheck } from './utils/appCheck';
 import { initializeParQueenAuth } from './utils/authInitialization';
 import { resolveFirebaseApiKey } from './utils/firebaseApiKey';
+import { assertDemoFirebaseAllowed, demoFirebaseAppConfig, DEMO_PROJECT_ID } from './utils/demoFirebase';
+import { bindDemoEmulators } from './utils/demoFirebaseRuntime';
 
-const firebaseConfig = {
+const productionFirebaseConfig = {
   apiKey: "AIzaSyCKSqWVd6JqpcrNUG6hei8Ug1njaIkAI7Y",
   authDomain: "parkqueen-46475363-ccf36.firebaseapp.com",
   projectId: "parkqueen-46475363-ccf36",
@@ -14,7 +16,14 @@ const firebaseConfig = {
   appId: "1:768131391875:web:613c5d2a948862333196b6"
 };
 
-firebaseConfig.apiKey = resolveFirebaseApiKey(firebaseConfig.apiKey);
+productionFirebaseConfig.apiKey = resolveFirebaseApiKey(productionFirebaseConfig.apiKey);
+
+const demoMode = assertDemoFirebaseAllowed({
+  DEV: import.meta.env.DEV,
+  PROD: import.meta.env.PROD,
+  VITE_PARQUEEN_DEMO_FIREBASE: import.meta.env.VITE_PARQUEEN_DEMO_FIREBASE,
+});
+const firebaseConfig = demoMode ? demoFirebaseAppConfig() : productionFirebaseConfig;
 
 // ── App Check debug token (DEV only) ─────────────────────────────────────────
 // import.meta.env.DEV → false in production builds (Vite static replacement);
@@ -23,6 +32,9 @@ firebaseConfig.apiKey = resolveFirebaseApiKey(firebaseConfig.apiKey);
 // Firebase Console → App Check → Apps → overflow menu → Manage debug tokens.
 if (import.meta.env.DEV) {
   const debugToken = import.meta.env.VITE_APPCHECK_DEBUG_TOKEN;
+  if (demoMode && debugToken) {
+    throw new Error('Demo Firebase mode refuses a production App Check debug token.');
+  }
   if (debugToken) {
     (self as any).FIREBASE_APPCHECK_DEBUG_TOKEN = debugToken;
   }
@@ -33,6 +45,9 @@ if (import.meta.env.DEV) {
 // a test or future refactor), App Check and service exports still attach to the
 // same [DEFAULT] app rather than throwing app/duplicate-app.
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+if (demoMode && app.options.projectId !== DEMO_PROJECT_ID) {
+  throw new Error('Refusing to attach local emulators to a non-demo Firebase app.');
+}
 
 // Initialization order for the default app:
 // 1. initializeApp / getApp
@@ -47,8 +62,12 @@ initializeParQueenAppCheck(app);
 
 export const auth = initializeParQueenAuth(app);
 export const db = getFirestore(app);
+if (demoMode) {
+  bindDemoEmulators({ app, auth, db });
+}
 
 export const getFCM = async () => {
+    if (demoMode) return null;
     const supported = await isSupported();
     return supported ? getMessaging(app) : null;
 };

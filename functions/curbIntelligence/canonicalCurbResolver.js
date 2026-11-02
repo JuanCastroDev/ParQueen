@@ -22,6 +22,7 @@ const {
   observePrivateSourceContext,
   readServerSourceEvidence,
 } = require('./privateSourceContextRetention');
+const { readOfficialLionPrimary } = require('./officialLionPrimaryTopology');
 
 const NYC = Object.freeze({ minLat: 40.4, maxLat: 40.95, minLng: -74.3, maxLng: -73.65 });
 const BOROUGHS = Object.freeze({
@@ -136,7 +137,12 @@ function buildCandidate(rankedGroup, context) {
     return null;
   }
   const native = record.sourceNative || {};
-  const supplied = context?.evidence ? context.evidence.streetContextFor(record) : null;
+  const primary = context?.officialRelationships?.get(record) || null;
+  if (primary && primary.ok !== true) {
+    if (identityFailure && identityFailure.reason == null) identityFailure.reason = primary.reason;
+    return null;
+  }
+  const supplied = !primary?.ok && context?.evidence ? context.evidence.streetContextFor(record) : null;
   if (supplied && supplied.ok !== true) {
     if (identityFailure && identityFailure.reason == null) identityFailure.reason = supplied.reason;
     return null;
@@ -152,9 +158,11 @@ function buildCandidate(rankedGroup, context) {
     geometry: record.geometry,
     streetWidthFeet: Number(native.streetwidth),
     borough: BOROUGHS[native.boroughcode] || String(native.boroughcode || '').trim(),
-    onStreet: native.full_street_name || native.street_name || native.stname_label,
-    fromStreet: supplied?.ok ? supplied.fromStreet : native.from_street,
-    toStreet: supplied?.ok ? supplied.toStreet : native.to_street,
+    onStreet: primary?.ok
+      ? primary.onStreet
+      : (native.full_street_name || native.street_name || native.stname_label),
+    fromStreet: primary?.ok ? primary.fromStreet : (supplied?.ok ? supplied.fromStreet : native.from_street),
+    toStreet: primary?.ok ? primary.toStreet : (supplied?.ok ? supplied.toStreet : native.to_street),
     aliases: [native.street_name, native.stname_label],
     cardinalSide: cardinalSide(projection),
     resolutionMethod: 'automatic',
@@ -170,7 +178,7 @@ function buildCandidate(rankedGroup, context) {
     group: rankedGroup.group,
     streetName: identityResult.identity.names.onStreet,
     stroke: record.geometry,
-    sourceEnrichment: supplied?.ok === true,
+    sourceEnrichment: supplied?.ok === true && primary?.ok !== true,
   };
 }
 
@@ -290,10 +298,21 @@ async function resolveCanonicalCurb(location, options = {}) {
   const retainPrivateSourceContext = options.privateSourceContextRetention === RETENTION_MODE;
   const evidence = shadowSourceEvidence(options);
   if (evidence?.ok === true) emitPilotStage(options.telemetry, 'cscl_admitted');
-  const identityFailure = retainPrivateSourceContext || evidence ? { reason: null, enrichment: null } : null;
+  const officialPrimary = readOfficialLionPrimary(options.officialLionPrimary);
+  let officialRelationships = null;
+  if (officialPrimary) {
+    try {
+      officialRelationships = await officialPrimary.relationshipsFor(materialRanked.map(group => group.best));
+    } catch {
+      return unsupported(['lion_primary_unavailable'], { candidateCount: materialRanked.length });
+    }
+  }
+  const identityFailure = retainPrivateSourceContext || evidence || officialRelationships
+    ? { reason: null, enrichment: null }
+    : null;
   const candidates = materialRanked.map(rankedGroup => (
-    identityFailure
-      ? buildCandidate(rankedGroup, { identityFailure, evidence })
+    identityFailure || officialRelationships
+      ? buildCandidate(rankedGroup, { identityFailure, evidence, officialRelationships })
       : buildCandidate(rankedGroup)
   )).filter(Boolean);
   if (retainPrivateSourceContext) {
@@ -306,7 +325,11 @@ async function resolveCanonicalCurb(location, options = {}) {
     }));
   }
   if (candidates.length !== materialRanked.length || candidates.length === 0) {
-    return unsupported(['candidate_incomplete'], { candidateCount: materialRanked.length });
+    const lionReason = identityFailure?.reason;
+    const reasons = typeof lionReason === 'string' && lionReason.startsWith('lion_')
+      ? [lionReason]
+      : ['candidate_incomplete'];
+    return unsupported(reasons, { candidateCount: materialRanked.length });
   }
   if (identityFailure?.enrichment?.fromStreet && identityFailure.enrichment.toStreet) {
     emitPilotStage(options.telemetry, 'enrichment_accepted');

@@ -5080,9 +5080,16 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
 
   const getSocrataToken = _socrataToken;
   const streetIntelligenceCache = createStreetIntelligenceCacheBoundary({ Timestamp });
+  const localFunction3c = process.env.FUNCTIONS_EMULATOR === 'true'
+    ? require('./curbIntelligence/localGeosupportTransport').createLocalGeosupportTransport()
+    : null;
   const blockfaceResolver = createPrivateBlockfaceResolver({
     mode: 'shadow',
     serviceUrl: config.serviceUrl,
+    ...(localFunction3c ? {
+      transport: localFunction3c.transport,
+      getIdToken: localFunction3c.getIdToken,
+    } : {}),
   });
   const orchestratorDependencies = {
     db,
@@ -5114,6 +5121,11 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
   if (process.env.FUNCTIONS_EMULATOR === 'true') {
     const { localRuntimeDependencies } = require('./curbIntelligence/runtimeSourceArtifact');
     Object.assign(orchestratorDependencies, localRuntimeDependencies());
+    if (process.env.CURB_OFFICIAL_LION_PRIMARY === 'local') {
+      const { loadOfficialLionPrimary } = require('./curbIntelligence/officialLionPrimaryTopology');
+      const admitted = await loadOfficialLionPrimary();
+      if (admitted?.ok === true) orchestratorDependencies.officialLionPrimary = admitted;
+    }
   } else {
     const { attachOwnerPilot } = require('./curbIntelligence/runtimeSourceArtifact');
     attachOwnerPilot(orchestratorDependencies, verifiedUid);
@@ -5578,11 +5590,14 @@ async function _reverseGeocodeStreet(lat, lng, strictOperationalFailures = false
 function _socrataToken() {
   try {
     const v = socrataAppToken.value();
+    if (process.env.FUNCTIONS_EMULATOR === 'true' && v === 'local-demo-not-a-secret') return '';
     if (v) return v;
   } catch {
     // Not bound in this runtime; fall through to the environment.
   }
-  return process.env.SOCRATA_APP_TOKEN || '';
+  const fromEnv = process.env.SOCRATA_APP_TOKEN || '';
+  if (process.env.FUNCTIONS_EMULATOR === 'true' && fromEnv === 'local-demo-not-a-secret') return '';
+  return fromEnv;
 }
 
 /**

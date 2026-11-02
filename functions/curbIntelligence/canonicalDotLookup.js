@@ -18,7 +18,8 @@ const dotName = value => text(osmNameToDOT(value));
 
 function context(identity) {
   const names = identity?.names;
-  const side = letterForCardinal(identity?.side?.cardinal);
+  const cardinal = identity?.side?.cardinal;
+  const side = letterForCardinal(cardinal);
   const blockFaceId = normalizeBlockFaceId(identity?.officialBlockFaceId);
   if (identity?.schemaVersion !== 2 || identity?.jurisdiction !== 'NYC'
     || !blockFaceId || !side || !names) return null;
@@ -29,7 +30,7 @@ function context(identity) {
   const bounds = [dotName(names.fromStreet), dotName(names.toStreet)];
   const borough = text(names.borough);
   return onStreetNames.length && bounds.every(Boolean) && borough
-    ? { blockFaceId, onStreetNames, bounds, borough, side } : null;
+    ? { blockFaceId, onStreetNames, bounds, borough, side, cardinal } : null;
 }
 
 function sameBounds(row, bounds) {
@@ -77,8 +78,7 @@ function defaultDotSource(options) {
         'sign_design_voided_on_date IS NULL',
         `upper(borough)='${curb.borough.replace(/'/g, "''")}'`,
         `upper(on_street) in(${names})`,
-        `((upper(from_street)='${from}' AND upper(to_street)='${to}')`,
-        `OR (upper(from_street)='${to}' AND upper(to_street)='${from}'))`,
+        `((upper(from_street)='${from}' AND upper(to_street)='${to}') OR (upper(from_street)='${to}' AND upper(to_street)='${from}'))`,
       ].join(' AND ');
       const parameters = new URLSearchParams({
         '$where': where,
@@ -127,7 +127,7 @@ function publicRule(row, curb) {
     street: curb.onStreetNames[0],
     fromCross: curb.bounds[0],
     toCross: curb.bounds[1],
-    side: curb.side,
+    side: curb.cardinal,
   });
   if (cleaning.classified) {
     return { category: 'cleaning', source: 'dot', schedules: [cleaning.schedule] };
@@ -135,9 +135,9 @@ function publicRule(row, curb) {
   const parsed = parseNYCOpenDataRestriction(row.sign_description);
   if (!parsed.ok || parsed.extent !== 'whole_face') return null;
   const schedules = parsed.anytime
-    ? [{ side: curb.side, days: parsed.days, anytime: true }]
+    ? [{ side: curb.cardinal, days: parsed.days, anytime: true }]
     : parsed.windows.map(window => ({
-      side: curb.side,
+      side: curb.cardinal,
       days: parsed.days,
       startTime: window.startTime,
       endTime: window.endTime,

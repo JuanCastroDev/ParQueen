@@ -74,6 +74,47 @@ function toPublicRule(rule) {
 }
 
 const canonicalNumber = value => Object.is(value, -0) ? 0 : value;
+
+function firestoreGeometry(geometry) {
+  if (geometry?.type !== 'MultiLineString' || !Array.isArray(geometry.coordinates)) return geometry;
+  return {
+    type: 'MultiLineString',
+    lines: geometry.coordinates.map(line => ({
+      points: (Array.isArray(line) ? line : []).map(point => ({
+        lng: Array.isArray(point) ? point[0] : null,
+        lat: Array.isArray(point) ? point[1] : null,
+      })),
+    })),
+  };
+}
+
+function geoJsonGeometry(geometry) {
+  if (!geometry || geometry.type !== 'MultiLineString' || Array.isArray(geometry.coordinates)
+    || !Array.isArray(geometry.lines)) return geometry;
+  return {
+    type: 'MultiLineString',
+    coordinates: geometry.lines.map(line => (
+      (Array.isArray(line?.points) ? line.points : []).map(point => [point?.lng, point?.lat])
+    )),
+  };
+}
+
+function storedIdentity(identity) {
+  if (!identity?.roadway) return identity;
+  return {
+    ...identity,
+    roadway: { ...identity.roadway, geometry: firestoreGeometry(identity.roadway.geometry) },
+  };
+}
+
+function restoredIdentity(identity) {
+  if (!identity?.roadway) return identity;
+  return {
+    ...identity,
+    roadway: { ...identity.roadway, geometry: geoJsonGeometry(identity.roadway.geometry) },
+  };
+}
+
 function canonicalGeometry(value) {
   if (value?.type !== 'MultiLineString' || !Array.isArray(value.coordinates)) return null;
   const representation = JSON.stringify({
@@ -124,23 +165,26 @@ async function readCanonicalCache({ db, topologyResult, identityProof }) {
     return { hit: false, reason: 'exact_identity_missing' };
   }
   const privateData = privateSnapshot.data();
-  const publicSegment = publicSnapshot.data();
-  const storedIdentity = privateData?.identity;
+  const storedIdentityValue = restoredIdentity(privateData?.identity);
+  const publicSegment = {
+    ...publicSnapshot.data(),
+    geometry: geoJsonGeometry(publicSnapshot.data()?.geometry),
+  };
   const currentPublic = topologyResult.publicCurb || toPublicCurb(identity);
   if (privateData?.schemaVersion !== 2 || publicSegment?.schemaVersion !== 2
     || publicSegment?.protocolVersion !== 2
     || privateData?.cacheCompatibilityVersion !== CACHE_COMPATIBILITY_VERSION
     || publicSegment?.cacheCompatibilityVersion !== CACHE_COMPATIBILITY_VERSION
-    || privateData?.publicCurbKey !== key || publicCurbKey(storedIdentity) !== key
+    || privateData?.publicCurbKey !== key || publicCurbKey(storedIdentityValue) !== key
     || publicSegment?.segmentId !== key
     || !RULE_SET_VERSION.test(publicSegment?.activeRuleSetVersion || '')
-    || !compatibleIdentity(storedIdentity, identity)
+    || !compatibleIdentity(storedIdentityValue, identity)
     || publicSegment.streetName !== currentPublic?.streetName
     || publicSegment.sideLabel !== currentPublic?.sideLabel
     || canonicalGeometry(publicSegment.geometry) !== canonicalGeometry(currentPublic?.geometry)) {
     return { hit: false, reason: 'cache_curb_mismatch' };
   }
-  return { hit: true, identity: storedIdentity, publicSegment };
+  return { hit: true, identity: storedIdentityValue, publicSegment };
 }
 
 function trustedProductCaller(uid) {
@@ -171,11 +215,12 @@ async function persistCanonicalCurb(input = {}) {
       schemaVersion: 2,
       cacheCompatibilityVersion: CACHE_COMPATIBILITY_VERSION,
       publicCurbKey: key,
-      identity,
+      identity: storedIdentity(identity),
       updatedAt: now,
     }],
     [db.doc(`streetSegments/${key}`), {
       ...publicCurb,
+      geometry: firestoreGeometry(publicCurb.geometry),
       status: 'active',
       protocolVersion: 2,
       cacheCompatibilityVersion: CACHE_COMPATIBILITY_VERSION,

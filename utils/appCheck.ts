@@ -6,6 +6,7 @@ import {
 import type { FirebaseApp } from 'firebase/app';
 import { nativeGetAppCheckToken, type NativeAppCheckToken } from './appCheckNative';
 import { resolveAppCheckPath, type AppCheckPath } from './appCheckPlatform';
+import { localDemoAppCheckOptions } from './demoFirebaseAppCheck';
 
 export const NATIVE_APP_CHECK_FAILURE = 'Native App Check token request failed.';
 
@@ -85,6 +86,17 @@ export const initializeParQueenAppCheck = (
     } catch {
       warn('[AppCheck] Native initialization failed.');
     }
+    return;
+  }
+
+  const demoAppCheck = localDemoAppCheckOptions({
+    dev: import.meta.env.DEV === true,
+    prod: import.meta.env.PROD === true,
+    mode: import.meta.env.VITE_PARQUEEN_DEMO_FIREBASE,
+    CustomProvider: Custom,
+  });
+  if (demoAppCheck) {
+    init(app, demoAppCheck);
     return;
   }
 
