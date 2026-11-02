@@ -1,9 +1,9 @@
 
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
 import { browserLocalPersistence, setPersistence } from "firebase/auth";
-import { auth as parqueenAuth } from "./firebaseConfig";
+import { auth as parqueenAuth, db as parqueenDb } from "./firebaseConfig";
 import { usesCapacitorIosAuthPersistence } from "./utils/authInitialization";
+import { DEMO_PROJECT_ID } from "./utils/demoFirebase";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCKSqWVd6JqpcrNUG6hei8Ug1njaIkAI7Y",
@@ -14,17 +14,28 @@ const firebaseConfig = {
   appId: "1:768131391875:web:613c5d2a948862333196b6"
 };
 
+const demoMode = import.meta.env.DEV && import.meta.env.VITE_PARQUEEN_DEMO_FIREBASE === 'local';
+
 const app = (() => {
   try {
     if (typeof window === 'undefined') return null;
-    return getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+    if (getApps().length === 0) {
+      if (demoMode) throw new Error('Demo Firebase app was not initialized before use.');
+      return initializeApp(firebaseConfig);
+    }
+    const existing = getApp();
+    if (demoMode && existing.options.projectId !== DEMO_PROJECT_ID) {
+      throw new Error('Refusing production Firebase during demo mode.');
+    }
+    return existing;
   } catch (error) {
+    if (demoMode) throw error;
     console.warn("Firebase App initialization failed.");
     return null;
   }
 })();
 
-export const db = app ? getFirestore(app) : null;
+export const db = app ? parqueenDb : null;
 
 // Auth is created once in firebaseConfig. This module only retrieves that
 // instance. Web/PWA/Android still apply the existing local persistence call.

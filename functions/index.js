@@ -5078,11 +5078,21 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
     return { protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' };
   }
 
+  const { localStreetIntelligenceBinding } = require('./curbIntelligence/localGeosupportTransport');
+  const localBinding = localStreetIntelligenceBinding();
+  if (localBinding.mode === 'closed') {
+    return { protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' };
+  }
+
   const getSocrataToken = _socrataToken;
   const streetIntelligenceCache = createStreetIntelligenceCacheBoundary({ Timestamp });
   const blockfaceResolver = createPrivateBlockfaceResolver({
     mode: 'shadow',
     serviceUrl: config.serviceUrl,
+    ...(localBinding.mode === 'local' ? {
+      transport: localBinding.transport,
+      getIdToken: localBinding.getIdToken,
+    } : {}),
   });
   const orchestratorDependencies = {
     db,
@@ -5114,6 +5124,11 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
   if (process.env.FUNCTIONS_EMULATOR === 'true') {
     const { localRuntimeDependencies } = require('./curbIntelligence/runtimeSourceArtifact');
     Object.assign(orchestratorDependencies, localRuntimeDependencies());
+    if (localBinding.officialLionPrimary === true) {
+      const { loadOfficialLionPrimary } = require('./curbIntelligence/officialLionPrimaryTopology');
+      const admitted = await loadOfficialLionPrimary();
+      if (admitted?.ok === true) orchestratorDependencies.officialLionPrimary = admitted;
+    }
   } else {
     const { attachOwnerPilot } = require('./curbIntelligence/runtimeSourceArtifact');
     attachOwnerPilot(orchestratorDependencies, verifiedUid);
@@ -5578,11 +5593,14 @@ async function _reverseGeocodeStreet(lat, lng, strictOperationalFailures = false
 function _socrataToken() {
   try {
     const v = socrataAppToken.value();
+    if (process.env.FUNCTIONS_EMULATOR === 'true' && v === 'local-demo-not-a-secret') return '';
     if (v) return v;
   } catch {
     // Not bound in this runtime; fall through to the environment.
   }
-  return process.env.SOCRATA_APP_TOKEN || '';
+  const fromEnv = process.env.SOCRATA_APP_TOKEN || '';
+  if (process.env.FUNCTIONS_EMULATOR === 'true' && fromEnv === 'local-demo-not-a-secret') return '';
+  return fromEnv;
 }
 
 /**

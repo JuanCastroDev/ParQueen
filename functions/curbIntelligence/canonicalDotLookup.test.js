@@ -62,6 +62,9 @@ describe('runCanonicalDotLookup', () => {
     expect(result.state).toBe('complete');
     expect(result.rules.map(rule => rule.category).sort())
       .toEqual(['cleaning', 'restriction', 'timeLimit']);
+    const publishedSides = result.rules.flatMap(rule => rule.schedules || []).map(schedule => schedule.side);
+    expect(publishedSides.length).toBeGreaterThan(0);
+    expect(publishedSides.every(side => side === 'North')).toBe(true);
     expect(blockfaceResolver.resolve).toHaveBeenCalledOnce();
     expect(blockfaceResolver.resolve).toHaveBeenCalledWith(expect.objectContaining({
       borough: 'BRONX',
@@ -127,5 +130,20 @@ describe('runCanonicalDotLookup', () => {
       rules: [],
     });
     expect(dotSource.query).toHaveBeenCalledOnce();
+  });
+
+  it('asks DOT for either cross-street order in one valid clause', async () => {
+    const fetchFn = vi.fn(async () => ({
+      ok: true,
+      json: async () => [],
+    }));
+    const result = await runCanonicalDotLookup({ identity }, {
+      fetchFn,
+      blockfaceResolver: resolver(),
+    });
+    const where = new URL(fetchFn.mock.calls[0][0]).searchParams.get('$where');
+    expect(where).toContain("(upper(from_street)='WHITE PLAINS ROAD' AND upper(to_street)='LURTING AVENUE') OR (upper(from_street)='LURTING AVENUE' AND upper(to_street)='WHITE PLAINS ROAD')");
+    expect(where).not.toContain('AND OR');
+    expect(result).toMatchObject({ state: 'complete', rules: [] });
   });
 });
