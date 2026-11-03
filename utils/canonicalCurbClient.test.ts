@@ -5,9 +5,17 @@ import {
   resolveCanonicalCurbWithLocation,
 } from './canonicalCurbClient';
 import type { AggregatedLocation } from './locationBurst';
+import { sampleSideConfirmationToken } from './sideConfirmationTokenFixture';
+import {
+  SIDE_CONFIRMATION_TOKEN_BODY_MAX,
+  SIDE_CONFIRMATION_TOKEN_MAC_LENGTH,
+  SIDE_CONFIRMATION_TOKEN_MAX_LENGTH,
+} from './sideConfirmationTokenLimits';
 
 const key = `curb2_${'a'.repeat(32)}`;
+
 const token = (rank: number) => `candidate2_${'b'.repeat(16)}_${String(rank).repeat(32)}`;
+const sideToken = (mark: string) => sampleSideConfirmationToken(mark);
 const stroke = (offset = 0) => ({
   type: 'MultiLineString' as const,
   coordinates: [[[-74, 40.7 + offset], [-73.999, 40.7 + offset]]],
@@ -129,8 +137,8 @@ describe('canonical curb V2 client contract', () => {
       streetName: 'Maran Place',
       orientation: { north: 'up' as const, axis: 'east-west' as const },
       curbs: [
-        { token: token(1), cardinal: 'North' as const },
-        { token: token(2), cardinal: 'South' as const },
+        { token: sideToken('N'), cardinal: 'North' as const },
+        { token: sideToken('S'), cardinal: 'South' as const },
       ],
     };
     expect(parseCanonicalCurbResponse({
@@ -138,11 +146,22 @@ describe('canonical curb V2 client contract', () => {
       status: 'side_confirmation_required',
       confirmation,
     })).toEqual({ protocolVersion: 2, status: 'side_confirmation_required', confirmation });
-    expect(buildCanonicalCurbRequest(location(), token(1))).toEqual({
+    expect(buildCanonicalCurbRequest(location(), sideToken('N'))).toEqual({
       protocolVersion: 2,
       location: location(),
-      candidateToken: token(1),
+      candidateToken: sideToken('N'),
     });
+    expect(() => parseCanonicalCurbResponse({
+      protocolVersion: 2,
+      status: 'side_confirmation_required',
+      confirmation: {
+        ...confirmation,
+        curbs: [
+          { token: token(1), cardinal: 'North' },
+          { token: token(2), cardinal: 'South' },
+        ],
+      },
+    })).toThrow('Invalid canonical curb response');
     expect(() => parseCanonicalCurbResponse({
       protocolVersion: 2,
       status: 'side_confirmation_required',
@@ -167,6 +186,19 @@ describe('canonical curb V2 client contract', () => {
         curbs: [
           { token: token(1), cardinal: 'North' },
           { token: token(2), cardinal: 'East' },
+        ],
+      },
+    })).toThrow('Invalid canonical curb response');
+    const oversized = `sidec1.${'A'.repeat(SIDE_CONFIRMATION_TOKEN_BODY_MAX + 1)}.${'B'.repeat(SIDE_CONFIRMATION_TOKEN_MAC_LENGTH)}`;
+    expect(oversized.length).toBeGreaterThan(SIDE_CONFIRMATION_TOKEN_MAX_LENGTH);
+    expect(() => parseCanonicalCurbResponse({
+      protocolVersion: 2,
+      status: 'side_confirmation_required',
+      confirmation: {
+        ...confirmation,
+        curbs: [
+          { token: oversized, cardinal: 'North' },
+          { token: sideToken('S'), cardinal: 'South' },
         ],
       },
     })).toThrow('Invalid canonical curb response');

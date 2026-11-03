@@ -42,7 +42,6 @@ function CurbButton({
       className={`pq-curb-side-choice is-${place}`}
       data-cardinal={curb.cardinal}
       data-place={place}
-      data-token={curb.token}
       disabled={loading}
       onClick={() => { if (!loading) onSelect(curb.token); }}
     >

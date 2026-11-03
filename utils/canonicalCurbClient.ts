@@ -1,4 +1,9 @@
 import { isCanonicalLocationReady, type AggregatedLocation } from './locationBurst';
+import {
+  SIDE_CONFIRMATION_TOKEN_BODY_MAX,
+  SIDE_CONFIRMATION_TOKEN_BODY_MIN,
+  SIDE_CONFIRMATION_TOKEN_MAC_LENGTH,
+} from './sideConfirmationTokenLimits';
 
 export type CanonicalCurbCandidate = Readonly<{
   token: string;
@@ -56,6 +61,9 @@ export type ResolveCurbRequestV2 = Readonly<{
 
 const PUBLIC_KEY = /^curb2_[a-f0-9]{32}$/;
 const CANDIDATE_TOKEN = /^candidate2_[a-f0-9]{16}_[a-f0-9]{32}$/;
+const SIDE_CONFIRMATION_TOKEN = new RegExp(
+  `^sidec1\\.[A-Za-z0-9_-]{${SIDE_CONFIRMATION_TOKEN_BODY_MIN},${SIDE_CONFIRMATION_TOKEN_BODY_MAX}}\\.[A-Za-z0-9_-]{${SIDE_CONFIRMATION_TOKEN_MAC_LENGTH}}$`,
+);
 const SIDES = new Set(['North', 'South', 'East', 'West']);
 const OPPOSITE: Readonly<Record<string, string>> = {
   North: 'South', South: 'North', East: 'West', West: 'East',
@@ -94,7 +102,7 @@ function parseCandidate(value: unknown): CanonicalCurbCandidate | null {
 
 function parseSideCurb(value: unknown): SideConfirmationCurb | null {
   if (!record(value) || !exactKeys(value, ['token', 'cardinal'])
-    || typeof value.token !== 'string' || !CANDIDATE_TOKEN.test(value.token)
+    || typeof value.token !== 'string' || !SIDE_CONFIRMATION_TOKEN.test(value.token)
     || typeof value.cardinal !== 'string' || !SIDES.has(value.cardinal)) return null;
   return value as SideConfirmationCurb;
 }

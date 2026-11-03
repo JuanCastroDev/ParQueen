@@ -9,6 +9,7 @@ const {
   hasSideConfirmationAuthority,
 } = require('./canonicalCurbResolver');
 const { isSideConfirmationEnabled } = require('./sideConfirmation');
+const { SIDE_CONFIRMATION_TOKEN_MAX_LENGTH } = require('./sideConfirmationToken');
 const { applyVisualCurbSelection } = require('./visualCurbSelection');
 const { loadCanonicalRules } = require('./canonicalRuleSources');
 const { readCanonicalCache, persistCanonicalCurb } = require('./canonicalCurbPersistence');
@@ -51,7 +52,8 @@ function validRequest(request) {
     && Number.isInteger(location?.sampleCount)
     && Number.isFinite(location?.consistencyMeters)
     && (request.candidateToken === undefined
-      || (typeof request.candidateToken === 'string' && request.candidateToken.length <= 256));
+      || (typeof request.candidateToken === 'string'
+        && request.candidateToken.length <= SIDE_CONFIRMATION_TOKEN_MAX_LENGTH));
 }
 
 function requestKey(request) {

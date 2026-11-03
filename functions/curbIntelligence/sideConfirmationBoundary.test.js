@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
+import { parseCanonicalCurbResponse } from '../../utils/canonicalCurbClient';
+import { SIDE_CONFIRMATION_TOKEN_MAX_LENGTH } from '../../utils/sideConfirmationTokenLimits';
 
 const require = createRequire(import.meta.url);
 const { resolveCanonicalCurb } = require('./canonicalCurbResolver');
@@ -12,6 +14,10 @@ const {
   publicCurbKey,
 } = require('./canonicalCurbIdentity');
 const { stableSideAuthorityDigest } = require('./sideConfirmation');
+const { SIDE_CONFIRMATION_TOKEN_MAX_LENGTH: SERVER_TOKEN_MAX_LENGTH, TOKEN_LIFETIME_MS } = require('./sideConfirmationToken');
+
+const TEST_HMAC_KEY = 'side-confirmation-test-key-0123456789ab';
+const TEST_UID = 'driver-1';
 
 const METADATA = Object.freeze({ id: 'inkn-q76z', rowsUpdatedAt: 1767225600, viewLastModified: 1767225660 });
 const SERVER_VERSION = Object.freeze({
@@ -89,6 +95,8 @@ function options(fetchFn, extra = {}) {
     planimetricStore: emptyPlan,
     requestNonce: 'boundary-nonce',
     sideConfirmationEnabled: true,
+    callerUid: TEST_UID,
+    sideConfirmationHmacKey: TEST_HMAC_KEY,
     ...extra,
   };
 }
@@ -124,7 +132,7 @@ function function3c(officialBlockFaceId) {
   };
 }
 
-async function orchestrate(location, token, fetchFn, proof, enabled = true) {
+async function orchestrate(location, token, fetchFn, proof, enabled = true, extra = {}) {
   const persist = vi.fn(async () => ({ success: true }));
   const readCanonicalCache = vi.fn(async () => ({ hit: false }));
   const loadCanonicalRules = vi.fn(async () => ({ state: 'complete', sources: {}, selected: {
@@ -139,12 +147,15 @@ async function orchestrate(location, token, fetchFn, proof, enabled = true) {
     planimetricStore: emptyPlan,
     requestNonceFactory: () => 'boundary-nonce',
     sideConfirmationEnabled: enabled,
+    callerUid: extra.callerUid || TEST_UID,
+    sideConfirmationHmacKey: TEST_HMAC_KEY,
+    ...(extra.sideConfirmationNow === undefined ? {} : { sideConfirmationNow: extra.sideConfirmationNow }),
     blockfaceResolver: proof.resolver,
     persistCanonicalCurb: persist,
     readCanonicalCache,
     loadCanonicalRules,
     inFlight: new Map(),
-    telemetry: { emit: vi.fn() },
+    telemetry: extra.telemetry || { emit: vi.fn() },
   });
   return { outcome, persist, readCanonicalCache, loadCanonicalRules, transport: proof.transport };
 }
@@ -368,7 +379,7 @@ describe('side-confirmation authority boundaries', () => {
     expect(rejected.persist).not.toHaveBeenCalled();
   });
 
-  it('shows a captured nonce can select another roadway only when fresh resolution independently matches it', async () => {
+  it('rejects a candidate2 token and a public-data forgery for another roadway', async () => {
     const roadway = record();
     const other = record({
       globalId: 'other-road',
@@ -381,7 +392,9 @@ describe('side-confirmation authority boundaries', () => {
       closeLocation,
       options(scriptedFetch([[roadway]]).fetchFn),
     );
-    const nonce = candidateTokenNonceDigest(northToken(offered));
+    const issued = northToken(offered);
+    expect(issued.startsWith('sidec1.')).toBe(true);
+    expect(candidateTokenNonceDigest(issued)).toBeNull();
     const synthesized = createCandidateToken({
       publicCurbKey: publicCurbKey({
         schemaVersion: 2,
@@ -389,7 +402,7 @@ describe('side-confirmation authority boundaries', () => {
         officialBlockFaceId: '2000000001',
         sourceVersion: SERVER_VERSION,
       }),
-      requestNonceDigest: nonce,
+      requestNonceDigest: 'abcdef0123456789',
       rank: 0,
       authorityContextDigest: stableSideAuthorityDigest({
         sourceVersion: SERVER_VERSION,
@@ -397,47 +410,223 @@ describe('side-confirmation authority boundaries', () => {
         faces: { LEFT: '2000000001', RIGHT: '2000000002' },
       }),
     });
-    expect(synthesized).toBeTruthy();
-    expect(offered.confirmation.curbs.map(curb => curb.token)).not.toContain(synthesized);
+    expect(synthesized.startsWith('candidate2_')).toBe(true);
 
-    const onOtherRoad = await applyVisualCurbSelection({
+    const forgedOnOther = await applyVisualCurbSelection({
       location: otherLocation,
       candidateToken: synthesized,
     }, options(scriptedFetch([[other]]).fetchFn));
-    expect(onOtherRoad).toMatchObject({
-      state: 'SUPPORTED',
-      identity: { officialBlockFaceId: '2000000001', csclSide: 'LEFT', side: { cardinal: 'North' } },
-    });
-
-    const onOriginalRoad = await applyVisualCurbSelection({
-      location: closeLocation,
-      candidateToken: synthesized,
-    }, options(scriptedFetch([[roadway]]).fetchFn));
-    expect(onOriginalRoad).toMatchObject({ state: 'UNSUPPORTED', reasons: ['candidate_selection_stale'] });
-    expect(onOriginalRoad.identity).toBeUndefined();
+    expect(forgedOnOther).toMatchObject({ state: 'UNSUPPORTED', reasons: ['candidate_selection_stale'] });
+    expect(forgedOnOther.identity).toBeUndefined();
 
     const proof = function3c('2000000001');
-    const proven = await orchestrate(
+    const notProven = await orchestrate(
       otherLocation,
       synthesized,
       scriptedFetch([[other]]).fetchFn,
       proof,
     );
-    expect(proof.transport).toHaveBeenCalledTimes(1);
-    expect(proven.outcome.status).toBe('high_confidence');
-    expect(proven.outcome.streetName).toBe('OTHER PLACE');
-
-    const wrongPlace = function3c('2000000001');
-    const notProven = await orchestrate(
-      closeLocation,
-      synthesized,
-      scriptedFetch([[roadway]]).fetchFn,
-      wrongPlace,
-    );
     expect(notProven.outcome).toEqual({
       protocolVersion: 2, status: 'unsupported', reason: 'candidate_incomplete',
     });
-    expect(wrongPlace.transport).not.toHaveBeenCalled();
+    expect(proof.transport).not.toHaveBeenCalled();
     expect(notProven.persist).not.toHaveBeenCalled();
+
+    const otherOffer = await resolveCanonicalCurb(
+      otherLocation,
+      options(scriptedFetch([[other]]).fetchFn),
+    );
+    const otherToken = otherOffer.confirmation.curbs.find(curb => curb.cardinal === 'North').token;
+    const crossed = function3c('1000000001');
+    const crossedResult = await orchestrate(
+      closeLocation,
+      otherToken,
+      scriptedFetch([[roadway]]).fetchFn,
+      crossed,
+    );
+    expect(crossedResult.outcome).toEqual({
+      protocolVersion: 2, status: 'unsupported', reason: 'candidate_incomplete',
+    });
+    expect(crossed.transport).not.toHaveBeenCalled();
+    expect(crossedResult.persist).not.toHaveBeenCalled();
+  });
+});
+
+describe('sidec1 client and server round trip', () => {
+  const issuedAt = 1_700_000_000_000;
+  const normalUid = 'k7n2Qm9pLx4Vw8Rs1Yt6Zu3A';
+  const faces = { North: '1000000001', South: '1000000002' };
+
+  function decoded(token) {
+    return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
+  }
+
+  async function offeredTo(uid = normalUid) {
+    const offered = await resolveCanonicalCurb(closeLocation, options(
+      scriptedFetch([[record()]]).fetchFn,
+      { callerUid: uid, sideConfirmationNow: issuedAt },
+    ));
+    const parsed = parseCanonicalCurbResponse({
+      protocolVersion: 2,
+      status: 'side_confirmation_required',
+      confirmation: offered.confirmation,
+    });
+    return parsed;
+  }
+
+  async function select(token, uid, face) {
+    const proof = function3c(face);
+    const result = await orchestrate(
+      closeLocation,
+      token,
+      scriptedFetch([[record()]]).fetchFn,
+      proof,
+      true,
+      { callerUid: uid, sideConfirmationNow: issuedAt },
+    );
+    return { ...result, proof };
+  }
+
+  it('accepts either curb for a normal uid and a maximum-length uid', async () => {
+    expect(SERVER_TOKEN_MAX_LENGTH).toBe(SIDE_CONFIRMATION_TOKEN_MAX_LENGTH);
+    const parsed = await offeredTo(normalUid);
+    expect(parsed.status).toBe('side_confirmation_required');
+    for (const cardinal of ['North', 'South']) {
+      const token = parsed.confirmation.curbs.find(curb => curb.cardinal === cardinal).token;
+      expect(token.length).toBeLessThanOrEqual(SIDE_CONFIRMATION_TOKEN_MAX_LENGTH);
+      expect(decoded(token)).not.toHaveProperty('uid');
+      expect(decoded(token)).not.toHaveProperty('officialBlockFaceId');
+      expect(token).not.toContain(normalUid);
+      expect(token).not.toContain(faces[cardinal]);
+      const selected = await select(token, normalUid, faces[cardinal]);
+      expect(selected.outcome).toMatchObject({
+        protocolVersion: 2,
+        status: 'high_confidence',
+        sideLabel: cardinal,
+      });
+      expect(selected.proof.transport).toHaveBeenCalledTimes(1);
+    }
+
+    const maxUid = 'A'.repeat(128);
+    const maxParsed = await offeredTo(maxUid);
+    const maxToken = maxParsed.confirmation.curbs.find(curb => curb.cardinal === 'North').token;
+    expect(maxToken.length).toBeLessThanOrEqual(SIDE_CONFIRMATION_TOKEN_MAX_LENGTH);
+    expect(maxToken).not.toContain(maxUid);
+    const maxSelected = await select(maxToken, maxUid, faces.North);
+    expect(maxSelected.outcome.status).toBe('high_confidence');
+    expect(maxSelected.proof.transport).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects the wrong user, the wrong block face, another roadway, and the opposite curb', async () => {
+    const parsed = await offeredTo();
+    const north = parsed.confirmation.curbs.find(curb => curb.cardinal === 'North').token;
+    const south = parsed.confirmation.curbs.find(curb => curb.cardinal === 'South').token;
+
+    const wrongUser = await select(north, 'driver-2', faces.North);
+    expect(wrongUser.outcome).toEqual({
+      protocolVersion: 2, status: 'unsupported', reason: 'candidate_incomplete',
+    });
+    expect(wrongUser.proof.transport).not.toHaveBeenCalled();
+
+    const otherFace = record({ leftBlockFaceId: '3000000001', rightBlockFaceId: '3000000002' });
+    const wrongFaceProof = function3c('3000000001');
+    const wrongFace = await orchestrate(
+      closeLocation,
+      north,
+      scriptedFetch([[otherFace]]).fetchFn,
+      wrongFaceProof,
+      true,
+      { callerUid: normalUid, sideConfirmationNow: issuedAt },
+    );
+    expect(wrongFace.outcome).toEqual({
+      protocolVersion: 2, status: 'unsupported', reason: 'candidate_incomplete',
+    });
+    expect(wrongFaceProof.transport).not.toHaveBeenCalled();
+
+    const other = record({
+      globalId: 'other-road',
+      streetName: 'OTHER PLACE',
+      coordinates: [[[-74.001, 40.71], [-73.999, 40.71]]],
+      leftBlockFaceId: '2000000001',
+      rightBlockFaceId: '2000000002',
+    });
+    const crossedProof = function3c('2000000001');
+    const crossed = await orchestrate(
+      otherLocation,
+      north,
+      scriptedFetch([[other]]).fetchFn,
+      crossedProof,
+      true,
+      { callerUid: normalUid, sideConfirmationNow: issuedAt },
+    );
+    expect(crossed.outcome).toEqual({
+      protocolVersion: 2, status: 'unsupported', reason: 'candidate_incomplete',
+    });
+    expect(crossedProof.transport).not.toHaveBeenCalled();
+
+    const swapped = `sidec1.${Buffer.from(JSON.stringify(decoded(south)), 'utf8').toString('base64url')}.${north.split('.')[2]}`;
+    const opposite = await select(swapped, normalUid, faces.South);
+    expect(opposite.outcome).toEqual({
+      protocolVersion: 2, status: 'unsupported', reason: 'candidate_incomplete',
+    });
+    expect(opposite.proof.transport).not.toHaveBeenCalled();
+  });
+
+  it('rejects expired, future, malformed, oversized, and modified tokens before Function 3C', async () => {
+    const parsed = await offeredTo();
+    const token = parsed.confirmation.curbs.find(curb => curb.cardinal === 'North').token;
+    const cases = [
+      ['expired', token, issuedAt + TOKEN_LIFETIME_MS, 'candidate_incomplete'],
+      ['future', token, issuedAt - 1, 'candidate_incomplete'],
+      ['malformed', 'sidec1.not-a-token.not-a-mac', issuedAt, 'candidate_incomplete'],
+      ['modified', `${token.slice(0, -1)}${token.endsWith('A') ? 'B' : 'A'}`, issuedAt, 'candidate_incomplete'],
+    ];
+    for (const [, candidateToken, now, reason] of cases) {
+      const proof = function3c(faces.North);
+      const result = await orchestrate(
+        closeLocation,
+        candidateToken,
+        scriptedFetch([[record()]]).fetchFn,
+        proof,
+        true,
+        { callerUid: normalUid, sideConfirmationNow: now },
+      );
+      expect(result.outcome).toEqual({ protocolVersion: 2, status: 'unsupported', reason });
+      expect(proof.transport).not.toHaveBeenCalled();
+    }
+    const oversizedProof = function3c(faces.North);
+    const tooLong = await orchestrate(
+      closeLocation,
+      'A'.repeat(SIDE_CONFIRMATION_TOKEN_MAX_LENGTH + 1),
+      scriptedFetch([[record()]]).fetchFn,
+      oversizedProof,
+      true,
+      { callerUid: normalUid, sideConfirmationNow: issuedAt },
+    );
+    expect(tooLong.outcome).toEqual({
+      protocolVersion: 2, status: 'unsupported', reason: 'location_quality',
+    });
+    expect(oversizedProof.transport).not.toHaveBeenCalled();
+  });
+
+  it('does not put the token, uid, or key in telemetry', async () => {
+    const parsed = await offeredTo();
+    const token = parsed.confirmation.curbs.find(curb => curb.cardinal === 'North').token;
+    const telemetry = { emit: vi.fn() };
+    const proof = function3c(faces.North);
+    const selected = await orchestrate(
+      closeLocation,
+      token,
+      scriptedFetch([[record()]]).fetchFn,
+      proof,
+      true,
+      { callerUid: normalUid, sideConfirmationNow: issuedAt, telemetry },
+    );
+    expect(selected.outcome.status).toBe('high_confidence');
+    const emitted = JSON.stringify(telemetry.emit.mock.calls);
+    expect(emitted).not.toContain(token);
+    expect(emitted).not.toContain(normalUid);
+    expect(emitted).not.toContain(TEST_HMAC_KEY);
+    expect(emitted).not.toContain(faces.North);
   });
 });

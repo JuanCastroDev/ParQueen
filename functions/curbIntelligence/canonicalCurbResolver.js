@@ -29,6 +29,7 @@ const {
   sideConfirmationEligible,
   stableSideAuthorityDigest,
 } = require('./sideConfirmation');
+const { issueSideConfirmationToken } = require('./sideConfirmationToken');
 
 const NYC = Object.freeze({ minLat: 40.4, maxLat: 40.95, minLng: -74.3, maxLng: -73.65 });
 const BOROUGHS = Object.freeze({
@@ -39,6 +40,7 @@ const authoritativeRetrievals = new WeakSet();
 const primaryTopologyResults = new WeakSet();
 const ambiguousTopologyResults = new WeakSet();
 const sideConfirmationResults = new WeakSet();
+const sideConfirmationAuthorities = new WeakMap();
 
 const unsupported = (reasons, diagnostics = {}) => ({
   state: 'UNSUPPORTED',
@@ -235,21 +237,33 @@ function sideConfirmationResult(input) {
     faces,
   });
   if (!authorityContextDigest) return null;
+  const issuedAt = Number.isSafeInteger(input.nowMs) ? input.nowMs : Date.now();
   const built = ['LEFT', 'RIGHT'].map((csclSide, rank) => {
     const created = sideIdentity(input.selected, csclSide, orientation.sides[csclSide]);
     if (!created.ok || created.identity.officialBlockFaceId !== faces[csclSide]) return null;
     const key = publicCurbKey(created.identity);
-    const token = createCandidateToken({
+    const token = issueSideConfirmationToken({
+      uid: input.callerUid,
+      authorityDigest: authorityContextDigest,
+      officialBlockFaceId: faces[csclSide],
       publicCurbKey: key,
-      ...input.tokenContext,
+      csclSide,
       rank,
-      authorityContextDigest,
+    }, {
+      key: input.hmacKey,
+      now: issuedAt,
+      nonce: typeof input.nonceForRank === 'function' ? input.nonceForRank(rank) : undefined,
     });
     if (!token) return null;
     return {
       token,
       cardinal: orientation.sides[csclSide],
       identity: created.identity,
+      rank,
+      csclSide,
+      authorityDigest: authorityContextDigest,
+      officialBlockFaceId: faces[csclSide],
+      publicCurbKey: key,
     };
   });
   if (built.some(side => !side) || built[0].cardinal === built[1].cardinal || built[0].token === built[1].token) {
@@ -265,10 +279,16 @@ function sideConfirmationResult(input) {
     },
   });
   sideConfirmationResults.add(result);
+  sideConfirmationAuthorities.set(result, authorityContextDigest);
   privateCandidateSets.set(result, deepFreeze(built.map(side => ({
     token: side.token,
     identity: side.identity,
     topologySelectable: true,
+    rank: side.rank,
+    csclSide: side.csclSide,
+    authorityDigest: side.authorityDigest,
+    officialBlockFaceId: side.officialBlockFaceId,
+    publicCurbKey: side.publicCurbKey,
   }))));
   return result;
 }
@@ -508,6 +528,10 @@ async function resolveCanonicalCurb(location, options = {}) {
       decision,
       tokenContext,
       authorityContextDigest,
+      callerUid: options.callerUid,
+      hmacKey: options.sideConfirmationHmacKey,
+      nowMs: Number.isSafeInteger(options.sideConfirmationNow) ? options.sideConfirmationNow : Date.now(),
+      nonceForRank: options.sideConfirmationNonceForRank,
     });
     if (sideConfirmation) return sideConfirmation;
     return unsupported(decision.reasons, { candidateCount: considered.length });
@@ -544,6 +568,19 @@ function hasAmbiguousTopologyAuthority(result) {
 
 function hasSideConfirmationAuthority(result) {
   return Boolean(result && sideConfirmationResults.has(result));
+}
+
+function attestedSideConfirmationMatch(resolution, visible) {
+  if (!hasSideConfirmationAuthority(resolution) || !visible) return null;
+  if (sideConfirmationAuthorities.get(resolution) !== visible.authorityDigest) return null;
+  const selected = privateCandidateSets.get(resolution)?.find(candidate => (
+    candidate.rank === visible.rank
+    && candidate.csclSide === visible.csclSide
+    && candidate.publicCurbKey === visible.publicCurbKey
+    && candidate.authorityDigest === visible.authorityDigest
+  ));
+  if (!selected || selected.topologySelectable !== true) return null;
+  return selected;
 }
 
 function promoteAttestedSideConfirmation(resolution, candidateToken) {
@@ -592,6 +629,7 @@ module.exports = {
   hasPrimaryTopologyAuthority,
   hasAmbiguousTopologyAuthority,
   hasSideConfirmationAuthority,
+  attestedSideConfirmationMatch,
   promoteAttestedVisualSelection,
   promoteAttestedSideConfirmation,
 };

@@ -18,7 +18,13 @@ const {
   PRESENTATION_AXIS_LIMIT_DEGREES,
   stableSideAuthorityDigest,
 } = require('./sideConfirmation');
+const {
+  TOKEN_LIFETIME_MS,
+  inspectSideConfirmationToken,
+} = require('./sideConfirmationToken');
 
+const TEST_HMAC_KEY = 'side-confirmation-test-key-0123456789ab';
+const TEST_UID = 'driver-1';
 const VERSION = Object.freeze({ resourceId: 'inkn-q76z', version: 'selection-v1' });
 const METADATA = Object.freeze({ id: 'inkn-q76z', rowsUpdatedAt: 1767225600, viewLastModified: 1767225660 });
 const HORIZONTAL = [[[-74.001, 40.7], [-73.999, 40.7]]];
@@ -80,6 +86,8 @@ function options(rows, extra = {}) {
     planimetricStore: emptyPlan,
     requestNonce: 'server-generated-nonce',
     sideConfirmationEnabled: true,
+    callerUid: TEST_UID,
+    sideConfirmationHmacKey: TEST_HMAC_KEY,
     ...extra,
   };
 }
@@ -291,7 +299,7 @@ describe('one-roadway side confirmation', () => {
     const forged = await applyVisualCurbSelection({
       location: closeLocation, candidateToken: forgedToken,
     }, options([record()]));
-    expect(forged).toMatchObject({ state: 'UNSUPPORTED', reasons: ['candidate_selection_stale'] });
+    expect(forged).toMatchObject({ state: 'UNSUPPORTED', reasons: ['candidate_token_invalid'] });
     const moved = await applyVisualCurbSelection({
       location: { ...closeLocation, lat: 40.702 }, candidateToken: token,
     }, options([record()]));
@@ -409,6 +417,8 @@ describe('one-roadway side confirmation', () => {
       planimetricStore: emptyPlan,
       requestNonceFactory: () => 'server-generated-nonce',
       sideConfirmationEnabled: true,
+      callerUid: TEST_UID,
+      sideConfirmationHmacKey: TEST_HMAC_KEY,
       loadCanonicalRules: vi.fn(),
       readCanonicalCache: vi.fn(),
       persistCanonicalCurb: persist,
@@ -424,7 +434,7 @@ describe('one-roadway side confirmation', () => {
     expect(offered.status).not.toBe('ambiguous');
     for (const marker of PRIVATE) expect(published).not.toContain(marker);
     expect(offered.confirmation.curbs[0]).toEqual({
-      token: expect.stringMatching(/^candidate2_[0-9a-f]{16}_[0-9a-f]{32}$/),
+      token: expect.stringMatching(/^sidec1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/),
       cardinal: expect.stringMatching(/North|South/),
     });
     expect(telemetry.emit.mock.calls.some(call => call[0] === 'intersection_ambiguity')).toBe(false);
@@ -495,5 +505,126 @@ describe('one-roadway side confirmation', () => {
     });
     expect(evidence.ok).toBe(true);
     expect(result).toMatchObject({ state: 'UNSUPPORTED', reasons: ['ambiguity_unresolved'] });
+  });
+});
+
+describe('side-confirmation HMAC authentication', () => {
+  const issuedAt = 1_700_000_000_000;
+
+  it('accepts the same roadway inside five minutes, including sub-meter jitter, and then expires', async () => {
+    const row = record();
+    const offered = await resolveAt([row], closeLocation, { sideConfirmationNow: issuedAt });
+    const token = offered.confirmation.curbs.find(curb => curb.cardinal === 'North').token;
+    const inside = await applyVisualCurbSelection({
+      location: { ...closeLocation, lat: closeLocation.lat + 0.000004 },
+      candidateToken: token,
+    }, options([row], { sideConfirmationNow: issuedAt + TOKEN_LIFETIME_MS - 1 }));
+    expect(inside).toMatchObject({
+      state: 'SUPPORTED',
+      identity: { officialBlockFaceId: '1000000001', csclSide: 'LEFT' },
+    });
+    const expired = await applyVisualCurbSelection({
+      location: closeLocation,
+      candidateToken: token,
+    }, options([row], { sideConfirmationNow: issuedAt + TOKEN_LIFETIME_MS }));
+    expect(expired).toMatchObject({ state: 'UNSUPPORTED', reasons: ['candidate_token_invalid'] });
+    const future = await applyVisualCurbSelection({
+      location: closeLocation,
+      candidateToken: token,
+    }, options([row], { sideConfirmationNow: issuedAt - 1 }));
+    expect(future).toMatchObject({ state: 'UNSUPPORTED', reasons: ['candidate_token_invalid'] });
+  });
+
+  it('rejects another uid, a changed claim, the opposite face, a missing key, and a legacy candidate2 token', async () => {
+    const row = record();
+    const offered = await resolveAt([row], closeLocation, { sideConfirmationNow: issuedAt });
+    const north = offered.confirmation.curbs.find(curb => curb.cardinal === 'North');
+    const south = offered.confirmation.curbs.find(curb => curb.cardinal === 'South');
+    const otherUser = await applyVisualCurbSelection({
+      location: closeLocation,
+      candidateToken: north.token,
+    }, options([row], { sideConfirmationNow: issuedAt, callerUid: 'driver-2' }));
+    expect(otherUser).toMatchObject({ state: 'UNSUPPORTED', reasons: ['candidate_token_invalid'] });
+
+    const opposite = await applyVisualCurbSelection({
+      location: closeLocation,
+      candidateToken: north.token,
+    }, options([row], { sideConfirmationNow: issuedAt }));
+    expect(opposite.identity.csclSide).not.toBe('RIGHT');
+    expect(opposite.identity.side.cardinal).toBe('North');
+    expect(south.cardinal).toBe('South');
+
+    const flippedMac = `${north.token.slice(0, -1)}${north.token.endsWith('A') ? 'B' : 'A'}`;
+    const badMac = inspectSideConfirmationToken(flippedMac, {
+      key: TEST_HMAC_KEY, now: issuedAt, uid: TEST_UID, officialBlockFaceId: '1000000001',
+    });
+    expect(badMac).toEqual({ ok: false, reason: 'invalid_signature' });
+
+    const missingKey = await resolveAt([row], closeLocation, { sideConfirmationHmacKey: undefined });
+    expect(missingKey).toMatchObject({ state: 'UNSUPPORTED', reasons: ['ambiguity_unresolved'] });
+    expect(missingKey.confirmation).toBeUndefined();
+    const shortKey = await resolveAt([row], closeLocation, { sideConfirmationHmacKey: 'too-short' });
+    expect(shortKey.confirmation).toBeUndefined();
+
+    const legacy = await applyVisualCurbSelection({
+      location: closeLocation,
+      candidateToken: 'candidate2_abcdef0123456789_0123456789abcdef0123456789abcdef',
+    }, options([row], { sideConfirmationNow: issuedAt }));
+    expect(legacy).toMatchObject({ state: 'UNSUPPORTED', reasons: ['candidate_selection_stale'] });
+    expect(legacy.identity).toBeUndefined();
+  });
+
+  it('keeps the secret, uid, and token out of telemetry and error responses', async () => {
+    const telemetry = { emit: vi.fn() };
+    const offered = await runCanonicalCurbOrchestrator({
+      protocolVersion: 2,
+      location: closeLocation,
+      callerUid: 'attacker-supplied',
+    }, {
+      fetchFn: fetchFor([record()]),
+      planimetricStore: emptyPlan,
+      requestNonceFactory: () => 'server-generated-nonce',
+      sideConfirmationEnabled: true,
+      callerUid: TEST_UID,
+      sideConfirmationHmacKey: TEST_HMAC_KEY,
+      sideConfirmationNow: issuedAt,
+      inFlight: new Map(),
+      telemetry,
+    });
+    expect(offered.status).toBe('side_confirmation_required');
+    const token = offered.confirmation.curbs[0].token;
+    const face = offered.confirmation.curbs[0].cardinal === 'North' ? '1000000001' : '1000000002';
+    const inspected = inspectSideConfirmationToken(token, {
+      key: TEST_HMAC_KEY, now: issuedAt, uid: TEST_UID, officialBlockFaceId: face,
+    });
+    expect(inspected.ok).toBe(true);
+    expect(inspected.visible).not.toHaveProperty('uid');
+    expect(inspected.visible).not.toHaveProperty('officialBlockFaceId');
+    expect(token).not.toContain(TEST_UID);
+    expect(token).not.toContain(face);
+    const emitted = JSON.stringify(telemetry.emit.mock.calls);
+    expect(emitted).not.toContain(TEST_HMAC_KEY);
+    expect(emitted).not.toContain(TEST_UID);
+    expect(emitted).not.toContain(token);
+    expect(emitted).not.toContain('1000000001');
+
+    const failed = await runCanonicalCurbOrchestrator({
+      protocolVersion: 2,
+      location: closeLocation,
+      candidateToken: `${token.slice(0, -1)}${token.endsWith('A') ? 'B' : 'A'}`,
+    }, {
+      fetchFn: fetchFor([record()]),
+      planimetricStore: emptyPlan,
+      sideConfirmationEnabled: true,
+      callerUid: TEST_UID,
+      sideConfirmationHmacKey: TEST_HMAC_KEY,
+      sideConfirmationNow: issuedAt,
+      inFlight: new Map(),
+      telemetry: { emit: vi.fn() },
+      blockfaceResolver: function3c('1000000001'),
+    });
+    expect(failed).toEqual({ protocolVersion: 2, status: 'unsupported', reason: 'candidate_incomplete' });
+    expect(JSON.stringify(failed)).not.toContain(TEST_HMAC_KEY);
+    expect(JSON.stringify(failed)).not.toContain(token);
   });
 });

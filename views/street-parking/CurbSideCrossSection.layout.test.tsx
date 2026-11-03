@@ -5,8 +5,9 @@ import { chromium, type Browser, type Page } from '@playwright/test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CurbSideCrossSection } from './CurbSideCrossSection';
 import type { SideConfirmation } from '../../utils/canonicalCurbClient';
+import { sampleSideConfirmationToken } from '../../utils/sideConfirmationTokenFixture';
 
-const token = (rank: string) => `candidate2_${'b'.repeat(16)}_${rank.repeat(32)}`;
+const token = (rank: string) => sampleSideConfirmationToken(rank);
 const css = (() => {
   const source = readFileSync(new URL('../../index.css', import.meta.url), 'utf8');
   const start = source.indexOf('.pq-curb-side,');
@@ -104,8 +105,12 @@ describe('curb cross-section rendered layout', () => {
     expect(laid.south!.height).toBeGreaterThanOrEqual(48);
     expect(laid.scrollWidth).toBeLessThanOrEqual(laid.viewport + 1);
     expect(laid.north!.gridArea).toContain('north');
-    expect(await page.locator('[data-cardinal="North"]').getAttribute('data-token')).toBe(token('2'));
-    expect(await page.locator('[data-cardinal="South"]').getAttribute('data-token')).toBe(token('1'));
+    expect(await page.locator('[data-cardinal="North"]').getAttribute('data-cardinal')).toBe('North');
+    expect(await page.locator('[data-cardinal="South"]').getAttribute('data-cardinal')).toBe('South');
+    const html = await page.content();
+    expect(html).not.toContain('data-token');
+    expect(html).not.toContain(token('1'));
+    expect(html).not.toContain(token('2'));
   });
 
   it('keeps the same north and south positions when the stored direction is reversed', async () => {

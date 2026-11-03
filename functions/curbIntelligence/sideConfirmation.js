@@ -106,12 +106,10 @@ function canonicalGeometry(geometry) {
 }
 
 function stableSideAuthorityDigest(input) {
-  // This digest selects an official face. It is not an HMAC, not single-use,
-  // and it does not expire. A later fresh sample may reuse the token only
-  // when that sample independently qualifies on this same roadway. The same
-  // token can be replayed on that block while the source version, geometry,
-  // and both faces remain unchanged. Possession of the token is not proof
-  // that the holder is parked there.
+  // This digest identifies the official roadway. It is not itself a credential.
+  // The side-confirmation token binds it with HMAC-SHA256, the authenticated
+  // uid, the selected face, and a five-minute lifetime. Possession of a valid
+  // token is driver-confirmed selection, not proof the driver is parked there.
   const sourceVersion = input?.sourceVersion;
   const faces = input?.faces;
   const records = Array.isArray(input?.records) ? input.records : [];

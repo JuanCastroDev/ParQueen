@@ -19,6 +19,11 @@ const sendgridApiKey = defineSecret("SENDGRID_API_KEY");
 // Operator action: firebase functions:secrets:set EMAIL_RATE_LIMIT_PEPPER (random 32-byte hex)
 const emailRateLimitPepper = defineSecret("EMAIL_RATE_LIMIT_PEPPER");
 const socrataAppToken = defineSecret("SOCRATA_APP_TOKEN");
+// Distinct from SendGrid, Socrata, Firebase, and the provenance signing key.
+// Not attached to a callable and not provisioned by this change. Activation
+// must set this secret and add it to createSegmentFromSweepNYC before
+// CURB_SIDE_CONFIRMATION can succeed. Until then the flow fails closed.
+const curbSideConfirmationHmacKey = defineSecret("CURB_SIDE_CONFIRMATION_HMAC_KEY");
 const { osmNameToDOT, streetNameToLikePattern, dotSideToCardinal, BOROUGH_CODE_TO_NAME, nycOdSegmentDocId, selectBlockFace, findBlockContext, parseNYCOpenDataSign } = require('./nycOpenDataNormalizer');
 const { redactForLog, sanitizeError } = require('./redactForLog');
 const { checkRateLimit } = require('./rateLimiter');
@@ -5108,6 +5113,10 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
     getSocrataToken,
     telemetry: createCurbTelemetry(),
     requestNonceFactory: randomUUID,
+    callerUid: verifiedUid,
+    sideConfirmationHmacKey: require('./curbIntelligence/sideConfirmationToken')
+      .readConfiguredSideConfirmationHmacKey(process.env),
+    sideConfirmationHmacKeyName: curbSideConfirmationHmacKey.name,
     readCanonicalCache: streetIntelligenceCache.readCanonicalCache,
     // The orchestrator fetches external evidence before this write. The
     // authenticated uid is applied here, over any field in the orchestrator

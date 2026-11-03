@@ -5,8 +5,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { CurbSideCrossSection } from './CurbSideCrossSection';
 import { parseCanonicalCurbResponse, type SideConfirmation } from '../../utils/canonicalCurbClient';
 import { readSavedSpot, writeSavedSpot, SAVED_SPOT_KEY, type SavedSpot } from '../../utils/savedSpot';
+import { sampleSideConfirmationToken } from '../../utils/sideConfirmationTokenFixture';
 
-const token = (rank: string) => `candidate2_${'b'.repeat(16)}_${rank.repeat(32)}`;
+const token = (rank: string) => sampleSideConfirmationToken(rank);
 const confirmation: SideConfirmation = {
   streetName: 'Maran Place',
   orientation: { north: 'up' as const, axis: 'east-west' as const },
@@ -57,6 +58,10 @@ describe('CurbSideCrossSection', () => {
     expect(south.props['data-place']).toBe('bottom');
     act(() => { north.props.onClick(); });
     expect(onSelect).toHaveBeenCalledWith(token('2'));
+    const markup = JSON.stringify(renderer!.toJSON());
+    expect(markup).not.toContain('data-token');
+    expect(markup).not.toContain(token('2'));
+    expect(markup).not.toContain(token('1'));
     expect(onCancel).not.toHaveBeenCalled();
   });
 
