@@ -65,6 +65,12 @@ jobs:
       - name: Install functions dependencies
         run: npm ci --prefix functions
 
+      # The curb cross-section layout suite launches the Playwright Chromium
+      # build pinned by the installed @playwright/test package. npm ci does
+      # not download that browser. Ubuntu needs its system libraries too.
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
       # General PR suite only. The script reports the one excluded private
       # provenance file. npm test itself is unchanged.
       - name: Run general PR unit tests

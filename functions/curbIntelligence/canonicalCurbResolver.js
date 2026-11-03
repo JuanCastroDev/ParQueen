@@ -23,6 +23,13 @@ const {
   readServerSourceEvidence,
 } = require('./privateSourceContextRetention');
 const { readOfficialLionPrimary } = require('./officialLionPrimaryTopology');
+const {
+  consistentOfficialFaces,
+  orientationForTangent,
+  sideConfirmationEligible,
+  stableSideAuthorityDigest,
+} = require('./sideConfirmation');
+const { issueSideConfirmationToken } = require('./sideConfirmationToken');
 
 const NYC = Object.freeze({ minLat: 40.4, maxLat: 40.95, minLng: -74.3, maxLng: -73.65 });
 const BOROUGHS = Object.freeze({
@@ -32,6 +39,8 @@ const privateCandidateSets = new WeakMap();
 const authoritativeRetrievals = new WeakSet();
 const primaryTopologyResults = new WeakSet();
 const ambiguousTopologyResults = new WeakSet();
+const sideConfirmationResults = new WeakSet();
+const sideConfirmationAuthorities = new WeakMap();
 
 const unsupported = (reasons, diagnostics = {}) => ({
   state: 'UNSUPPORTED',
@@ -185,6 +194,103 @@ function buildCandidate(rankedGroup, context) {
 function visuallyDistinct(left, right) {
   return left.streetName !== right.streetName
     || JSON.stringify(left.stroke) !== JSON.stringify(right.stroke);
+}
+
+function sideIdentity(selected, csclSide, cardinal) {
+  const current = selected.identity;
+  return createCanonicalCurbIdentity({
+    csclRows: identityRows(selected.group.records),
+    csclSide,
+    sourceVersion: current.sourceVersion,
+    selectedGlobalId: current.roadway.selectedGlobalId,
+    geometry: current.roadway.geometry,
+    streetWidthFeet: current.roadway.streetWidthFeet,
+    borough: current.names.borough,
+    onStreet: current.names.onStreet,
+    fromStreet: current.names.fromStreet,
+    toStreet: current.names.toStreet,
+    aliases: current.names.aliases,
+    cardinalSide: cardinal,
+    resolutionMethod: 'automatic',
+  });
+}
+
+function sideConfirmationResult(input) {
+  const orientation = orientationForTangent(input.selected.projection.tangent);
+  const faces = consistentOfficialFaces(input.selected.group.records);
+  if (!sideConfirmationEligible({
+    enabled: input.enabled,
+    consideredCount: input.consideredCount,
+    sideCrossesCenterline: input.sideCrossesCenterline,
+    endpointAmbiguous: input.endpointAmbiguous,
+    levelOrRoadbedAmbiguous: input.levelOrRoadbedAmbiguous,
+    topologySelectable: input.topologySelectable,
+    sourceEnrichment: input.sourceEnrichment,
+    decisionState: input.decision.state,
+    decisionReasons: input.decision.reasons,
+    faces,
+    orientation,
+  })) return null;
+  const authorityContextDigest = stableSideAuthorityDigest({
+    sourceVersion: input.selected.identity.sourceVersion,
+    records: input.selected.group.records,
+    faces,
+  });
+  if (!authorityContextDigest) return null;
+  const issuedAt = Number.isSafeInteger(input.nowMs) ? input.nowMs : Date.now();
+  const built = ['LEFT', 'RIGHT'].map((csclSide, rank) => {
+    const created = sideIdentity(input.selected, csclSide, orientation.sides[csclSide]);
+    if (!created.ok || created.identity.officialBlockFaceId !== faces[csclSide]) return null;
+    const key = publicCurbKey(created.identity);
+    const token = issueSideConfirmationToken({
+      uid: input.callerUid,
+      authorityDigest: authorityContextDigest,
+      officialBlockFaceId: faces[csclSide],
+      publicCurbKey: key,
+      csclSide,
+      rank,
+    }, {
+      key: input.hmacKey,
+      now: issuedAt,
+      nonce: typeof input.nonceForRank === 'function' ? input.nonceForRank(rank) : undefined,
+    });
+    if (!token) return null;
+    return {
+      token,
+      cardinal: orientation.sides[csclSide],
+      identity: created.identity,
+      rank,
+      csclSide,
+      authorityDigest: authorityContextDigest,
+      officialBlockFaceId: faces[csclSide],
+      publicCurbKey: key,
+    };
+  });
+  if (built.some(side => !side) || built[0].cardinal === built[1].cardinal || built[0].token === built[1].token) {
+    return null;
+  }
+  const result = deepFreeze({
+    state: 'SIDE_CONFIRMATION_REQUIRED',
+    reasons: ['side_uncertain'],
+    confirmation: {
+      streetName: input.selected.streetName,
+      orientation: { north: 'up', axis: orientation.axis },
+      curbs: built.map(side => ({ token: side.token, cardinal: side.cardinal })),
+    },
+  });
+  sideConfirmationResults.add(result);
+  sideConfirmationAuthorities.set(result, authorityContextDigest);
+  privateCandidateSets.set(result, deepFreeze(built.map(side => ({
+    token: side.token,
+    identity: side.identity,
+    topologySelectable: true,
+    rank: side.rank,
+    csclSide: side.csclSide,
+    authorityDigest: side.authorityDigest,
+    officialBlockFaceId: side.officialBlockFaceId,
+    publicCurbKey: side.publicCurbKey,
+  }))));
+  return result;
 }
 
 function publicCandidate(candidate, tokenContext, rank, authorityContextDigest) {
@@ -401,9 +507,6 @@ async function resolveCanonicalCurb(location, options = {}) {
     primaryTopologyResults.add(result);
     return result;
   }
-  if (decision.state !== 'AMBIGUOUS') {
-    return unsupported(decision.reasons, { candidateCount: considered.length });
-  }
   const tokenContext = typeof options.requestNonceDigest === 'string'
     ? { requestNonceDigest: options.requestNonceDigest }
     : { requestNonce: options.requestNonce };
@@ -412,6 +515,27 @@ async function resolveCanonicalCurb(location, options = {}) {
     populationIdentity: retrieved.populationIdentity,
     sourceVersion: retrieved.sourceVersion,
   })).digest('hex');
+  if (decision.state !== 'AMBIGUOUS') {
+    const sideConfirmation = sideConfirmationResult({
+      enabled: options.sideConfirmationEnabled === true,
+      selected,
+      consideredCount: considered.length,
+      sideCrossesCenterline: Math.abs(selected.projection.signedOffsetMeters) <= uncertainty,
+      endpointAmbiguous: endpointDistance <= uncertainty,
+      levelOrRoadbedAmbiguous,
+      topologySelectable: topologySelectable(selected),
+      sourceEnrichment: selected.sourceEnrichment === true,
+      decision,
+      tokenContext,
+      authorityContextDigest,
+      callerUid: options.callerUid,
+      hmacKey: options.sideConfirmationHmacKey,
+      nowMs: Number.isSafeInteger(options.sideConfirmationNow) ? options.sideConfirmationNow : Date.now(),
+      nonceForRank: options.sideConfirmationNonceForRank,
+    });
+    if (sideConfirmation) return sideConfirmation;
+    return unsupported(decision.reasons, { candidateCount: considered.length });
+  }
   const publicCandidates = considered.map((candidate, index) => (
     publicCandidate(candidate, tokenContext, index, authorityContextDigest)
   ));
@@ -442,6 +566,43 @@ function hasAmbiguousTopologyAuthority(result) {
   return Boolean(result && ambiguousTopologyResults.has(result));
 }
 
+function hasSideConfirmationAuthority(result) {
+  return Boolean(result && sideConfirmationResults.has(result));
+}
+
+function attestedSideConfirmationMatch(resolution, visible) {
+  if (!hasSideConfirmationAuthority(resolution) || !visible) return null;
+  if (sideConfirmationAuthorities.get(resolution) !== visible.authorityDigest) return null;
+  const selected = privateCandidateSets.get(resolution)?.find(candidate => (
+    candidate.rank === visible.rank
+    && candidate.csclSide === visible.csclSide
+    && candidate.publicCurbKey === visible.publicCurbKey
+    && candidate.authorityDigest === visible.authorityDigest
+  ));
+  if (!selected || selected.topologySelectable !== true) return null;
+  return selected;
+}
+
+function promoteAttestedSideConfirmation(resolution, candidateToken) {
+  if (!hasSideConfirmationAuthority(resolution) || typeof candidateToken !== 'string') {
+    return unsupported(['candidate_selection_stale']);
+  }
+  const privateSet = privateCandidateSets.get(resolution);
+  const selected = privateSet?.find(candidate => candidate.token === candidateToken);
+  if (!selected || selected.topologySelectable !== true) {
+    return unsupported(['candidate_selection_stale']);
+  }
+  const identity = deepFreeze({
+    ...selected.identity,
+    resolution: { ...selected.identity.resolution, method: 'visual_selection' },
+  });
+  const result = deepFreeze({
+    state: 'SUPPORTED', reasons: [], identity, publicCurb: toPublicCurb(identity),
+  });
+  primaryTopologyResults.add(result);
+  return result;
+}
+
 function promoteAttestedVisualSelection(resolution, candidateToken) {
   if (!hasAmbiguousTopologyAuthority(resolution) || typeof candidateToken !== 'string') {
     return unsupported(['candidate_selection_stale']);
@@ -467,5 +628,8 @@ module.exports = {
   buildCandidate,
   hasPrimaryTopologyAuthority,
   hasAmbiguousTopologyAuthority,
+  hasSideConfirmationAuthority,
+  attestedSideConfirmationMatch,
   promoteAttestedVisualSelection,
+  promoteAttestedSideConfirmation,
 };

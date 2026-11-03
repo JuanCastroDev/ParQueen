@@ -230,6 +230,12 @@ jobs:
         if: steps.classify.outputs.run_client == 'true'
         run: npm ci --prefix functions
 
+      # Vitest launches the same pinned Chromium build used by the later
+      # browser smoke tests. Install it first so the layout suite can run.
+      - name: CLIENT — Install Playwright Chromium
+        if: steps.classify.outputs.run_client == 'true'
+        run: npx playwright install --with-deps chromium
+
       - name: CLIENT — Run general PR unit tests
         if: steps.classify.outputs.run_client == 'true'
         run: node scripts/ci/general-pr-suite.mjs
@@ -243,10 +249,6 @@ jobs:
         run: npm run build
         env:
           VITE_MAPBOX_TOKEN: ${{ vars.VITE_MAPBOX_TOKEN }}
-
-      - name: CLIENT — Install Playwright Chromium
-        if: steps.classify.outputs.run_client == 'true'
-        run: npx playwright install --with-deps chromium
 
       - name: CLIENT — Run browser smoke and accessibility tests
         if: steps.classify.outputs.run_client == 'true'
