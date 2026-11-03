@@ -3,11 +3,11 @@ import TestRenderer, { act } from 'react-test-renderer';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { CurbSideCrossSection } from './CurbSideCrossSection';
-import { parseCanonicalCurbResponse } from '../../utils/canonicalCurbClient';
-import { readSavedSpot, writeSavedSpot, type SavedSpot } from '../../utils/savedSpot';
+import { parseCanonicalCurbResponse, type SideConfirmation } from '../../utils/canonicalCurbClient';
+import { readSavedSpot, writeSavedSpot, SAVED_SPOT_KEY, type SavedSpot } from '../../utils/savedSpot';
 
 const token = (rank: string) => `candidate2_${'b'.repeat(16)}_${rank.repeat(32)}`;
-const confirmation = {
+const confirmation: SideConfirmation = {
   streetName: 'Maran Place',
   orientation: { north: 'up' as const, axis: 'east-west' as const },
   curbs: [
@@ -63,12 +63,12 @@ describe('CurbSideCrossSection', () => {
   it('places west on the left of a north-south road and leaves cancel unselected', () => {
     const onSelect = vi.fn();
     const onCancel = vi.fn();
-    const vertical = {
+    const vertical: SideConfirmation = {
       ...confirmation,
-      orientation: { north: 'up' as const, axis: 'north-south' as const },
+      orientation: { north: 'up', axis: 'north-south' },
       curbs: [
-        { token: token('3'), cardinal: 'East' as const },
-        { token: token('4'), cardinal: 'West' as const },
+        { token: token('3'), cardinal: 'East' },
+        { token: token('4'), cardinal: 'West' },
       ],
     };
     let renderer: TestRenderer.ReactTestRenderer;
@@ -86,11 +86,11 @@ describe('CurbSideCrossSection', () => {
 
   it('fails closed when the curbs are not a geographically opposite pair', () => {
     const onSelect = vi.fn();
-    const broken = {
+    const broken: SideConfirmation = {
       ...confirmation,
       curbs: [
-        { token: token('1'), cardinal: 'North' as const },
-        { token: token('2'), cardinal: 'East' as const },
+        { token: token('1'), cardinal: 'North' },
+        { token: token('2'), cardinal: 'East' },
       ],
     };
     let renderer: TestRenderer.ReactTestRenderer;
@@ -105,18 +105,24 @@ describe('CurbSideCrossSection', () => {
 
   it('drops a stored confirmation that carries a private face and keeps cancel unsupported', () => {
     const store = new Map<string, string>();
-    vi.stubGlobal('localStorage', {
+    const storage = {
       getItem: (key: string) => store.get(key) ?? null,
       setItem: (key: string, value: string) => { store.set(key, value); },
       removeItem: (key: string) => { store.delete(key); },
-    });
+    };
+    vi.stubGlobal('localStorage', storage);
     writeSavedSpot(spot());
     expect(readSavedSpot()?.curbResolutionStatus).toBe('side_confirmation_required');
     expect(readSavedSpot()?.confirmedParkingSide).toBeNull();
-    writeSavedSpot({
+    storage.setItem(SAVED_SPOT_KEY, JSON.stringify({
       ...spot(),
-      curbSideConfirmation: { ...confirmation, officialBlockFaceId: '1000000001' } as never,
-    });
+      curbSideConfirmation: {
+        streetName: confirmation.streetName,
+        orientation: confirmation.orientation,
+        curbs: confirmation.curbs,
+        officialBlockFaceId: '1000000001',
+      },
+    }));
     const rejected = readSavedSpot();
     expect(rejected?.curbResolutionStatus).toBe('unsupported');
     expect(rejected?.curbSideConfirmation).toBeNull();

@@ -79,7 +79,7 @@ describe('curb cross-section rendered layout', () => {
 
   afterAll(async () => {
     await browser?.close();
-  });
+  }, 30_000);
 
   it('places north above and south below an east-west road on a narrow screen', async () => {
     await render(page, (
