@@ -2,6 +2,7 @@
 
 const { candidateTokenNonceDigest } = require('./canonicalCurbIdentity');
 const {
+  promoteAttestedSideConfirmation,
   promoteAttestedVisualSelection,
   resolveCanonicalCurb,
 } = require('./canonicalCurbResolver');
@@ -18,8 +19,11 @@ async function applyVisualCurbSelection(input, options = {}) {
     requestNonce: undefined,
     requestNonceDigest: nonceDigest,
   });
-  if (current?.state !== 'AMBIGUOUS') return unsupported('candidate_selection_stale');
-  return promoteAttestedVisualSelection(current, input.candidateToken);
+  if (current?.state === 'AMBIGUOUS') return promoteAttestedVisualSelection(current, input.candidateToken);
+  if (current?.state === 'SIDE_CONFIRMATION_REQUIRED') {
+    return promoteAttestedSideConfirmation(current, input.candidateToken);
+  }
+  return unsupported('candidate_selection_stale');
 }
 
 module.exports = { applyVisualCurbSelection };

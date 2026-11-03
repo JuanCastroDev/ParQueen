@@ -123,4 +123,52 @@ describe('canonical curb V2 client contract', () => {
       location: location(),
     });
   });
+
+  it('accepts a two-curb confirmation and rejects a client-chosen side or private face', () => {
+    const confirmation = {
+      streetName: 'Maran Place',
+      orientation: { north: 'up' as const, axis: 'east-west' as const },
+      curbs: [
+        { token: token(1), cardinal: 'North' as const },
+        { token: token(2), cardinal: 'South' as const },
+      ],
+    };
+    expect(parseCanonicalCurbResponse({
+      protocolVersion: 2,
+      status: 'side_confirmation_required',
+      confirmation,
+    })).toEqual({ protocolVersion: 2, status: 'side_confirmation_required', confirmation });
+    expect(buildCanonicalCurbRequest(location(), token(1))).toEqual({
+      protocolVersion: 2,
+      location: location(),
+      candidateToken: token(1),
+    });
+    expect(() => parseCanonicalCurbResponse({
+      protocolVersion: 2,
+      status: 'side_confirmation_required',
+      confirmation: { ...confirmation, officialBlockFaceId: '1000000001' },
+    })).toThrow('Invalid canonical curb response');
+    expect(() => parseCanonicalCurbResponse({
+      protocolVersion: 2,
+      status: 'side_confirmation_required',
+      confirmation: {
+        ...confirmation,
+        curbs: [
+          { token: token(1), cardinal: 'North' },
+          { token: token(1), cardinal: 'South' },
+        ],
+      },
+    })).toThrow('Invalid canonical curb response');
+    expect(() => parseCanonicalCurbResponse({
+      protocolVersion: 2,
+      status: 'side_confirmation_required',
+      confirmation: {
+        ...confirmation,
+        curbs: [
+          { token: token(1), cardinal: 'North' },
+          { token: token(2), cardinal: 'East' },
+        ],
+      },
+    })).toThrow('Invalid canonical curb response');
+  });
 });

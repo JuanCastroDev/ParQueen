@@ -17,7 +17,7 @@ export const SAVED_SPOT_TTL_MS = 24 * 60 * 60 * 1000;
 
 export type SideConfidence = 'high' | 'low' | 'unknown';
 export type StreetIntelStatus = 'found' | 'unavailable' | 'failed';
-export type CurbResolutionStatus = 'resolving' | 'high_confidence' | 'ambiguous' | 'unsupported';
+export type CurbResolutionStatus = 'resolving' | 'high_confidence' | 'ambiguous' | 'unsupported' | 'side_confirmation_required';
 
 export interface SavedSpot {
   lat: number;
@@ -39,6 +39,7 @@ export interface SavedSpot {
   curbProtocolVersion: 2 | null;
   curbResolutionStatus: CurbResolutionStatus | null;
   curbSelector: import('./canonicalCurbClient').CanonicalCurbSelector | null;
+  curbSideConfirmation?: import('./canonicalCurbClient').SideConfirmation | null;
   curbRefreshAttempted: boolean;
   // Side confidence — drives whether to show Safe Until or ask the user to confirm
   gpsAccuracyMeters: number | null;
@@ -112,10 +113,11 @@ export function readSavedSpot(now: number = Date.now()): SavedSpot | null {
       s.curbProtocolVersion = null; changed = true;
     }
     if (s.curbResolutionStatus !== null
-      && !['resolving', 'high_confidence', 'ambiguous', 'unsupported'].includes(s.curbResolutionStatus)) {
+      && !['resolving', 'high_confidence', 'ambiguous', 'unsupported', 'side_confirmation_required'].includes(s.curbResolutionStatus)) {
       s.curbResolutionStatus = null; changed = true;
     }
     if (s.curbSelector === undefined) { s.curbSelector = null; changed = true; }
+    if (s.curbSideConfirmation === undefined) { s.curbSideConfirmation = null; changed = true; }
     if (s.curbResolutionStatus === 'ambiguous') {
       try {
         const parsed = parseCanonicalCurbResponse({
@@ -127,6 +129,23 @@ export function readSavedSpot(now: number = Date.now()): SavedSpot | null {
       } catch {
         s.curbResolutionStatus = 'unsupported';
         s.curbSelector = null;
+        s.streetIntelStatus = 'unavailable';
+        s.streetIntelReason = 'candidate_incomplete';
+        changed = true;
+      }
+    }
+    if (s.curbResolutionStatus === 'side_confirmation_required') {
+      try {
+        const parsed = parseCanonicalCurbResponse({
+          protocolVersion: 2,
+          status: 'side_confirmation_required',
+          confirmation: s.curbSideConfirmation,
+        });
+        s.curbSideConfirmation = parsed.status === 'side_confirmation_required' ? parsed.confirmation : null;
+      } catch {
+        s.curbResolutionStatus = 'unsupported';
+        s.curbSideConfirmation = null;
+        s.confirmedParkingSide = null;
         s.streetIntelStatus = 'unavailable';
         s.streetIntelReason = 'candidate_incomplete';
         changed = true;

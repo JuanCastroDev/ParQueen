@@ -14,6 +14,19 @@ export type CanonicalCurbSelector = Readonly<{
   candidates: readonly [CanonicalCurbCandidate, CanonicalCurbCandidate];
 }>;
 
+export type CurbCardinal = 'North' | 'South' | 'East' | 'West';
+
+export type SideConfirmationCurb = Readonly<{
+  token: string;
+  cardinal: CurbCardinal;
+}>;
+
+export type SideConfirmation = Readonly<{
+  streetName: string;
+  orientation: Readonly<{ north: 'up'; axis: 'north-south' | 'east-west' }>;
+  curbs: readonly [SideConfirmationCurb, SideConfirmationCurb];
+}>;
+
 export type CanonicalCurbResponse =
   | Readonly<{
     protocolVersion: 2;
@@ -24,6 +37,11 @@ export type CanonicalCurbResponse =
     ruleSummary: Readonly<{ cleaningAvailable: boolean }>;
   }>
   | Readonly<{ protocolVersion: 2; status: 'ambiguous'; selector: CanonicalCurbSelector }>
+  | Readonly<{
+    protocolVersion: 2;
+    status: 'side_confirmation_required';
+    confirmation: SideConfirmation;
+  }>
   | Readonly<{
     protocolVersion: 2;
     status: 'unsupported';
@@ -39,6 +57,12 @@ export type ResolveCurbRequestV2 = Readonly<{
 const PUBLIC_KEY = /^curb2_[a-f0-9]{32}$/;
 const CANDIDATE_TOKEN = /^candidate2_[a-f0-9]{16}_[a-f0-9]{32}$/;
 const SIDES = new Set(['North', 'South', 'East', 'West']);
+const OPPOSITE: Readonly<Record<string, string>> = {
+  North: 'South', South: 'North', East: 'West', West: 'East',
+};
+const AXIS: Readonly<Record<string, string>> = {
+  North: 'east-west', South: 'east-west', East: 'north-south', West: 'north-south',
+};
 const REASONS = new Set(['location_quality', 'candidate_incomplete', 'intersection_complex', 'source_unavailable']);
 
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -66,6 +90,13 @@ function parseCandidate(value: unknown): CanonicalCurbCandidate | null {
   const valid = value.stroke.coordinates.every(line =>
     Array.isArray(line) && line.length >= 2 && line.every(finitePoint));
   return valid ? value as CanonicalCurbCandidate : null;
+}
+
+function parseSideCurb(value: unknown): SideConfirmationCurb | null {
+  if (!record(value) || !exactKeys(value, ['token', 'cardinal'])
+    || typeof value.token !== 'string' || !CANDIDATE_TOKEN.test(value.token)
+    || typeof value.cardinal !== 'string' || !SIDES.has(value.cardinal)) return null;
+  return value as SideConfirmationCurb;
 }
 
 function invalid(): never {
@@ -98,6 +129,23 @@ export function parseCanonicalCurbResponse(value: unknown): CanonicalCurbRespons
     if (candidates.some(candidate => !candidate)
       || candidates[0]?.token === candidates[1]?.token
       || JSON.stringify(candidates[0]?.stroke) === JSON.stringify(candidates[1]?.stroke)) invalid();
+    return value as CanonicalCurbResponse;
+  }
+  if (value.status === 'side_confirmation_required') {
+    if (!exactKeys(value, ['protocolVersion', 'status', 'confirmation']) || !record(value.confirmation)
+      || !exactKeys(value.confirmation, ['streetName', 'orientation', 'curbs'])
+      || typeof value.confirmation.streetName !== 'string' || !value.confirmation.streetName.trim()
+      || !record(value.confirmation.orientation)
+      || !exactKeys(value.confirmation.orientation, ['north', 'axis'])
+      || value.confirmation.orientation.north !== 'up'
+      || (value.confirmation.orientation.axis !== 'north-south'
+        && value.confirmation.orientation.axis !== 'east-west')
+      || !Array.isArray(value.confirmation.curbs) || value.confirmation.curbs.length !== 2) invalid();
+    const curbs = value.confirmation.curbs.map(parseSideCurb);
+    if (!curbs[0] || !curbs[1]
+      || curbs[0].token === curbs[1].token
+      || OPPOSITE[curbs[0].cardinal] !== curbs[1].cardinal
+      || AXIS[curbs[0].cardinal] !== value.confirmation.orientation.axis) invalid();
     return value as CanonicalCurbResponse;
   }
   return invalid();

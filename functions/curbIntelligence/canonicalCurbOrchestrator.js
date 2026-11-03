@@ -6,7 +6,9 @@ const {
   resolveCanonicalCurb,
   hasPrimaryTopologyAuthority,
   hasAmbiguousTopologyAuthority,
+  hasSideConfirmationAuthority,
 } = require('./canonicalCurbResolver');
+const { isSideConfirmationEnabled } = require('./sideConfirmation');
 const { applyVisualCurbSelection } = require('./visualCurbSelection');
 const { loadCanonicalRules } = require('./canonicalRuleSources');
 const { readCanonicalCache, persistCanonicalCurb } = require('./canonicalCurbPersistence');
@@ -77,6 +79,10 @@ function highResponse(publicCurb, cleaningAvailable) {
 
 async function execute(request, dependencies) {
   const startedAt = Date.now();
+  const scoped = {
+    ...dependencies,
+    sideConfirmationEnabled: isSideConfirmationEnabled(dependencies),
+  };
   emit(dependencies.telemetry, 'curb_resolution_attempted', {
     protocolVersion: 2,
     sampleCount: request.location.sampleCount,
@@ -90,11 +96,11 @@ async function execute(request, dependencies) {
       resolution = await select({
         location: request.location,
         candidateToken: request.candidateToken,
-      }, dependencies);
+      }, scoped);
     } else {
       const resolve = dependencies.resolveCanonicalCurb || resolveCanonicalCurb;
       const nonce = (dependencies.requestNonceFactory || randomUUID)();
-      resolution = await resolve(request.location, { ...dependencies, requestNonce: nonce });
+      resolution = await resolve(request.location, { ...scoped, requestNonce: nonce });
     }
   } catch {
     emit(dependencies.telemetry, 'curb_resolution_unsupported', {
@@ -107,6 +113,20 @@ async function execute(request, dependencies) {
 
   if (resolution?.state === 'AMBIGUOUS' && !hasAmbiguousTopologyAuthority(resolution)) {
     resolution = { state: 'UNSUPPORTED', reasons: ['authority_invalid'] };
+  }
+  if (resolution?.state === 'SIDE_CONFIRMATION_REQUIRED' && !hasSideConfirmationAuthority(resolution)) {
+    resolution = { state: 'UNSUPPORTED', reasons: ['authority_invalid'] };
+  }
+  if (resolution?.state === 'SIDE_CONFIRMATION_REQUIRED') {
+    emit(dependencies.telemetry, 'curb_side_confirmation_required', {
+      protocolVersion: 2,
+      candidateCount: resolution.confirmation?.curbs?.length || 0,
+    });
+    return {
+      protocolVersion: 2,
+      status: 'side_confirmation_required',
+      confirmation: resolution.confirmation,
+    };
   }
   if (resolution?.state === 'SUPPORTED' && !hasPrimaryTopologyAuthority(resolution)) {
     resolution = { state: 'UNSUPPORTED', reasons: ['authority_invalid'] };

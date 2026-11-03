@@ -3955,6 +3955,85 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   line-height: 1.45;
   color: color-mix(in srgb, var(--color-text-secondary) 78%, transparent);
 }
+.pq-curb-side,
+.pq-curb-side-fallback {
+  padding: 12px;
+  border-radius: 18px;
+  background: linear-gradient(165deg, #0b182c 0%, #07101e 100%);
+  border: 1px solid rgba(126, 184, 255, 0.18);
+  color: var(--color-text);
+}
+.pq-curb-side-street { margin: 0 0 4px; font-weight: 700; }
+.pq-curb-side-orientation { margin: 0 0 10px; font-size: 12px; color: var(--color-text-secondary); }
+.pq-curb-side-diagram {
+  position: relative;
+  height: 148px;
+  border-radius: 13px;
+  background: #07101e;
+}
+.pq-curb-side-north {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  font-weight: 700;
+}
+.pq-curb-side-road {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.14);
+}
+.pq-curb-side-diagram.is-east-west .pq-curb-side-road {
+  left: 16px;
+  right: 16px;
+  top: 58px;
+  height: 32px;
+}
+.pq-curb-side-diagram.is-north-south .pq-curb-side-road {
+  top: 28px;
+  bottom: 16px;
+  left: 50%;
+  width: 32px;
+  transform: translateX(-50%);
+}
+.pq-curb-side-stage {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.pq-curb-side-stage.is-east-west {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "north"
+    "road"
+    "south";
+}
+.pq-curb-side-stage.is-north-south {
+  grid-template-columns: minmax(0, 1fr) 36px minmax(0, 1fr);
+  grid-template-areas: "west road east";
+  align-items: stretch;
+}
+.pq-curb-side-stage .pq-curb-side-diagram { grid-area: road; }
+.pq-curb-side-stage.is-north-south .pq-curb-side-diagram { height: 168px; }
+.pq-curb-side-choice.is-top { grid-area: north; }
+.pq-curb-side-choice.is-bottom { grid-area: south; }
+.pq-curb-side-choice.is-left { grid-area: west; }
+.pq-curb-side-choice.is-right { grid-area: east; }
+.pq-curb-side-choice,
+.pq-curb-side-cancel {
+  min-height: 48px;
+  min-width: 0;
+  padding: 10px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 650;
+}
+.pq-curb-side-cancel { width: 100%; margin-top: 8px; }
+.pq-curb-side-choice:disabled,
+.pq-curb-side-cancel:disabled { opacity: 0.48; }
 
 /* 3 — Reminders: compact horizontal action cards */
 .pq-mycar-remind-grid {

@@ -76,6 +76,7 @@ import { HeaderBar } from './street-parking/HeaderBar';
 import { NavigationBar } from './street-parking/NavigationBar';
 import { StreetIntelligenceCard, StreetIntelligenceUnavailableCard } from './street-parking/StreetIntelligenceCard';
 import { VisualCurbSelector } from './street-parking/VisualCurbSelector';
+import { CurbSideCrossSection } from './street-parking/CurbSideCrossSection';
 import { useParkingTimer } from './street-parking/useParkingTimer';
 import { recordParkingAnalyticsEvent } from '../utils/parkingAnalytics';
 import { useMapChromePadding } from './street-parking/useMapChromePadding';
@@ -92,7 +93,7 @@ import { isLegacyNYCOpenDataSegment } from '../utils/streetIntelligenceLegacy';
 const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpot,
     'segmentId' | 'parkingSide' | 'restrictionVersionId' | 'segmentStreetName'
     | 'streetIntelStatus' | 'streetIntelReason' | 'streetIntelCheckedAt'
-    | 'curbProtocolVersion' | 'curbResolutionStatus' | 'curbSelector'
+    | 'curbProtocolVersion' | 'curbResolutionStatus' | 'curbSelector' | 'curbSideConfirmation'
     | 'sideConfidence' | 'confirmedParkingSide'
 > => {
     const checkedAt = new Date().toISOString();
@@ -108,6 +109,7 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
             curbProtocolVersion: 2,
             curbResolutionStatus: 'high_confidence',
             curbSelector: null,
+            curbSideConfirmation: null,
             sideConfidence: 'high',
             confirmedParkingSide: null,
         };
@@ -124,6 +126,24 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
             curbProtocolVersion: 2,
             curbResolutionStatus: 'ambiguous',
             curbSelector: response.selector,
+            curbSideConfirmation: null,
+            sideConfidence: 'unknown',
+            confirmedParkingSide: null,
+        };
+    }
+    if (response.status === 'side_confirmation_required') {
+        return {
+            segmentId: null,
+            parkingSide: null,
+            restrictionVersionId: null,
+            segmentStreetName: null,
+            streetIntelStatus: null,
+            streetIntelReason: null,
+            streetIntelCheckedAt: checkedAt,
+            curbProtocolVersion: 2,
+            curbResolutionStatus: 'side_confirmation_required',
+            curbSelector: null,
+            curbSideConfirmation: response.confirmation,
             sideConfidence: 'unknown',
             confirmedParkingSide: null,
         };
@@ -139,6 +159,7 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
         curbProtocolVersion: 2,
         curbResolutionStatus: 'unsupported',
         curbSelector: null,
+        curbSideConfirmation: null,
         sideConfidence: 'unknown',
         confirmedParkingSide: null,
     };
@@ -960,6 +981,53 @@ export const MapView: React.FC<MapViewProps> = ({
         const updated = { ...savedSpot, confirmedParkingSide: side };
         setSavedSpot(updated);
         localStorage.setItem(SAVED_SPOT_KEY, JSON.stringify(updated));
+    }, [savedSpot]);
+
+    const handleSideConfirmation = useCallback(async (candidateToken: string) => {
+        if (!savedSpot || savedSpot.curbResolutionStatus !== 'side_confirmation_required'
+            || !savedSpot.curbSideConfirmation || curbSelectionLoading) return;
+        setCurbSelectionLoading(true);
+        try {
+            const response = await requestCanonicalCurb(savedSpot.lat, savedSpot.lng, candidateToken);
+            const updated: SavedSpot = {
+                ...savedSpot,
+                ...canonicalResponseFields(response),
+                curbRefreshAttempted: true,
+                confirmedParkingSide: null,
+            };
+            setSavedSpot(updated);
+            writeSavedSpot(updated);
+        } catch {
+            const updated: SavedSpot = {
+                ...savedSpot,
+                ...canonicalResponseFields({
+                    protocolVersion: 2,
+                    status: 'unsupported',
+                    reason: 'source_unavailable',
+                }),
+                curbRefreshAttempted: true,
+            };
+            setSavedSpot(updated);
+            writeSavedSpot(updated);
+        } finally {
+            setCurbSelectionLoading(false);
+        }
+    }, [curbSelectionLoading, requestCanonicalCurb, savedSpot]);
+
+    const handleSideConfirmationCancel = useCallback(() => {
+        if (!savedSpot || savedSpot.curbResolutionStatus !== 'side_confirmation_required') return;
+        const updated: SavedSpot = {
+            ...savedSpot,
+            ...canonicalResponseFields({
+                protocolVersion: 2,
+                status: 'unsupported',
+                reason: 'candidate_incomplete',
+            }),
+            curbRefreshAttempted: true,
+            confirmedParkingSide: null,
+        };
+        setSavedSpot(updated);
+        writeSavedSpot(updated);
     }, [savedSpot]);
 
     const retryStreetIntelInFlightRef = useRef(false);
@@ -2183,6 +2251,13 @@ export const MapView: React.FC<MapViewProps> = ({
                             <div className="pq-mycar-intel-unavailable" role="status" aria-live="polite">
                                 <p className="pq-mycar-intel-reason">{t('street_intel.verifying_curb')}</p>
                             </div>
+                        ) : savedSpot.curbResolutionStatus === 'side_confirmation_required' && savedSpot.curbSideConfirmation ? (
+                            <CurbSideCrossSection
+                                confirmation={savedSpot.curbSideConfirmation}
+                                onSelect={handleSideConfirmation}
+                                onCancel={handleSideConfirmationCancel}
+                                loading={curbSelectionLoading}
+                            />
                         ) : savedSpot.curbResolutionStatus === 'ambiguous' && savedSpot.curbSelector ? (
                             <VisualCurbSelector
                                 selector={savedSpot.curbSelector}
