@@ -8,6 +8,8 @@ export const STORY_TIMELINE = {
   choicesAt: 7700,
   /** Last intention row finishes sliding in (measured 8.29–8.31 s in the prototype). */
   choicesFullyVisibleAt: 8300,
+  /** Welcome screen -> street: dissolve before the example starts (not part of the 8.3 s story). */
+  welcomeFade: 450,
   /** Opening: the logo settles first, then the street fades up. */
   introDuration: 1400,
   /** Focus moves to the new heading after the panel has swapped. */

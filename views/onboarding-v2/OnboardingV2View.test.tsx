@@ -69,7 +69,7 @@ function mount(props: Partial<React.ComponentProps<typeof OnboardingV2View>> = {
   let r!: TestRenderer.ReactTestRenderer;
   act(() => {
     r = TestRenderer.create(
-      <OnboardingV2View onChooseIntent={onChooseIntent} onAccount={onAccount} androidBackRef={androidBackRef} {...props} />,
+      <OnboardingV2View initialState="arrive" onChooseIntent={onChooseIntent} onAccount={onAccount} androidBackRef={androidBackRef} {...props} />,
       { createNodeMock: nodeMock },
     );
   });
@@ -208,6 +208,94 @@ describe('OnboardingV2View', () => {
     const inactive = sections.filter(s => s.props.inert === '');
     expect(inactive).toHaveLength(2);
     inactive.forEach(s => expect(s.props['aria-hidden']).toBe(true));
+  });
+
+  describe('original welcome screen', () => {
+    const welcomeEl = (r: TestRenderer.ReactTestRenderer) => r.root.findAll(n => n.props['data-testid'] === 'obv2-welcome');
+
+    it('opens on the original ParQueen welcome by default, with the street inert behind it', () => {
+      const { r } = mount({ initialState: 'welcome' });
+      expect(welcomeEl(r)).toHaveLength(1);
+      const t = textOf(welcomeEl(r)[0]);
+      expect(t).toContain(en['onboarding.slide1.headline_prefix']);
+      expect(t).toContain('ParQueen');
+      expect(t).toContain(en['onboarding.slide1.body']);
+      expect(t).toContain(en['onboarding.slide1.supporting']);
+      expect(t).toContain(en['onboarding.get_started']);
+      expect(stage(r).props.inert).toBe('');
+      expect(stage(r).props.className).toContain('from-welcome');
+      act(() => { vi.advanceTimersByTime(20_000); });
+      expect(welcomeEl(r)).toHaveLength(1);
+      expect(stateOf(r)).toBe('arrive');
+    });
+
+    it('Get Started dissolves into the street, then the story plays by itself (8.3 s timed from the story start)', () => {
+      const { r } = mount({ initialState: 'welcome' });
+      act(() => { button(r, en['onboarding.get_started']).props.onClick(); });
+      act(() => { button(r, en['onboarding.get_started']).props.onClick(); });   // a double tap starts it once
+      expect(welcomeEl(r)[0].props.className).toContain('leaving');
+      act(() => { vi.advanceTimersByTime(449); });
+      expect(stateOf(r)).toBe('arrive');
+      act(() => { vi.advanceTimersByTime(1); });
+      expect(welcomeEl(r)).toHaveLength(0);
+      expect(stateOf(r)).toBe('demo');
+      expect(stage(r).props.inert).toBeUndefined();
+      act(() => { vi.advanceTimersByTime(7699); });
+      expect(stateOf(r)).toBe('demo');
+      act(() => { vi.advanceTimersByTime(1); });
+      expect(stateOf(r)).toBe('choose');
+    });
+
+    it('reduced motion: Get Started goes straight to the choices without the dissolve', () => {
+      env.reduceMotion = true;
+      const { r } = mount({ initialState: 'welcome' });
+      act(() => { button(r, en['onboarding.get_started']).props.onClick(); });
+      expect(welcomeEl(r)).toHaveLength(0);
+      expect(stateOf(r)).toBe('choose');
+    });
+
+    it('Android Back and the header Back return to the welcome; Back on the welcome minimizes', () => {
+      const { r, androidBackRef } = mount({ initialState: 'welcome' });
+      expect(androidBackRef.current?.handleAndroidBack()).toBe('minimize');
+      act(() => { button(r, en['onboarding.get_started']).props.onClick(); });
+      act(() => { vi.advanceTimersByTime(450 + 3000); });
+      let res: string | undefined;
+      act(() => { res = androidBackRef.current?.handleAndroidBack(); });
+      expect(res).toBe('handled');
+      expect(welcomeEl(r)).toHaveLength(1);
+      act(() => { vi.advanceTimersByTime(20_000); });
+      expect(stateOf(r)).toBe('arrive');                       // the story stopped
+      act(() => { button(r, en['onboarding.get_started']).props.onClick(); });
+      act(() => { vi.advanceTimersByTime(450 + 8000); });
+      expect(stateOf(r)).toBe('choose');
+      act(() => { button(r, en['onboarding_v2.back']).props.onClick(); });
+      expect(welcomeEl(r)).toHaveLength(1);
+    });
+
+    it('Replay replays the street story, not the welcome', () => {
+      const { r } = mount({ initialState: 'choose' });
+      expect(welcomeEl(r)).toHaveLength(0);
+      act(() => { button(r, en['onboarding_v2.replay']).props.onClick(); });
+      expect(welcomeEl(r)).toHaveLength(0);
+      expect(stateOf(r)).toBe('demo');
+    });
+
+    it('keeps an existing-account route on the welcome', () => {
+      const { r, onAccount } = mount({ initialState: 'welcome' });
+      const acc = liveButtons(r).filter(b => textOf(b) === en['onboarding_v2.account'] && b.props.className === 'obv2-welcome-account');
+      expect(acc).toHaveLength(1);
+      act(() => { acc[0].props.onClick(); });
+      expect(onAccount).toHaveBeenCalledTimes(1);
+    });
+
+    it('is localized', () => {
+      setLang('es');
+      const { r } = mount({ initialState: 'welcome' });
+      const t = textOf(welcomeEl(r)[0]);
+      expect(t).toContain(es['onboarding.slide1.headline_prefix']);
+      expect(t).toContain(es['onboarding.get_started']);
+      expect(welcomeEl(r)[0].props.lang).toBe('es');
+    });
   });
 
   it('describes the street as an example, never as live activity', () => {

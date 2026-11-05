@@ -1,4 +1,5 @@
-// Onboarding 2.0: arrival -> one-tap example (~8.3 s) -> three intentions.
+// Onboarding 2.0: original ParQueen welcome -> Get Started dissolves into the street and the example plays
+// by itself (~8.3 s from its start) -> three intentions.
 // Faithful React port of the approved prototype gateb-freeze-v1.1. The prototype's simulated phone screen is
 // replaced by the real sign-up: choosing an intention or "Already have an account?" hands off to the app.
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -9,6 +10,7 @@ import type { OnboardingIntent } from '../../utils/onboardingIntent';
 import { NeighborhoodScene, LeaveIntentIcon } from './NeighborhoodScene';
 import { baseLayout, computeLayout, placeOverlays, type OnboardingLayout } from './onboardingV2Layout';
 import { STORY_STEPS, STORY_TIMELINE, type StoryCaption } from './onboardingV2Timeline';
+import { WelcomeScreen } from './WelcomeScreen';
 
 export type StoryState = 'arrive' | 'demo' | 'choose';
 
@@ -18,8 +20,8 @@ type Props = {
   onChooseIntent: (intent: OnboardingIntent) => void;
   onAccount: () => void;
   androidBackRef?: React.MutableRefObject<OnboardingV2AndroidBackHandle | null>;
-  /** Where to start; 'choose' when returning from the phone screen. */
-  initialState?: 'arrive' | 'choose';
+  /** Where to start: the welcome screen (default), or 'choose' when returning from Create account. */
+  initialState?: 'welcome' | 'arrive' | 'choose';
 };
 
 type Tr = (key: string) => string;
@@ -122,12 +124,14 @@ const BrandHero = ({ measureRef }: { measureRef?: React.Ref<HTMLDivElement> }) =
 );
 
 // ---------------------------------------------------------------- view
-export const OnboardingV2View = ({ onChooseIntent, onAccount, androidBackRef, initialState = 'arrive' }: Props) => {
+export const OnboardingV2View = ({ onChooseIntent, onAccount, androidBackRef, initialState = 'welcome' }: Props) => {
   const lang = useLang();
   const tr: Tr = useCallback(key => translateIn(lang, key), [lang]);
   const reduce = prefersReducedMotion();
 
-  const [state, setStateRaw] = useState<StoryState>(initialState);
+  const [state, setStateRaw] = useState<StoryState>(initialState === 'choose' ? 'choose' : 'arrive');
+  const [welcome, setWelcome] = useState<'shown' | 'leaving' | 'hidden'>(initialState === 'welcome' ? 'shown' : 'hidden');
+  const welcomeHeadingRef = useRef<HTMLHeadingElement>(null);
   const [playing, setPlaying] = useState(false);
   const [replaying, setReplaying] = useState(false);
   const [intro, setIntro] = useState(() => initialState === 'arrive' && !prefersReducedMotion());
@@ -259,7 +263,7 @@ export const OnboardingV2View = ({ onChooseIntent, onAccount, androidBackRef, in
   }, [toChoose]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const play = () => {
-    if (playing || state === 'demo') return;
+    if (welcome !== 'hidden' || playing || state === 'demo') return;
     startPlay();
   };
 
@@ -280,7 +284,27 @@ export const OnboardingV2View = ({ onChooseIntent, onAccount, androidBackRef, in
   }, [replaying, startPlay]);
 
   const skip = () => { setPlaying(false); toChoose(); };
-  const toArrive = () => { clearTimers(); setPlaying(false); setCaption(null); setStoryState('arrive'); };
+
+  // Welcome -> Get Started: a short dissolve into the street, then the example starts by itself.
+  const getStarted = () => {
+    if (welcome !== 'shown') return;
+    clearTimers();
+    if (prefersReducedMotion()) { setWelcome('hidden'); startPlay(); return; }
+    setWelcome('leaving');
+    later(STORY_TIMELINE.welcomeFade, () => { setWelcome('hidden'); startPlay(); });
+  };
+  // Back from the example or the choices returns to the welcome screen.
+  const toWelcome = () => {
+    clearTimers(); setPlaying(false); setCaption(null); setPicked(null); setAnnouncement('');
+    pendingFocus.current = null;
+    setStateRaw('arrive');
+    setWelcome('shown');
+  };
+  useEffect(() => {
+    if (welcome !== 'shown') return;
+    const t = setTimeout(() => welcomeHeadingRef.current?.focus({ preventScroll: true }), STORY_TIMELINE.focusDelay);
+    return () => clearTimeout(t);
+  }, [welcome]);
 
   const chooseIntent = (intent: OnboardingIntent) => {
     if (picked) return;
@@ -296,8 +320,9 @@ export const OnboardingV2View = ({ onChooseIntent, onAccount, androidBackRef, in
     if (!androidBackRef) return;
     androidBackRef.current = {
       handleAndroidBack: () => {
-        if (state === 'arrive') return 'minimize';
-        toArrive();
+        if (welcome === 'shown') return 'minimize';
+        if (welcome === 'hidden' && state === 'arrive' && initialState === 'arrive') return 'minimize';
+        toWelcome();
         return 'handled';
       },
     };
@@ -318,6 +343,7 @@ export const OnboardingV2View = ({ onChooseIntent, onAccount, androidBackRef, in
     L?.scrollPanel && 'scroll-panel', L?.arriveUnder && 'arrive-under', L?.arriveTight && 'arrive-tight',
     L?.arriveCompact && 'arrive-compact', L?.arriveScroll && 'arrive-scroll', L?.logoOnly && 'logo-only',
     !L && 'obv2-measuring',
+    welcome !== 'hidden' && 'from-welcome',
   ].filter(Boolean).join(' ');
   const stageStyle = {
     ...(L?.panelMax != null ? { '--pmax': `${L.panelMax}px` } : {}),
@@ -331,7 +357,7 @@ export const OnboardingV2View = ({ onChooseIntent, onAccount, androidBackRef, in
 
   return (
     <div className="pq-obv2-host">
-      <div className={classes} ref={stageRef} lang={lang} style={stageStyle} data-testid="obv2-stage" data-state={state}>
+      <div className={classes} ref={stageRef} lang={lang} style={stageStyle} data-testid="obv2-stage" data-state={state} {...(welcome !== 'hidden' ? inertProps(true) : {})}>
         <NeighborhoodScene
           altText={tr(ALT_KEY[state])}
           carLabel={tr('onboarding_v2.car_label')}
@@ -356,7 +382,7 @@ export const OnboardingV2View = ({ onChooseIntent, onAccount, androidBackRef, in
         <BrandHero />
         <div className="hdr" ref={hdrRef}>
           <div className="hdr-left">
-            <button type="button" className="icon-btn" aria-label={tr('onboarding_v2.back')} hidden={state === 'arrive'} onClick={toArrive}>
+            <button type="button" className="icon-btn" aria-label={tr('onboarding_v2.back')} hidden={state === 'arrive'} onClick={toWelcome}>
               <svg width={22} height={22} viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="#fff" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><polyline points="15 6 9 12 15 18" /></svg>
             </button>
             <BrandMini />
@@ -411,6 +437,17 @@ export const OnboardingV2View = ({ onChooseIntent, onAccount, androidBackRef, in
 
         <div className="sr-only" aria-live="polite" data-testid="obv2-live">{announcement}</div>
       </div>
+      {welcome !== 'hidden' && (
+        <WelcomeScreen
+          tr={tr}
+          reduce={reduce}
+          leaving={welcome === 'leaving'}
+          onGetStarted={getStarted}
+          onAccount={onAccount}
+          headingRef={welcomeHeadingRef}
+          extra={{ lang, ...(welcome === 'leaving' ? { 'aria-hidden': true } : {}) }}
+        />
+      )}
     </div>
   );
 };

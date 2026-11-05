@@ -1090,7 +1090,7 @@ export default function App() {
       case AppView.ONBOARDING:
         if (ONBOARDING_V2_ENABLED) {
           return <OnboardingV2View
-            initialState={onboardingReturn === 'choose' ? 'choose' : 'arrive'}
+            initialState={onboardingReturn === 'choose' ? 'choose' : 'welcome'}
             onChooseIntent={intent => {
               savePendingIntent(intent);
               localStorage.setItem('hasSeenOnboarding', '1');

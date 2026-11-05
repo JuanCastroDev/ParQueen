@@ -55,6 +55,7 @@ describe('signup with Onboarding 2.0', () => {
 
   it('a chosen intention is saved locally then routes to the existing phone sign-up', () => {
     const v2 = between(app, 'return <OnboardingV2View', '/>;');
+    expect(v2).toContain("initialState={onboardingReturn === 'choose' ? 'choose' : 'welcome'}");
     expect(v2).toContain('savePendingIntent(intent)');
     expect(v2).toContain("localStorage.setItem('hasSeenOnboarding', '1')");
     expect(v2).toContain('setCurrentView(AppView.CREATE_ACCOUNT)');

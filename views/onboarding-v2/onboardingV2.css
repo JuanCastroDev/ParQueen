@@ -246,3 +246,39 @@
 .pq-obv2.land .brand-hero .wm { font-size: calc(30px * var(--ts, 1)); }
 
 .pq-obv2 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ---- original ParQueen welcome (opens Onboarding 2.0); sits over the stage, same column width ---- */
+.pq-obv2-host > .obv2-welcome { position: absolute; top: 0; bottom: 0; left: 0; right: 0; margin: 0 auto; width: 100%; max-width: 480px; z-index: 2;
+  display: flex; flex-direction: column; overflow: hidden; transition: opacity 450ms ease, transform 450ms cubic-bezier(.4,0,.2,1); }
+.pq-obv2-host > .obv2-welcome.leaving { opacity: 0; transform: scale(1.015); pointer-events: none; }
+.obv2-welcome-top { flex: none; height: calc(env(safe-area-inset-top, 0px) + 56px); }
+.obv2-welcome-lockup { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: safe center;
+  padding: 0 32px; overflow-y: auto; scrollbar-width: none; }
+.obv2-welcome-lockup::-webkit-scrollbar { display: none; }
+.obv2-welcome-logo { width: min(200px, 30vh); height: min(200px, 30vh); flex: none; }
+.obv2-welcome-emblem { width: calc(min(200px, 30vh) * 0.84); height: calc(min(200px, 30vh) * 0.84); }
+.obv2-welcome-wordmark { font-size: 52px; }
+.obv2-welcome h1 { margin: 0; font-weight: inherit; }
+.obv2-welcome h1:focus { outline: none; }
+.obv2-welcome-actions { position: relative; flex: none; display: flex; flex-direction: column; align-items: center; gap: 12px;
+  padding: 12px 28px calc(env(safe-area-inset-bottom, 0px) + 14px); }
+.obv2-welcome-account { min-height: 44px; padding: 0 14px; border: 0; background: none; color: #60a5fa; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: -4px; }
+.obv2-welcome :focus-visible { outline: 3px solid #86c2ff; outline-offset: 2px; }
+/* the street under the welcome shows no arrival panel or large logo, so the dissolve reveals only the scene */
+.pq-obv2.from-welcome .p-arrive, .pq-obv2.from-welcome .brand-hero { visibility: hidden; }
+@media (orientation: landscape) and (max-height: 500px) {
+  .pq-obv2-host > .obv2-welcome { max-width: none; flex-direction: row; align-items: stretch; }
+  .obv2-welcome-top { display: none; }
+  .obv2-welcome-lockup { padding: calc(env(safe-area-inset-top, 0px) + 12px) 24px 12px; }
+  .obv2-welcome-logo { width: 132px; height: 132px; margin-bottom: 10px; }
+  .obv2-welcome-emblem { width: 112px; height: 112px; }
+  .obv2-welcome-wordmark { font-size: 42px; }
+  .obv2-welcome-actions { width: min(380px, 46%); justify-content: center; padding: 12px max(28px, env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom, 0px) + 12px) 12px; }
+}
+@media (max-height: 620px) and (orientation: portrait) {
+  .obv2-welcome-top { height: calc(env(safe-area-inset-top, 0px) + 28px); }
+  .obv2-welcome-logo { width: 160px; height: 160px; }
+  .obv2-welcome-emblem { width: 136px; height: 136px; }
+  .obv2-welcome-wordmark { font-size: 46px; }
+}
+@media (prefers-reduced-motion: reduce) { .pq-obv2-host > .obv2-welcome { transition: none; } }
