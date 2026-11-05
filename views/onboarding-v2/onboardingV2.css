@@ -265,7 +265,19 @@
 .obv2-welcome-account { min-height: 44px; padding: 0 14px; border: 0; background: none; color: #60a5fa; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: -4px; }
 .obv2-welcome :focus-visible { outline: 3px solid #86c2ff; outline-offset: 2px; }
 /* the street under the welcome shows no arrival panel or large logo, so the dissolve reveals only the scene */
-.pq-obv2.from-welcome .p-arrive, .pq-obv2.from-welcome .brand-hero { visibility: hidden; }
+/* Under the welcome the street already shows its first story frame: final header, story scrims, no arrival panel or
+   large logo. display:none (not visibility) so nothing replays a transition when the welcome is removed. */
+.pq-obv2.from-welcome .p-arrive, .pq-obv2.from-welcome .brand-hero { display: none; }
+.pq-obv2.from-welcome .brand-mini { visibility: visible; opacity: 1; transition: none; }
+.pq-obv2.from-welcome.s-arrive .scrim-top { height: calc(var(--it) + 120px); background: linear-gradient(180deg, rgba(5,13,28,0.72), rgba(5,13,28,0)); transition: none; }
+.pq-obv2.from-welcome .scrim-bottom { transition: none; }
+.pq-obv2.from-welcome .halo-ring { animation: none; }
+/* the welcome's emblem and copy leave first; its midnight background then dissolves into the street (no double branding) */
+.pq-obv2-host > .obv2-welcome.leaving > * { opacity: 0 !important; animation: none !important; transition: opacity 180ms ease; }
+/* the street continues below its 390x600 frame (env-fore.svg, same camera) so it reaches the captions */
+.pq-obv2 .art > .layer-fore { top: 600px; bottom: auto; height: 300px; }
+/* the caption block keeps the height of the longest caption (EN/ES), so the disclosure and Skip never jump */
+.pq-obv2 > .p-demo .caption { min-height: max(calc(62px * var(--ts, 1)), var(--cap-h, 0px)); }
 @media (orientation: landscape) and (max-height: 500px) {
   .pq-obv2-host > .obv2-welcome { max-width: none; flex-direction: row; align-items: stretch; }
   .obv2-welcome-top { display: none; }
@@ -282,3 +294,7 @@
   .obv2-welcome-wordmark { font-size: 46px; }
 }
 @media (prefers-reduced-motion: reduce) { .pq-obv2-host > .obv2-welcome { transition: none; } }
+/* the searching car's headlight beam ends in a hard edge (its brightest part) at scene y 489; with the street now
+   continuing below the frame, that edge would cut across the lane. Fade only the beam's last stretch; the car body
+   (y 278-345) and the artwork itself are untouched. */
+.pq-obv2 .art > .layer-search { -webkit-mask-image: linear-gradient(180deg, #000 0, #000 430px, transparent 492px); mask-image: linear-gradient(180deg, #000 0, #000 430px, transparent 492px); }

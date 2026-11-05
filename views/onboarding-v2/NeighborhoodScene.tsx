@@ -2,6 +2,7 @@
 // (halo, unlock blink, production Ping, cyan signal, discovery phone). Geometry: sceneGeometry.ts.
 import React, { type CSSProperties } from 'react';
 import envSvg from '../../assets/onboarding-v2/env.svg';
+import envForeSvg from '../../assets/onboarding-v2/env-fore.svg';
 import departCarSvg from '../../assets/onboarding-v2/depart-car.svg';
 import driverSvg from '../../assets/onboarding-v2/driver.svg';
 import departDoorSvg from '../../assets/onboarding-v2/depart-door.svg';
@@ -109,6 +110,8 @@ export const NeighborhoodScene = ({ altText, carLabel, carTappable, onCarTap, tr
   <div className="scene" style={{ transform }} data-testid="obv2-scene">
     <div className="art" role="img" aria-label={altText}>
       <img src={envSvg} alt="" aria-hidden="true" data-layer="environment" draggable={false} decoding="async" />
+      {/* the same street, continued toward the camera below the 390x600 frame (same projection; nothing stretched) */}
+      <img className="layer-fore" src={envForeSvg} alt="" aria-hidden="true" data-layer="environment-foreground" draggable={false} decoding="async" />
       <Halo />
       <img src={departCarSvg} alt="" aria-hidden="true" data-layer="departing-car" draggable={false} />
       <img className="layer-driver" src={driverSvg} alt="" aria-hidden="true" data-layer="driver" draggable={false} />

@@ -136,6 +136,43 @@ describe('D22 vehicle-details suggestion', () => {
   });
 });
 
+describe('founder S20 QA fixes (welcome dots, transition, lower composition)', () => {
+  const css = read('views/onboarding-v2/onboardingV2.css');
+  const view = read('views/onboarding-v2/OnboardingV2View.tsx');
+  const welcome = read('views/onboarding-v2/WelcomeScreen.tsx');
+  const scene = read('views/onboarding-v2/NeighborhoodScene.tsx');
+
+  it('the welcome has no leftover carousel progress dots', () => {
+    expect(welcome).not.toContain('h-[8px] w-8'); expect(welcome).not.toContain('[0, 1, 2].map');
+    expect(welcome).toContain('obv2-get-started');
+    expect(welcome).toContain('obv2-welcome-account');
+  });
+
+  it('under the welcome the street already shows its first story frame, so nothing pops in after the dissolve', () => {
+    expect(css).toContain('.pq-obv2.from-welcome .p-arrive, .pq-obv2.from-welcome .brand-hero { display: none; }');
+    expect(css).not.toContain('.pq-obv2.from-welcome .p-arrive, .pq-obv2.from-welcome .brand-hero { visibility: hidden; }');
+    expect(css).toContain('.pq-obv2.from-welcome .brand-mini { visibility: visible; opacity: 1; transition: none; }');
+    expect(css).toContain('.pq-obv2.from-welcome.s-arrive .scrim-top');
+    expect(css).toContain('.obv2-welcome.leaving > * { opacity: 0 !important; animation: none !important;');
+    expect(view).toContain("const overlayState: StoryState = welcome !== 'hidden' ? 'demo' : state;");
+    expect(view).toContain("hidden={state === 'arrive' && welcome === 'hidden'}");
+  });
+
+  it('the street continues below its frame (same camera, nothing stretched) and the scrim covers the real art edge', () => {
+    expect(scene).toContain("import envForeSvg from '../../assets/onboarding-v2/env-fore.svg';");
+    expect(css).toContain('.pq-obv2 .art > .layer-fore { top: 600px; bottom: auto; height: 300px; }');
+    const layout = read('views/onboarding-v2/onboardingV2Layout.ts');
+    expect(layout).toContain('export const ART_BOTTOM = SCENE_HEIGHT + 300;');
+    const fore = read('assets/onboarding-v2/env-fore.svg');
+    expect(fore.startsWith('<svg')).toBe(true); expect(fore).toContain('viewBox="0 600 390 300"');
+  });
+
+  it('the caption block keeps the longest caption height, so nothing jumps when captions change', () => {
+    expect(css).toContain('.pq-obv2 > .p-demo .caption { min-height: max(calc(62px * var(--ts, 1)), var(--cap-h, 0px)); }');
+    expect(view).toContain("'--cap-h'");
+  });
+});
+
 describe('sign-out and deletion', () => {
   it('logout clears the intention with all account state, keeping only device preferences', () => {
     const logout = between(database, 'export const logoutUser', 'await signOut(auth);');

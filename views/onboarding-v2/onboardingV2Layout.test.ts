@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SCRIM_RAMP, baseLayout, computeLayout, placeOverlays, type LayoutMeasurements } from './onboardingV2Layout';
+import { ART_BOTTOM, SCRIM_RAMP, baseLayout, computeLayout, placeOverlays, type LayoutMeasurements } from './onboardingV2Layout';
 import { STORY_STEPS, STORY_TIMELINE } from './onboardingV2Timeline';
 import { SCENE_ANCHORS, signalDots, signalPath } from './sceneGeometry';
 
@@ -74,7 +74,7 @@ describe('onboarding 2.0 layout', () => {
   it('overlay placement follows the panel heights', () => {
     const L = computeLayout(baseLayout(390, 844), m());
     const o = placeOverlays(L, 'choose', 320, 320, 40);
-    expect(o.scrimTop).toBe(Math.min(844 - 320 - 70, 600 * L.k + L.ty - SCRIM_RAMP));
+    expect(o.scrimTop).toBe(Math.min(844 - 320 - 70, ART_BOTTOM * L.k + L.ty - SCRIM_RAMP));
     expect(o.replayTop).toBe(844 - 320 - 40 - 10);
   });
 });
@@ -84,7 +84,7 @@ describe('scene-to-panel transition', () => {
     for (const [w, h] of [[320, 568], [360, 712], [360, 726], [390, 844], [412, 915]]) {
       for (const panel of [180, 260, 340]) {
         const L = computeLayout(baseLayout(w, h), m({ storyPanelHeight: panel }));
-        const sceneBottom = 600 * L.k + L.ty;
+        const sceneBottom = ART_BOTTOM * L.k + L.ty;
         for (const state of ['arrive', 'demo', 'choose'] as const) {
           const { scrimTop } = placeOverlays(L, state, panel, panel, 40);
           expect(scrimTop + SCRIM_RAMP).toBeLessThanOrEqual(Math.max(SCRIM_RAMP, sceneBottom) + 0.01);

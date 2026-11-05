@@ -9,6 +9,8 @@ const BACK_BUTTON = 44 + 6;
 const HEADER_GAP = 8;
 /** Height of the bottom scrim's transparent-to-opaque ramp (px); matches onboardingV2.css. */
 export const SCRIM_RAMP = 110;
+/** Bottom of the street art in scene units: the 600 px frame plus the 300 px foreground extension (env-fore.svg). */
+export const ART_BOTTOM = SCENE_HEIGHT + 300;
 
 export type BaseLayout = { width: number; height: number; land: boolean; short: boolean; tiny: boolean };
 
@@ -101,8 +103,8 @@ export function computeLayout(base: BaseLayout, m: LayoutMeasurements): Onboardi
 /** Top of the bottom scrim and of the Replay button for the given state (px). */
 export function placeOverlays(layout: OnboardingLayout, state: 'arrive' | 'demo' | 'choose', activePanelHeight: number, choosePanelHeight: number, replayHeight: number) {
   const H = layout.height;
-  // the scrim must be fully opaque before the street art ends (bottom of the 390x600 frame), so the art never stops in a hard line
-  const sceneBottom = SCENE_HEIGHT * layout.k + layout.ty;
+  // the scrim must be fully opaque before the street art ends, so the art never stops in a hard line
+  const sceneBottom = ART_BOTTOM * layout.k + layout.ty;
   const scrimTop = state === 'arrive' && layout.arriveUnder
     ? Math.max(0, Math.min(layout.carBottom - 48, sceneBottom - SCRIM_RAMP))
     : Math.max(0, Math.min(H - activePanelHeight - 70, sceneBottom - SCRIM_RAMP));

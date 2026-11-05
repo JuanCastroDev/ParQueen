@@ -143,6 +143,9 @@ export const OnboardingV2View = ({ onChooseIntent, onAccount, androidBackRef, in
   const [layout, setLayout] = useState<OnboardingLayout | null>(null);
   const [overlays, setOverlays] = useState<{ scrimTop: number; replayTop: number }>({ scrimTop: 0, replayTop: 0 });
   const [fontsReady, setFontsReady] = useState(0);
+  // story panel height (tallest of example/choices, EN+ES) and longest caption height: the example's caption sits where
+  // the choices will appear, directly under the street, and never moves when the caption changes
+  const [storyMetrics, setStoryMetrics] = useState<{ storyH: number; capH: number }>({ storyH: 0, capH: 0 });
 
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -204,13 +207,18 @@ export const OnboardingV2View = ({ onChooseIntent, onAccount, androidBackRef, in
       brandMiniWidth: measure.mini.current?.offsetWidth ?? 0,
     });
     setLayout(prev => (prev && JSON.stringify(prev) === JSON.stringify(next)) ? prev : next);
+    const caps = measure.story.current.filter(Boolean).map(el => (typeof (el as HTMLElement).querySelector === 'function' ? (el as HTMLElement).querySelector('.caption') : null) as HTMLElement | null).filter(Boolean).map(c => (c as HTMLElement).offsetHeight);
+    const metrics = { storyH: storyHeights.length ? Math.max(...storyHeights) : 0, capH: caps.length ? Math.max(...caps) : 0 };
+    setStoryMetrics(prev => (prev.storyH === metrics.storyH && prev.capH === metrics.capH) ? prev : metrics);
   }, [size.w, size.h, lang, fontsReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- scrim and Replay placement follow the live panel heights
   useLayoutEffect(() => {
     if (!layout || layout.land) return;
-    const active = panelRefs[state].current, choose = panelRefs.choose.current;
-    const next = placeOverlays(layout, state, active?.offsetHeight ?? 0, choose?.offsetHeight ?? 0, replayRef.current?.offsetHeight ?? 40);
+    // under the welcome the street is already in its first story frame, so the dissolve reveals a finished picture
+    const overlayState: StoryState = welcome !== 'hidden' ? 'demo' : state;
+    const active = panelRefs[overlayState].current, choose = panelRefs.choose.current;
+    const next = placeOverlays(layout, overlayState, active?.offsetHeight ?? 0, choose?.offsetHeight ?? 0, replayRef.current?.offsetHeight ?? 40);
     setOverlays(prev => (prev.scrimTop === next.scrimTop && prev.replayTop === next.replayTop) ? prev : next);
     const p = panelRefs[state].current;
     if (p) {
@@ -218,7 +226,7 @@ export const OnboardingV2View = ({ onChooseIntent, onAccount, androidBackRef, in
       const end = p.scrollHeight <= p.clientHeight + 4;
       setAtEnd(prev => (prev[state] === end ? prev : { ...prev, [state]: end }));
     }
-  }, [layout, state, lang]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [layout, state, lang, welcome, storyMetrics]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- focus the new heading after a state change
   useEffect(() => {
@@ -347,6 +355,7 @@ export const OnboardingV2View = ({ onChooseIntent, onAccount, androidBackRef, in
   ].filter(Boolean).join(' ');
   const stageStyle = {
     ...(L?.panelMax != null ? { '--pmax': `${L.panelMax}px` } : {}),
+    ...(storyMetrics.capH ? { '--cap-h': `${storyMetrics.capH}px` } : {}),
     ...(L?.arriveMax != null ? { '--amax': `${L.arriveMax}px` } : {}),
     ...(L?.arriveTop != null ? { '--arrive-top': `${L.arriveTop}px` } : {}),
   } as React.CSSProperties;
@@ -382,7 +391,7 @@ export const OnboardingV2View = ({ onChooseIntent, onAccount, androidBackRef, in
         <BrandHero />
         <div className="hdr" ref={hdrRef}>
           <div className="hdr-left">
-            <button type="button" className="icon-btn" aria-label={tr('onboarding_v2.back')} hidden={state === 'arrive'} onClick={toWelcome}>
+            <button type="button" className="icon-btn" aria-label={tr('onboarding_v2.back')} hidden={state === 'arrive' && welcome === 'hidden'} onClick={toWelcome}>
               <svg width={22} height={22} viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="#fff" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><polyline points="15 6 9 12 15 18" /></svg>
             </button>
             <BrandMini />

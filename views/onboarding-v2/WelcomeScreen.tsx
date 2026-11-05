@@ -2,7 +2,7 @@
 // Onboarding 2.0. Same emblem, beacon ring, shimmer, "WELCOME TO" / ParQueen wordmark / slogan / supporting line
 // and blue Get Started button as views/OnboardingView.tsx (which stays untouched as the rollback path); the
 // animation classes are the same global ones in index.css. Differences: the controls sit in normal flow (so large
-// text scrolls instead of overlapping), the three dots now stand for Welcome · Example · Choose, and a quiet
+// text scrolls instead of overlapping), the old carousel dots are removed (founder QA), and a quiet
 // "Already have an account?" link keeps the existing-account route.
 import React, { useLayoutEffect, useRef } from 'react';
 import Logo from '../../assets/Parqueen_Logo.png';
@@ -111,16 +111,6 @@ export const WelcomeScreen = ({ tr, reduce, leaving, onGetStarted, onAccount, he
 
     {/* dots + Get Started (+ existing-account route) */}
     <div className={`obv2-welcome-actions${reduce ? '' : ' hero-bottom-fade'}`}>
-      {/* three stages of the new flow: Welcome · Example · Choose (decorative; the screen reader hears the heading) */}
-      <div className="flex gap-2 items-center" aria-hidden="true">
-        {[0, 1, 2].map(i => (
-          <span
-            key={i}
-            className={`block rounded-full${i === 0 ? ' h-[8px] w-8' : ' h-[6px] w-[6px]'}`}
-            style={i === 0 ? { background: '#3b82f6', boxShadow: '0 0 7px rgba(59,130,246,0.55)' } : { background: 'rgba(255,255,255,0.28)' }}
-          />
-        ))}
-      </div>
       <button
         type="button"
         onClick={onGetStarted}
