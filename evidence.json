@@ -1,0 +1,40 @@
+{
+  "schema": "parqueen-founder-provenance-evidence/v1",
+  "evidenceClass": "FOUNDER-EXECUTED",
+  "keyId": "parqueen-founder-20261028-r1",
+  "payload": {
+    "schema": "parqueen-founder-provenance-evidence/v1",
+    "evidenceClass": "FOUNDER-EXECUTED",
+    "repository": "JuanCastroDev/ParQueen",
+    "head": "16b96dc5f24f4fc7981e8bc3519460a0d31f4b1c",
+    "tree": "fe2a2b8563fa500c221c04a1f28a68b9a296d99e",
+    "base": "2bddccb0477211867326d9e858607b6dd6ac3843",
+    "criticalPaths": [
+      ".github/workflows/pr-gate.yml"
+    ],
+    "runner": {
+      "path": "scripts/ci/private-provenance-suite.mjs",
+      "sha256": "96a932f9c33482ac0a7ca43bb05f7e317e0c8e83e80bf40ce8a2f1395b10cd37"
+    },
+    "suite": {
+      "path": "functions/curbIntelligence/provenanceAndConflict.test.cjs",
+      "sha256": "ec331d80d5c29a4a367a9a4926d0f3fd7a5773bf030dd8388da3821e60d4c486"
+    },
+    "artifact": {
+      "size": 45710043,
+      "sha256": "e1ca91f7ba05e874449f168242509908ab7d587be3fc7f3352c66c0851cbc225"
+    },
+    "tests": {
+      "executed": 11,
+      "passed": 11,
+      "failed": 0,
+      "skipped": 0,
+      "exitCode": 0
+    },
+    "founderIdentity": "parqueen-founder",
+    "executedAt": "2026-11-05T13:13:57.288Z",
+    "attestationId": "2f5719bb-9c31-4c92-829e-d352e6fbfdc4",
+    "expiresAt": "2026-11-19T13:13:57.288Z"
+  },
+  "signature": "kQmOgP8enmQUSDLGR3NMW4uafmogF37EMGEMU9QoY6kWPhJptnZnmNecSHOIRpa+0yvK3wagovggbcwzX1AWCA=="
+}
