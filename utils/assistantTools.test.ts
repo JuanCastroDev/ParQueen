@@ -242,7 +242,7 @@ const baseSpot = {
   restrictionVersionId: 'v1', segmentStreetName: 'Main St',
   streetIntelStatus: 'found' as const, streetIntelReason: null, streetIntelCheckedAt: null,
   curbProtocolVersion: 2 as const, curbResolutionStatus: 'high_confidence' as const,
-  curbSelector: null, curbRefreshAttempted: false,
+  curbSelector: null, curbSideConfirmation: null, curbRefreshAttempted: false,
   gpsAccuracyMeters: 8, sideConfidence: 'high' as const, confirmedParkingSide: null,
 };
 
