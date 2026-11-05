@@ -55,6 +55,15 @@ function source() {
   };
 }
 
+const configuredArchive = process.env.CURB_LION_PRIMARY_ARCHIVE || '';
+const configuredIndex = configuredArchive ? relationshipIndexPath(configuredArchive) : '';
+const privatePinnedIndex = configuredArchive
+  && configuredIndex
+  && existsSync(configuredArchive)
+  && existsSync(configuredIndex)
+  ? configuredIndex
+  : '';
+
 function record() {
   return {
     sourceVersion: { resourceId: 'inkn-q76z', version: '1793494484:1744725948' },
@@ -141,11 +150,8 @@ describe('LION relationship index', () => {
     expect(loadPinnedRelationshipIndex('')).toBeNull();
   });
 
-  it('loads the pinned 26B index once and resolves an unseen physical id', () => {
-    const archive = process.env.CURB_LION_PRIMARY_ARCHIVE
-      || 'C:/Users/jayca/AppData/Local/ParQueen/si-launch-03-v1/private/generator/si03-retained-source-bytes-1/lion-snapshot.raw';
-    const file = relationshipIndexPath(archive);
-    expect(existsSync(file)).toBe(true);
+  it.skipIf(!privatePinnedIndex)('loads the configured pinned 26B index once and resolves an unseen physical id', () => {
+    const file = privatePinnedIndex;
     const started = performance.now();
     const index = loadPinnedRelationshipIndex(file);
     const loadMs = performance.now() - started;

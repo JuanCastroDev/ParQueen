@@ -20,10 +20,18 @@ const { nyLongIslandUsFtToWgs84 } = require('./lionStatePlane');
 const { resolveCanonicalCurb, hasPrimaryTopologyAuthority } = require('./canonicalCurbResolver');
 const { proveCanonicalCurbIdentity } = require('./canonicalCurbIdentityProof');
 const { createPrivateBlockfaceResolver } = require('./privateBlockfaceResolver');
+const { relationshipIndexPath } = require('./lionRelationshipIndex');
 
 const ARCHIVE = process.env.CURB_LION_PRIMARY_ARCHIVE ?? '';
 const GDAL = process.env.CURB_LION_GDAL_MODULE ?? '';
-const liveLion = ARCHIVE !== '' && GDAL !== '' && existsSync(ARCHIVE) && existsSync(GDAL);
+const configuredIndex = ARCHIVE ? relationshipIndexPath(ARCHIVE) : '';
+const privateLionArchive = ARCHIVE !== ''
+  && configuredIndex
+  && existsSync(ARCHIVE)
+  && existsSync(configuredIndex)
+  ? ARCHIVE
+  : '';
+const liveLion = privateLionArchive !== '' && GDAL !== '' && existsSync(GDAL);
 const SERVICE_URL = 'https://local-demo-disabled.run.app';
 const GEOMETRY = Object.freeze({
   type: 'MultiLineString',
@@ -324,17 +332,20 @@ describe('official LION primary topology', () => {
     expect(mismatch).toEqual({ state: 'IDENTITY_NOT_PROVEN', reason: 'function3c_bfi_mismatch' });
   }, 90000);
 
-  it('fails closed instead of scanning FileGDB when the pinned index is missing or corrupt', async () => {
+  it('fails closed instead of scanning FileGDB when the pinned index is missing or corrupt', () => {
     const source = readFileSync(new URL('./officialLionPrimaryTopology.js', import.meta.url), 'utf8');
     const body = source.slice(
       source.indexOf('async function openApprovedLionArchive'),
       source.indexOf('let admittedCatalog'),
     );
+    expect(body).toContain('loadPinnedRelationshipIndex');
+    expect(body).toContain('createUnavailableCatalog()');
     expect(body).not.toContain('extractVerifiedBytes');
     expect(body).not.toContain('openGdalSession');
+  });
 
-    const archive = 'C:/Users/jayca/AppData/Local/ParQueen/si-launch-03-v1/private/generator/si03-retained-source-bytes-1/lion-snapshot.raw';
-    expect(existsSync(archive)).toBe(true);
+  it.skipIf(!privateLionArchive)('fails closed on the configured archive when its pinned index is missing or corrupt', async () => {
+    const archive = privateLionArchive;
     const directory = mkdtempSync(join(tmpdir(), 'lion-no-index-'));
     const copy = join(directory, 'archive.raw');
     linkSync(archive, copy);
@@ -357,8 +368,8 @@ describe('official LION primary topology', () => {
     }
   });
 
-  it('admits the pinned index and preserves the Melville relationship', async () => {
-    const archive = 'C:/Users/jayca/AppData/Local/ParQueen/si-launch-03-v1/private/generator/si03-retained-source-bytes-1/lion-snapshot.raw';
+  it.skipIf(!privateLionArchive)('admits the configured pinned index and preserves the Melville relationship', async () => {
+    const archive = privateLionArchive;
     const admitted = await openApprovedLionArchive(archive);
     expect(readOfficialLionPrimary(admitted)?.ok).toBe(true);
     const relationships = await admitted.relationshipsFor([
