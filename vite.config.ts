@@ -33,6 +33,16 @@ export default defineConfig(({ command, mode }) => {
       },
       plugins: [
         react(),
+        {
+          name: 'parqueen-posthog-release-marker',
+          apply: 'build' as const,
+          transformIndexHtml(html: string) {
+            if (!html.includes('</head>')) {
+              throw new Error('[configuration] Missing document head for PostHog release marker.');
+            }
+            return html.replace('</head>', '  <meta name="parqueen-posthog-release" content="off" />\n</head>');
+          },
+        },
         // Only active when real upload credentials are present — an ordinary
         // local/CI build without them must still succeed, just without
         // source-map generation/upload (see build.sourcemap below).

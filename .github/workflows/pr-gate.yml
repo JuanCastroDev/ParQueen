@@ -250,6 +250,10 @@ jobs:
         env:
           VITE_MAPBOX_TOKEN: ${{ vars.VITE_MAPBOX_TOKEN }}
 
+      - name: CLIENT — Assert PostHog release disabled
+        if: steps.classify.outputs.run_client == 'true'
+        run: npm run verify:posthog:release
+
       - name: CLIENT — Run browser smoke and accessibility tests
         if: steps.classify.outputs.run_client == 'true'
         run: npm run test:e2e
