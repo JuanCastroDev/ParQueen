@@ -225,7 +225,10 @@ async function persistCanonicalCurb(input = {}) {
       protocolVersion: 2,
       cacheCompatibilityVersion: CACHE_COMPATIBILITY_VERSION,
       activeRuleSetVersion: ruleSetVersion,
-      ruleSummary: { cleaningAvailable: Boolean(selectedRules?.cleaning) },
+      ruleSummary: {
+        cleaningAvailable: Boolean(selectedRules?.cleaning),
+        rulesResolved: selectedRules?.rulesResolved === true,
+      },
       updatedAt: now,
     }],
     ...rules.map((rule, index) => [db.doc(`streetSegments/${key}/streetRules/${ruleSetVersion}_${index}`), {
@@ -241,6 +244,7 @@ async function persistCanonicalCurb(input = {}) {
   // User-initiated saves name the authenticated caller. The access read and
   // the curb writes commit in one transaction. Callers that do not supply
   // callerUid are scheduled, internal, or test paths and keep the batch.
+  if (input.signal?.aborted) return { success: false, reason: 'request_aborted' };
   const userInitiated = Object.prototype.hasOwnProperty.call(input || {}, 'callerUid');
   if (userInitiated) {
     const callerUid = input.callerUid;
@@ -254,15 +258,18 @@ async function persistCanonicalCurb(input = {}) {
         const snap = await tx.get(db.doc(`users/${callerUid}`));
         const data = snap && snap.exists && typeof snap.data === 'function' ? snap.data() : null;
         if (userRecordDenies(data)) throw denied;
+        if (input.signal?.aborted) throw new Error('request_aborted');
         for (const [ref, value] of documents) tx.set(ref, value);
       });
     } catch (err) {
       if (err === denied) return { success: false, reason: 'product_access_denied' };
+      if (input.signal?.aborted) return { success: false, reason: 'request_aborted' };
       throw err;
     }
     return { success: true, publicCurbKey: key, ruleCount: rules.length };
   }
 
+  if (input.signal?.aborted) return { success: false, reason: 'request_aborted' };
   const batch = db.batch();
   for (const [ref, value] of documents) batch.set(ref, value);
   await batch.commit();

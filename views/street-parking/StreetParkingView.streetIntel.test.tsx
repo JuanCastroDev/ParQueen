@@ -21,7 +21,7 @@ describe('StreetParkingView canonical curb save contract', () => {
     expect(save).toContain('requestCanonicalCurb(lat, lng)');
     expect(save.indexOf('setSavedSpot(resolvingSpot)')).toBeLessThan(save.indexOf('requestCanonicalCurb(lat, lng)'));
     expect(source).toContain("savedSpot.curbResolutionStatus === 'resolving'");
-    expect(source).toContain("t('street_intel.verifying_curb')");
+    expect(source).toContain("t(curbLookupStage === 'location' ? 'street_intel.getting_location' : 'street_intel.identifying_curb')");
   });
 
   it('uses one V2 request for a normal save and never invokes the 80 m matcher', () => {
@@ -53,9 +53,14 @@ describe('StreetParkingView canonical curb save contract', () => {
     const request = between('const requestCanonicalCurb = useCallback', '// Pre-V2 sessions');
     const watch = between('watchHandle = watchPosition(', 'if (!mapRef.current) {');
     expect(watch).toContain('lastGpsSampleRef.current = {');
-    expect(watch).toContain('timestampMs: Date.now()');
+    expect(watch).toContain('position.timestampMs');
+    expect(watch).toContain('providerTimestampMs ?? Date.now()');
     expect(request).toContain('const observed = lastGpsSampleRef.current');
     expect(request).toContain('collectLocationBurst({ seed: liveSeed })');
+    expect(request).toContain('retainedCanonicalLocation(Date.now())');
+    expect(request).toContain('if (captureBurst && candidateToken)');
+    expect(source).toContain('{ enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }');
+    expect(source).not.toContain('interval:');
     expect(request).not.toMatch(/liveSeed\s*=\s*\{[^}]*timestampMs:\s*now/s);
   });
 
@@ -76,21 +81,33 @@ describe('StreetParkingView canonical curb save contract', () => {
   });
 
   it('allows ambiguity to produce only one token-bearing selection request', () => {
-    const selection = between('const handleCanonicalCurbSelection', 'const handleConfirmSide');
+    const selection = between('const handleCanonicalCurbSelection', 'const handleSideConfirmation');
     expect(selection.match(/requestCanonicalCurb\(savedSpot\.lat, savedSpot\.lng, candidateToken\)/g)).toHaveLength(1);
     expect(selection).toContain("savedSpot.curbResolutionStatus !== 'ambiguous'");
     expect(selection).toContain('curbSelectionLoading');
     expect(selection).not.toContain('runMatchNearestSegment');
     expect(source).toContain('<VisualCurbSelector');
     expect(source).toContain('onSelect={handleCanonicalCurbSelection}');
+    const confirmation = between('const handleSideConfirmation', 'const handleConfirmSide');
+    expect(confirmation.match(/requestCanonicalCurb\(savedSpot\.lat, savedSpot\.lng, candidateToken\)/g)).toHaveLength(1);
+    expect(confirmation).toContain("curbResolutionStatus !== 'side_confirmation_required'");
+    expect(source).toContain('<CurbSideCrossSection');
   });
 
-  it('attempts legacy canonical refresh once and replaces legacy identity only on V2 high confidence', () => {
+  it('does not look up or replace a curb when My Car opens', () => {
     const migration = between('// Pre-V2 sessions', '// Live duration counter');
-    expect(migration).toContain('savedSpot.curbRefreshAttempted');
-    expect(migration).toContain('curbRefreshAttempted: true');
-    expect(migration).toContain("if (response.status !== 'high_confidence') return");
+    expect(migration).toContain('Opening My Car does not look up or replace a curb');
+    expect(migration).not.toContain('requestCanonicalCurb');
+    expect(migration).not.toContain('writeSavedSpot');
     expect(migration).not.toContain('runMatchNearestSegment');
+    const save = between('const saveMySpot = async () =>', '// Used after handoff');
+    expect(save).toContain('const existingSavedSpot = readSavedSpot()');
+    expect(save).toContain('if (existingSavedSpot)');
+    expect(save).toContain('commitSpotIfCurrent(epoch, resolvingSpot.sessionId, spot)');
+    const commit = between('const commitSpotIfCurrent', 'const saveMySpot');
+    expect(commit).toContain("stored?.curbResolutionStatus === 'high_confidence' && spot.curbResolutionStatus !== 'high_confidence'");
+    const retry = between('const handleRetryStreetIntel = useCallback', 'const writeCleaningReminder');
+    expect(retry).toContain('commitSpotIfCurrent(epoch, sessionId, updated)');
   });
 
   it('stores no invented side or segment for unsupported V2 results', () => {
@@ -107,6 +124,21 @@ describe('StreetParkingView canonical curb save contract', () => {
     expect(source).toContain('disabled={!cleaningAvailable || !nextCleaningAt}');
     expect(source).toContain('cleaningAvailable && nextCleaningAt && reminderEnabled');
     expect(source).not.toContain('disabled={!savedSpot.segmentId}');
+  });
+
+  it('keeps the QA field test off the saved-car write path', () => {
+    const fieldTest = between('{streetIntelQaProbe && userLocation && (', '{userLocation && (');
+    expect(fieldTest).toContain('<QaCurbFieldTest');
+    expect(fieldTest).toContain('requestCanonicalCurb(userLocation[1], userLocation[0], candidateToken, true, onStage)');
+    expect(fieldTest).not.toContain('saveMySpot');
+    expect(fieldTest).not.toContain('writeSavedSpot');
+    expect(fieldTest).not.toContain('endSession');
+    expect(fieldTest).not.toContain('removeItem');
+    const panel = readFileSync(join(__dirname, 'QaCurbFieldTest.tsx'), 'utf8');
+    expect(panel).not.toContain('savedSpot');
+    expect(panel).not.toContain('saveMySpot');
+    expect(panel).not.toContain('writeSavedSpot');
+    expect(panel).not.toContain('endSession');
   });
 
   it('deactivates stale session reminders without erasing the saved preference', () => {

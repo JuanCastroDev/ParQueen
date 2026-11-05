@@ -129,7 +129,7 @@ describe('one-roadway side confirmation', () => {
     expect(isSideConfirmationEnabled({ sideConfirmationEnabled: false }, { CURB_SIDE_CONFIRMATION: 'on' })).toBe(false);
   });
 
-  it('draws only streets within 20 degrees of a cardinal axis', () => {
+  it('keeps axis-aligned streets and draws a valid diagonal at its bearing', () => {
     const bearing = degrees => ({
       eastMeters: Math.cos(degrees * Math.PI / 180),
       northMeters: Math.sin(degrees * Math.PI / 180),
@@ -145,10 +145,20 @@ describe('one-roadway side confirmation', () => {
     expect(orientationForTangent(bearing(80)).axis).toBe('north-south');
     expect(orientationForTangent(bearing(180)).sides).toEqual({ LEFT: 'South', RIGHT: 'North' });
     expect(orientationForTangent(bearing(270)).sides).toEqual({ LEFT: 'East', RIGHT: 'West' });
-    expect(orientationForTangent(bearing(45))).toBeNull();
-    expect(orientationForTangent(bearing(21))).toBeNull();
+    expect(orientationForTangent(bearing(10)).bearingDegrees).toBeUndefined();
+    expect(orientationForTangent(bearing(21))).toMatchObject({
+      north: 'up', axis: 'oblique', bearingDegrees: 69, sides: { LEFT: 'North', RIGHT: 'South' },
+    });
+    expect(orientationForTangent(bearing(45))).toMatchObject({
+      north: 'up', axis: 'oblique', bearingDegrees: 45, sides: { LEFT: 'Northwest', RIGHT: 'Southeast' },
+    });
+    expect(orientationForTangent(bearing(135))).toMatchObject({
+      north: 'up', axis: 'oblique', bearingDegrees: 315, sides: { LEFT: 'Southwest', RIGHT: 'Northeast' },
+    });
     expect(orientationForTangent({ eastMeters: 0, northMeters: 0 })).toBeNull();
+    expect(orientationForTangent({ eastMeters: Number.NaN, northMeters: 1 })).toBeNull();
     expect(cardinalForSide({ eastMeters: 1, northMeters: 0 }, 'CENTERLINE')).toBeNull();
+    expect(cardinalForSide({ eastMeters: Math.SQRT1_2, northMeters: Math.SQRT1_2 }, 'LEFT')).toBe('Northwest');
   });
 
   it('binds the side token to the official roadway and not to the search center', () => {
@@ -268,7 +278,9 @@ describe('one-roadway side confirmation', () => {
       [record({ coordinates: STEEP })],
       { lat: 40.70002, lng: -74, accuracyMeters: 8, sampleCount: 3, consistencyMeters: 2 },
     );
-    expect(steep).toMatchObject({ state: 'UNSUPPORTED', reasons: ['ambiguity_unresolved'] });
+    expect(steep.state).toBe('SIDE_CONFIRMATION_REQUIRED');
+    expect(steep.confirmation.orientation.axis).toBe('oblique');
+    expect(steep.state).not.toBe('SUPPORTED');
     const adjacent = await resolveAt([
       record(),
       record({
@@ -626,5 +638,87 @@ describe('side-confirmation HMAC authentication', () => {
     expect(failed).toEqual({ protocolVersion: 2, status: 'unsupported', reason: 'candidate_incomplete' });
     expect(JSON.stringify(failed)).not.toContain(TEST_HMAC_KEY);
     expect(JSON.stringify(failed)).not.toContain(token);
+  });
+});
+
+describe('oblique side confirmation', () => {
+  const issuedAt = 1_700_000_000_000;
+  const latScale = 111320;
+  const lngScale = 111320 * Math.cos(40.7 * Math.PI / 180);
+
+  function roadwayAt(mathDegrees, reversed = false) {
+    const east = 180 * Math.cos(mathDegrees * Math.PI / 180);
+    const north = 180 * Math.sin(mathDegrees * Math.PI / 180);
+    const start = [-74, 40.7];
+    const end = [-74 + east / lngScale, 40.7 + north / latScale];
+    const coordinates = [[reversed ? end : start, reversed ? start : end]];
+    const unitEast = east / 180;
+    const unitNorth = north / 180;
+    return {
+      row: record({ coordinates }),
+      location: {
+        lat: 40.7 + north / latScale / 2 + (unitEast * 2) / latScale,
+        lng: -74 + east / lngScale / 2 + (-unitNorth * 2) / lngScale,
+        accuracyMeters: 8,
+        sampleCount: 3,
+        consistencyMeters: 2,
+      },
+    };
+  }
+
+  async function chosenFace(mathDegrees, cardinal, reversed = false) {
+    const { row, location } = roadwayAt(mathDegrees, reversed);
+    const offered = await resolveAt([row], location, { sideConfirmationNow: issuedAt });
+    expect(offered.state).toBe('SIDE_CONFIRMATION_REQUIRED');
+    expect(offered.confirmation.orientation.axis).toBe('oblique');
+    const curb = offered.confirmation.curbs.find(value => value.cardinal === cardinal);
+    expect(curb?.token.startsWith('sidec1.')).toBe(true);
+    const selected = await applyVisualCurbSelection({
+      location, candidateToken: curb.token,
+    }, options([row], { sideConfirmationNow: issuedAt }));
+    expect(selected.state).toBe('SUPPORTED');
+    expect(selected.identity.side.cardinal).toBe(cardinal);
+    expect(selected.identity.resolution.method).toBe('visual_selection');
+    return selected.identity.officialBlockFaceId;
+  }
+
+  it('binds each displayed diagonal curb to its official face', async () => {
+    expect(await chosenFace(45, 'Northwest')).toBe('1000000001');
+    expect(await chosenFace(45, 'Southeast')).toBe('1000000002');
+    expect(await chosenFace(135, 'Southwest')).toBe('1000000001');
+    expect(await chosenFace(135, 'Northeast')).toBe('1000000002');
+    expect(await chosenFace(21, 'North')).toBe('1000000001');
+    expect(await chosenFace(21, 'South', true)).toBe('1000000001');
+    expect(await chosenFace(45, 'Northwest', true)).toBe('1000000002');
+  });
+
+  it('does not offer a zero-length tangent or two identical faces', async () => {
+    const { location } = roadwayAt(45);
+    const collapsed = record({ coordinates: [[[-74, 40.7], [-74, 40.7]]] });
+    const sameFace = record({ coordinates: roadwayAt(45).row.geometry.coordinates, rightBlockFaceId: '1000000001' });
+    expect((await resolveAt([collapsed], location)).state).not.toBe('SIDE_CONFIRMATION_REQUIRED');
+    expect((await resolveAt([sameFace], location)).state).not.toBe('SIDE_CONFIRMATION_REQUIRED');
+  });
+
+  it('keeps expiration and replay protection on a diagonal token', async () => {
+    const { row, location } = roadwayAt(45);
+    const offered = await resolveAt([row], location, { sideConfirmationNow: issuedAt });
+    const token = offered.confirmation.curbs.find(curb => curb.cardinal === 'Northwest').token;
+    const expired = await applyVisualCurbSelection({
+      location, candidateToken: token,
+    }, options([row], { sideConfirmationNow: issuedAt + TOKEN_LIFETIME_MS }));
+    expect(expired).toMatchObject({ state: 'UNSUPPORTED', reasons: ['candidate_token_invalid'] });
+    const replayed = await applyVisualCurbSelection({
+      location, candidateToken: token,
+    }, options([row], { sideConfirmationNow: issuedAt, callerUid: 'driver-2' }));
+    expect(replayed).toMatchObject({ state: 'UNSUPPORTED', reasons: ['candidate_token_invalid'] });
+    const accepted = await applyVisualCurbSelection({
+      location, candidateToken: token,
+    }, options([row], { sideConfirmationNow: issuedAt + TOKEN_LIFETIME_MS - 1 }));
+    expect(accepted.state).toBe('SUPPORTED');
+    expect(accepted.identity.officialBlockFaceId).toBe('1000000001');
+    expect(JSON.stringify(offered.confirmation)).not.toContain(TEST_HMAC_KEY);
+    expect(JSON.stringify(offered.confirmation)).not.toContain(TEST_UID);
+    expect(JSON.stringify(offered.confirmation)).not.toContain('1000000001');
   });
 });

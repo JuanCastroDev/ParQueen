@@ -1,4 +1,5 @@
 import { Capacitor } from '@capacitor/core';
+import { streetIntelQaBuild } from './demoFirebase';
 
 export type NotificationPath = 'native' | 'browser';
 
@@ -20,4 +21,7 @@ export const readNotificationPlatformEnv = (): NotificationPlatformEnv => ({
  */
 export const resolveNotificationPath = (
   env: NotificationPlatformEnv = readNotificationPlatformEnv(),
-): NotificationPath => (env.isNative && env.platform === 'android' ? 'native' : 'browser');
+): NotificationPath => {
+  if (streetIntelQaBuild()) return 'browser';
+  return env.isNative && env.platform === 'android' ? 'native' : 'browser';
+};

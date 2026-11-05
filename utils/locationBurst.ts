@@ -1,6 +1,8 @@
+import { streetIntelQaBuild } from './demoFirebase';
 import {
   watchPosition,
   type AppPosition,
+  type AppPositionOptions,
   type LocationPositionError,
   type LocationWatchHandle,
 } from './geolocation';
@@ -10,6 +12,8 @@ export interface LocationSample {
   lng: number;
   accuracyMeters: number;
   timestampMs: number;
+  /** Platform clock of this fix, when the device reported one. */
+  providerTimestampMs?: number;
 }
 
 export interface AggregatedLocation {
@@ -33,6 +37,60 @@ export const LOCATION_BURST_POLICY = {
   minimumOutlierDistanceMeters: 15,
   oldestSampleFreshnessWeight: 0.5,
 } as const;
+
+/** Isolated Street Intelligence QA only. Production keeps maximumDurationMs at 1,800. */
+export const STREET_INTEL_QA_BURST_MAXIMUM_DURATION_MS = 10_000;
+export const STREET_INTEL_QA_BURST_UPDATE_INTERVAL_MS = 2_000;
+export const STREET_INTEL_QA_BURST_MINIMUM_UPDATE_INTERVAL_MS = 1_000;
+
+export const locationBurstMaximumDurationMs = (qaBuild: boolean): number => (
+  qaBuild
+    ? STREET_INTEL_QA_BURST_MAXIMUM_DURATION_MS
+    : LOCATION_BURST_POLICY.maximumDurationMs
+);
+
+export const locationBurstWatchOptions = (
+  qaBuild: boolean,
+  maximumDurationMs: number,
+): AppPositionOptions => {
+  const options: AppPositionOptions = {
+    enableHighAccuracy: true,
+    maximumAge: 0,
+    timeout: maximumDurationMs,
+  };
+  if (!qaBuild) return options;
+  return {
+    ...options,
+    interval: STREET_INTEL_QA_BURST_UPDATE_INTERVAL_MS,
+    minimumUpdateInterval: STREET_INTEL_QA_BURST_MINIMUM_UPDATE_INTERVAL_MS,
+  };
+};
+
+let qaSampleOffsetsMs: number[] | null = null;
+
+/** Relative provider-fix times from the latest QA burst. Production leaves this empty. */
+export const readStreetIntelQaBurstTiming = (): readonly number[] | null => qaSampleOffsetsMs;
+
+let retainedCanonicalSamples: LocationSample[] | null = null;
+
+/** A confirmation may reuse a burst only while every sample is still inside the freshness window. */
+export const retainedCanonicalLocation = (
+  nowMs = Date.now(),
+): AggregatedLocation | null => {
+  const samples = retainedCanonicalSamples;
+  if (!samples || samples.some(sample => !isValidSample(sample, nowMs))) return null;
+  const aggregate = aggregateLocationSamples(samples, nowMs);
+  return isCanonicalLocationReady(aggregate) ? aggregate : null;
+};
+
+const retainCanonicalSamples = (
+  samples: readonly LocationSample[],
+  aggregate: AggregatedLocation | null,
+): void => {
+  retainedCanonicalSamples = isCanonicalLocationReady(aggregate)
+    ? samples.map(sample => ({ ...sample }))
+    : null;
+};
 
 export const isCanonicalLocationReady = (
   location: AggregatedLocation | null,
@@ -184,18 +242,55 @@ type StartWatch = (
   options?: Parameters<typeof watchPosition>[2],
 ) => LocationWatchHandle;
 
+const sameReading = (left: LocationSample, right: LocationSample): boolean =>
+  left.lat === right.lat
+  && left.lng === right.lng
+  && left.accuracyMeters === right.accuracyMeters;
+
+const acceptDistinctSample = (
+  samples: LocationSample[],
+  nextSample: LocationSample,
+  observedAt: number,
+): boolean => {
+  const providerTimestampMs = nextSample.providerTimestampMs;
+  if (providerTimestampMs != null) {
+    const providerAgeMs = observedAt - providerTimestampMs;
+    if (providerAgeMs > LOCATION_BURST_POLICY.maximumSampleAgeMs) return false;
+    if (samples.some((sample) => sample.providerTimestampMs === providerTimestampMs)) return false;
+  } else if (samples.some((sample) => sameReading(sample, nextSample))) {
+    return false;
+  }
+  if (!isValidSample(nextSample, observedAt)) return false;
+  samples.push(nextSample);
+  return true;
+};
+
 export async function collectLocationBurst(input: {
   seed?: LocationSample | null;
   now?: () => number;
   startWatch?: StartWatch;
   setTimer?: typeof setTimeout;
   clearTimer?: typeof clearTimeout;
+  maximumDurationMs?: number;
+  qaBuild?: boolean;
 } = {}): Promise<AggregatedLocation> {
   const now = input.now ?? Date.now;
   const startWatch = input.startWatch ?? watchPosition;
   const setTimer = input.setTimer ?? setTimeout;
   const clearTimer = input.clearTimer ?? clearTimeout;
+  const qaBuild = input.qaBuild ?? streetIntelQaBuild();
+  const maximumDurationMs = input.maximumDurationMs
+    ?? locationBurstMaximumDurationMs(qaBuild);
   const samples: LocationSample[] = [];
+  const sampleOffsetsMs: number[] = [];
+  let sampleOriginMs: number | null = null;
+  qaSampleOffsetsMs = qaBuild ? sampleOffsetsMs : null;
+  const noteSample = (sample: LocationSample): void => {
+    if (!qaBuild) return;
+    const mark = sample.providerTimestampMs ?? sample.timestampMs;
+    if (sampleOriginMs == null) sampleOriginMs = mark;
+    sampleOffsetsMs.push(mark - sampleOriginMs);
+  };
   const startedAt = now();
 
   if (
@@ -203,6 +298,7 @@ export async function collectLocationBurst(input: {
     && isValidSample(input.seed, startedAt, LOCATION_BURST_POLICY.maximumSeedAgeMs)
   ) {
     samples.push(input.seed);
+    noteSample(input.seed);
   }
 
   return new Promise<AggregatedLocation>((resolve, reject) => {
@@ -216,7 +312,7 @@ export async function collectLocationBurst(input: {
     };
     const timer = setTimer(() => {
       finish();
-    }, LOCATION_BURST_POLICY.maximumDurationMs);
+    }, maximumDurationMs);
     const cleanup = (): void => {
       clearTimer(timer);
       clearWatch();
@@ -231,9 +327,11 @@ export async function collectLocationBurst(input: {
       if (settled) return;
       const aggregate = aggregateLocationSamples(samples, now());
       if (!aggregate) {
+        retainCanonicalSamples(samples, null);
         fail(new Error('No valid location samples'));
         return;
       }
+      retainCanonicalSamples(samples, aggregate);
       settled = true;
       cleanup();
       resolve(aggregate);
@@ -244,14 +342,18 @@ export async function collectLocationBurst(input: {
         (position) => {
           if (settled) return;
           const observedAt = now();
+          const providerTimestampMs = Number.isFinite(position.timestampMs)
+            ? position.timestampMs
+            : undefined;
           const nextSample: LocationSample = {
             lat: position.coords.latitude,
             lng: position.coords.longitude,
             accuracyMeters: position.coords.accuracy ?? Number.NaN,
             timestampMs: observedAt,
+            ...(providerTimestampMs === undefined ? {} : { providerTimestampMs }),
           };
-          if (!isValidSample(nextSample, observedAt)) return;
-          samples.push(nextSample);
+          if (!acceptDistinctSample(samples, nextSample, observedAt)) return;
+          noteSample(nextSample);
           const aggregate = aggregateLocationSamples(samples, observedAt);
           if (
             isCanonicalLocationReady(aggregate)
@@ -261,11 +363,7 @@ export async function collectLocationBurst(input: {
           }
         },
         fail,
-        {
-          enableHighAccuracy: true,
-          maximumAge: 0,
-          timeout: LOCATION_BURST_POLICY.maximumDurationMs,
-        },
+        locationBurstWatchOptions(qaBuild, maximumDurationMs),
       );
       if (clearWatchWhenAvailable) watchHandle.clear();
     } catch (error) {

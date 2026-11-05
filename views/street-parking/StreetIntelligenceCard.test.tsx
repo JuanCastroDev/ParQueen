@@ -20,6 +20,8 @@ vi.mock('../../firebase', () => ({ db: {} }));
 interface SuspensionRow { id: string; data: any }
 let suspensionRows: SuspensionRow[] = [];
 let segmentExists = true;
+let holdReads = false;
+let releaseReads: Array<() => void> = [];
 let segmentData: any = { status: 'active' };
 let streetRuleRows: { id: string; data: any }[] = [];
 interface SuspensionsQueryCall { constraints: any[] }
@@ -31,7 +33,11 @@ vi.mock('firebase/firestore', () => ({
     query: (base: any, ...constraints: any[]) => ({ ...base, __constraints: constraints }),
     where: (field: string, op: string, value: any) => ({ __kind: 'where', field, op, value }),
     orderBy: (field: string, dir?: string) => ({ __kind: 'orderBy', field, dir }),
-    getDoc: (_ref: any) => Promise.resolve({ exists: () => segmentExists, data: () => segmentData }),
+    getDoc: (_ref: any) => {
+        const result = { exists: () => segmentExists, data: () => segmentData };
+        if (!holdReads) return Promise.resolve(result);
+        return new Promise(resolve => { releaseReads.push(() => resolve(result)); });
+    },
     getDocs: (q: any) => {
         if (Array.isArray(q.__col) && q.__col[0] === 'suspensions') {
             suspensionsQueryCalls.push({ constraints: q.__constraints });
@@ -235,6 +241,8 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         segmentExists = true;
         segmentData = SUPPORTED_ADMIN_SEGMENT;
         streetRuleRows = [{ id: 'rule1', data: MELVILLE_RULE }];
+        holdReads = false;
+        releaseReads = [];
         vi.useFakeTimers();
         vi.setSystemTime(new Date('2026-08-24T07:00:00-04:00'));
     });
@@ -245,7 +253,11 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         segmentExists = false;
         const { renderer } = await renderCard();
         const text = renderedText(renderer);
-        expect(text).toContain('ParQueen could not verify the curb and parking rules here.');
+        expect(text).toContain('Curb verified');
+        expect(text).not.toContain('West side');
+        expect(text).toContain('Parking information unavailable');
+        expect(text).toContain('Always check posted signs.');
+        expect(text).not.toContain('ParQueen could not verify the curb and parking rules here.');
         expect(text).not.toContain('Safe Until');
         expect(text).not.toContain('ParQueen Verified');
     });
@@ -254,7 +266,9 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         segmentData = { ...SUPPORTED_ADMIN_SEGMENT, status: undefined };
         const { renderer } = await renderCard();
         const text = renderedText(renderer);
-        expect(text).toContain('ParQueen could not verify the curb and parking rules here.');
+        expect(text).toContain('Curb verified');
+        expect(text).toContain('Parking information unavailable');
+        expect(text).not.toContain('ParQueen could not verify the curb and parking rules here.');
         expect(text).not.toContain('Parking info available');
         expect(text).not.toContain('ParQueen Verified');
     });
@@ -263,7 +277,9 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         segmentData = { ...SUPPORTED_ADMIN_SEGMENT, status: 'needs_review' };
         const { renderer } = await renderCard();
         const text = renderedText(renderer);
-        expect(text).toBe('ParQueen could not verify the curb and parking rules here.');
+        expect(text).toContain('Curb verified');
+        expect(text).toContain('Parking information unavailable');
+        expect(text).not.toContain('ParQueen could not verify the curb and parking rules here.');
         expect(text).not.toMatch(/review|confidence|provider|source|updated|schedule count/i);
     });
 
@@ -278,7 +294,9 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         streetRuleRows = [{ id: 'rule1', data: { ...MELVILLE_RULE, source: 'nyc_open_data', needsReview: true } }];
         const { renderer } = await renderCard();
         const text = renderedText(renderer);
-        expect(text).toBe('ParQueen could not verify the curb and parking rules here.');
+        expect(text).toContain('Curb verified');
+        expect(text).toContain('Parking information unavailable');
+        expect(text).not.toContain('ParQueen could not verify the curb and parking rules here.');
         expect(text).not.toMatch(/NYC Open Data|provider|source|review/i);
     });
 
@@ -446,7 +464,8 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         const { renderer, getResult } = await renderCard();
         const text = renderedText(renderer);
         expect(text).toContain('Metered parking');
-        expect(text).toContain('No street-cleaning schedule found');
+        expect(text).toContain('Street-cleaning schedule unavailable. Always check posted signs.');
+        expect(text).toContain('Curb verified');
         expect(text).not.toContain('ParQueen could not verify the curb and parking rules here.');
         expect(text).not.toContain('Safe Until');
         expect(getResult().movementResult.scheduleDescription).toBeNull();
@@ -527,5 +546,32 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         expect(getResult().movementResult.activeNow).toBe(true);
         expect(getResult().movementResult.restrictionKind).toBe('noStanding');
         expect(getResult().cleaningAvailable).toBe(false);
+    });
+
+    it('keeps a verified curb visible while parking rules are still loading', async () => {
+        holdReads = true;
+        const { renderer } = await renderCard({ parkingSide: 'Northeast' });
+        const text = renderedText(renderer);
+        expect(text).toContain('Curb verified');
+        expect(text).not.toContain('Northeast side');
+        expect(text).toContain('Checking parking information');
+        expect(text).not.toContain('ParQueen could not verify the curb and parking rules here.');
+        holdReads = false;
+        await act(async () => { releaseReads.splice(0).forEach(release => release()); });
+    });
+
+    it('keeps an unverified curb on the unsupported message', async () => {
+        segmentExists = false;
+        const { renderer } = await renderCard({ sideConfidence: 'unknown' });
+        expect(renderedText(renderer)).toBe('ParQueen could not verify the curb and parking rules here.');
+    });
+
+    it('shows a previously saved verified curb with its confirmed schedule', async () => {
+        const { renderer } = await renderCard({ parkingSide: 'West', sideConfidence: 'high' });
+        const text = renderedText(renderer);
+        expect(text).toContain('Curb verified');
+        expect(text).not.toContain('West side');
+        expect(text).toContain('Safe Until');
+        expect(text).not.toContain('Parking information unavailable');
     });
 });

@@ -9,6 +9,10 @@ const { APPROVED_LION } = require('./successorReleasePolicy');
 const { localDemoSession } = require('./localGeosupportTransport');
 const { normalizeBlockFaceId, CSCL_RESOURCE_ID } = require('./curbIdentity');
 const { nyLongIslandUsFtToWgs84 } = require('./lionStatePlane');
+const {
+  loadPinnedRelationshipIndex,
+  relationshipIndexPath,
+} = require('./lionRelationshipIndex');
 
 const MAX_ENDPOINT_RESIDUAL_METERS = 2;
 const seals = new WeakMap();
@@ -362,6 +366,16 @@ function projectGeometry(geometry) {
   return { type: 'MultiLineString', coordinates };
 }
 
+function officialEndpointGeometry(geometry) {
+  const projected = projectGeometry(geometry);
+  const points = endpoints(projected);
+  if (!points) return null;
+  return {
+    type: 'MultiLineString',
+    coordinates: [[points[0], points[1]]],
+  };
+}
+
 function segmentFromFeature(feature) {
   const attributes = feature.attributes || {};
   const geometry = projectGeometry(feature.geometry);
@@ -378,13 +392,20 @@ function segmentFromFeature(feature) {
   };
 }
 
-function createCatalog(directory, session) {
+function createCatalog(directory, session, index = null) {
   const cache = new Map();
   return Object.freeze({
     async packetFor(physicalId) {
       const key = digitKey(physicalId);
       if (!key) return null;
       if (cache.has(key)) return cache.get(key);
+      if (index) {
+        const started = performance.now();
+        const packet = index.packetFor(key);
+        noteLionLookup(started, packet ? 'packet' : 'closed');
+        cache.set(key, packet);
+        return packet;
+      }
       const subjectFeatures = await session.query(
         directory,
         `subject-${key}`,
@@ -441,6 +462,31 @@ function createCatalog(directory, session) {
   });
 }
 
+function noteLionLookup(started, outcome) {
+  if (process.env.FUNCTIONS_EMULATOR !== 'true') return;
+  if (process.env.GCLOUD_PROJECT !== 'demo-parkqueen-functions-test') return;
+  const elapsedMs = Math.max(0, Math.round(performance.now() - started));
+  try {
+    console.log(JSON.stringify({ record: 'parqueen_lion_index_lookup', elapsedMs, outcome }));
+  } catch { /* timing never changes the relationship */ }
+}
+
+function createUnavailableCatalog() {
+  return {
+    async packetFor() {
+      noteLionLookup(performance.now(), 'unavailable');
+      return null;
+    },
+    async relationshipsFor(records) {
+      const relationships = new Map();
+      for (const record of records || []) {
+        relationships.set(record, closed('lion_primary_unavailable'));
+      }
+      return relationships;
+    },
+  };
+}
+
 function sealCatalog(catalog) {
   const admitted = Object.freeze({
     ok: true,
@@ -463,11 +509,11 @@ async function openApprovedLionArchive(archivePath) {
   if (typeof archivePath !== 'string' || !archivePath) return null;
   const identity = approvedArchive(archivePath);
   if (!identity) return null;
-  const extracted = extractVerifiedBytes(identity.bytes, identity.sha256);
-  if (!extracted || !verifiedExtraction(extracted.directory, extracted.treeSha256)) return null;
-  const session = await openGdalSession();
-  if (!session || !verifiedExtraction(extracted.directory, extracted.treeSha256)) return null;
-  return sealCatalog(createCatalog(extracted.directory, session));
+  const indexed = loadPinnedRelationshipIndex(relationshipIndexPath(archivePath));
+  if (indexed?.lionSha256 === identity.sha256 && indexed.lionByteLength === identity.byteLength) {
+    return sealCatalog(createCatalog(null, null, indexed));
+  }
+  return sealCatalog(createUnavailableCatalog());
 }
 
 let admittedCatalog = null;
@@ -487,6 +533,7 @@ module.exports = {
   evaluateOfficialLionRelationship,
   extractVerifiedBytes,
   loadOfficialLionPrimary,
+  officialEndpointGeometry,
   openApprovedLionArchive,
   readOfficialLionPrimary,
   verifiedExtraction,

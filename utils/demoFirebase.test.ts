@@ -4,12 +4,13 @@ import { getFirestore } from 'firebase/firestore';
 import { describe, expect, it } from 'vitest';
 import {
   assertDemoFirebaseAllowed,
+  assertStreetIntelQaBuildAllowed,
   demoFirebaseAppConfig,
   DEMO_PROJECT_ID,
   PRODUCTION_APP_ID,
   PRODUCTION_PROJECT_ID,
 } from './demoFirebase';
-import { simulatedDemoAppCheckToken } from './demoFirebaseAppCheck';
+import { simulatedDemoAppCheckToken, streetIntelQaAppCheckOptions } from './demoFirebaseAppCheck';
 import { bindDemoEmulators } from './demoFirebaseRuntime';
 
 describe('demo Firebase isolation', () => {
@@ -65,5 +66,40 @@ describe('demo Firebase isolation', () => {
     expect(payload.sub).not.toBe(PRODUCTION_APP_ID);
     expect(payload.simulatedEmulatorAppCheck).toBe(true);
     expect(payload.aud).toEqual([`projects/${DEMO_PROJECT_ID}`]);
+  });
+
+  it('refuses the Street Intelligence QA package in a production build', () => {
+    expect(assertStreetIntelQaBuildAllowed({ MODE: 'production' })).toBe(false);
+    expect(() => assertStreetIntelQaBuildAllowed({
+      MODE: 'production',
+      VITE_PARQUEEN_STREET_INTEL_QA: 'app.parqueen.qa',
+    })).toThrow(/refused outside the streetintelqa build/);
+    expect(() => assertDemoFirebaseAllowed({
+      PROD: true,
+      DEV: false,
+      VITE_PARQUEEN_DEMO_FIREBASE: 'local',
+    })).toThrow(/refused outside a development build/);
+  });
+
+  it('allows simulated App Check only for the streetintelqa package build', () => {
+    const Provider = class {
+      constructor(public options: { getToken: () => Promise<{ token: string; expireTimeMillis: number }> }) {}
+    };
+    expect(streetIntelQaAppCheckOptions({
+      mode: 'production',
+      packageId: '',
+      CustomProvider: Provider as never,
+    })).toBeNull();
+    expect(() => streetIntelQaAppCheckOptions({
+      mode: 'production',
+      packageId: 'app.parqueen.qa',
+      CustomProvider: Provider as never,
+    })).toThrow(/refused outside the streetintelqa build/);
+    const options = streetIntelQaAppCheckOptions({
+      mode: 'streetintelqa',
+      packageId: 'app.parqueen.qa',
+      CustomProvider: Provider as never,
+    });
+    expect(options?.isTokenAutoRefreshEnabled).toBe(true);
   });
 });

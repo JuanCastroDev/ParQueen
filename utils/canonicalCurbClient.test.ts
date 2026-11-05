@@ -203,4 +203,101 @@ describe('canonical curb V2 client contract', () => {
       },
     })).toThrow('Invalid canonical curb response');
   });
+
+  it('accepts the staged oblique response and rejects a malformed bearing', () => {
+    const oblique = {
+      streetName: 'Maran Place',
+      orientation: { north: 'up' as const, axis: 'oblique' as const, bearingDegrees: 45 },
+      curbs: [
+        { token: sideToken('NW'), cardinal: 'Northwest' as const },
+        { token: sideToken('SE'), cardinal: 'Southeast' as const },
+      ],
+    };
+    expect(parseCanonicalCurbResponse({
+      protocolVersion: 2, status: 'side_confirmation_required', confirmation: oblique,
+    })).toMatchObject({
+      status: 'side_confirmation_required',
+      confirmation: { orientation: { axis: 'oblique', bearingDegrees: 45 } },
+    });
+    const oneWay = {
+      ...oblique,
+      orientation: { north: 'up' as const, axis: 'oblique' as const, bearingDegrees: 321 },
+      curbs: [
+        { token: sideToken('SW'), cardinal: 'Southwest' as const, drivingSide: 'left' as const },
+        { token: sideToken('NE'), cardinal: 'Northeast' as const, drivingSide: 'right' as const },
+      ],
+    };
+    expect(parseCanonicalCurbResponse({
+      protocolVersion: 2, status: 'side_confirmation_required', confirmation: oneWay,
+    }).status).toBe('side_confirmation_required');
+    expect(() => parseCanonicalCurbResponse({
+      protocolVersion: 2,
+      status: 'side_confirmation_required',
+      confirmation: {
+        ...oneWay,
+        curbs: oneWay.curbs.map(curb => ({ ...curb, drivingSide: 'right' as const })),
+      },
+    })).toThrow('Invalid canonical curb response');
+    expect(parseCanonicalCurbResponse({
+      protocolVersion: 2,
+      status: 'high_confidence',
+      segmentId: key,
+      streetName: 'Maran Place',
+      sideLabel: 'Northwest',
+      ruleSummary: { cleaningAvailable: false },
+    })).toMatchObject({ sideLabel: 'Northwest' });
+    expect(() => parseCanonicalCurbResponse({
+      protocolVersion: 2,
+      status: 'side_confirmation_required',
+      confirmation: {
+        ...oblique,
+        curbs: [
+          { token: sideToken('N'), cardinal: 'North' },
+          { token: sideToken('S'), cardinal: 'South' },
+        ],
+      },
+    })).toThrow('Invalid canonical curb response');
+    expect(() => parseCanonicalCurbResponse({
+      protocolVersion: 2,
+      status: 'side_confirmation_required',
+      confirmation: {
+        ...oblique,
+        orientation: { north: 'up', axis: 'oblique', bearingDegrees: 80 },
+      },
+    })).toThrow('Invalid canonical curb response');
+    expect(() => parseCanonicalCurbResponse({
+      protocolVersion: 2,
+      status: 'side_confirmation_required',
+      confirmation: {
+        ...oblique,
+        orientation: { north: 'up', axis: 'oblique' },
+      },
+    })).toThrow('Invalid canonical curb response');
+    expect(() => parseCanonicalCurbResponse({
+      protocolVersion: 2,
+      status: 'high_confidence',
+      segmentId: key,
+      streetName: 'Maran Place',
+      sideLabel: 'Left',
+      ruleSummary: { cleaningAvailable: false },
+    })).toThrow('Invalid canonical curb response');
+    for (const sideLabel of ['Northwest', 'Southeast', 'Northeast', 'Southwest']) {
+      expect(parseCanonicalCurbResponse({
+        protocolVersion: 2,
+        status: 'high_confidence',
+        segmentId: key,
+        streetName: 'Maran Place',
+        sideLabel,
+        ruleSummary: { cleaningAvailable: false },
+      })).toMatchObject({ status: 'high_confidence', segmentId: key, sideLabel });
+    }
+    expect(() => parseCanonicalCurbResponse({
+      protocolVersion: 2,
+      status: 'high_confidence',
+      segmentId: key,
+      streetName: 'Maran Place',
+      sideLabel: 'NW',
+      ruleSummary: { cleaningAvailable: false },
+    })).toThrow('Invalid canonical curb response');
+  });
 });
