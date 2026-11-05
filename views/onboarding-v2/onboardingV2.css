@@ -121,7 +121,7 @@
 .pq-obv2 .scrim-top { position: absolute; left: 0; right: 0; top: 0; height: calc(var(--it) + 120px); background: linear-gradient(180deg, rgba(5,13,28,0.72), rgba(5,13,28,0)); pointer-events: none; transition: height 400ms ease; }
 .pq-obv2.s-arrive .scrim-top { height: calc(var(--it) + 190px); background: linear-gradient(180deg, rgba(5,13,28,0.80) 0%, rgba(5,13,28,0.45) 60%, rgba(5,13,28,0)); }
 /* moved with transform instead of top (same picture as the prototype, no layout shift) */
-.pq-obv2 .scrim-bottom { position: absolute; left: 0; right: 0; top: 0; height: 100%; pointer-events: none; will-change: transform; transition: transform 420ms ease; background: linear-gradient(180deg, rgba(5,13,28,0) 0px, rgba(5,13,28,0.62) 45px, var(--color-bg) 90px, var(--color-bg) 100%); }
+.pq-obv2 .scrim-bottom { position: absolute; left: 0; right: 0; top: 0; height: 100%; pointer-events: none; will-change: transform; transition: transform 420ms ease; background: linear-gradient(180deg, rgba(5,13,28,0) 0px, rgba(5,13,28,0.16) 30px, rgba(5,13,28,0.48) 60px, rgba(5,13,28,0.82) 88px, var(--color-bg) 110px, var(--color-bg) 100%); }
 
 /* ---------- brand: the real logo asset + the app's wordmark treatment ---------- */
 /* arrival: large stacked lockup that frames the headline; afterwards: compact header lockup */
