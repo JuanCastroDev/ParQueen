@@ -1,0 +1,248 @@
+/* Onboarding 2.0 neighborhood stage.
+   Ported 1:1 from the approved prototype gateb-freeze-v1.1 (Documents/ParQueen-Onboarding-Art/GateB/16-baseline-freeze-v1.1/prototype/index.html,
+   sha256 b4179fed05c30b13abfb1faed10488620972611f27e6e028d280012aedfc0236). Selectors are scoped to .pq-obv2 and keyframes prefixed obv2-; values, timings and colours are unchanged.
+   Prototype-only parts (desktop test shell, simulated sign-up screen, debug overlay) are not included.
+   In the app the stage is always in the prototype's "phone" mode. */
+/* The prototype page hid [hidden] globally; here it is scoped so the Back and Replay buttons stay out of view and focus when hidden. */
+.pq-obv2 [hidden] { display: none !important; }
+.pq-obv2 { --ts: 1; --it: max(12px, env(safe-area-inset-top, 0px)); --ib: max(6px, env(safe-area-inset-bottom, 0px));
+  position: relative; width: 100%; height: 100%; margin: 0 auto; overflow: hidden;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --color-bg: #050d1c; --color-surface: #091728; --color-text: #ffffff; --color-text-secondary: rgba(255, 255, 255, 0.55);
+  --color-border: rgba(255, 255, 255, 0.1); --color-card: rgba(5, 13, 28, 0.6); --color-glass: rgba(5, 13, 28, 0.85);
+  --color-accent: #60a5fa; --color-info: #38bdf8; --pq-elev-cta: linear-gradient(165deg, #0b63e6 0%, #0a4fc4 55%, #0a3fa8 100%);
+  --mobile-shell-focus: #86c2ff; --mobile-ping-cradle-border: rgba(151, 201, 255, 0.32); --ping-blue: #1e75ff;
+  --hero-tagline: rgba(196, 235, 255, 0.92); color-scheme: dark; }
+.pq-obv2, .pq-obv2 * { box-sizing: border-box; }
+.pq-obv2 button { font: inherit; color: inherit; }
+.pq-obv2 :focus-visible { outline: 3px solid var(--mobile-shell-focus); outline-offset: 2px; }
+/* the stage is a phone-shaped column; on wide desktop browsers it is centred (phones on their side keep the full width) */
+.pq-obv2-host { position: fixed; inset: 0; z-index: 0; background: #050d1c; display: flex; justify-content: center; }
+.pq-obv2-host > .pq-obv2 { max-width: 480px; }
+@media (orientation: landscape) and (max-height: 500px) { .pq-obv2-host > .pq-obv2 { max-width: none; } }
+/* phone-mode safe-area rules from the prototype */
+.pq-obv2 .hdr { left: max(8px, env(safe-area-inset-left, 0px)); right: max(16px, env(safe-area-inset-right, 0px)); }
+.pq-obv2.land .panel { padding-right: max(24px, env(safe-area-inset-right, 0px)); }
+.pq-obv2.land .replay-pill { left: max(16px, env(safe-area-inset-left, 0px)); }
+/* hidden measuring copies used to keep one camera across states and languages */
+.pq-obv2 .obv2-measure { position: absolute; inset: 0; visibility: hidden; pointer-events: none; overflow: hidden; z-index: -1; }
+.pq-obv2 .obv2-measure .panel { top: auto !important; max-height: none !important; animation: none !important; visibility: hidden !important; }
+.pq-obv2 .obv2-measure .p-arrive .sub { display: block !important; }
+.pq-obv2 .obv2-measure .p-arrive.measure-tight .sub { display: none !important; }
+.pq-obv2 .obv2-measure .brand-mini { position: absolute; left: 0; top: 0; opacity: 0; visibility: hidden; }
+.pq-obv2 .obv2-measure .brand-mini .wm { display: inline !important; }
+.pq-obv2 .obv2-measure .brand-hero { display: flex !important; animation: none !important; transform: none !important; }
+/* reduced motion: every state complete and still */
+@media (prefers-reduced-motion: reduce) { .pq-obv2 *, .pq-obv2 *::before, .pq-obv2 *::after { animation: none !important; transition: none !important; } }
+
+.pq-obv2 { background: var(--color-bg); color: var(--color-text); isolation: isolate; }
+
+.pq-obv2 .scene { position: absolute; left: 0; top: 0; width: 390px; height: 600px; transform-origin: 0 0; }
+.pq-obv2 .art, .pq-obv2 .art > * { position: absolute; inset: 0; width: 390px; height: 600px; }
+.pq-obv2 .art img { display: block; user-select: none; -webkit-user-drag: none; }
+.pq-obv2 .fx { overflow: visible; pointer-events: none; }
+.pq-obv2 .hits { position: absolute; inset: 0; pointer-events: none; }
+.pq-obv2 .car-hit { position: absolute; pointer-events: auto; border: 0; border-radius: 44px; background: transparent; cursor: pointer; }
+.pq-obv2 .car-hit:focus-visible { outline: 4px solid var(--mobile-shell-focus); outline-offset: 2px; }
+
+/* scene motion (story beats) */
+.pq-obv2 .layer-driver, .pq-obv2 .layer-search { transition: transform 700ms cubic-bezier(.3,.7,.3,1); }
+.pq-obv2.s-demo .layer-driver, .pq-obv2.s-choose .layer-driver { transform: translate(-5px, 1.5px); }
+.pq-obv2.s-demo .layer-search { transform: translate(1.5px, 5px) scale(1.012); transition-timing-function: ease-out; }
+.pq-obv2.s-choose .layer-search { transform: translate(1.5px, 5px) scale(1.012); }
+
+/* departing-car halo: ParQueen sky/cyan, invites the tap on arrival */
+.pq-obv2 .halo { opacity: 0; transition: opacity 300ms ease; }
+.pq-obv2.s-arrive .halo, .pq-obv2.s-demo .halo { opacity: 1; }
+.pq-obv2.s-arrive .halo-ring { animation: obv2-breathe 2.2s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+@keyframes obv2-breathe { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(1.07); } }
+.pq-obv2 .unlock { opacity: 0; }
+@keyframes obv2-blink { 0%, 100% { opacity: 0; } 40%, 60% { opacity: 1; } }
+
+.pq-obv2 .ping { position: absolute; width: 44px; height: 50.6px; opacity: 0; pointer-events: none; }
+.pq-obv2 .ping svg.pin { position: relative; display: block; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 3px 6px rgba(0,0,0,0.45)); z-index: 2; }
+.pq-obv2 .ping .pulse { position: absolute; top: 40%; left: 50%; width: 44px; height: 44px; border: 2px solid var(--ping-blue); border-radius: 50%; opacity: 0; transform: translate(-50%, -50%) scale(0.8); }
+.pq-obv2 .ping .tip { position: absolute; left: 50%; bottom: -5px; width: 30px; height: 9px; transform: translateX(-50%); border-radius: 50%; background: rgba(30,117,255,0.35); border: 1.5px solid rgba(147,197,253,0.7); }
+.pq-obv2.s-demo .ping, .pq-obv2.s-choose .ping { opacity: 1; }
+.pq-obv2.s-demo .ping .pulse, .pq-obv2.s-choose .ping .pulse { animation: obv2-map-pin-ring 2s ease-out infinite; }
+.pq-obv2 .ping .pulse.p2 { animation-delay: 0.7s !important; }
+@keyframes obv2-map-pin-ring { 0% { transform: translate(-50%, -50%) scale(0.8); opacity: 0; } 15% { opacity: 0.75; } 100% { transform: translate(-50%, -50%) scale(2.4); opacity: 0; } }
+
+.pq-obv2 .sig-line, .pq-obv2 .sig-dot, .pq-obv2 .sig-glow, .pq-obv2 .disc, .pq-obv2 .rx-glow, .pq-obv2 .spark { opacity: 0; }
+.pq-obv2.s-demo .sig-line, .pq-obv2.s-choose .sig-line, 
+.pq-obv2.s-demo .sig-dot, .pq-obv2.s-choose .sig-dot, .pq-obv2.s-demo .sig-glow, .pq-obv2.s-choose .sig-glow, 
+.pq-obv2.s-demo .disc, .pq-obv2.s-choose .disc, .pq-obv2.s-demo .rx-glow, .pq-obv2.s-choose .rx-glow { opacity: 1; }
+.pq-obv2 .sig-dot, .pq-obv2 .sig-glow, .pq-obv2 .rx-glow, .pq-obv2 .disc-pulse, .pq-obv2 .disc-pin { transform-box: fill-box; transform-origin: center; }
+.pq-obv2 .disc { transform-box: fill-box; transform-origin: 0% 100%; }
+.pq-obv2 .disc-pin { transform-origin: 50% 100%; }
+.pq-obv2 .disc-pulse { opacity: 0; }
+.pq-obv2.s-demo .disc-pulse, .pq-obv2.s-choose .disc-pulse { animation: obv2-disc-ring 2s ease-out 0.4s infinite; }
+@keyframes obv2-disc-ring { 0% { opacity: 0; transform: scale(0.6); } 20% { opacity: 0.8; } 100% { opacity: 0; transform: scale(2.2); } }
+
+/* one-tap story, ~8 s, one beat at a time (ms from the tap):
+   0     driver steps to the open door, car lights blink (unlocked)        caption 1 "getting ready to leave"
+   1500  a light leaves the driver's phone ... 1950 it becomes the Ping     caption 2 at 2300, once the Ping has settled
+   3300  the heads-up travels up the street, dot by dot (~1.9 s)            no caption change while it travels
+   5300  the searching driver's phone comes up beside the red car
+   5900  the same Ping lands on their map and pulses                         caption 3 at 6000
+   7700  the three intentions slide in (last one fully visible ~8.3 s) */
+.pq-obv2.play .unlock { animation: obv2-blink 700ms ease-in-out 250ms 2; }
+.pq-obv2.play .spark { animation: obv2-spark 600ms cubic-bezier(.4,0,.2,1) 1500ms both; }
+@keyframes obv2-spark { 0% { opacity: 0; transform: translate(0, 0) scale(0.6); } 15% { opacity: 1; } 85% { opacity: 1; } 100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(1.3); } }
+.pq-obv2 .spark { transform-box: fill-box; transform-origin: center; }
+.pq-obv2.play .ping { animation: obv2-drop 650ms cubic-bezier(.2,.9,.3,1.25) 1950ms both; }
+@keyframes obv2-drop { 0% { opacity: 0; transform: translateY(-24px) scale(0.8); } 100% { opacity: 1; transform: none; } }
+.pq-obv2.play .ping .pulse { animation-delay: 2.3s !important; }
+.pq-obv2.play .ping .pulse.p2 { animation-delay: 3.0s !important; }
+.pq-obv2.play .sig-line { animation: obv2-draw 1900ms linear 3300ms both; }
+@keyframes obv2-draw { from { opacity: 0; } to { opacity: 1; } }
+.pq-obv2.play .sig-dot, .pq-obv2.play .sig-glow { animation: obv2-pop 300ms ease-out both; animation-delay: calc(3350ms + var(--i) * 255ms); }
+@keyframes obv2-pop { from { opacity: 0; transform: scale(0.3); } to { opacity: 1; transform: none; } }
+.pq-obv2.play .disc { animation: obv2-phone-in 600ms cubic-bezier(.2,.9,.3,1.15) 5300ms both; }
+@keyframes obv2-phone-in { 0% { opacity: 0; transform: translate(-12px, 18px) scale(0.5); } 70% { opacity: 1; transform: scale(1.08); } 100% { opacity: 1; transform: none; } }
+.pq-obv2.play .disc-pin { animation: obv2-drop-mini 520ms cubic-bezier(.2,.9,.3,1.3) 5900ms both; }
+@keyframes obv2-drop-mini { from { opacity: 0; transform: translateY(-12px) scale(0.5); } to { opacity: 1; transform: none; } }
+.pq-obv2.play .disc-halo { animation: obv2-halo-pulse 1100ms ease-out 5950ms 2; }
+@keyframes obv2-halo-pulse { 0% { opacity: 0.9; transform: scale(1); } 100% { opacity: 0; transform: scale(1.35); } }
+.pq-obv2 .disc-halo { opacity: 0; transform-box: fill-box; transform-origin: center; }
+.pq-obv2.play .disc-pulse { animation: obv2-disc-ring 2s ease-out 6.1s infinite; }
+.pq-obv2.play .rx-glow { animation: obv2-rx 900ms ease-out 5300ms both; }
+@keyframes obv2-rx { from { opacity: 0; } 40% { opacity: 1; } to { opacity: 0.8; } }
+.pq-obv2.play .layer-driver { transition-duration: 1200ms; }
+.pq-obv2.s-demo .layer-search { transition-duration: 7400ms; }
+
+/* replay resets the scene instantly before the story runs again */
+.pq-obv2.replaying *, .pq-obv2.replaying *::before, .pq-obv2.replaying *::after { transition: none !important; }
+
+/* reduced motion: every state complete and still */
+.pq-obv2.rm *, .pq-obv2.rm *::before, .pq-obv2.rm *::after { animation: none !important; transition: none !important; }
+
+/* scrims */
+.pq-obv2 .scrim-top { position: absolute; left: 0; right: 0; top: 0; height: calc(var(--it) + 120px); background: linear-gradient(180deg, rgba(5,13,28,0.72), rgba(5,13,28,0)); pointer-events: none; transition: height 400ms ease; }
+.pq-obv2.s-arrive .scrim-top { height: calc(var(--it) + 190px); background: linear-gradient(180deg, rgba(5,13,28,0.80) 0%, rgba(5,13,28,0.45) 60%, rgba(5,13,28,0)); }
+/* moved with transform instead of top (same picture as the prototype, no layout shift) */
+.pq-obv2 .scrim-bottom { position: absolute; left: 0; right: 0; top: 0; height: 100%; pointer-events: none; will-change: transform; transition: transform 420ms ease; background: linear-gradient(180deg, rgba(5,13,28,0) 0px, rgba(5,13,28,0.62) 45px, var(--color-bg) 90px, var(--color-bg) 100%); }
+
+/* ---------- brand: the real logo asset + the app's wordmark treatment ---------- */
+/* arrival: large stacked lockup that frames the headline; afterwards: compact header lockup */
+.pq-obv2 .brand-hero { position: absolute; z-index: 6; left: 0; right: 0; top: calc(var(--it) - 2px); display: flex; flex-direction: column; align-items: center; pointer-events: none; transition: opacity 360ms ease, transform 420ms cubic-bezier(.3,.7,.3,1); }
+.pq-obv2 .brand-hero img { height: 118px; width: auto; display: block; }
+.pq-obv2 .brand-hero .wm { margin-top: -4px; font-size: calc(40px * var(--ts, 1)); }
+.pq-obv2 .wm { line-height: 1.05; font-weight: 900; letter-spacing: -0.03em; color: var(--color-text); white-space: nowrap; text-shadow: 0 2px 14px rgba(5,13,28,0.65); }
+/* opening: the logo settles first (the app's logo-rise), then the street fades up behind it */
+.pq-obv2.intro .brand-hero { animation: obv2-logo-rise 760ms cubic-bezier(0.22,1,0.36,1) both; }
+@keyframes obv2-logo-rise { 0% { transform: translateY(10px) scale(0.96); opacity: 0; } 78% { transform: translateY(-1px) scale(1.01); opacity: 1; } 100% { transform: none; opacity: 1; } }
+.pq-obv2.intro .art { animation: obv2-scene-up 1100ms ease-out 180ms both; }
+@keyframes obv2-scene-up { from { opacity: 0.15; transform: scale(1.025); } to { opacity: 1; transform: none; } }
+.pq-obv2.intro .p-arrive { animation: obv2-panel-in 520ms cubic-bezier(.3,.7,.3,1) 520ms both !important; }
+.pq-obv2:not(.s-arrive) .brand-hero { opacity: 0; transform: translateY(-24px) scale(0.7); }
+.pq-obv2 .brand-mini { display: flex; align-items: center; opacity: 0; transition: opacity 360ms ease 160ms; pointer-events: none; }
+.pq-obv2 .brand-mini img { height: 50px; width: auto; display: block; margin: 0 -14px 0 -12px; }
+.pq-obv2 .brand-mini .wm { font-size: calc(20px * var(--ts, 1)); }
+.pq-obv2:not(.s-arrive) .brand-mini { opacity: 1; }
+.pq-obv2.s-arrive .brand-mini { visibility: hidden; }
+/* large text: the wordmark leaves the header when it cannot sit beside EN/ES; the arrival lockup turns compact when it would meet the headline */
+.pq-obv2.logo-only .brand-mini .wm { display: none; }
+.pq-obv2.arrive-compact.s-arrive .brand-hero { display: none; }
+.pq-obv2.arrive-compact.s-arrive .brand-mini { visibility: visible; opacity: 1; }
+/* the arrival panel scrolls when it is taller than the space under the header; the main action stays in view */
+.pq-obv2.arrive-scroll .p-arrive { max-height: var(--amax); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+.pq-obv2.arrive-scroll .p-arrive::-webkit-scrollbar { display: none; }
+.pq-obv2.arrive-scroll .p-arrive:not(.at-end) { -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 22px), transparent); mask-image: linear-gradient(180deg, #000 calc(100% - 22px), transparent); }
+.pq-obv2.arrive-scroll .p-arrive .btn-primary { position: sticky; bottom: 8px; z-index: 1; }
+/* P3: headline group under the car, actions at the bottom (only where it fits) */
+.pq-obv2.arrive-under.s-arrive .p-arrive { top: var(--arrive-top); }
+/* very long words at large text sizes wrap instead of overflowing */
+.pq-obv2 .opt .lbl, .pq-obv2 .panel h1, .pq-obv2 .caption, .pq-obv2 .sub, .pq-obv2 .trust, .pq-obv2 .trust-line, .pq-obv2 .su-sub, .pq-obv2 .signup h1 { overflow-wrap: anywhere; hyphens: auto; }
+/* landscape: the main arrival action stays in view while the panel scrolls */
+.pq-obv2.land .p-arrive .btn-primary { position: sticky; bottom: 8px; z-index: 1; }
+.pq-obv2.arrive-under .p-arrive .btn-primary { margin-top: auto !important; }
+.pq-obv2 .hdr { position: absolute; top: var(--it); left: 8px; right: 16px; height: 44px; display: flex; align-items: center; justify-content: space-between; z-index: 7; pointer-events: none; }
+.pq-obv2 .hdr > * { pointer-events: auto; }
+.pq-obv2 .hdr-left { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.pq-obv2 .icon-btn { width: 44px; height: 44px; border: 0; border-radius: 22px; background: rgba(5,13,28,0.55); display: flex; align-items: center; justify-content: center; cursor: pointer; flex: none; }
+.pq-obv2 .lang { display: flex; gap: 2px; padding: 4px; border-radius: 22px; background: var(--color-glass); border: 1px solid rgba(255,255,255,0.16); flex: none; margin-left: auto; }
+.pq-obv2 .lang button { width: 44px; height: 36px; border: 0; border-radius: 18px; background: transparent; color: rgba(255,255,255,0.86); font-size: calc(13px * var(--ts, 1)); font-weight: 600; cursor: pointer; }
+.pq-obv2 .lang button[aria-pressed="true"] { background: #fff; color: var(--color-bg); font-weight: 700; }
+
+
+/* ---------- panels ---------- */
+.pq-obv2 .panel { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 24px calc(var(--ib) + 12px); display: flex; flex-direction: column; z-index: 4; }
+.pq-obv2 .panel[data-inactive] { visibility: hidden; pointer-events: none; }
+.pq-obv2:not(.rm) .panel:not([data-inactive]) { animation: obv2-panel-in 360ms cubic-bezier(.3,.7,.3,1) both; }
+@keyframes obv2-panel-in { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+.pq-obv2 .panel h1 { margin: 0; font-weight: 800; letter-spacing: -0.02em; color: #fff; text-wrap: balance; outline: none; }
+.pq-obv2 .p-arrive { text-align: center; }
+.pq-obv2 .p-arrive h1 { font-size: calc(30px * var(--ts, 1)); line-height: calc(35px * var(--ts, 1)); letter-spacing: -0.025em; }
+.pq-obv2 .sub { margin: 8px 0 0; font-size: calc(15px * var(--ts, 1)); line-height: calc(22px * var(--ts, 1)); color: var(--hero-tagline); }
+.pq-obv2 .btn { min-height: 56px; padding: 10px 20px; line-height: 1.2; text-align: center; border: 0; border-radius: 28px; color: #fff; font-size: calc(16px * var(--ts, 1)); font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; }
+.pq-obv2 .btn-primary { background: var(--pq-elev-cta); box-shadow: inset 0 1px 0 rgba(255,255,255,0.14), 0 8px 22px rgba(11,99,230,0.30); }
+.pq-obv2 .row2 { margin-top: 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.pq-obv2 .row1 { margin-top: 6px; display: flex; justify-content: center; }
+.pq-obv2 .row-split { margin-top: 6px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; column-gap: 12px; }
+.pq-obv2 .row-split > * { white-space: nowrap; }
+.pq-obv2 .replay-pill { position: absolute; right: 16px; z-index: 6; min-height: 40px; max-width: calc(100% - 32px); display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 20px; text-align: left; border: 1px solid rgba(255,255,255,0.18); background: var(--color-glass); color: #e6edf8; font-size: calc(13px * var(--ts, 1)); font-weight: 700; cursor: pointer; }
+.pq-obv2 .replay-pill svg { flex: none; }
+.pq-obv2:not(.rm) .replay-pill:not([hidden]) { animation: obv2-panel-in 360ms ease-out 300ms both; }
+.pq-obv2.land .replay-pill { top: auto !important; bottom: calc(var(--ib) + 12px); right: auto; left: 16px; }
+.pq-obv2 .text-btn, .pq-obv2 .link-btn { min-height: 44px; padding: 0 4px; border: 0; background: transparent; font-size: calc(15px * var(--ts, 1)); font-weight: 600; cursor: pointer; text-align: left; }
+.pq-obv2 .text-btn { color: var(--color-text-secondary); color: rgba(255,255,255,0.72); }
+.pq-obv2 .link-btn { color: var(--color-accent); }
+
+/* demo caption: one line that follows the story */
+.pq-obv2 .p-demo { gap: 0; }
+.pq-obv2 .caption { margin: 0; min-height: calc(62px * var(--ts, 1)); font-size: calc(24px * var(--ts, 1)); line-height: calc(31px * var(--ts, 1)); font-weight: 800; letter-spacing: -0.02em; text-wrap: balance; outline: none; }
+.pq-obv2 .caption span { display: block; }
+.pq-obv2:not(.rm) .caption .cap-new { animation: obv2-cap 360ms ease-out both; }
+@keyframes obv2-cap { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.pq-obv2:not(.rm) .caption .cap-new { animation-duration: 520ms; }
+/* disclosure: a quiet line in the app's secondary text, cyan info icon, no box */
+.pq-obv2 .trust { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0 0; font-size: calc(14px * var(--ts, 1)); line-height: calc(20px * var(--ts, 1)); font-weight: 500; color: var(--color-text-secondary); }
+.pq-obv2 .trust svg, .pq-obv2 .trust-line svg { flex: none; margin-top: 1.5px; }
+.pq-obv2 .skip-demo { align-self: flex-start; margin-top: 10px; }
+
+/* chooser */
+.pq-obv2 .p-choose { padding-left: 20px; padding-right: 20px; }
+.pq-obv2 .kicker { margin: 0 4px 6px; font-size: calc(14px * var(--ts, 1)); line-height: calc(19px * var(--ts, 1)); font-weight: 700; color: var(--color-info); }
+.pq-obv2 .p-choose h1 { font-size: calc(24px * var(--ts, 1)); line-height: calc(29px * var(--ts, 1)); margin: 0 4px; }
+.pq-obv2 .opts { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.pq-obv2 .opt { min-height: 54px; display: flex; align-items: center; gap: 12px; padding: 8px 14px 8px 10px; border-radius: 16px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.13); color: #fff; font-size: calc(16px * var(--ts, 1)); font-weight: 700; text-align: left; cursor: pointer; }
+.pq-obv2 .opt:hover { background: rgba(255,255,255,0.10); }
+.pq-obv2 .opt.picked { background: rgba(96,165,250,0.18); border-color: var(--mobile-ping-cradle-border); transform: scale(0.985); transition: transform 160ms ease, background 160ms ease; }
+.pq-obv2.leaving .scene, .pq-obv2.leaving .panel, .pq-obv2.leaving .hdr { opacity: 0.25; transition: opacity 260ms ease; }
+.pq-obv2:not(.rm) .p-choose:not([data-inactive]) .opt { animation: obv2-panel-in 360ms cubic-bezier(.3,.7,.3,1) both; animation-delay: calc(80ms + var(--i) * 70ms); }
+.pq-obv2 .opt .ic { flex: none; width: 36px; height: 36px; border-radius: 18px; display: flex; align-items: center; justify-content: center; background: rgba(96,165,250,0.14); border: 1.5px solid var(--mobile-ping-cradle-border); }
+.pq-obv2 .opt .lbl { flex: 1; min-width: 0; }
+.pq-obv2 .trust-line { margin: 12px 4px 0; display: flex; align-items: flex-start; gap: 8px; font-size: calc(14px * var(--ts, 1)); line-height: calc(20px * var(--ts, 1)); font-weight: 500; color: var(--color-text-secondary); }
+.pq-obv2 .p-choose .row1 { margin-top: 14px; }
+.pq-obv2 .trust svg, .pq-obv2 .trust-line svg { margin-top: 2.5px; }
+
+/* short screens: tighter rows, same type sizes for controls */
+.pq-obv2.short .opt { min-height: 50px; padding-block: 6px; }
+.pq-obv2.short .opts { gap: 6px; margin-top: 10px; }
+.pq-obv2.short .p-choose h1 { font-size: calc(22px * var(--ts, 1)); line-height: calc(27px * var(--ts, 1)); }
+.pq-obv2.short .p-arrive h1 { font-size: calc(28px * var(--ts, 1)); line-height: calc(33px * var(--ts, 1)); }
+.pq-obv2.short .brand-hero img { height: 96px; }
+.pq-obv2.short .brand-hero .wm { font-size: calc(34px * var(--ts, 1)); }
+.pq-obv2.tiny .brand-hero img { height: 80px; }
+.pq-obv2.tiny .brand-hero .wm { font-size: calc(28px * var(--ts, 1)); }
+.pq-obv2.tiny .p-arrive h1 { font-size: calc(26px * var(--ts, 1)); line-height: calc(31px * var(--ts, 1)); }
+
+.pq-obv2.arrive-tight .p-arrive .sub { display: none; }
+.pq-obv2.scroll-panel .panel:not(.p-arrive) { max-height: var(--pmax); overflow-y: auto; overscroll-behavior: contain; padding-top: 4px; scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(180deg, #000 calc(100% - 28px), transparent); }
+.pq-obv2.scroll-panel .panel:not(.p-arrive)::-webkit-scrollbar { display: none; }
+.pq-obv2.scroll-panel .panel.at-end { -webkit-mask-image: none; mask-image: none; }
+
+/* landscape: scene left, panel column right */
+.pq-obv2.land .panel { left: auto; width: min(380px, 48%); top: 0; justify-content: safe flex-end; padding-top: calc(var(--it) + 100px); padding-left: 32px; overflow-y: auto; scrollbar-width: none; background: linear-gradient(90deg, rgba(5,13,28,0), var(--color-bg) 28px); }
+.pq-obv2.land .panel::-webkit-scrollbar { display: none; }
+.pq-obv2.land .kicker { display: none; }
+.pq-obv2.land .opt { min-height: 50px; padding-block: 6px; }
+.pq-obv2.land .opts { gap: 6px; margin-top: 10px; }
+.pq-obv2.land .scrim-bottom { display: none; }
+.pq-obv2.land .brand-hero { right: auto; width: calc(100% - min(380px, 48%) + 28px); }
+.pq-obv2.land .brand-hero img { height: 84px; }
+.pq-obv2.land .brand-hero .wm { font-size: calc(30px * var(--ts, 1)); }
+
+.pq-obv2 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
