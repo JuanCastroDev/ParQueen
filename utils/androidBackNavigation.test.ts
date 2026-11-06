@@ -118,6 +118,20 @@ describe('resolveAndroidBack', () => {
     });
   });
 
+  it('Onboarding 2.0: Create account returns to the intention choices only when reached from them', () => {
+    expect(resolveAndroidBack({ ...base, currentView: AppView.CREATE_ACCOUNT, returnToOnboarding: true })).toEqual({
+      type: 'navigate',
+      view: AppView.ONBOARDING,
+    });
+    expect(resolveAndroidBack({ ...base, currentView: AppView.CREATE_ACCOUNT, returnToOnboarding: false })).toEqual({ type: 'minimize' });
+    // The flag never changes any other screen.
+    expect(resolveAndroidBack({ ...base, currentView: AppView.SETUP_PROFILE, returnToOnboarding: true })).toEqual({ type: 'minimize' });
+    expect(resolveAndroidBack({ ...base, currentView: AppView.VERIFY_PHONE, returnToOnboarding: true })).toEqual({
+      type: 'navigate',
+      view: AppView.CREATE_ACCOUNT,
+    });
+  });
+
   it('minimizes auth/onboarding/admin/legacy roots without inventing parents', () => {
     const minimizeViews = [
       AppView.CREATE_ACCOUNT,
