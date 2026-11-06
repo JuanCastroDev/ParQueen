@@ -2,6 +2,10 @@ import { readFileSync } from 'node:fs';
 import { beforeAll, afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { initializeTestEnvironment, type RulesTestEnvironment } from '@firebase/rules-unit-testing';
 import { doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
+import { assertRulesProject, readRulesEmulatorEndpoint, RULES_PROJECT_ID } from './firestoreRulesEmulator';
+
+const rulesEmulator = readRulesEmulatorEndpoint();
+assertRulesProject(RULES_PROJECT_ID);
 
 const FINDER = 'finder-31ag';
 const CLAIMER = 'claimer-31ag';
@@ -9,8 +13,8 @@ let env: RulesTestEnvironment;
 
 beforeAll(async () => {
   env = await initializeTestEnvironment({
-    projectId: 'demo-parkqueen-rules-test',
-    firestore: { rules: readFileSync('firestore.rules', 'utf8'), host: 'localhost', port: 8080 },
+    projectId: RULES_PROJECT_ID,
+    firestore: { rules: readFileSync('firestore.rules', 'utf8'), host: rulesEmulator.host, port: rulesEmulator.port },
   });
 });
 

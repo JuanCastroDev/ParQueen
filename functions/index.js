@@ -5099,7 +5099,9 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
       getIdToken: localBinding.getIdToken,
     } : {}),
   });
+  const initializationStartedAt = Date.now();
   const orchestratorDependencies = {
+    initializationStartedAt,
     db,
     Timestamp,
     planimetricStore: createPlanimetricCurbStore({ fetchFn: fetch }),

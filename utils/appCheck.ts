@@ -6,7 +6,7 @@ import {
 import type { FirebaseApp } from 'firebase/app';
 import { nativeGetAppCheckToken, type NativeAppCheckToken } from './appCheckNative';
 import { resolveAppCheckPath, type AppCheckPath } from './appCheckPlatform';
-import { localDemoAppCheckOptions } from './demoFirebaseAppCheck';
+import { localDemoAppCheckOptions, streetIntelQaAppCheckOptions } from './demoFirebaseAppCheck';
 
 export const NATIVE_APP_CHECK_FAILURE = 'Native App Check token request failed.';
 
@@ -74,6 +74,15 @@ export const initializeParQueenAppCheck = (
   const siteKey = deps.siteKey ?? import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY;
   const warn = deps.warn ?? ((message: string) => console.warn(message));
   const path = resolvePath();
+  const qaAppCheck = streetIntelQaAppCheckOptions({
+    mode: import.meta.env.MODE,
+    packageId: import.meta.env.VITE_PARQUEEN_STREET_INTEL_QA,
+    CustomProvider: Custom,
+  });
+  if (qaAppCheck) {
+    init(app, qaAppCheck);
+    return;
+  }
 
   if (path === 'native-android' || path === 'native-ios') {
     try {

@@ -10,6 +10,8 @@ const { letterForCardinal } = require('./productMeterModel');
 const RESOURCE_ID = 'nfid-uabd';
 const DATA_URL = `https://data.cityofnewyork.us/resource/${RESOURCE_ID}.json`;
 const MAX_ROWS = 200;
+const DISPLAY_CARDINALS = new Set(['Northeast', 'Southeast', 'Southwest', 'Northwest']);
+const COMPASS_LETTERS = ['N', 'S', 'E', 'W'];
 
 const unavailable = reason => ({ state: 'unavailable', reason, rules: [] });
 const text = value => (typeof value === 'string' && value.trim()
@@ -20,9 +22,10 @@ function context(identity) {
   const names = identity?.names;
   const cardinal = identity?.side?.cardinal;
   const side = letterForCardinal(cardinal);
+  const displayDiagonal = DISPLAY_CARDINALS.has(cardinal);
   const blockFaceId = normalizeBlockFaceId(identity?.officialBlockFaceId);
   if (identity?.schemaVersion !== 2 || identity?.jurisdiction !== 'NYC'
-    || !blockFaceId || !side || !names) return null;
+    || !blockFaceId || (!side && !displayDiagonal) || !names) return null;
   const onStreetNames = [...new Set([
     names.onStreet,
     ...(Array.isArray(names.aliases) ? names.aliases : []),
@@ -30,7 +33,7 @@ function context(identity) {
   const bounds = [dotName(names.fromStreet), dotName(names.toStreet)];
   const borough = text(names.borough);
   return onStreetNames.length && bounds.every(Boolean) && borough
-    ? { blockFaceId, onStreetNames, bounds, borough, side, cardinal } : null;
+    ? { blockFaceId, onStreetNames, bounds, borough, side, cardinal, displayDiagonal } : null;
 }
 
 function sameBounds(row, bounds) {
@@ -39,9 +42,35 @@ function sameBounds(row, bounds) {
     || (actual[0] === bounds[1] && actual[1] === bounds[0]);
 }
 
-function sameSide(row, expectedSide) {
+function rowSideLetter(row) {
   const raw = text(row?.side_of_street);
-  return raw === expectedSide || letterForCardinal(dotSideToCardinal(raw)) === expectedSide;
+  if (!raw) return null;
+  return letterForCardinal(dotSideToCardinal(raw)) || (COMPASS_LETTERS.includes(raw) ? raw : null);
+}
+
+function sameSide(row, acceptedSides) {
+  const letter = rowSideLetter(row);
+  return Boolean(letter && acceptedSides.includes(letter));
+}
+
+async function officialSides(identity, blockFaceId, blockfaceResolver, signal) {
+  const borough = text(identity?.names?.borough);
+  const matched = [];
+  for (const compassDirection of COMPASS_LETTERS) {
+    if (signal?.aborted) throw new Error('request_aborted');
+    const result = await blockfaceResolver.resolve({
+      borough,
+      onStreet: identity.names.onStreet,
+      crossStreetOne: identity.names.fromStreet,
+      crossStreetTwo: identity.names.toStreet,
+      compassDirection,
+      signal,
+    });
+    if (normalizeBlockFaceId(result?.officialBlockFaceId) === blockFaceId) {
+      matched.push(compassDirection);
+    }
+  }
+  return matched;
 }
 
 function wholeFace(row) {
@@ -168,10 +197,14 @@ async function runCanonicalDotLookup(input = {}, options = {}) {
     if (snapshot?.completeness?.state !== 'COMPLETE' || !Array.isArray(snapshot.rows)) {
       return unavailable('candidate_source_incomplete');
     }
+    const acceptedSides = curb.displayDiagonal
+      ? await officialSides(input.identity, curb.blockFaceId, blockfaceResolver, signal)
+      : [curb.side];
+    if (!acceptedSides.length) return unavailable('official_blockface_mismatch');
     const rows = snapshot.rows.filter(row => isCurrentUnvoidedRow(row)
       && curb.onStreetNames.includes(dotName(row.on_street))
       && sameBounds(row, curb.bounds)
-      && sameSide(row, curb.side)
+      && sameSide(row, acceptedSides)
       && wholeFace(row));
     const tupleResults = new Map();
     const matchingRows = [];
