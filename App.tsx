@@ -70,7 +70,8 @@ import { ConfirmationResult, RecaptchaVerifier, signOut } from 'firebase/auth';
 import { useInAppLegalNavigation } from './hooks/useInAppLegalNavigation';
 import { applyAndroidBackAction, useAndroidSystemBack } from './hooks/useAndroidSystemBack';
 import { dispatchAndroidSystemBack, resolveAndroidBack } from './utils/androidBackNavigation';
-import { dismissTopAndroidBackOverlay } from './utils/androidBackOverlay';
+import { androidBackOverlayCount, dismissTopAndroidBackOverlay } from './utils/androidBackOverlay';
+import { OBV2_DIAG, diag } from './utils/obv2Diag';
 import type { MessagesAndroidBackHandle } from './views/MessagesView';
 import type { OnboardingAndroidBackHandle } from './views/OnboardingView';
 import type { AssistantAndroidBackHandle } from './views/AssistantView';
@@ -170,14 +171,23 @@ export default function App() {
   useAndroidSystemBack({
     handleBack: () => {
       const state = androidBackStateRef.current;
+      diag('back:press', { view: state.currentView, onboardingReturn: state.onboardingReturn, overlays: androidBackOverlayCount(), visibility: typeof document !== 'undefined' ? document.visibilityState : null });
       dispatchAndroidSystemBack(
-        dismissTopAndroidBackOverlay,
-        () => resolveAndroidBack({
-          currentView: state.currentView,
-          vehicleOnboarding: state.vehicleOnboarding,
-          locationAccess: state.locationAccess,
-          returnToOnboarding: ONBOARDING_V2_ENABLED && state.onboardingReturn === 'choose',
-        }),
+        () => {
+          const consumed = dismissTopAndroidBackOverlay();
+          if (consumed) diag('back:overlay-dismissed', { view: state.currentView });
+          return consumed;
+        },
+        () => {
+          const action = resolveAndroidBack({
+            currentView: state.currentView,
+            vehicleOnboarding: state.vehicleOnboarding,
+            locationAccess: state.locationAccess,
+            returnToOnboarding: ONBOARDING_V2_ENABLED && state.onboardingReturn === 'choose',
+          });
+          diag('back:resolved', { view: state.currentView, action: action.type, to: action.type === 'navigate' ? action.view : null });
+          return action;
+        },
         (action) => applyAndroidBackAction(action, {
           currentView: state.currentView,
           navigate: (view) => setCurrentView(view),
@@ -187,6 +197,7 @@ export default function App() {
           },
           delegateOnboarding: () => {
             const result = onboardingAndroidBackRef.current?.handleAndroidBack();
+            diag('back:onboarding-delegate', { result: result ?? 'no-handler' });
             if (result !== 'handled') {
               void CapacitorApp.minimizeApp();
             }
@@ -198,6 +209,7 @@ export default function App() {
             }
           },
           minimize: () => {
+            diag('back:minimize', { view: state.currentView });
             void CapacitorApp.minimizeApp();
           },
           clearVehicleOnboarding: () => setVehicleOnboarding(false),
@@ -205,6 +217,18 @@ export default function App() {
       );
     },
   });
+  // QA diagnostics (VITE_OBV2_DIAG=1 builds only): view changes and app lifecycle, no user data
+  useEffect(() => { diag('view', { view: currentView, onboardingReturn }); }, [currentView, onboardingReturn]);
+  useEffect(() => {
+    if (!OBV2_DIAG) return;
+    const onVis = () => diag('lifecycle:visibility', { state: document.visibilityState });
+    document.addEventListener('visibilitychange', onVis);
+    const handles: Array<{ remove: () => Promise<void> }> = [];
+    void CapacitorApp.addListener('appStateChange', s => diag('lifecycle:appState', { active: s.isActive })).then(h => handles.push(h)).catch(() => {});
+    void CapacitorApp.addListener('pause', () => diag('lifecycle:pause')).then(h => handles.push(h)).catch(() => {});
+    void CapacitorApp.addListener('resume', () => diag('lifecycle:resume')).then(h => handles.push(h)).catch(() => {});
+    return () => { document.removeEventListener('visibilitychange', onVis); handles.forEach(h => void h.remove()); };
+  }, []);
   const pushToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [notificationRuntime, setNotificationRuntime] = useState<NotificationRuntimeState | null>(null);
   const [notificationBusy, setNotificationBusy] = useState(false);

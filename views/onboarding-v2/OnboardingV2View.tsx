@@ -11,6 +11,7 @@ import { NeighborhoodScene, LeaveIntentIcon } from './NeighborhoodScene';
 import { baseLayout, computeLayout, placeOverlays, type OnboardingLayout } from './onboardingV2Layout';
 import { STORY_STEPS, STORY_TIMELINE, type StoryCaption } from './onboardingV2Timeline';
 import { WelcomeScreen } from './WelcomeScreen';
+import { diag } from '../../utils/obv2Diag';
 
 export type StoryState = 'arrive' | 'demo' | 'choose';
 
@@ -163,8 +164,14 @@ export const OnboardingV2View = ({ onChooseIntent, onAccount, androidBackRef, in
   const pendingFocus = useRef<StoryState | null>(null);
   const replayAfterReset = useRef(false);
 
-  const clearTimers = () => { timers.current.forEach(clearTimeout); timers.current = []; };
-  const later = (ms: number, fn: () => void) => { timers.current.push(setTimeout(fn, ms)); };
+  // Every story timer belongs to a generation; clearing timers starts a new generation, so a callback that was already
+  // queued (for example while the app was in the background) can never advance a restarted story.
+  const generation = useRef(0);
+  const clearTimers = () => { generation.current += 1; timers.current.forEach(clearTimeout); timers.current = []; };
+  const later = (ms: number, fn: () => void) => {
+    const g = generation.current;
+    timers.current.push(setTimeout(() => { if (g === generation.current) fn(); }, ms));
+  };
 
   const setStoryState = (next: StoryState, focus = true) => {
     setStateRaw(next);
@@ -213,19 +220,30 @@ export const OnboardingV2View = ({ onChooseIntent, onAccount, androidBackRef, in
   }, [size.w, size.h, lang, fontsReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- scrim and Replay placement follow the live panel heights
+  const overlayKey = useRef('');
   useLayoutEffect(() => {
     if (!layout || layout.land) return;
     // under the welcome the street is already in its first story frame, so the dissolve reveals a finished picture
     const overlayState: StoryState = welcome !== 'hidden' ? 'demo' : state;
-    const active = panelRefs[overlayState].current, choose = panelRefs.choose.current;
-    const next = placeOverlays(layout, overlayState, active?.offsetHeight ?? 0, choose?.offsetHeight ?? 0, replayRef.current?.offsetHeight ?? 40);
-    setOverlays(prev => (prev.scrimTop === next.scrimTop && prev.replayTop === next.replayTop) ? prev : next);
+    // the welcome -> story switch keeps the same overlay state: skip the measurement, so the commit that starts the
+    // story does not force a synchronous style + layout pass (part of the first-run hitch on the S20)
+    const key = JSON.stringify([overlayState, lang, storyMetrics, layout.width, layout.height, layout.k, layout.ty]);
+    if (key !== overlayKey.current) {
+      overlayKey.current = key;
+      const active = panelRefs[overlayState].current, choose = panelRefs.choose.current;
+      const next = placeOverlays(layout, overlayState, active?.offsetHeight ?? 0, choose?.offsetHeight ?? 0, replayRef.current?.offsetHeight ?? 40);
+      setOverlays(prev => (prev.scrimTop === next.scrimTop && prev.replayTop === next.replayTop) ? prev : next);
+    }
     const p = panelRefs[state].current;
-    if (p) {
+    if (!p) return;
+    const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (f: FrameRequestCallback) => setTimeout(() => f(0), 0) as unknown as number;
+    const caf = typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : (id: number) => clearTimeout(id);
+    const id = raf(() => {
       p.scrollTop = 0;
       const end = p.scrollHeight <= p.clientHeight + 4;
       setAtEnd(prev => (prev[state] === end ? prev : { ...prev, [state]: end }));
-    }
+    });
+    return () => caf(id);
   }, [layout, state, lang, welcome, storyMetrics]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- focus the new heading after a state change
@@ -314,6 +332,44 @@ export const OnboardingV2View = ({ onChooseIntent, onAccount, androidBackRef, in
     return () => clearTimeout(t);
   }, [welcome]);
 
+  // ---- lifecycle: the device pauses CSS animation in the background but keeps (throttled) timers running, so the
+  // captions would run ahead of the picture. Policy, decided when the page is hidden and applied when it is visible:
+  //  - during the welcome dissolve -> finish the dissolve and start the story from its first frame
+  //  - during the story            -> restart the story cleanly from its first frame
+  //  - on the welcome or choices   -> nothing (the selected intention and everything else is untouched)
+  const live = useRef({ welcome, state });
+  live.current = { welcome, state };
+  const onResume = useRef<null | 'finish-dissolve' | 'restart-story'>(null);
+  useEffect(() => {
+    if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return;
+    const onVisibility = () => {
+      const { welcome: w, state: s } = live.current;
+      if (document.visibilityState === 'hidden') {
+        if (w === 'leaving') { clearTimers(); onResume.current = 'finish-dissolve'; }
+        else if (w === 'hidden' && s === 'demo') { clearTimers(); onResume.current = 'restart-story'; }
+        else onResume.current = null;
+        diag('story:hidden', { welcome: w, state: s, plan: onResume.current });
+      } else if (document.visibilityState === 'visible') {
+        const plan = onResume.current;
+        onResume.current = null;
+        diag('story:visible', { plan });
+        if (plan === 'finish-dissolve') { setWelcome('hidden'); startPlay(); }
+        else if (plan === 'restart-story') replay();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [startPlay]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---- GPU warm-up: while the welcome is fully opaque, render the story-only layers once at near-zero opacity under
+  // it, so their first rasterisation does not land on the first story frame. Removed the moment the dissolve starts.
+  const [warm, setWarm] = useState(false);
+  useEffect(() => {
+    if (welcome !== 'shown' || warm) return;
+    const t = setTimeout(() => setWarm(true), 350);
+    return () => clearTimeout(t);
+  }, [welcome, warm]);
+
   const chooseIntent = (intent: OnboardingIntent) => {
     if (picked) return;
     if (prefersReducedMotion()) { onChooseIntent(intent); return; }
@@ -352,6 +408,7 @@ export const OnboardingV2View = ({ onChooseIntent, onAccount, androidBackRef, in
     L?.arriveCompact && 'arrive-compact', L?.arriveScroll && 'arrive-scroll', L?.logoOnly && 'logo-only',
     !L && 'obv2-measuring',
     welcome !== 'hidden' && 'from-welcome',
+    welcome === 'shown' && warm && 'obv2-warm',
   ].filter(Boolean).join(' ');
   const stageStyle = {
     ...(L?.panelMax != null ? { '--pmax': `${L.panelMax}px` } : {}),

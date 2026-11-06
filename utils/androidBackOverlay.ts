@@ -56,6 +56,11 @@ export function dismissTopAndroidBackOverlay(): boolean {
   return false;
 }
 
+/** Number of registered overlays (diagnostics only). */
+export function androidBackOverlayCount(): number {
+  return overlays.length;
+}
+
 /** Test-only: drop leaked registrations between cases. */
 export function resetAndroidBackOverlays(): void {
   overlays.length = 0;

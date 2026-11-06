@@ -273,7 +273,12 @@
 .pq-obv2.from-welcome .scrim-bottom { transition: none; }
 .pq-obv2.from-welcome .halo-ring { animation: none; }
 /* the welcome's emblem and copy leave first; its midnight background then dissolves into the street (no double branding) */
-.pq-obv2-host > .obv2-welcome.leaving > * { opacity: 0 !important; animation: none !important; transition: opacity 180ms ease; }
+/* the welcome's emblem and copy are fully gone (140 ms) before its background starts to dissolve (310 ms): the street
+   never shows through while any welcome branding is still visible. Total stays 450 ms. */
+.pq-obv2-host > .obv2-welcome.leaving > * { opacity: 0 !important; animation: none !important; transition: opacity 140ms ease; }
+.pq-obv2-host > .obv2-welcome.leaving { transition: opacity 310ms ease 140ms, transform 310ms cubic-bezier(.4,0,.2,1) 140ms; }
+/* GPU warm-up under the opaque welcome (see OnboardingV2View): story-only layers rendered once, invisibly */
+.pq-obv2.obv2-warm .fx > *, .pq-obv2.obv2-warm .ping, .pq-obv2.obv2-warm > .p-demo { opacity: 0.012 !important; visibility: visible !important; animation: none !important; transition: none !important; }
 /* the street continues below its 390x600 frame (env-fore.svg, same camera) so it reaches the captions */
 .pq-obv2 .art > .layer-fore { top: 600px; bottom: auto; height: 300px; }
 /* the caption block keeps the height of the longest caption (EN/ES), so the disclosure and Skip never jump */

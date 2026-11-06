@@ -13,7 +13,7 @@ const env = vi.hoisted(() => {
       clear: () => values.clear(),
     },
   });
-  const state = { reduceMotion: false, focused: [] as string[] };
+  const state = { reduceMotion: false, focused: [] as string[], visibility: 'visible' as 'visible' | 'hidden', listeners: new Map<string, Set<() => void>>() };
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
     value: {
@@ -24,7 +24,12 @@ const env = vi.hoisted(() => {
   });
   Object.defineProperty(globalThis, 'document', {
     configurable: true,
-    value: { getElementById: (id: string) => ({ focus: () => state.focused.push(id) }) },
+    value: {
+      getElementById: (id: string) => ({ focus: () => state.focused.push(id) }),
+      get visibilityState() { return state.visibility; },
+      addEventListener: (type: string, fn: () => void) => { if (!state.listeners.has(type)) state.listeners.set(type, new Set()); state.listeners.get(type)!.add(fn); },
+      removeEventListener: (type: string, fn: () => void) => { state.listeners.get(type)?.delete(fn); },
+    },
   });
   return state;
 });
@@ -295,6 +300,93 @@ describe('OnboardingV2View', () => {
       expect(t).toContain(es['onboarding.slide1.headline_prefix']);
       expect(t).toContain(es['onboarding.get_started']);
       expect(welcomeEl(r)[0].props.lang).toBe('es');
+    });
+  });
+
+  describe('background / resume (device lifecycle)', () => {
+    const setVisibility = (v: 'visible' | 'hidden') => { env.visibility = v; act(() => { env.listeners.get('visibilitychange')?.forEach(fn => fn()); }); };
+    const caption = (r: TestRenderer.ReactTestRenderer) => textOf(r.root.find(n => n.props.id === 'obv2-cap'));
+    afterEach(() => { env.visibility = 'visible'; });
+
+    it('backgrounded during the story: restarts cleanly from the first frame; old timers never advance it', () => {
+      const { r } = mount();
+      act(() => { button(r, en['onboarding_v2.primary']).props.onClick(); });
+      act(() => { vi.advanceTimersByTime(3000); });
+      expect(caption(r)).toBe(en['onboarding_v2.caption_2']);
+      setVisibility('hidden');
+      act(() => { vi.advanceTimersByTime(20_000); });          // throttled timers would have run the story to the end
+      expect(stateOf(r)).toBe('demo');                          // nothing advanced while hidden
+      setVisibility('visible');
+      expect(stateOf(r)).toBe('demo');
+      expect(caption(r)).toBe(en['onboarding_v2.caption_1']);   // restarted from the first frame
+      act(() => { vi.advanceTimersByTime(2299); });
+      expect(caption(r)).toBe(en['onboarding_v2.caption_1']);
+      act(() => { vi.advanceTimersByTime(1); });
+      expect(caption(r)).toBe(en['onboarding_v2.caption_2']);
+      act(() => { vi.advanceTimersByTime(7700 - 2300); });
+      expect(stateOf(r)).toBe('choose');
+    });
+
+    it('rapid background/resume cycles never duplicate or skip captions', () => {
+      const { r } = mount();
+      act(() => { button(r, en['onboarding_v2.primary']).props.onClick(); });
+      for (let i = 0; i < 6; i++) {
+        act(() => { vi.advanceTimersByTime(700 + i * 300); });
+        setVisibility('hidden');
+        act(() => { vi.advanceTimersByTime(1500); });
+        setVisibility('visible');
+        expect(stateOf(r)).toBe('demo');
+        expect(caption(r)).toBe(en['onboarding_v2.caption_1']);
+      }
+      act(() => { vi.advanceTimersByTime(7699); });
+      expect(stateOf(r)).toBe('demo');
+      act(() => { vi.advanceTimersByTime(1); });
+      expect(stateOf(r)).toBe('choose');
+    });
+
+    it('backgrounded during the welcome dissolve: finishes it and starts the story from its first frame on resume', () => {
+      const { r } = mount({ initialState: 'welcome' });
+      act(() => { button(r, en['onboarding.get_started']).props.onClick(); });
+      act(() => { vi.advanceTimersByTime(200); });
+      setVisibility('hidden');
+      act(() => { vi.advanceTimersByTime(5000); });
+      expect(r.root.findAll(n => n.props['data-testid'] === 'obv2-welcome')).toHaveLength(1);   // the dissolve timer was cancelled
+      setVisibility('visible');
+      expect(r.root.findAll(n => n.props['data-testid'] === 'obv2-welcome')).toHaveLength(0);
+      expect(stateOf(r)).toBe('demo');
+      expect(caption(r)).toBe(en['onboarding_v2.caption_1']);
+      act(() => { vi.advanceTimersByTime(7700); });
+      expect(stateOf(r)).toBe('choose');
+    });
+
+    it('does nothing on the choices or the welcome, and never repeats a chosen intention', () => {
+      const { r, onChooseIntent } = mount({ initialState: 'choose' });
+      setVisibility('hidden'); setVisibility('visible');
+      expect(stateOf(r)).toBe('choose');
+      act(() => { liveButtons(r).find(b => b.props['data-intent'] === 'leave')!.props.onClick(); });
+      act(() => { vi.advanceTimersByTime(200); });
+      expect(onChooseIntent).toHaveBeenCalledTimes(1);
+      setVisibility('hidden'); setVisibility('visible');
+      act(() => { vi.advanceTimersByTime(5000); });
+      expect(onChooseIntent).toHaveBeenCalledTimes(1);
+      const w = mount({ initialState: 'welcome' });
+      setVisibility('hidden'); setVisibility('visible');
+      expect(w.r.root.findAll(n => n.props['data-testid'] === 'obv2-welcome')).toHaveLength(1);
+      expect(stateOf(w.r)).toBe('arrive');
+    });
+
+    it('Replay and Back still work after a resume', () => {
+      const { r, androidBackRef } = mount();
+      act(() => { button(r, en['onboarding_v2.primary']).props.onClick(); });
+      setVisibility('hidden'); setVisibility('visible');
+      act(() => { vi.advanceTimersByTime(7700); });
+      act(() => { button(r, en['onboarding_v2.replay']).props.onClick(); });
+      expect(stateOf(r)).toBe('demo');
+      let res: string | undefined;
+      act(() => { res = androidBackRef.current?.handleAndroidBack(); });
+      expect(res).toBe('handled');
+      act(() => { vi.advanceTimersByTime(20_000); });
+      expect(stateOf(r)).toBe('arrive');
     });
   });
 
