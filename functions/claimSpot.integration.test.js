@@ -1,5 +1,8 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+const { emulatorEndpoint, emulatorOrigin } = require('./isolatedEmulatorGuard');
+
 const { initializeApp, getApps } = require('firebase-admin/app');
 const { getFirestore, Timestamp } = require('firebase-admin/firestore');
 const { requireEmulatorProjectId } = require('./emulatorProjectId');
@@ -8,11 +11,10 @@ const { cancelClaim } = require('./cancelClaim');
 const { checkRateLimit } = require('./rateLimiter');
 
 const PROJECT_ID = requireEmulatorProjectId();
-if (PROJECT_ID !== 'demo-parkqueen-functions-test') {
-  throw new Error(`Refusing claimSpot integration tests for project ${PROJECT_ID}`);
-}
-if (process.env.FIRESTORE_EMULATOR_HOST !== '127.0.0.1:8080') {
-  throw new Error('FIRESTORE_EMULATOR_HOST must be the local demo emulator');
+const LIVE_DEMO_PROJECT = 'demo-parkqueen-functions-test';
+const host = process.env.FIRESTORE_EMULATOR_HOST ?? '';
+if (PROJECT_ID === LIVE_DEMO_PROJECT || host.endsWith(':8080') || host === '') {
+  throw new Error('Refusing claimSpot integration tests against the live demo emulator');
 }
 if (getApps().length === 0) initializeApp({ projectId: PROJECT_ID });
 const db = getFirestore();
@@ -304,7 +306,7 @@ describe('claim intent emulator protocol', () => {
     const { idToken } = await signed.json();
     const data = { spotId, attemptId: attemptA, mode: 'immediate', etaMinutes: 4 };
     for (const name of ['prepareClaimIntent', 'claimSpot', 'revokeClaimIntent']) {
-      const response = await fetch(`http://127.0.0.1:5001/${PROJECT_ID}/us-central1/${name}`, {
+      const response = await fetch(`${emulatorOrigin('functions')}/${PROJECT_ID}/us-central1/${name}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
         body: JSON.stringify({ data }),
@@ -328,7 +330,7 @@ describe('claim intent emulator protocol', () => {
       projectId: PROJECT_ID,
       firestore: {
         host: '127.0.0.1',
-        port: 8080,
+        port: emulatorEndpoint('firestore').port,
         rules: fs.readFileSync(path.join(__dirname, '..', 'firestore.rules'), 'utf8'),
       },
     });
@@ -354,7 +356,7 @@ describe('claim intent emulator protocol', () => {
       projectId: PROJECT_ID,
       firestore: {
         host: '127.0.0.1',
-        port: 8080,
+        port: emulatorEndpoint('firestore').port,
         rules: fs.readFileSync(path.join(__dirname, '..', 'firestore.rules'), 'utf8'),
       },
     });

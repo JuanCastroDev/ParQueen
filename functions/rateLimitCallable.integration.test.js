@@ -1,4 +1,6 @@
-﻿'use strict';
+'use strict';
+
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
 
 /**
  * Behavioral integration tests â€” rate-limited callables (TM-13 Phase J Verification).

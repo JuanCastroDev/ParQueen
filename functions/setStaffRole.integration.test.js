@@ -1,5 +1,8 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+const { emulatorOrigin } = require('./isolatedEmulatorGuard');
+
 /**
  * Behavioral integration tests — setStaffRole callable.
  *
@@ -97,7 +100,7 @@ try {
 const { requireEmulatorProjectId } = require('./emulatorProjectId');
 const PROJECT_ID = requireEmulatorProjectId();
 const APP_NAME = '__setStaffRole_intg__';
-const AUTH_EMULATOR = 'http://localhost:9099';
+const AUTH_EMULATOR = emulatorOrigin('auth');
 
 const testApp =
     getApps().find(a => a.name === APP_NAME) ??

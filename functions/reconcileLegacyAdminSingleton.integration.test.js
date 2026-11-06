@@ -1,5 +1,7 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+
 /**
  * Behavioral integration tests — reconcileLegacyAdminSingleton callable.
  *

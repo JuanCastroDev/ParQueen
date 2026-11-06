@@ -1,5 +1,7 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+
 /**
  * True revoked-token enforcement for current admins — the residual left
  * open by fix-admin-session-revocation-hardening (see that branch's

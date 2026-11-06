@@ -1,4 +1,6 @@
-﻿'use strict';
+'use strict';
+
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
 
 /**
  * Behavioral integration tests â€” bootstrapAdmin callable (Phase J Verification Â§5).

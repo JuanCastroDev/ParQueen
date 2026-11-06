@@ -1,5 +1,8 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+const { emulatorOrigin } = require('./isolatedEmulatorGuard');
+
 const { initializeApp, getApps } = require('firebase-admin/app');
 const { getFirestore, Timestamp } = require('firebase-admin/firestore');
 const { getAuth } = require('firebase-admin/auth');
@@ -419,7 +422,7 @@ describe('suspension generation fence', () => {
       expect(defeated.status).toBe('Active');
       await expect(assertProductAccess(target)).resolves.toBeUndefined();
       const signIn = await fetch(
-        'http://localhost:9099/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=fake-key',
+        `${emulatorOrigin('auth')}/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=fake-key`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -607,7 +610,7 @@ describe('suspension generation fence', () => {
 
   async function signIn(uid) {
     const resp = await fetch(
-      'http://localhost:9099/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=fake-key',
+      `${emulatorOrigin('auth')}/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=fake-key`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

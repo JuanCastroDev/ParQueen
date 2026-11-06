@@ -1,5 +1,7 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+
 const { initializeApp, getApps } = require('firebase-admin/app');
 const { getFirestore, Timestamp, FieldValue } = require('firebase-admin/firestore');
 const { HttpsError } = require('firebase-functions/v2/https');

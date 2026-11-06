@@ -1,5 +1,7 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+
 const fs = require('fs');
 const path = require('path');
 const { initializeApp, getApps } = require('firebase-admin/app');

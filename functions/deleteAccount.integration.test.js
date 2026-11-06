@@ -1,5 +1,8 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+const { emulatorOrigin } = require('./isolatedEmulatorGuard');
+
 /**
  * Integration tests for the deleteAccount callable.
  *
@@ -50,8 +53,8 @@ try {
 const { requireEmulatorProjectId } = require('./emulatorProjectId');
 const PROJECT_ID = requireEmulatorProjectId();
 const REGION = 'us-central1';
-const FUNCTIONS_BASE = `http://localhost:5001/${PROJECT_ID}/${REGION}`;
-const AUTH_EMULATOR = 'http://localhost:9099';
+const FUNCTIONS_BASE = `${emulatorOrigin('functions')}/${PROJECT_ID}/${REGION}`;
+const AUTH_EMULATOR = emulatorOrigin('auth');
 const APP_NAME = '__deleteAccount_intg__';
 
 // Named app avoids conflicts with any other admin SDK usage in the test process

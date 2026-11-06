@@ -1,5 +1,7 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+
 // Cross-boundary checks for the S7 suspension workflow and cancelClaim.
 // Callable HTTP is intentionally not used. The Auth emulator's verifyIdToken
 // rejects a disabled user when the Admin app is in emulator mode, which
@@ -20,12 +22,6 @@ const {
 } = require('./index.js');
 
 const PROJECT_ID = requireEmulatorProjectId();
-if (PROJECT_ID !== 'demo-parkqueen-functions-test') {
-  throw new Error('These tests run only against demo-parkqueen-functions-test');
-}
-if (!process.env.FIRESTORE_EMULATOR_HOST || !process.env.FIREBASE_AUTH_EMULATOR_HOST) {
-  throw new Error('Firestore and Auth emulators must be set');
-}
 
 const db = getFirestore();
 const adminAuth = getAuth();

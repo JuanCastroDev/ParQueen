@@ -1,5 +1,8 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+const { emulatorEndpoint, emulatorOrigin } = require('./isolatedEmulatorGuard');
+
 const { readFileSync } = require('fs');
 const { join } = require('path');
 const { initializeApp, getApps } = require('firebase-admin/app');
@@ -73,12 +76,12 @@ describe('product access enforcement', () => {
       firestore: {
         rules: readFileSync(join(__dirname, '..', 'firestore.rules'), 'utf8'),
         host: '127.0.0.1',
-        port: 8080,
+        port: emulatorEndpoint('firestore').port,
       },
       storage: {
         rules: readFileSync(join(__dirname, '..', 'storage.rules'), 'utf8'),
         host: '127.0.0.1',
-        port: 9199,
+        port: emulatorEndpoint('storage').port,
       },
     });
   });
@@ -271,7 +274,7 @@ describe('product access enforcement', () => {
     try {
       const custom = await adminAuth.createCustomToken(target);
       const signIn = await fetch(
-        'http://localhost:9099/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=fake-key',
+        `${emulatorOrigin('auth')}/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=fake-key`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: custom, returnSecureToken: true }) },
       );
       const body = await signIn.json();
@@ -633,7 +636,7 @@ describe('product access enforcement', () => {
       expect(sent.code).toBe('not-found');
       await expectRulesAllowed(target);
       const signIn = await fetch(
-        'http://localhost:9099/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=fake-key',
+        `${emulatorOrigin('auth')}/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=fake-key`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
