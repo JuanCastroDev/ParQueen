@@ -257,6 +257,10 @@ export const MapView: React.FC<MapViewProps> = ({
     const [showPingConfirmation, setShowPingConfirmation] = useState(false);
     const [pingError, setPingError] = useState<string | null>(null);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    const [isDeletingPing, setIsDeletingPing] = useState(false);
+    const [deletePingError, setDeletePingError] = useState<string | null>(null);
+    const deletePingInFlightRef = useRef(false);
+    const deletePingTargetRef = useRef<any | null>(null);
     const deletePingCancelRef = useRef<HTMLButtonElement>(null);
     const [isSpotModalOpen, setSpotModalOpen] = useState(false);
     const [spotAddress, setSpotAddress] = useState<string>(() => t('my_car.resolving_address'));
@@ -1983,6 +1987,8 @@ export const MapView: React.FC<MapViewProps> = ({
         const spotToDelete = selectedItem || (spotData.activeSpots.length > 0 ? spotData.activeSpots[0] : null);
         if (!user || !spotToDelete) return;
         if (user.id !== spotToDelete.finderId) return;
+        deletePingTargetRef.current = spotToDelete;
+        setDeletePingError(null);
         setShowDeleteConfirm(true);
     };
 
@@ -2014,6 +2020,9 @@ export const MapView: React.FC<MapViewProps> = ({
                 interestedUserId: data.interestedUserId ?? null,
                 claimState: data.claimState ?? null,
                 claimGenerationId: data.claimGenerationId ?? null,
+                pingMode: data.pingMode ?? null,
+                reportedAt: data.reportedAt ?? null,
+                expiresAt: data.expiresAt ?? null,
             });
             if (outcome !== 'deleted' && outcome !== 'already_deleted') {
                 setLinkedPingError(t('my_car.cancel_shared_error'));
@@ -2060,6 +2069,9 @@ export const MapView: React.FC<MapViewProps> = ({
                 interestedUserId: snapData?.interestedUserId ?? null,
                 claimState: snapData?.claimState ?? null,
                 claimGenerationId: snapData?.claimGenerationId ?? null,
+                pingMode: snapData?.pingMode ?? null,
+                reportedAt: snapData?.reportedAt ?? null,
+                expiresAt: snapData?.expiresAt ?? null,
             });
             if (outcome !== 'deleted' && outcome !== 'already_deleted') {
                 setLinkedPingError(t('my_car.remove_error'));
@@ -2088,6 +2100,9 @@ export const MapView: React.FC<MapViewProps> = ({
                     interestedUserId: data.interestedUserId ?? null,
                     claimState: data.claimState ?? null,
                     claimGenerationId: data.claimGenerationId ?? null,
+                    pingMode: data.pingMode ?? null,
+                    reportedAt: data.reportedAt ?? null,
+                    expiresAt: data.expiresAt ?? null,
                 });
                 if (outcome !== 'deleted' && outcome !== 'already_deleted') {
                     setLinkedPingError(t('my_car.update_error'));
@@ -2109,10 +2124,13 @@ export const MapView: React.FC<MapViewProps> = ({
     };
 
     const doDeletePing = async () => {
-        const spotToDelete = selectedItem || (spotData.activeSpots.length > 0 ? spotData.activeSpots[0] : null);
+        if (deletePingInFlightRef.current) return;
+        const spotToDelete = deletePingTargetRef.current;
         if (!spotToDelete) return;
-        setShowDeleteConfirm(false);
         if (!user) return;
+        deletePingInFlightRef.current = true;
+        setIsDeletingPing(true);
+        setDeletePingError(null);
         try {
             const outcome = await cancelConfirmedPing(spotToDelete.id, {
                 finderId: user.id,
@@ -2120,10 +2138,38 @@ export const MapView: React.FC<MapViewProps> = ({
                 interestedUserId: spotToDelete.interestedUserId ?? null,
                 claimState: spotToDelete.claimState ?? null,
                 claimGenerationId: spotToDelete.claimGenerationId ?? spotToDelete.rawSpot?.claimGenerationId ?? null,
+                pingMode: spotToDelete.pingMode ?? spotToDelete.rawSpot?.pingMode ?? null,
+                reportedAt: spotToDelete.reportedAt ?? spotToDelete.rawSpot?.reportedAt ?? null,
+                expiresAt: spotToDelete.expiresAt ?? spotToDelete.rawSpot?.expiresAt ?? null,
             });
-            if (outcome === 'deleted' || outcome === 'already_deleted') setSelectedItem(null);
+            if (outcome === 'deleted' || outcome === 'already_deleted') {
+                setShowDeleteConfirm(false);
+                deletePingTargetRef.current = null;
+                setSelectedItem(null);
+            } else if (outcome === 'stale') {
+                setDeletePingError(t('map.delete_error_stale'));
+            } else if (outcome === 'not_owner') {
+                setDeletePingError(t('map.delete_error_not_owner'));
+            } else {
+                setDeletePingError(t('map.delete_error_unavailable'));
+            }
         } catch (e) {
             console.error("Error deleting ping:", (e as any)?.code ?? 'unknown');
+            const code = String((e as any)?.code ?? '');
+            if (code.includes('not-found') || code.includes('unimplemented') || code.includes('internal')) {
+                setDeletePingError(t('map.delete_error_service'));
+            } else if (code.includes('permission-denied') || code.includes('unauthenticated')) {
+                setDeletePingError(t('map.delete_error_permission'));
+            } else if (code.includes('app-check')) {
+                setDeletePingError(t('map.delete_error_verification'));
+            } else if (code.includes('unavailable') || code.includes('deadline-exceeded') || code.includes('network')) {
+                setDeletePingError(t('map.delete_error_network'));
+            } else {
+                setDeletePingError(t('map.delete_error_failed'));
+            }
+        } finally {
+            deletePingInFlightRef.current = false;
+            setIsDeletingPing(false);
         }
     };
 
@@ -3047,18 +3093,21 @@ export const MapView: React.FC<MapViewProps> = ({
                 <AccessibleModal
                     ariaLabel={t('map.delete_confirm_title')}
                     initialFocusRef={deletePingCancelRef}
-                    onDismiss={() => setShowDeleteConfirm(false)}
+                    onDismiss={() => { if (!isDeletingPing) { deletePingTargetRef.current = null; setShowDeleteConfirm(false); } }}
                     overlayClassName="absolute inset-0 z-[200] flex items-end justify-center pb-10 bg-black/50 backdrop-blur-sm"
                     panelClassName="bg-[var(--color-card)] border border-[var(--color-border)] rounded-3xl p-6 mx-4 w-full max-w-sm shadow-2xl"
                 >
                         <p className="text-base font-bold text-[var(--color-text)] text-center mb-1">{t('map.delete_confirm_title')}</p>
                         <p className="text-sm text-[var(--color-text-secondary)] text-center mb-6">{t('map.delete_confirm_body')}</p>
+                        {deletePingError && (
+                            <p role="alert" className="mb-3 text-sm text-center text-[var(--color-danger)]">{deletePingError}</p>
+                        )}
                         <div className="flex gap-3">
-                            <button ref={deletePingCancelRef} onClick={() => setShowDeleteConfirm(false)} className="flex-1 py-3 rounded-2xl border border-[var(--color-border)] text-[var(--color-text)] font-semibold text-sm">
+                            <button ref={deletePingCancelRef} disabled={isDeletingPing} onClick={() => { deletePingTargetRef.current = null; setShowDeleteConfirm(false); }} className="flex-1 py-3 rounded-2xl border border-[var(--color-border)] text-[var(--color-text)] font-semibold text-sm disabled:opacity-50">
                                 {t('map.delete_cancel')}
                             </button>
-                            <button onClick={doDeletePing} className="flex-1 py-3 rounded-2xl bg-red-500/20 border border-red-500/40 text-[var(--color-danger)] font-bold text-sm">
-                                {t('map.delete_confirm_btn')}
+                            <button disabled={isDeletingPing} onClick={doDeletePing} className="flex-1 py-3 rounded-2xl bg-red-500/20 border border-red-500/40 text-[var(--color-danger)] font-bold text-sm disabled:opacity-50">
+                                {isDeletingPing ? t('map.delete_deleting') : t('map.delete_confirm_btn')}
                             </button>
                         </div>
                 </AccessibleModal>

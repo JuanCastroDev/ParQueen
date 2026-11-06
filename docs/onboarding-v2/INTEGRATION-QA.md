@@ -86,23 +86,25 @@ either way.
 
   The buffer is `globalThis.__obv2diag`.
 
-## Next phase: authenticated Android QA (not started)
+## Next phase: authenticated Android QA (environment established; combined build not tested)
 
 Goal: the full onboarding-to-map experience on the S20 with a real account. Everything below runs against production
 Firebase, so no security, IAM, Functions or configuration change is part of it.
 
+The Ping deletion QA established a working Galaxy S20 environment for `app.parqueen`: in-place debug updates preserve
+the authenticated session and App Check debug identity, the compatible signing certificate is known, and the NYC
+Mapbox map loads normally. The state-based deletion hotfix was also exercised successfully on an eligible owner Ping.
+That evidence does not count as testing an Onboarding 2.0 + current-main combined build; the candidate must still be
+built with `VITE_ONBOARDING_V2=1`, provenance-checked, installed with `adb install -r`, and tested without clearing app
+data.
+
 ### Prerequisites (founder actions or decisions)
-1. **App Check debug secret.** The installed debug build is still rejected (`exchangeDebugToken` failures in logcat).
-   - Read the secret on the PC (do not paste it into chat or logs):
-
-     ```bash
-     adb logcat -d | grep DebugAppCheckProvider
-     ```
-
-   - Register it in Firebase console → App Check → Apps → ParQueen Android → Manage debug tokens.
-   - The secret survives `adb install -r` updates. It changes after an uninstall or cleared data, so keep updating in
-     place.
-2. **Test identity.** Choose one:
+1. **Preserve the established device identity.** Do not uninstall, clear app data, rotate the App Check debug identity,
+   change Firebase configuration, or replace the signing certificate. Install an approved combined APK only with
+   `adb install -r`. If App Check regresses, stop and collect sanitized diagnostics; do not register or rotate anything
+   without separate authorization.
+2. **Test identity.** Prefer the authenticated founder session already present on the S20. Creating another account or
+   switching identities still requires an explicit test decision. If a new-user run is separately authorized, choose:
    - the founder's real number;
    - a dedicated QA SIM.
 
@@ -113,8 +115,10 @@ Firebase, so no security, IAM, Functions or configuration change is part of it.
    - use three numbers or accounts; or
    - test the other two intentions on the returning-user path (choose an intention, then sign in to the existing
      account).
-4. **Ping test plan.** "I'm leaving a spot" must open the composer without publishing. Any real publish (for example the
-   D22 car-details card after a first Ping) needs a written plan:
+4. **Ping test plan.** "I'm leaving a spot" must open the composer without publishing. Do not create a production Ping
+   merely to supply a deletion fixture. Deletion QA may use only an existing eligible owner Ping after the founder
+   confirms its current state and personally approves the final tap. Any real publish (for example the D22 car-details
+   card after a first Ping) needs a written plan:
    - location;
    - immediate cancel;
    - who might be notified.
@@ -137,6 +141,22 @@ Firebase, so no security, IAM, Functions or configuration change is part of it.
 | A10 | Android Back on every auth screen (Verify phone → Create account; Create account → intentions) | Matches the Back table; watch for OQA-2 with the diagnostics build |
 | A11 | Spanish run of A1/A4/A5 | All copy Spanish; no clipping |
 | A12 | Accessibility: TalkBack, largest system font, Remove animations | Readable order; headings announced; reduced-motion path; 200% text usable |
+
+### Combined-build sequence
+
+1. Prove the candidate contains current main plus the frozen Onboarding 2.0 source, and verify
+   `VITE_ONBOARDING_V2=1` in the generated bundle.
+2. Verify APK hash, `app.parqueen`, and signing-certificate compatibility; update only with `adb install -r`.
+3. Confirm the existing authenticated session, App Check requests, and NYC Mapbox map still work before onboarding QA.
+4. Enter Onboarding 2.0 through the existing non-destructive Replay path; verify the frozen welcome, transition, story,
+   captions, intentions, Android Back behaviour, EN/ES copy, and one-time intent consumption without clearing data.
+5. Return to the preserved account and confirm the map and Ping controls remain functional.
+6. If an existing owner-controlled Ping is available, server-verify that it is unclaimed and generation-free, open the
+   deletion dialog, verify loading and duplicate-submit protection, and stop for the founder's manual confirmation.
+   If no fixture exists, record `DEVICE_DELETION_QA_BLOCKED_NO_FIXTURE`; do not publish one automatically.
+7. After a founder-confirmed deletion, require server acknowledgement, refresh the map, and verify the correct marker
+   remains absent with no unrelated claim or notification changes. Claimed or generation-bearing Pings remain gated by
+   the server-authoritative callable.
 
 **Exit:** A1–A12 pass, or failures are logged with a cause. Then CI is green, and the PR can be reviewed for merge
 (merge only with founder authorization).
