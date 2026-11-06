@@ -59,6 +59,8 @@ const hooks = {
   beforeAuthRpc: null,
   afterAuthRpc: null,
   acquireAttempts: null,
+  beforeRepairDecision: null,
+  afterRepairAuthorized: null,
 };
 
 function db() {
@@ -880,9 +882,164 @@ async function adminUnsuspendUser(request) {
   }, 'increment');
 }
 
+function parseAuthIntent(data) {
+  if (!data || typeof data !== 'object') return null;
+  if (!Number.isInteger(data.generation) || data.generation < 0) return null;
+  if (typeof data.desiredDisabled !== 'boolean') return null;
+  if (data.phase !== 'pending' && data.phase !== 'confirmed') return null;
+  return data;
+}
+
+function repairResult(outcome, extra) {
+  return {
+    outcome,
+    issued: false,
+    retractable: false,
+    stable: false,
+    generation: null,
+    desiredDisabled: null,
+    observedDisabled: null,
+    ...extra,
+    retractable: false,
+    stable: false,
+  };
+}
+
+async function deletionBlocksRepair(userId) {
+  const snap = await db().doc(`accountDeletionJobs/${userId}`).get();
+  return snap.exists;
+}
+
+function denialAbsent(profile) {
+  return !!profile && !Object.prototype.hasOwnProperty.call(profile, 'productAccessBlocked');
+}
+
+function enableEligible(intent, profile) {
+  return !!intent
+    && intent.desiredDisabled === false
+    && intent.phase === 'confirmed'
+    && !!profile
+    && profile.status === 'Active'
+    && denialAbsent(profile);
+}
+
+async function readRepairSnapshot(userId) {
+  const intentRef = authIntentRef(userId);
+  const profileRef = userRef(userId);
+  const jobRef = db().doc(`accountDeletionJobs/${userId}`);
+  return db().runTransaction(async (tx) => {
+    const [intentSnap, profileSnap, jobSnap] = await Promise.all([
+      tx.get(intentRef),
+      tx.get(profileRef),
+      tx.get(jobRef),
+    ]);
+    return {
+      intent: intentSnap.exists ? parseAuthIntent(intentSnap.data()) : null,
+      profile: profileSnap.exists ? (profileSnap.data() || {}) : null,
+      deletion: jobSnap.exists,
+    };
+  });
+}
+
+// One pass toward the current authIntent. It does not write the public
+// profile, the denial flag, or a success record. A matching getUser is not
+// a promise that an already-accepted updateUser will stay at that bit.
+//
+// An enable is issued only for a confirmed generation whose profile is
+// Active and whose denial flag is absent. The deletion job is read again
+// in that same transaction immediately before updateUser. A job created
+// after that transaction, or an Auth RPC accepted before it returns, can
+// still overlap deletion. This pass cannot close that gap.
+async function reconcileAuthReplica(userId) {
+  if (typeof userId !== 'string' || userId.length === 0) return repairResult('refused');
+  const profile = await userRef(userId).get();
+  if (!profile.exists) return repairResult('refused');
+  if (await deletionBlocksRepair(userId)) return repairResult('deletion');
+
+  const intentSnap = await authIntentRef(userId).get();
+  if (!intentSnap.exists) return repairResult('refused');
+  const intent = parseAuthIntent(intentSnap.data());
+  if (!intent) return repairResult('refused');
+
+  const lockSnap = await suspensionLockRef(userId).get();
+  if (lockSnap.exists && leaseIsLive(lockSnap.data(), Timestamp.now().toMillis())) {
+    return repairResult('lease-held', {
+      generation: intent.generation,
+      desiredDisabled: intent.desiredDisabled,
+    });
+  }
+
+  try {
+    return await withUserSuspensionLock(userId, async (ownerOperationId, heldGeneration) => {
+      if (typeof hooks.beforeRepairDecision === 'function') {
+        await hooks.beforeRepairDecision({ userId, generation: intent.generation });
+      }
+      const snap = await readRepairSnapshot(userId);
+      const base = { generation: intent.generation, desiredDisabled: intent.desiredDisabled };
+      if (snap.deletion) return repairResult('deletion', base);
+      if (!snap.profile) return repairResult('refused', base);
+      if (!snap.intent || snap.intent.generation !== intent.generation || snap.intent.desiredDisabled !== intent.desiredDisabled || heldGeneration !== intent.generation) {
+        return repairResult('superseded', base);
+      }
+      if (snap.intent.desiredDisabled === false && !enableEligible(snap.intent, snap.profile)) {
+        return repairResult('ineligible', base);
+      }
+      if (!(await renewSuspensionLock(userId, ownerOperationId, heldGeneration))) {
+        return repairResult('lease-held', base);
+      }
+      const observed = await readDisabled(userId);
+      if (observed.notFound) return repairResult('not-found', base);
+      if (!observed.ok) return repairResult('unconfirmed', base);
+      if (observed.disabled === snap.intent.desiredDisabled) {
+        return repairResult('matched', { ...base, observedDisabled: observed.disabled });
+      }
+      const gate = await readRepairSnapshot(userId);
+      if (gate.deletion) return repairResult('deletion', base);
+      if (!gate.intent || gate.intent.generation !== intent.generation || gate.intent.desiredDisabled !== intent.desiredDisabled) {
+        return repairResult('superseded', base);
+      }
+      if (gate.intent.desiredDisabled === false && !enableEligible(gate.intent, gate.profile)) {
+        return repairResult('ineligible', base);
+      }
+      if (typeof hooks.afterRepairAuthorized === 'function') {
+        await hooks.afterRepairAuthorized({ userId, generation: intent.generation });
+      }
+      const sent = await sendAndConfirm(userId, intent.desiredDisabled);
+      const afterSnap = await authIntentRef(userId).get();
+      const after = afterSnap.exists ? parseAuthIntent(afterSnap.data()) : null;
+      const moved = !after || after.generation !== intent.generation || after.desiredDisabled !== intent.desiredDisabled;
+      if (moved) {
+        return repairResult('superseded', {
+          ...base,
+          issued: true,
+          observedDisabled: sent.outcome === 'applied' ? intent.desiredDisabled : sent.disabled === true,
+        });
+      }
+      if (sent.outcome === 'not-found') return repairResult('not-found', { ...base, issued: true });
+      if (sent.outcome !== 'applied') {
+        return repairResult(sent.outcome === 'unconfirmed' ? 'unconfirmed' : 'rejected', {
+          ...base,
+          issued: true,
+          observedDisabled: typeof sent.disabled === 'boolean' ? sent.disabled : null,
+        });
+      }
+      return repairResult('repaired', { ...base, issued: true, observedDisabled: intent.desiredDisabled });
+    }, 'resume', intent.generation);
+  } catch (err) {
+    if (!suspensionLockBusy(err)) throw err;
+    const latestSnap = await authIntentRef(userId).get();
+    const latest = latestSnap.exists ? parseAuthIntent(latestSnap.data()) : null;
+    if (!latest || latest.generation !== intent.generation || latest.desiredDisabled !== intent.desiredDisabled) {
+      return repairResult('superseded', { generation: intent.generation, desiredDisabled: intent.desiredDisabled });
+    }
+    return repairResult('lease-held', { generation: intent.generation, desiredDisabled: intent.desiredDisabled });
+  }
+}
+
 module.exports = {
   hooks,
   SUSPENSION_CALL_TIMEOUT_SEC,
   adminSuspendUser,
   adminUnsuspendUser,
+  reconcileAuthReplica,
 };
