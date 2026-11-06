@@ -236,14 +236,13 @@ export const OnboardingV2View = ({ onChooseIntent, onAccount, androidBackRef, in
     }
     const p = panelRefs[state].current;
     if (!p) return;
-    const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (f: FrameRequestCallback) => setTimeout(() => f(0), 0) as unknown as number;
-    const caf = typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : (id: number) => clearTimeout(id);
-    const id = raf(() => {
+    // after the panel's entrance (it only drives the bottom fade of scrollable panels): never in the first story frames
+    const id = setTimeout(() => {
       p.scrollTop = 0;
       const end = p.scrollHeight <= p.clientHeight + 4;
       setAtEnd(prev => (prev[state] === end ? prev : { ...prev, [state]: end }));
-    });
-    return () => caf(id);
+    }, 450);
+    return () => clearTimeout(id);
   }, [layout, state, lang, welcome, storyMetrics]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- focus the new heading after a state change
@@ -361,12 +360,14 @@ export const OnboardingV2View = ({ onChooseIntent, onAccount, androidBackRef, in
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, [startPlay]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ---- GPU warm-up: while the welcome is fully opaque, render the story-only layers once at near-zero opacity under
-  // it, so their first rasterisation does not land on the first story frame. Removed the moment the dissolve starts.
+
+  // ---- GPU warm-up (cold-start traces on the S20: ~80 ms of first-time raster when the caption panel, Ping and story
+  // layers first appear). While the welcome is up, those layers are drawn once at near-zero opacity under it and kept
+  // through the dissolve, so the story's first frames reuse them. They take their real values when the story starts.
   const [warm, setWarm] = useState(false);
   useEffect(() => {
     if (welcome !== 'shown' || warm) return;
-    const t = setTimeout(() => setWarm(true), 350);
+    const t = setTimeout(() => setWarm(true), 300);
     return () => clearTimeout(t);
   }, [welcome, warm]);
 
@@ -408,7 +409,7 @@ export const OnboardingV2View = ({ onChooseIntent, onAccount, androidBackRef, in
     L?.arriveCompact && 'arrive-compact', L?.arriveScroll && 'arrive-scroll', L?.logoOnly && 'logo-only',
     !L && 'obv2-measuring',
     welcome !== 'hidden' && 'from-welcome',
-    welcome === 'shown' && warm && 'obv2-warm',
+    welcome !== 'hidden' && warm && 'obv2-warm',
   ].filter(Boolean).join(' ');
   const stageStyle = {
     ...(L?.panelMax != null ? { '--pmax': `${L.panelMax}px` } : {}),

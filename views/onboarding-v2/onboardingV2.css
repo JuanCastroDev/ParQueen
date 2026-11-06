@@ -277,8 +277,6 @@
    never shows through while any welcome branding is still visible. Total stays 450 ms. */
 .pq-obv2-host > .obv2-welcome.leaving > * { opacity: 0 !important; animation: none !important; transition: opacity 140ms ease; }
 .pq-obv2-host > .obv2-welcome.leaving { transition: opacity 310ms ease 140ms, transform 310ms cubic-bezier(.4,0,.2,1) 140ms; }
-/* GPU warm-up under the opaque welcome (see OnboardingV2View): story-only layers rendered once, invisibly */
-.pq-obv2.obv2-warm .fx > *, .pq-obv2.obv2-warm .ping, .pq-obv2.obv2-warm > .p-demo { opacity: 0.012 !important; visibility: visible !important; animation: none !important; transition: none !important; }
 /* the street continues below its 390x600 frame (env-fore.svg, same camera) so it reaches the captions */
 .pq-obv2 .art > .layer-fore { top: 600px; bottom: auto; height: 300px; }
 /* the caption block keeps the height of the longest caption (EN/ES), so the disclosure and Skip never jump */
@@ -303,3 +301,11 @@
    continuing below the frame, that edge would cut across the lane. Fade only the beam's last stretch; the car body
    (y 278-345) and the artwork itself are untouched. */
 .pq-obv2 .art > .layer-search { -webkit-mask-image: linear-gradient(180deg, #000 0, #000 430px, transparent 492px); mask-image: linear-gradient(180deg, #000 0, #000 430px, transparent 492px); }
+/* The street SVG (~2,800 shapes) gets its own GPU layer, rasterised once. Without it, every story overlay that appears
+   or animates (halo, Ping, signal, discovery phone, panels) invalidated the shared layer and the device re-rasterised the
+   street at 4x density (20-45 ms GPU tasks: the first-run hitches traced on the S20). One texture, no duplication. */
+.pq-obv2 .art > img[data-layer^="environment"] { will-change: transform; }
+/* GPU warm-up (see OnboardingV2View): the story caption panel and Ping keep their own layer; under the welcome they and
+   the story effects are drawn once at near-zero opacity, so the first story frame does not rasterise them. */
+.pq-obv2 > .p-demo, .pq-obv2 .ping { will-change: transform, opacity; }
+.pq-obv2.obv2-warm .fx > *, .pq-obv2.obv2-warm .ping, .pq-obv2.obv2-warm > .p-demo { opacity: 0.012 !important; visibility: visible !important; animation: none !important; transition: none !important; }
