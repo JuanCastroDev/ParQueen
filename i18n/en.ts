@@ -236,6 +236,15 @@ const en: Record<string, string> = {
     'map.delete_confirm_body': "This can't be undone.",
     'map.delete_cancel': 'Cancel',
     'map.delete_confirm_btn': 'Delete Spot',
+    'map.delete_deleting': 'Deleting…',
+    'map.delete_error_stale': 'This Ping changed. Review it, then try again.',
+    'map.delete_error_not_owner': 'Only the person who shared this Ping can delete it.',
+    'map.delete_error_unavailable': 'We could not verify this Ping safely. Refresh and try again.',
+    'map.delete_error_service': 'The secure deletion service is unavailable right now. Please try again later.',
+    'map.delete_error_permission': 'We could not confirm permission to delete this Ping. Sign in again and retry.',
+    'map.delete_error_verification': 'We could not verify this request. Reopen the app and try again.',
+    'map.delete_error_network': 'Check your connection and try deleting the Ping again.',
+    'map.delete_error_failed': 'The Ping was not deleted. Please try again.',
 
     // My Car — session sheet
     'my_car.just_parked': 'Just parked',
