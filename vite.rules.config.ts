@@ -15,6 +15,7 @@ export default defineConfig({
           include: [
             'firestore.rules.test.candidate-aware.ts',
             'firestore.rules.finder-notice.31ag.test.ts',
+            'firestore.rules.ping-delete.test.ts',
           ],
         },
       },

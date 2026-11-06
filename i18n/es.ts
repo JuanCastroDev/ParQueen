@@ -236,6 +236,15 @@ const es: Record<string, string> = {
     'map.delete_confirm_body': 'Esta acción no se puede deshacer.',
     'map.delete_cancel': 'Cancelar',
     'map.delete_confirm_btn': 'Eliminar lugar',
+    'map.delete_deleting': 'Eliminando…',
+    'map.delete_error_stale': 'Este Ping cambió. Revísalo e inténtalo de nuevo.',
+    'map.delete_error_not_owner': 'Solo la persona que compartió este Ping puede eliminarlo.',
+    'map.delete_error_unavailable': 'No pudimos verificar este Ping de forma segura. Actualiza e inténtalo de nuevo.',
+    'map.delete_error_service': 'El servicio seguro de eliminación no está disponible ahora. Inténtalo más tarde.',
+    'map.delete_error_permission': 'No pudimos confirmar el permiso para eliminar este Ping. Inicia sesión de nuevo e inténtalo.',
+    'map.delete_error_verification': 'No pudimos verificar esta solicitud. Vuelve a abrir la app e inténtalo.',
+    'map.delete_error_network': 'Revisa tu conexión e intenta eliminar el Ping de nuevo.',
+    'map.delete_error_failed': 'El Ping no se eliminó. Inténtalo de nuevo.',
 
     // My Car — session sheet
     'my_car.just_parked': 'Recién estacionado',
