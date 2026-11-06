@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { AppView } from '../types';
 import { MapPin, Check, Locate, X, Bell, Clock, ChevronRight, ChevronLeft, Users, Car, Navigation, CheckCircle2 } from 'lucide-react';
 import { db } from '../firebase';
-import { collection, Timestamp, doc, deleteDoc, updateDoc, getDocs, getDoc, getDocFromServer, setDoc, where, query, orderBy, startAt, endAt, serverTimestamp, limit } from 'firebase/firestore';
+import { collection, Timestamp, doc, deleteDoc, getDocs, getDoc, getDocFromServer, setDoc, where, query, orderBy, startAt, endAt, serverTimestamp, limit } from 'firebase/firestore';
 import { auth } from '../firebaseConfig';
 import { detectParkingSide } from '../utils/streetIntelligence';
 import { detectCardinalSide } from '../utils/sweepnyc';
