@@ -105,8 +105,12 @@ function millisOrNull(value: unknown): number | null {
   if (!value || typeof value !== 'object' || !('toMillis' in value)) return null;
   const toMillis = (value as { toMillis?: unknown }).toMillis;
   if (typeof toMillis !== 'function') return null;
-  const millis = toMillis.call(value);
-  return typeof millis === 'number' && Number.isFinite(millis) ? millis : null;
+  try {
+    const millis = toMillis.call(value);
+    return typeof millis === 'number' && Number.isFinite(millis) ? millis : null;
+  } catch {
+    return null;
+  }
 }
 
 function sameCancellationIdentity(current: CancellationIdentity, confirmed: CancellationIdentity): boolean {
@@ -123,9 +127,16 @@ function sameCancellationIdentity(current: CancellationIdentity, confirmed: Canc
 }
 
 function sameStablePingFields(current: Record<string, unknown>, confirmed: Record<string, unknown>): boolean {
-  return textOrNull(current.pingMode) === textOrNull(confirmed.pingMode)
-    && millisOrNull(current.reportedAt) === millisOrNull(confirmed.reportedAt)
-    && millisOrNull(current.expiresAt) === millisOrNull(confirmed.expiresAt);
+  const currentMode = textOrNull(current.pingMode);
+  const confirmedMode = textOrNull(confirmed.pingMode);
+  const currentReportedAt = millisOrNull(current.reportedAt);
+  const confirmedReportedAt = millisOrNull(confirmed.reportedAt);
+  const currentExpiresAt = millisOrNull(current.expiresAt);
+  const confirmedExpiresAt = millisOrNull(confirmed.expiresAt);
+  if ((currentMode !== 'now' && currentMode !== 'later') || currentMode !== confirmedMode) return false;
+  if (currentReportedAt === null || confirmedReportedAt === null || currentReportedAt !== confirmedReportedAt) return false;
+  if (currentExpiresAt === null || confirmedExpiresAt === null || currentExpiresAt !== confirmedExpiresAt) return false;
+  return true;
 }
 
 export async function finderCancelSpot(input: {

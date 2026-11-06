@@ -59,6 +59,24 @@ describe('finderCancelSpot client mechanism selection', () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['both reportedAt timestamps are missing', available({ reportedAt: undefined }), available({ reportedAt: undefined })],
+    ['the confirmed expiresAt is missing', available({ expiresAt: undefined }), available()],
+    ['the server reportedAt is missing', available(), available({ reportedAt: undefined })],
+    ['the confirmed reportedAt is malformed', available({ reportedAt: { toMillis: 'invalid' } }), available()],
+    ['the server expiresAt is non-finite', available(), available({ expiresAt: stamp(Number.NaN) })],
+    ['both Ping modes are missing', available({ pingMode: undefined }), available({ pingMode: undefined })],
+    ['the confirmed Ping mode is invalid', available({ pingMode: 'future' }), available()],
+    ['the server Ping mode is invalid', available(), available({ pingMode: 'future' })],
+  ])('fails closed when %s', async (_case, confirmedSpot, currentSpot) => {
+    getDocFromServer.mockResolvedValue(snapshot(currentSpot));
+    await expect(finderCancelSpot({
+      db: {} as never, spotId: 'spot-1', finderId: 'finder-1', confirmedSpot,
+    })).resolves.toBe('stale');
+    expect(deleteDoc).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it('fails safely when a claim appears before the server read', async () => {
     getDocFromServer.mockResolvedValue(snapshot(available({
       status: 'interested', interestedUserId: 'claimer-1', claimState: 'heading', claimGenerationId: G1,
