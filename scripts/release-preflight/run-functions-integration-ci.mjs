@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 const PROJECT_ID = 'demo-parkqueen-s7-fn-iso';
 const EMULATOR_CONFIG = 'firebase.s7-fn-iso.json';
+const FUNCTIONS_EMULATOR_HOST = '127.0.0.1:5002';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const DEMO_ENV_PATH = resolve(REPO_ROOT, 'functions', `.env.${PROJECT_ID}`);
 const LOCAL_ENV_PATH = resolve(REPO_ROOT, 'functions', '.env.local');
@@ -53,6 +54,26 @@ function pathStatus(path) {
 
 if (pathStatus(LOCAL_ENV_PATH)) {
   fail(`${LOCAL_ENV_PATH} already exists; refusing to overwrite it`);
+}
+
+function requireConfiguredFunctionsHost() {
+  const configPath = resolve(REPO_ROOT, EMULATOR_CONFIG);
+  let config;
+  try {
+    config = JSON.parse(readFileSync(configPath, 'utf8'));
+  } catch {
+    fail(`${EMULATOR_CONFIG} could not be read`);
+  }
+  const functions = config && config.emulators && config.emulators.functions;
+  const host = functions && functions.host;
+  const port = functions && functions.port;
+  if (host !== '127.0.0.1' || port !== 5002) {
+    fail(`${EMULATOR_CONFIG} Functions emulator must be ${FUNCTIONS_EMULATOR_HOST}`);
+  }
+  const inherited = process.env.S7_FUNCTIONS_EMULATOR_HOST;
+  if (typeof inherited === 'string' && inherited.trim() !== '' && inherited.trim() !== FUNCTIONS_EMULATOR_HOST) {
+    fail(`S7_FUNCTIONS_EMULATOR_HOST conflicts with ${FUNCTIONS_EMULATOR_HOST}`);
+  }
 }
 
 function firebaseLaunch() {
@@ -119,6 +140,7 @@ try {
       closeSync(fd);
     }
   }
+  requireConfiguredFunctionsHost();
   const launch = firebaseLaunch();
   const result = spawnSync(launch.command, [
     ...launch.args,
@@ -137,6 +159,7 @@ try {
       GCLOUD_PROJECT: PROJECT_ID,
       GOOGLE_CLOUD_PROJECT: PROJECT_ID,
       S7_ISOLATED_PROJECT: PROJECT_ID,
+      S7_FUNCTIONS_EMULATOR_HOST: FUNCTIONS_EMULATOR_HOST,
       GOOGLE_APPLICATION_CREDENTIALS: 'C:/Users/jayca/AppData/Local/ParQueen/s7-fn-iso-no-adc.json',
     },
     stdio: 'inherit',

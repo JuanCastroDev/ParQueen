@@ -163,15 +163,3 @@ jobs:
           echo "FUNCTIONS_EMULATOR_EXEC_DONE"
         env:
           FIREBASE_CLI_EXPERIMENTS: webframeworks
-
-      # firebase-debug.log is present when the CLI writes one; firestore-debug.log
-      # is created by the Firestore emulator. Upload neither unless the suite failed.
-      - name: Upload emulator debug logs
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: avatar-functions-emulator-logs
-          if-no-files-found: ignore
-          path: |
-            firebase-debug.log
-            firestore-debug.log
