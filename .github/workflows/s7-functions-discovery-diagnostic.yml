@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/s7-functions-discovery-diagnostic.yml
       - scripts/release-preflight/s7-functions-discovery-probe.mjs
+      - functions/.env.demo-parkqueen-s7-fn-iso
 
 permissions:
   contents: read
