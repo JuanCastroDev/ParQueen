@@ -19,8 +19,16 @@ service cloud.firestore {
       return exists(profile) && userRecordDenies(get(profile).data);
     }
 
+    // One exists() of accountLifecycle/{uid}. The document is outside
+    // users/{uid}, so deleting the profile does not remove the decision.
+    // A missing profile with no fence remains onboarding.
+    function deletionFenced() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/accountLifecycle/$(request.auth.uid));
+    }
+
     function actorMayUseProduct() {
-      return request.auth != null && !productAccessDenied();
+      return request.auth != null && !deletionFenced() && !productAccessDenied();
     }
 
     // isAdmin() (token-only `request.auth.token.role == 'admin'`) has been
@@ -1021,6 +1029,12 @@ service cloud.firestore {
     match /accountDeletionJobs/{userId} {
       allow read: if signedIn() && request.auth.uid == userId;
       allow write: if false;
+    }
+
+    // Irreversible deletion decision. Clients cannot read or write it.
+    // The owner may still read accountDeletionJobs for deletion progress.
+    match /accountLifecycle/{userId} {
+      allow read, write: if false;
     }
 
     match /rateLimits/{docId} {

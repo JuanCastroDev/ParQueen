@@ -6,9 +6,8 @@
  *   avatarCandidates/{**}                  — server-only (no client access)
  *   avatars/{uid}                           — server-published (owner read only)
  *
- * Run via:
- *   npm run test:storage:rules          (starts emulator automatically)
- *   npm run test:storage:rules:unit     (assumes emulator already on :9199)
+ * Run only through scripts/s7-storage-rules-isolation-run.js.
+ * This file refuses the live demo ports and does not choose them as a fallback.
  */
 import { readFileSync } from 'node:fs';
 import { describe, it, beforeAll, afterAll, expect } from 'vitest';
@@ -19,12 +18,30 @@ import {
     type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
 import { ref, uploadBytes, getBytes, deleteObject } from 'firebase/storage';
-import { doc, setDoc } from 'firebase/firestore';
+import { deleteDoc, doc, setDoc } from 'firebase/firestore';
 
 const OWNER_UID  = 'owner-st-111';
 const OTHER_UID  = 'other-st-222';
 const UPLOAD_ID  = 'upload-abc123';
-const PROJECT_ID = 'demo-parkqueen-storage-test';
+const PROJECT_ID = process.env.S7_RULES_PROJECT_ID || '';
+const FIRESTORE_PORT = Number(process.env.S7_FIRESTORE_EMULATOR_PORT);
+const STORAGE_PORT = Number(process.env.S7_STORAGE_EMULATOR_PORT);
+const FORBIDDEN_PORTS = new Set([8080, 9199, 9099, 5001, 4400, 4500]);
+const PRODUCTION_PROJECT = 'parkqueen-46475363-ccf36';
+
+function assertIsolatedRulesTarget() {
+    const cloudProject = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || '';
+    if (PROJECT_ID !== 'demo-parkqueen-s7-fn-iso' || cloudProject === PRODUCTION_PROJECT) {
+        throw new Error('Refusing storage rules tests: isolated non-production project is required');
+    }
+    if (!Number.isInteger(FIRESTORE_PORT) || !Number.isInteger(STORAGE_PORT)
+        || FORBIDDEN_PORTS.has(FIRESTORE_PORT) || FORBIDDEN_PORTS.has(STORAGE_PORT)
+        || FIRESTORE_PORT === STORAGE_PORT) {
+        throw new Error('Refusing storage rules tests: dedicated isolated emulator ports are required');
+    }
+}
+
+assertIsolatedRulesTarget();
 
 // Tiny valid image payloads
 const JPEG_DATA = new Uint8Array([0xFF, 0xD8, 0xFF, 0xE0, ...new Uint8Array(1020)]);
@@ -39,12 +56,12 @@ beforeAll(async () => {
         firestore: {
             rules: readFileSync('firestore.rules', 'utf8'),
             host: '127.0.0.1',
-            port: 8080,
+            port: FIRESTORE_PORT,
         },
         storage: {
             rules: readFileSync('storage.rules', 'utf8'),
             host: '127.0.0.1',
-            port: 9199,
+            port: STORAGE_PORT,
         },
     });
 });
@@ -63,6 +80,17 @@ function uploadPath(uid = OWNER_UID, uploadId = UPLOAD_ID) {
     return `avatarUploads/${uid}/${uploadId}/original`;
 }
 
+async function seedEligibleProfile(uid: string) {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        const db = ctx.firestore();
+        await setDoc(doc(db, 'users', uid), {
+            status: 'Active',
+            productAccessBlocked: false,
+        });
+        await deleteDoc(doc(db, 'accountLifecycle', uid));
+    });
+}
+
 // ── avatarUploads/ — client write rules ───────────────────────────────────────
 
 describe('ST-01 – ST-09, ST-23: avatarUploads/ write rules', () => {
@@ -70,18 +98,21 @@ describe('ST-01 – ST-09, ST-23: avatarUploads/ write rules', () => {
     // The rules use `allow create` (no overwrites); writing to an existing path fails.
 
     it('ST-01: owner can upload JPEG to their upload quarantine path', async () => {
+        await seedEligibleProfile(OWNER_UID);
         await assertSucceeds(
             uploadBytes(ref(ownerStorage(), uploadPath(OWNER_UID, 'st01-jpeg')), JPEG_DATA, IMAGE_META),
         );
     });
 
     it('ST-02: owner can upload PNG to their upload quarantine path', async () => {
+        await seedEligibleProfile(OWNER_UID);
         await assertSucceeds(
             uploadBytes(ref(ownerStorage(), uploadPath(OWNER_UID, 'st02-png')), PNG_DATA, { contentType: 'image/png' }),
         );
     });
 
     it('ST-03: owner can upload WebP to their upload quarantine path', async () => {
+        await seedEligibleProfile(OWNER_UID);
         await assertSucceeds(
             uploadBytes(ref(ownerStorage(), uploadPath(OWNER_UID, 'st03-webp')), JPEG_DATA, { contentType: 'image/webp' }),
         );
@@ -251,6 +282,7 @@ describe('AV-01 – AV-06: upload abuse controls', () => {
 
     // AV-01: owner can create a valid upload (create-only path)
     it('AV-01: owner can create their upload at /original', async () => {
+        await seedEligibleProfile(AV_UID);
         await assertSucceeds(
             uploadBytes(
                 ref(avOwnerStorage(), `avatarUploads/${AV_UID}/${AV_UPLOAD_A}/original`),
@@ -309,6 +341,7 @@ describe('AV-01 – AV-06: upload abuse controls', () => {
 
     // AV-06: valid upload with fresh uploadId is allowed (distinct from AV-01)
     it('AV-06: owner can create a second upload with a new unique uploadId', async () => {
+        await seedEligibleProfile(AV_UID);
         await assertSucceeds(
             uploadBytes(
                 ref(avOwnerStorage(), `avatarUploads/${AV_UID}/${AV_UPLOAD_B}/original`),
@@ -353,7 +386,9 @@ describe('AV-07: storage.rules static text assertion — update prohibition in e
     });
 });
 
-// Upload create reads users/{uid} only. Published avatar reads stay owner-only.
+// Upload create reads accountLifecycle/{uid} once and users/{uid} once.
+// A missing profile denies the upload. Published avatar reads stay owner-only
+// unless a deletion fence exists.
 describe('S7 access — Storage upload gate', () => {
     async function seedProfile(uid: string, profile: object) {
         await testEnv.withSecurityRulesDisabled(async (ctx) => {
@@ -365,9 +400,9 @@ describe('S7 access — Storage upload gate', () => {
         return testEnv.authenticatedContext(uid).storage();
     }
 
-    it('A: a user with no profile and no access doc can upload', async () => {
+    it('A: a user with no profile cannot upload', async () => {
         const uid = 's7-st-legacy';
-        await assertSucceeds(
+        await assertFails(
             uploadBytes(ref(storageFor(uid), uploadPath(uid, 's7-a')), JPEG_DATA, IMAGE_META),
         );
     });

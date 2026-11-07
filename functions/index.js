@@ -1226,6 +1226,15 @@ exports.moderateAvatarUpload = onObjectFinalized(
     const moderationRef  = db.collection("avatarModeration").doc(uid);
     const pendingRef     = db.doc(`users/${uid}/private/avatar`);
     const bucket         = getStorage().bucket(event.data.bucket);
+    try {
+      if ((await db.doc(`accountLifecycle/${uid}`).get()).exists) {
+        await bucket.file(filePath).delete({ ignoreNotFound: true }).catch(() => {});
+        return;
+      }
+    } catch (err) {
+      console.error(`[moderateAvatarUpload] ${maskedUid} fence read failed`);
+      return;
+    }
     const sourceFile     = bucket.file(filePath);
     const candidatePath  = `avatarCandidates/${uid}/${uploadId}.webp`;
     const candidateFile  = bucket.file(candidatePath);
@@ -2236,6 +2245,10 @@ exports.claimUsername = onCall(
 
     try {
       await db.runTransaction(async (tx) => {
+        const lifeSnap = await tx.get(db.doc(`accountLifecycle/${uid}`));
+        if (lifeSnap.exists) {
+          throw new HttpsError('permission-denied', 'Product access is not available.');
+        }
         const existing = await tx.get(usernameRef);
         if (existing.exists) {
           if (existing.data().uid !== uid) {
@@ -2879,6 +2892,26 @@ exports.reconcileLegacyAdminSingleton = onCall(
 // a manual Admin SDK script) racing concurrently — that residual is
 // accepted and documented, not solved, since no other in-repo code path
 // writes the role claim.
+// A disabled administrator cannot sign in. A deletion fence means the
+// account must not be treated as the surviving administrator who makes
+// someone else safe to remove. The target of the operation is excluded
+// by the caller.
+async function countOtherUsableAdmins(excludeUid) {
+  let count = 0;
+  let pageToken;
+  do {
+    const page = await getAuth().listUsers(1000, pageToken);
+    for (const user of page.users) {
+      if (user.uid === excludeUid || user.disabled || user.customClaims?.role !== 'admin') continue;
+      const fence = await db.doc(`accountLifecycle/${user.uid}`).get();
+      if (fence.exists) continue;
+      count++;
+    }
+    pageToken = page.pageToken;
+  } while (pageToken);
+  return count;
+}
+
 exports.setStaffRole = onCall(
   { region: 'us-central1', serviceAccount: 'parqueen-admin-auth@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },
   async (request) => {
@@ -3016,17 +3049,8 @@ exports.setStaffRole = onCall(
         // reconcileLegacyAdminSingleton's policy: a disabled account can't
         // authenticate, so it can't act as admin). The target itself is
         // excluded — this correctly covers an admin demoting themselves.
-        let otherActiveAdmins = 0;
-        let pageToken;
-        do {
-          const page = await getAuth().listUsers(1000, pageToken);
-          for (const u of page.users) {
-            if (u.uid !== uid && !u.disabled && u.customClaims?.role === 'admin') otherActiveAdmins++;
-          }
-          pageToken = page.pageToken;
-        } while (pageToken);
-
-        if (otherActiveAdmins === 0) {
+        const otherUsableAdmins = await countOtherUsableAdmins(uid);
+        if (otherUsableAdmins === 0) {
           throw new HttpsError('failed-precondition', 'Cannot remove the last active administrator.');
         }
       }
@@ -3332,53 +3356,17 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
     await checkRateLimit(uid, 'deleteAccount', { limit: 3, windowSec: 86400 });
 
     const jobRef = db.doc(`accountDeletionJobs/${uid}`);
+    const lifecycleRef = db.doc(`accountLifecycle/${uid}`);
     const maskedUid = uid.slice(0, 4) + '***';
 
-    // ── Atomic lock ───────────────────────────────────────────────────────────
-    // Transaction prevents two concurrent callers from both entering the deletion body.
-    // A fresh 'running' lease (< 10 min) is an active worker — reject the second caller.
-    // A stale lease or 'failed' state → claim the job and resume.
+    // A completed job is terminal. This read does not create a fence.
+    const completedPreview = await jobRef.get();
+    if (completedPreview.exists && (completedPreview.data() || {}).state === 'completed') {
+        return { alreadyCompleted: true };
+    }
+
     let alreadyDone = false;
     let doneSteps = {};
-
-    await db.runTransaction(async (tx) => {
-        const snap = await tx.get(jobRef);
-        if (snap.exists) {
-            const job = snap.data();
-            if (job.state === 'completed') {
-                alreadyDone = true;
-                return;
-            }
-            if (job.state === 'running') {
-                const leaseAge = (Date.now() / 1000) - job.leaseAt.seconds;
-                if (leaseAge < 600) {
-                    throw new HttpsError('already-exists', 'A deletion request is already in progress.');
-                }
-                // Stale lease — previous worker died; take over and resume
-            }
-            // 'failed' or stale 'running' — resume from where we left off
-            doneSteps = job.steps || {};
-            tx.update(jobRef, {
-                state: 'running',
-                leaseAt: Timestamp.now(),
-                currentStep: null,
-                lastError: null,
-                attemptNumber: (job.attemptNumber || 0) + 1,
-            });
-        } else {
-            tx.set(jobRef, {
-                state: 'running',
-                leaseAt: Timestamp.now(),
-                startedAt: Timestamp.now(),
-                currentStep: null,
-                lastError: null,
-                attemptNumber: 1,
-                steps: {},
-            });
-        }
-    });
-
-    if (alreadyDone) return { alreadyCompleted: true };
 
     // ── Admin-lifecycle serialization ──────────────────────────────────────────
     // Shares adminRoleLock/singleton with setStaffRole so account deletion is
@@ -3404,26 +3392,32 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
     // 60s (confirmed against the deployed config), so a 120s lease (2x margin)
     // guarantees any lease acquired or renewed at any point in this invocation's
     // life outlives the latest possible moment Cloud Functions could kill it.
-    // Deterministic per-uid, not random: at most one deletion can legitimately
-    // be in flight for a given uid at a time (already enforced by the
-    // accountDeletionJobs lease above), so a crash-and-resume attempt for the
-    // SAME uid naturally re-identifies as the same lock owner and can reclaim
-    // an unexpired lease immediately rather than needing to wait it out.
+    // Deterministic per-uid, plus a per-invocation token. A fresh running job
+    // rejects a second caller before the lock is taken, so that caller cannot
+    // clear the in-flight invocation's lock. A same-uid retry reclaims an
+    // unexpired lock only when that job lease is no longer fresh. The
+    // invocation token stops the older caller from releasing the newer lock.
     const deletionOperationId = `delete_${uid}`;
+    const deletionInvocationId = randomUUID();
     const lockRef = db.doc('adminRoleLock/singleton');
     const LOCK_LEASE_MS = 120000;
     const LOCK_ACQUIRE_ATTEMPTS = 6;
 
+    function lockBody(existing, now) {
+        return {
+            ownerOperationId: deletionOperationId,
+            invocationId: deletionInvocationId,
+            acquiredAt: existing && existing.acquiredAt ? existing.acquiredAt : now,
+            leaseExpiresAt: Timestamp.fromMillis(now.toMillis() + LOCK_LEASE_MS),
+        };
+    }
+
     async function renewLockOrThrow() {
         const stillOwned = await db.runTransaction(async (tx) => {
             const snap = await tx.get(lockRef);
-            if (!snap.exists || snap.data().ownerOperationId !== deletionOperationId) return false;
-            const now = Timestamp.now();
-            tx.set(lockRef, {
-                ownerOperationId: deletionOperationId,
-                acquiredAt: snap.data().acquiredAt,
-                leaseExpiresAt: Timestamp.fromMillis(now.toMillis() + LOCK_LEASE_MS),
-            });
+            const data = snap.exists ? snap.data() : null;
+            if (!data || data.ownerOperationId !== deletionOperationId || data.invocationId !== deletionInvocationId) return false;
+            tx.set(lockRef, lockBody(data, Timestamp.now()));
             return true;
         });
         if (!stillOwned) {
@@ -3432,75 +3426,142 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
     }
 
     let lockAcquired = false;
-    for (let attempt = 0; attempt < LOCK_ACQUIRE_ATTEMPTS && !lockAcquired; attempt++) {
+    let deletionAlreadyRunning = false;
+    for (let attempt = 0; attempt < LOCK_ACQUIRE_ATTEMPTS && !lockAcquired && !deletionAlreadyRunning; attempt++) {
         if (attempt > 0) {
             await new Promise((resolve) => setTimeout(resolve, Math.min(400 * attempt, 2000)));
         }
-        lockAcquired = await db.runTransaction(async (tx) => {
+        const attemptResult = await db.runTransaction(async (tx) => {
             const snap = await tx.get(lockRef);
+            const jobSnap = await tx.get(jobRef);
             const now = Timestamp.now();
+            const job = jobSnap.exists ? (jobSnap.data() || {}) : null;
+            if (job && job.state === 'running') {
+                const leaseSeconds = job.leaseAt && job.leaseAt.seconds ? job.leaseAt.seconds : 0;
+                if ((Date.now() / 1000) - leaseSeconds < 600) return 'busy';
+            }
             if (snap.exists) {
                 const data = snap.data();
                 const expired = !data.leaseExpiresAt || data.leaseExpiresAt.toMillis() <= now.toMillis();
                 const sameOwner = data.ownerOperationId === deletionOperationId;
-                if (!expired && !sameOwner) return false;
+                if (!expired && !sameOwner) return 'blocked';
             }
-            tx.set(lockRef, {
-                ownerOperationId: deletionOperationId,
-                acquiredAt: now,
-                leaseExpiresAt: Timestamp.fromMillis(now.toMillis() + LOCK_LEASE_MS),
-            });
-            return true;
+            tx.set(lockRef, lockBody(snap.exists ? snap.data() : null, now));
+            return 'acquired';
         });
+        if (attemptResult === 'busy') deletionAlreadyRunning = true;
+        if (attemptResult === 'acquired') lockAcquired = true;
+    }
+    if (deletionAlreadyRunning) {
+        throw new HttpsError('already-exists', 'A deletion request is already in progress.');
     }
     if (!lockAcquired) {
         throw new HttpsError('aborted', 'Another admin-role operation is in progress; please retry.');
     }
 
     try {
-        // Fresh Auth read, inside the lock, before any destructive work at all.
-        let targetUser;
+        // Re-read under the role lock. A fence already committed by an eligible
+        // deletion is an authorized retry. A missing Auth user is not, by
+        // itself, proof that cleanup finished.
+        const lifePreview = await lifecycleRef.get();
+        const fenced = lifePreview.exists && (lifePreview.data() || {}).decision === 'delete';
+        let targetUser = null;
         try {
             targetUser = await getAuth().getUser(uid);
         } catch (err) {
-            if (err.code === 'auth/user-not-found') {
-                // Already gone (e.g. a prior attempt's Auth deletion succeeded but
-                // the job document was never marked completed) — nothing left to
-                // protect or delete.
-                return { success: true };
+            if (err.code !== 'auth/user-not-found') {
+                throw new HttpsError('internal', 'Could not load account; retry.');
             }
-            throw new HttpsError('internal', 'Could not load account; retry.');
-        }
-
-        if (targetUser.customClaims?.role === 'admin') {
-            // Exhaustive paginated scan — same policy as setStaffRole and
-            // reconcileLegacyAdminSingleton: disabled accounts excluded (can't
-            // authenticate, can't act as admin), target excluded (checking
-            // whether anyone ELSE remains). Runs BEFORE any destructive step
-            // below — Firestore profile, username, Storage, and Auth all remain
-            // completely untouched if this rejects.
-            let otherActiveAdmins = 0;
-            let pageToken;
-            do {
-                const page = await getAuth().listUsers(1000, pageToken);
-                for (const u of page.users) {
-                    if (u.uid !== uid && !u.disabled && u.customClaims?.role === 'admin') otherActiveAdmins++;
-                }
-                pageToken = page.pageToken;
-            } while (pageToken);
-
-            if (otherActiveAdmins === 0) {
-                await jobRef.update({
-                    state: 'failed',
-                    currentStep: null,
-                    lastError: 'adminSafetyCheck: cannot delete the last active administrator',
-                }).catch(() => {});
+            if (!fenced) {
                 throw new HttpsError(
                     'failed-precondition',
-                    'You are the last active administrator. Add or promote another administrator before deleting this account.'
+                    'Account deletion cannot be authorized because the sign-in record is gone. Cleanup was not marked complete.'
                 );
             }
         }
+
+        if (targetUser && targetUser.customClaims?.role === 'admin') {
+            // An active administrator cannot start irreversible deletion.
+            // The role has to be transferred or removed first. This rejection
+            // is before the fence transaction, so it writes nothing.
+            if (!fenced) {
+                throw new HttpsError(
+                    'failed-precondition',
+                    'An administrator must transfer or remove that role before this account can be deleted.'
+                );
+            }
+            // A tombstone already exists. Continue only when another usable
+            // administrator remains. A fenced or disabled claim does not
+            // count. This does not clear the tombstone.
+            const otherUsableAdmins = await countOtherUsableAdmins(uid);
+            if (otherUsableAdmins === 0) {
+                throw new HttpsError(
+                    'failed-precondition',
+                    'This deletion is blocked because it would remove the last usable administrator. The deletion decision was not reversed.'
+                );
+            }
+        }
+
+        let claim = 'proceed';
+        await db.runTransaction(async (tx) => {
+            const lockSnap = await tx.get(lockRef);
+            const jobSnap = await tx.get(jobRef);
+            const lifeSnap = await tx.get(lifecycleRef);
+            const lock = lockSnap.exists ? (lockSnap.data() || {}) : null;
+            if (!lock || lock.ownerOperationId !== deletionOperationId || lock.invocationId !== deletionInvocationId) {
+                claim = 'lost';
+                return;
+            }
+            const job = jobSnap.exists ? (jobSnap.data() || {}) : null;
+            if (job && job.state === 'completed') {
+                alreadyDone = true;
+                return;
+            }
+            if (job && job.state === 'running') {
+                const leaseSeconds = job.leaseAt && job.leaseAt.seconds ? job.leaseAt.seconds : 0;
+                if ((Date.now() / 1000) - leaseSeconds < 600) {
+                    claim = 'busy';
+                    return;
+                }
+            }
+            if (job) doneSteps = job.steps || {};
+            const now = Timestamp.now();
+            tx.set(lockRef, lockBody(lock, now));
+            if (!lifeSnap.exists) {
+                tx.set(lifecycleRef, {
+                    decision: 'delete',
+                    fenceGeneration: 1,
+                    fencedAt: now,
+                    source: 'deleteAccount',
+                });
+            }
+            if (!job) {
+                tx.set(jobRef, {
+                    state: 'running',
+                    leaseAt: now,
+                    startedAt: now,
+                    currentStep: null,
+                    lastError: null,
+                    attemptNumber: 1,
+                    steps: {},
+                });
+            } else {
+                tx.update(jobRef, {
+                    state: 'running',
+                    leaseAt: now,
+                    currentStep: null,
+                    lastError: null,
+                    attemptNumber: (job.attemptNumber || 0) + 1,
+                });
+            }
+        });
+        if (claim === 'busy') {
+            throw new HttpsError('already-exists', 'A deletion request is already in progress.');
+        }
+        if (claim === 'lost') {
+            throw new HttpsError('aborted', 'Lock ownership lost before deletion was committed; retry.');
+        }
+        if (alreadyDone) return { alreadyCompleted: true };
 
         // ── True cursor-based paginated delete ────────────────────────────────
         // Does NOT load the entire result set into memory. Uses startAfter cursor to
@@ -3775,13 +3836,14 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
 
         return { success: true };
     } finally {
-        // Fencing: only release if this operation still owns the lock — a
-        // stale/crashed invocation whose lease already expired and was stolen
-        // by a newer operation must never release that newer operation's lock.
+        // Release only this invocation. A same-uid retry reuses the operation
+        // id, so ownership alone is not enough; the invocation token stops a
+        // loser, or a crashed caller's late exit, from clearing the live lock.
         await db.runTransaction(async (tx) => {
             const snap = await tx.get(lockRef);
             if (!snap.exists) return;
-            if (snap.data().ownerOperationId !== deletionOperationId) return;
+            const data = snap.data() || {};
+            if (data.ownerOperationId !== deletionOperationId || data.invocationId !== deletionInvocationId) return;
             tx.delete(lockRef);
         }).catch(() => {});
     }

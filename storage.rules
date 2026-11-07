@@ -13,26 +13,29 @@ service firebase.storage {
           && request.resource.contentType in ['image/jpeg', 'image/png', 'image/webp'];
     }
 
-    // Upload quarantine — owner may only CREATE the "original" file; no overwrites.
-    // Enforced: owner auth, MIME type, 5 MB size limit, create-only (no update),
-    // and the same user-document access policy as Firestore.
-    //
-    // One firestore.exists/get of users/{uid} in the default database.
-    // status == 'Suspended' denies. productAccessBlocked denies unless the
-    // field is missing or exactly boolean false. pendingUploadId freshness
-    // stays in moderateAvatarUpload.
-    function avatarUploadDenied(uid) {
-      let userPath = /databases/(default)/documents/users/$(uid);
-      return firestore.exists(userPath) && (
-        firestore.get(userPath).data.get('status', '') == 'Suspended'
-        || firestore.get(userPath).data.get('productAccessBlocked', false) != false
-      );
+    // Upload quarantine — owner may only CREATE the "original" file.
+    // Exactly two Firestore accesses, on two documents, with no repeated
+    // access and no cache assumption:
+    //   1. exists(accountLifecycle/{uid})
+    //   2. get(users/{uid})
+    // A missing user document makes get() fail the evaluation, which denies
+    // the upload. Account onboarding does not use this rule. A present
+    // profile denies when status is Suspended or productAccessBlocked is
+    // present and not exactly boolean false, including malformed values.
+    function deletionFenced(uid) {
+      return firestore.exists(/databases/(default)/documents/accountLifecycle/$(uid));
+    }
+    function uploadProfileDenies(uid) {
+      let profile = firestore.get(/databases/(default)/documents/users/$(uid)).data;
+      return profile.get('status', '') == 'Suspended'
+        || profile.get('productAccessBlocked', false) != false;
     }
 
     match /avatarUploads/{uid}/{uploadId}/original {
       allow create: if isOwner(uid)
         && isValidAvatarUpload()
-        && !avatarUploadDenied(uid);
+        && !deletionFenced(uid)
+        && !uploadProfileDenies(uid);
       allow update, delete, read: if false;
     }
     // Any other filename under the upload quarantine is denied entirely.
@@ -49,13 +52,13 @@ service firebase.storage {
     // Published avatar — written server-side after moderation approval.
     // Owner can read their own published avatar; client cannot write or delete.
     match /avatars/{uid} {
-      allow read:   if isOwner(uid);
+      allow read:   if isOwner(uid) && !deletionFenced(uid);
       allow write, delete: if false;
     }
 
     // Subdirectory variant kept for forward-compatibility with future avatar sizes.
     match /avatars/{uid}/{allPaths=**} {
-      allow read:   if isOwner(uid);
+      allow read:   if isOwner(uid) && !deletionFenced(uid);
       allow write, delete: if false;
     }
 

@@ -5,6 +5,7 @@ const { HttpsError } = require('firebase-functions/v2/https');
 const { getFirestore, Timestamp, FieldValue } = require('firebase-admin/firestore');
 const { getAuth } = require('firebase-admin/auth');
 const { requireCurrentAdmin } = require('./adminAuth');
+const { deletionFencePresent } = require('./productAccess');
 
 // Per-user suspension guard. adminSuspendUser and adminUnsuspendUser set
 // timeoutSeconds to 60. The lease is 120s from this process clock, renewed
@@ -151,6 +152,11 @@ async function setProductBlockedIfCurrent(userId, expectedGeneration) {
   let wrote = false;
   await db().runTransaction(async (tx) => {
     const intentSnap = await tx.get(intentRef);
+    const lifeSnap = await tx.get(db().doc(`accountLifecycle/${userId}`));
+    if (lifeSnap.exists) {
+      wrote = false;
+      return;
+    }
     const intent = intentSnap.exists ? (intentSnap.data() || {}) : null;
     if (!intent || intent.generation !== expectedGeneration) {
       wrote = false;
@@ -236,6 +242,12 @@ async function commitOwnedSuspensionRecords(userId, ownerOperationId, generation
     await db().runTransaction(async (tx) => {
       const snap = await tx.get(lockRef);
       const intentSnap = await tx.get(intentRef);
+      const lifeSnap = await tx.get(db().doc(`accountLifecycle/${userId}`));
+      if (lifeSnap.exists) {
+        const fenced = new Error('deletion fence');
+        fenced.code = 'suspension/deletion-fenced';
+        throw fenced;
+      }
       const data = snap.exists ? (snap.data() || {}) : null;
       const intent = intentSnap.exists ? (intentSnap.data() || {}) : null;
       if (!data || data.ownerOperationId !== ownerOperationId || data.generation !== generation) {
@@ -254,6 +266,9 @@ async function commitOwnedSuspensionRecords(userId, ownerOperationId, generation
     });
     return { outcome: 'committed' };
   } catch (err) {
+    if (err && (err.code === 'suspension/deletion-fenced' || err.message === 'deletion fence')) {
+      return { outcome: 'fenced' };
+    }
     if (err && (err.code === 'suspension/lock-lost' || err.message === 'suspension lock lost')) {
       return { outcome: 'lost' };
     }
@@ -281,7 +296,14 @@ async function sendAndConfirm(userId, desiredDisabled) {
   }
 }
 
+function throwIfDeletionFenced(result) {
+  if (result && result.outcome === 'fenced') {
+    throw new HttpsError('failed-precondition', 'This account is being deleted. The deletion decision was not reversed.');
+  }
+}
+
 async function compensateTowardLatest(userId) {
+  if (await deletionFencePresent(userId)) return { matched: false, fenced: true };
   const intent = await readIntent(userId);
   if (!intent) return { matched: false, missing: true };
   const observed = await readDisabled(userId);
@@ -457,6 +479,7 @@ async function finishSuspend(request, userId, generation, reason, requireRevoke)
           recordWritten: true,
         });
     }, true);
+    throwIfDeletionFenced(completed);
     if (completed.outcome !== 'committed' || !revoked) {
       throw new HttpsError(
         'aborted',
@@ -522,6 +545,7 @@ async function finishUnsuspend(request, userId, generation) {
         ...auditBase(request, userId, now),
       });
     }, true);
+    throwIfDeletionFenced(completed);
     if (completed.outcome !== 'committed') {
       await setProductBlockedIfCurrent(userId, heldGeneration);
       throw new HttpsError(
@@ -535,6 +559,9 @@ async function finishUnsuspend(request, userId, generation) {
 }
 
 async function onAuthSettled(userId, generation, desiredDisabled, sent) {
+  if (sent && sent.outcome === 'fenced') {
+    throw new HttpsError('failed-precondition', 'This account is being deleted. The deletion decision was not reversed.');
+  }
   if (sent.outcome === 'not-found') {
     throw new HttpsError('not-found', 'User not found. The access block was kept.');
   }
@@ -586,6 +613,9 @@ async function adminSuspendUser(request) {
   if (!userId || typeof userId !== 'string') throw new HttpsError('invalid-argument', 'userId required.');
   if (!reason || typeof reason !== 'string' || !reason.trim()) throw new HttpsError('invalid-argument', 'reason required.');
   if (userId === request.auth.uid) throw new HttpsError('failed-precondition', 'You cannot suspend your own account.');
+  if (await deletionFencePresent(userId)) {
+    throw new HttpsError('failed-precondition', 'This account is being deleted. The deletion decision was not reversed.');
+  }
 
   if (!(await userRef(userId).get()).exists) throw new HttpsError('not-found', 'User not found.');
   try {
@@ -641,6 +671,7 @@ async function adminSuspendUser(request) {
         recordWritten: true,
       });
     });
+    throwIfDeletionFenced(wrote);
     if (wrote.outcome === 'lost') {
       throw new HttpsError('aborted', 'Lock ownership lost before the access block was saved. Sign-in was not changed. Retry.');
     }
@@ -656,6 +687,9 @@ async function adminSuspendUser(request) {
       throw new HttpsError('aborted', 'Lock ownership lost before the account was disabled. The access block was kept. Retry.');
     }
     if (typeof hooks.beforeAuthRpc === 'function') await hooks.beforeAuthRpc({ userId, ownerOperationId, op: 'suspend', generation });
+    if (await deletionFencePresent(userId)) {
+      throw new HttpsError('failed-precondition', 'This account is being deleted. The deletion decision was not reversed.');
+    }
     const sent = await sendAndConfirm(userId, true);
     if (typeof hooks.afterAuthRpc === 'function') await hooks.afterAuthRpc({ userId, ownerOperationId, op: 'suspend', outcome: sent.outcome, generation });
     try {
@@ -728,6 +762,7 @@ async function adminSuspendUser(request) {
           recordWritten: true,
         });
     }, true);
+    throwIfDeletionFenced(completed);
     if (completed.outcome === 'lost') {
       throw new HttpsError('aborted', 'Lock ownership lost before the suspension audit was kept. The access block was kept. Retry.');
     }
@@ -746,6 +781,9 @@ async function adminUnsuspendUser(request) {
   await requireCurrentAdmin(request);
   const { userId } = request.data || {};
   if (!userId || typeof userId !== 'string') throw new HttpsError('invalid-argument', 'userId required.');
+  if (await deletionFencePresent(userId)) {
+    throw new HttpsError('failed-precondition', 'This account is being deleted. The deletion decision was not reversed.');
+  }
 
   if (!(await userRef(userId).get()).exists) throw new HttpsError('not-found', 'User not found.');
   try {
@@ -790,6 +828,7 @@ async function adminUnsuspendUser(request) {
         recordWritten: true,
       });
     });
+    throwIfDeletionFenced(wrote);
     if (wrote.outcome !== 'committed') {
       const pub = await userRef(userId).get().catch(() => null);
       const data = pub && pub.exists ? pub.data() : null;
@@ -802,6 +841,9 @@ async function adminUnsuspendUser(request) {
       throw new HttpsError('aborted', 'Lock ownership lost before sign-in was re-enabled. The access block was kept. Retry.');
     }
     if (typeof hooks.beforeAuthRpc === 'function') await hooks.beforeAuthRpc({ userId, ownerOperationId, op: 'unsuspend', generation });
+    if (await deletionFencePresent(userId)) {
+      throw new HttpsError('failed-precondition', 'This account is being deleted. The deletion decision was not reversed.');
+    }
     const sent = await sendAndConfirm(userId, false);
     if (typeof hooks.afterAuthRpc === 'function') await hooks.afterAuthRpc({ userId, ownerOperationId, op: 'unsuspend', outcome: sent.outcome, generation });
     try {
@@ -870,6 +912,7 @@ async function adminUnsuspendUser(request) {
         ...auditBase(request, userId, now),
       });
     }, true);
+    throwIfDeletionFenced(completed);
     if (completed.outcome !== 'committed') {
       await setProductBlockedIfCurrent(userId, generation).catch(() => {});
       throw new HttpsError(
@@ -906,8 +949,9 @@ function repairResult(outcome, extra) {
 }
 
 async function deletionBlocksRepair(userId) {
-  const snap = await db().doc(`accountDeletionJobs/${userId}`).get();
-  return snap.exists;
+  const job = await db().doc(`accountDeletionJobs/${userId}`).get();
+  if (job.exists) return true;
+  return deletionFencePresent(userId);
 }
 
 function denialAbsent(profile) {
@@ -927,16 +971,18 @@ async function readRepairSnapshot(userId) {
   const intentRef = authIntentRef(userId);
   const profileRef = userRef(userId);
   const jobRef = db().doc(`accountDeletionJobs/${userId}`);
+  const lifeRef = db().doc(`accountLifecycle/${userId}`);
   return db().runTransaction(async (tx) => {
-    const [intentSnap, profileSnap, jobSnap] = await Promise.all([
+    const [intentSnap, profileSnap, jobSnap, lifeSnap] = await Promise.all([
       tx.get(intentRef),
       tx.get(profileRef),
       tx.get(jobRef),
+      tx.get(lifeRef),
     ]);
     return {
       intent: intentSnap.exists ? parseAuthIntent(intentSnap.data()) : null,
       profile: profileSnap.exists ? (profileSnap.data() || {}) : null,
-      deletion: jobSnap.exists,
+      deletion: jobSnap.exists || lifeSnap.exists,
     };
   });
 }
