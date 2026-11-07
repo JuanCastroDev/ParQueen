@@ -7,8 +7,17 @@ import {
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
 import { deleteDoc, doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
+import { rulesFirestorePort } from './rulesEmulatorPorts';
 
-const PROJECT_ID = 'demo-parkqueen-rules-test';
+const PROJECT_ID = 'demo-parkqueen-s7-fn-iso';
+const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST ?? '';
+if (emulatorHost.endsWith(':8080') || emulatorHost.endsWith(':9099') || emulatorHost.endsWith(':5001')) {
+  throw new Error('refusing live demo emulator host');
+}
+if (process.env.GOOGLE_APPLICATION_CREDENTIALS && !String(process.env.GOOGLE_APPLICATION_CREDENTIALS).includes('s7-fn-iso-no-adc')) {
+  throw new Error('refusing credentials that are not the isolated sentinel');
+}
+const FIRESTORE_PORT = rulesFirestorePort();
 const OWNER = 'ping-delete-owner';
 const OTHER = 'ping-delete-other';
 const CLAIM_GENERATION = 'ab'.repeat(32);
@@ -46,7 +55,11 @@ describe('Ping direct-delete fallback rules', () => {
   beforeAll(async () => {
     env = await initializeTestEnvironment({
       projectId: PROJECT_ID,
-      firestore: { rules: readFileSync('firestore.rules', 'utf8') },
+      firestore: {
+        rules: readFileSync('firestore.rules', 'utf8'),
+        host: '127.0.0.1',
+        port: FIRESTORE_PORT,
+      },
     });
   });
 

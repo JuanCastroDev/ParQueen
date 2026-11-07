@@ -1,5 +1,8 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+const { emulatorOrigin } = require('./isolatedEmulatorGuard');
+
 /**
  * Integration tests for the deleteAccount callable.
  *
@@ -50,8 +53,8 @@ try {
 const { requireEmulatorProjectId } = require('./emulatorProjectId');
 const PROJECT_ID = requireEmulatorProjectId();
 const REGION = 'us-central1';
-const FUNCTIONS_BASE = `http://localhost:5001/${PROJECT_ID}/${REGION}`;
-const AUTH_EMULATOR = 'http://localhost:9099';
+const FUNCTIONS_BASE = `${emulatorOrigin('functions')}/${PROJECT_ID}/${REGION}`;
+const AUTH_EMULATOR = emulatorOrigin('auth');
 const APP_NAME = '__deleteAccount_intg__';
 
 // Named app avoids conflicts with any other admin SDK usage in the test process
@@ -109,6 +112,7 @@ async function nukeTestData(uid) {
         adminAuth.deleteUser(uid).catch(() => {}),
         db.recursiveDelete(db.doc(`users/${uid}`)).catch(() => {}),
         db.doc(`accountDeletionJobs/${uid}`).delete().catch(() => {}),
+        db.doc(`accountLifecycle/${uid}`).delete().catch(() => {}),
     ]);
 }
 
@@ -563,11 +567,14 @@ describe('deleteAccount — Functions emulator integration', () => {
 
         const resp = await callDeleteAccount(idToken);
 
-        // Either the emulator rejects the JWT (UNAUTHENTICATED) or the function
-        // handles auth/user-not-found and returns success — both are correct.
+        // The emulator may reject the orphaned JWT. If it accepts the token,
+        // deletion is not authorized: there is no fence, so the call must not
+        // report cleanup complete.
         const isAuthRejected = resp.error?.status === 'UNAUTHENTICATED';
-        const isSuccessful = resp.result?.success === true;
-        expect(isAuthRejected || isSuccessful).toBe(true);
+        const isBlocked = resp.error?.status === 'FAILED_PRECONDITION' || resp.error?.code === 'failed-precondition';
+        expect(isAuthRejected || isBlocked).toBe(true);
+        expect(resp.result?.success).not.toBe(true);
+        expect((await db.doc(`accountLifecycle/${uid}`).get()).exists).toBe(false);
     });
 
     // ── Auth preservation on step failure ─────────────────────────────────────
@@ -719,28 +726,106 @@ describe('deleteAccount — admin-lockout safety (DA)', () => {
         const authRecord = await adminAuth.getUser(uid).catch(() => null);
         expect(authRecord).not.toBeNull();
 
-        const job = (await db.doc(`accountDeletionJobs/${uid}`).get()).data();
-        expect(job?.state).toBe('failed');
-        expect(job?.lastError).toMatch(/adminSafetyCheck/);
-        expect(Object.keys(job?.steps || {})).toHaveLength(0); // no cleanup step ever ran
+        const job = await db.doc(`accountDeletionJobs/${uid}`).get();
+        expect(job.exists).toBe(false);
+        const fence = await db.doc(`accountLifecycle/${uid}`).get();
+        expect(fence.exists).toBe(false);
 
         await db.collection('usernames').doc('soleadmintestname').delete().catch(() => {});
     });
 
-    it('DA-6: admin may delete self when another active admin exists', async () => {
+    it('DA-6: an active administrator cannot delete while the role remains, even if another administrator exists', async () => {
         const otherAdmin = `da_other_${Date.now()}`;
         await adminAuth.createUser({ uid }).catch(() => {});
         await adminAuth.setCustomUserClaims(uid, { role: 'admin' });
         await adminAuth.createUser({ uid: otherAdmin }).catch(() => {});
         await adminAuth.setCustomUserClaims(otherAdmin, { role: 'admin' });
 
-        const result = await callDirect(uid, Math.floor(Date.now() / 1000) - 30);
-        expect(result.success).toBe(true);
+        await expect(callDirect(uid, Math.floor(Date.now() / 1000) - 30))
+            .rejects.toMatchObject({ code: 'failed-precondition' });
 
         const authRecord = await adminAuth.getUser(uid).catch(() => null);
-        expect(authRecord).toBeNull();
+        expect(authRecord).not.toBeNull();
+        expect(authRecord.customClaims?.role).toBe('admin');
+        expect((await db.doc(`accountLifecycle/${uid}`).get()).exists).toBe(false);
+        expect((await db.doc(`accountDeletionJobs/${uid}`).get()).exists).toBe(false);
+        expect((await db.doc('adminRoleLock/singleton').get()).exists).toBe(false);
 
         await adminAuth.deleteUser(otherAdmin).catch(() => {});
+    });
+
+    it('DA-6b: an authorized demotion allows the former administrator to delete', async () => {
+        const keeper = `da_keep_${Date.now()}`;
+        await adminAuth.createUser({ uid }).catch(() => {});
+        await adminAuth.setCustomUserClaims(uid, { role: 'admin' });
+        await adminAuth.createUser({ uid: keeper }).catch(() => {});
+        await adminAuth.setCustomUserClaims(keeper, { role: 'admin' });
+        const fresh = Math.floor(Date.now() / 1000) - 30;
+        const keeperToken = await signInUser(keeper);
+        await setStaffRole.run({
+            data: { uid, role: null, operationId: `op_${Date.now()}_demote_delete` },
+            auth: { uid: keeper, token: { uid: keeper, role: 'admin', auth_time: fresh, iat: fresh, exp: fresh + 3600 } },
+            rawRequest: { headers: { authorization: `Bearer ${keeperToken}` } },
+        });
+        expect((await adminAuth.getUser(uid)).customClaims?.role).toBeUndefined();
+
+        const result = await callDirect(uid, fresh);
+        expect(result.success).toBe(true);
+        expect((await db.doc(`accountLifecycle/${uid}`).get()).data()).toMatchObject({
+            decision: 'delete',
+            fenceGeneration: 1,
+            source: 'deleteAccount',
+        });
+        expect(await adminAuth.getUser(uid).catch(() => null)).toBeNull();
+        expect((await adminAuth.getUser(keeper)).customClaims?.role).toBe('admin');
+        await adminAuth.deleteUser(keeper).catch(() => {});
+    });
+
+    it('DA-6c: a fenced administrator does not make another administrator safe to demote', async () => {
+        const fencedAdmin = `da_fenced_${Date.now()}`;
+        await adminAuth.createUser({ uid }).catch(() => {});
+        await adminAuth.setCustomUserClaims(uid, { role: 'admin' });
+        await adminAuth.createUser({ uid: fencedAdmin }).catch(() => {});
+        await adminAuth.setCustomUserClaims(fencedAdmin, { role: 'admin' });
+        await db.doc(`accountLifecycle/${fencedAdmin}`).set({
+            decision: 'delete',
+            fenceGeneration: 1,
+            fencedAt: Timestamp.now(),
+            source: 'deleteAccount',
+        });
+        const fresh = Math.floor(Date.now() / 1000) - 30;
+        const token = await signInUser(uid);
+        await expect(setStaffRole.run({
+            data: { uid, role: null, operationId: `op_${Date.now()}_demote_last` },
+            auth: { uid, token: { uid, role: 'admin', auth_time: fresh, iat: fresh, exp: fresh + 3600 } },
+            rawRequest: { headers: { authorization: `Bearer ${token}` } },
+        })).rejects.toMatchObject({ code: 'failed-precondition' });
+        expect((await adminAuth.getUser(uid)).customClaims?.role).toBe('admin');
+        expect((await db.doc(`accountLifecycle/${fencedAdmin}`).get()).data().decision).toBe('delete');
+        await adminAuth.deleteUser(fencedAdmin).catch(() => {});
+        await db.doc(`accountLifecycle/${fencedAdmin}`).delete().catch(() => {});
+    });
+
+    it('DA-6d: a fenced administrator retry does not delete the final administrator', async () => {
+        await adminAuth.createUser({ uid }).catch(() => {});
+        await adminAuth.setCustomUserClaims(uid, { role: 'admin' });
+        await db.doc(`accountLifecycle/${uid}`).set({
+            decision: 'delete',
+            fenceGeneration: 1,
+            fencedAt: Timestamp.now(),
+            source: 'deleteAccount',
+        });
+
+        await expect(callDirect(uid, Math.floor(Date.now() / 1000) - 30))
+            .rejects.toMatchObject({ code: 'failed-precondition' });
+
+        expect((await adminAuth.getUser(uid)).customClaims?.role).toBe('admin');
+        expect((await db.doc(`accountLifecycle/${uid}`).get()).data()).toMatchObject({
+            decision: 'delete',
+            fenceGeneration: 1,
+        });
+        expect((await db.doc(`accountDeletionJobs/${uid}`).get()).exists).toBe(false);
+        expect((await db.doc('adminRoleLock/singleton').get()).exists).toBe(false);
     });
 
     it('DA-7: a disabled admin does not count as another active admin', async () => {
@@ -756,7 +841,7 @@ describe('deleteAccount — admin-lockout safety (DA)', () => {
         await adminAuth.deleteUser(disabledAdmin).catch(() => {});
     });
 
-    it('DA-8: pagination finds another admin beyond the first Auth listUsers page', async () => {
+    it('DA-8: an administrator is refused deletion even when another administrator exists beyond the first page', async () => {
         await adminAuth.createUser({ uid }).catch(() => {});
         await adminAuth.setCustomUserClaims(uid, { role: 'admin' });
 
@@ -769,10 +854,12 @@ describe('deleteAccount — admin-lockout safety (DA)', () => {
         }
 
         try {
-            const result = await callDirect(uid, Math.floor(Date.now() / 1000) - 30);
-            expect(result.success).toBe(true);
+            await expect(callDirect(uid, Math.floor(Date.now() / 1000) - 30))
+                .rejects.toMatchObject({ code: 'failed-precondition' });
             const authRecord = await adminAuth.getUser(uid).catch(() => null);
-            expect(authRecord).toBeNull();
+            expect(authRecord).not.toBeNull();
+            expect(authRecord.customClaims?.role).toBe('admin');
+            expect((await db.doc(`accountLifecycle/${uid}`).get()).exists).toBe(false);
         } finally {
             const uidsToDelete = bulkUsers.map(u => u.uid);
             for (let i = 0; i < uidsToDelete.length; i += 1000) {
@@ -804,7 +891,7 @@ describe('deleteAccount — admin-lockout safety (DA)', () => {
         }
     }, 60000);
 
-    it('DA-10: concurrent two-admin self-deletion cannot produce zero admins', async () => {
+    it('DA-10: concurrent administrator deletions create no tombstone and remove nobody', async () => {
         const adminA = `da_ca_${Date.now()}`;
         const adminB = `da_cb_${Date.now()}`;
         await adminAuth.createUser({ uid: adminA }).catch(() => {});
@@ -818,16 +905,18 @@ describe('deleteAccount — admin-lockout safety (DA)', () => {
             callDirect(adminB, fresh),
         ]);
         const outcomes = [a, b].map(r => (r.status === 'fulfilled' ? 'success' : r.reason?.code));
-        expect(outcomes.filter(o => o === 'success')).toHaveLength(1);
-        expect(outcomes.filter(o => o === 'failed-precondition')).toHaveLength(1);
+        expect(outcomes.filter(o => o === 'failed-precondition')).toHaveLength(2);
 
         const [userA, userB] = await Promise.all([
             adminAuth.getUser(adminA).catch(() => null),
             adminAuth.getUser(adminB).catch(() => null),
         ]);
-        const stillExisting = [userA, userB].filter(Boolean);
-        expect(stillExisting).toHaveLength(1);
-        expect(stillExisting[0].customClaims?.role).toBe('admin');
+        expect(userA).not.toBeNull();
+        expect(userB).not.toBeNull();
+        expect(userA.customClaims?.role).toBe('admin');
+        expect(userB.customClaims?.role).toBe('admin');
+        expect((await db.doc(`accountLifecycle/${adminA}`).get()).exists).toBe(false);
+        expect((await db.doc(`accountLifecycle/${adminB}`).get()).exists).toBe(false);
 
         await adminAuth.deleteUser(adminA).catch(() => {});
         await adminAuth.deleteUser(adminB).catch(() => {});
@@ -1035,7 +1124,7 @@ describe('deleteAccount — admin-lockout safety (DA)', () => {
         expect(lock.exists).toBe(false); // lock still released despite the failure
     });
 
-    it('DA-22: bootstrap singleton is never touched by account deletion', async () => {
+    it('DA-22: an administrator deletion refusal does not touch the bootstrap singleton', async () => {
         await deleteSingleton();
         const otherAdmin = `da_singleton_other_${Date.now()}`;
         await adminAuth.createUser({ uid }).catch(() => {});
@@ -1043,16 +1132,17 @@ describe('deleteAccount — admin-lockout safety (DA)', () => {
         await adminAuth.createUser({ uid: otherAdmin }).catch(() => {});
         await adminAuth.setCustomUserClaims(otherAdmin, { role: 'admin' });
 
-        const result = await callDirect(uid, Math.floor(Date.now() / 1000) - 30);
-        expect(result.success).toBe(true);
+        await expect(callDirect(uid, Math.floor(Date.now() / 1000) - 30))
+            .rejects.toMatchObject({ code: 'failed-precondition' });
 
         const singleton = await db.doc('adminBootstrap/singleton').get();
         expect(singleton.exists).toBe(false);
+        expect((await adminAuth.getUser(uid)).customClaims?.role).toBe('admin');
 
         await adminAuth.deleteUser(otherAdmin).catch(() => {});
     });
 
-    it('DA-23: deleting a historical bootstrap owner (with another active admin) does not reopen bootstrap', async () => {
+    it('DA-23: refusing an administrator deletion leaves the historical bootstrap owner in place', async () => {
         const otherAdmin = `da_hist_other_${Date.now()}`;
         await adminAuth.createUser({ uid }).catch(() => {});
         await adminAuth.setCustomUserClaims(uid, { role: 'admin' });
@@ -1064,17 +1154,17 @@ describe('deleteAccount — admin-lockout safety (DA)', () => {
             bootstrappedBy: uid,
         });
 
-        const result = await callDirect(uid, Math.floor(Date.now() / 1000) - 30);
-        expect(result.success).toBe(true);
+        await expect(callDirect(uid, Math.floor(Date.now() / 1000) - 30))
+            .rejects.toMatchObject({ code: 'failed-precondition' });
 
         // Singleton remains exactly as it was — deletion neither clears nor
-        // transfers ownership. bootstrapAdmin's own logic treats existence as
-        // permanent closure regardless of whether that owner UID still exists
-        // in Auth; that's a property of bootstrapAdmin's code (already
-        // verified in its own test suite), not something this test re-proves.
+        // transfers ownership. The administrator is not deleted while the
+        // role remains.
         const singleton = await db.doc('adminBootstrap/singleton').get();
         expect(singleton.exists).toBe(true);
         expect(singleton.data().bootstrappedBy).toBe(uid);
+        expect((await adminAuth.getUser(uid)).customClaims?.role).toBe('admin');
+        expect((await db.doc(`accountLifecycle/${uid}`).get()).exists).toBe(false);
 
         await db.doc('adminBootstrap/singleton').delete().catch(() => {});
         await adminAuth.deleteUser(otherAdmin).catch(() => {});

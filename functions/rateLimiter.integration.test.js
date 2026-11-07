@@ -1,5 +1,7 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+
 /**
  * §5 — checkRateLimit integration tests (Firestore emulator).
  *

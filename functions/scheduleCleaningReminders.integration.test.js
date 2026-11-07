@@ -1,5 +1,7 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+
 /**
  * F7 / R3 — scheduleCleaningReminders (real handler, Firestore emulator).
  * Inverts QA's F7-R3 poison-doc reproduction: with malformed docs present the

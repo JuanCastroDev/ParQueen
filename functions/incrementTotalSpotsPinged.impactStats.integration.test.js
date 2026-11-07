@@ -1,5 +1,7 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+
 /**
  * incrementTotalSpotsPinged — durable per-user "Pings shared" counter.
  *

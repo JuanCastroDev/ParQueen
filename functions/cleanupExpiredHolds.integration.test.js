@@ -1,5 +1,7 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+
 /**
  * cleanupExpiredHolds exercises the real scheduled handler via .run() against
  * the Firestore emulator (no mocks). The accepted-hold pass commits a single
@@ -377,7 +379,10 @@ async function claimThroughServer(uid, spotId) {
 async function claimSpotAs(uid, spotId) {
     const { initializeTestEnvironment } = require('@firebase/rules-unit-testing');
     const { doc, runTransaction, Timestamp: ClientTimestamp } = require('firebase/firestore');
-    const raw = process.env.FIRESTORE_EMULATOR_HOST || '127.0.0.1:8080';
+    const raw = process.env.FIRESTORE_EMULATOR_HOST ?? '';
+    if (!/^\d{1,3}(\.\d{1,3}){3}:\d+$/.test(raw) || raw.endsWith(':8080')) {
+        throw new Error('FIRESTORE_EMULATOR_HOST must be an isolated emulator');
+    }
     const [host, portRaw] = raw.split(':');
     const testEnv = await initializeTestEnvironment({
         projectId: PROJECT_ID,

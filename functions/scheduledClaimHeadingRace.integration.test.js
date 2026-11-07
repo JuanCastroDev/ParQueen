@@ -1,5 +1,7 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+
 /**
  * A3 / HO-009 — committed → heading vs processScheduledClaims auto-release.
  * The commit side uses the same decision and Arm 2b field set as the client

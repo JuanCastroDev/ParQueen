@@ -19,8 +19,16 @@ service cloud.firestore {
       return exists(profile) && userRecordDenies(get(profile).data);
     }
 
+    // One exists() of accountLifecycle/{uid}. The document is outside
+    // users/{uid}, so deleting the profile does not remove the decision.
+    // A missing profile with no fence remains onboarding.
+    function deletionFenced() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/accountLifecycle/$(request.auth.uid));
+    }
+
     function actorMayUseProduct() {
-      return request.auth != null && !productAccessDenied();
+      return request.auth != null && !deletionFenced() && !productAccessDenied();
     }
 
     // isAdmin() (token-only `request.auth.token.role == 'admin'`) has been
@@ -511,6 +519,33 @@ service cloud.firestore {
           && (!('fcmToken' in request.resource.data)
                || (request.resource.data.fcmToken is string
                    && request.resource.data.fcmToken.size() <= 4096));
+      }
+
+      // Production-only saved-car bookmark. Schema remains UNVERIFIED.
+      // List is denied. Product denial, including a deletion fence, applies
+      // through actorMayUseProduct. No broader private match grants this path.
+      match /private/carLocation {
+        allow get: if actorMayUseProduct() && request.auth.uid == userId;
+        allow list: if false;
+        allow create, update: if actorMayUseProduct() && request.auth.uid == userId
+          && request.resource.data.keys().hasOnly([
+               'verification', 'approximate', 'lat', 'lng', 'accuracyMeters', 'savedAt'])
+          && request.resource.data.verification == 'UNVERIFIED'
+          && request.resource.data.approximate == true
+          && request.resource.data.lat is number
+          && request.resource.data.lat >= -90
+          && request.resource.data.lat <= 90
+          && request.resource.data.lng is number
+          && request.resource.data.lng >= -180
+          && request.resource.data.lng <= 180
+          && (request.resource.data.accuracyMeters == null
+              || (request.resource.data.accuracyMeters is number
+                  && request.resource.data.accuracyMeters >= 0
+                  && request.resource.data.accuracyMeters <= 100000))
+          && request.resource.data.savedAt is timestamp
+          && request.resource.data.savedAt >= request.time - duration.value(5, 'm')
+          && request.resource.data.savedAt <= request.time + duration.value(1, 'm');
+        allow delete: if actorMayUseProduct() && request.auth.uid == userId;
       }
 
       // private/social — owner read/write; bounded blockedUsers list
@@ -1021,6 +1056,17 @@ service cloud.firestore {
     match /accountDeletionJobs/{userId} {
       allow read: if signedIn() && request.auth.uid == userId;
       allow write: if false;
+    }
+
+    // Irreversible deletion decision. Clients cannot read or write it.
+    // The owner may still read accountDeletionJobs for deletion progress.
+    match /accountLifecycle/{userId} {
+      allow read, write: if false;
+    }
+
+    // Removal uncertainty for administrator continuity. Not a role grant.
+    match /adminContinuity/{userId} {
+      allow read, write: if false;
     }
 
     match /rateLimits/{docId} {

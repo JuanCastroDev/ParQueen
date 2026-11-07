@@ -1,5 +1,7 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+
 /**
  * Waitlist endpoints against the Firestore emulator. Email delivery, Turnstile
  * and token generation go through _waitlistHooks, so no real email is sent and

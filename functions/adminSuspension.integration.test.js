@@ -1,5 +1,8 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+const { emulatorOrigin } = require('./isolatedEmulatorGuard');
+
 /**
  * F3 — server-authoritative suspension (adminSuspendUser / adminUnsuspendUser).
  *
@@ -27,8 +30,8 @@ const { getAuth } = require('firebase-admin/auth');
 
 const { requireEmulatorProjectId } = require('./emulatorProjectId');
 const PROJECT_ID = requireEmulatorProjectId();
-const FUNCTIONS_BASE = `http://localhost:5001/${PROJECT_ID}/us-central1`;
-const AUTH_EMULATOR = 'http://localhost:9099';
+const FUNCTIONS_BASE = `${emulatorOrigin('functions')}/${PROJECT_ID}/us-central1`;
+const AUTH_EMULATOR = emulatorOrigin('auth');
 const APP_NAME = '__adminSuspension_intg__';
 
 const testApp = getApps().find(a => a.name === APP_NAME) ?? initializeApp({ projectId: PROJECT_ID }, APP_NAME);

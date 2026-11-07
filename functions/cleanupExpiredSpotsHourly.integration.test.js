@@ -1,5 +1,7 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+
 /**
  * cleanupExpiredSpotsHourly — runtime-identity canary plus B1 durability.
  *

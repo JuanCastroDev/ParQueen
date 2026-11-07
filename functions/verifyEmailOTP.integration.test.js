@@ -1,5 +1,7 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+
 /**
  * Integration tests — verifyEmailOTP callable (Task H verification).
  *

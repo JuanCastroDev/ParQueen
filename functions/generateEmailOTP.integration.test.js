@@ -1,5 +1,7 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+
 process.env.EMAIL_RATE_LIMIT_PEPPER = 'integration-test-email-rate-limit-pepper';
 
 const crypto = require('crypto');

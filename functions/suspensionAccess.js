@@ -5,6 +5,8 @@ const { HttpsError } = require('firebase-functions/v2/https');
 const { getFirestore, Timestamp, FieldValue } = require('firebase-admin/firestore');
 const { getAuth } = require('firebase-admin/auth');
 const { requireCurrentAdmin } = require('./adminAuth');
+const { deletionFencePresent } = require('./productAccess');
+const { acquireRoleLock, releaseRoleLock, recordRemoval, countOtherReservedUsableAdmins } = require('./adminContinuity');
 
 // Per-user suspension guard. adminSuspendUser and adminUnsuspendUser set
 // timeoutSeconds to 60. The lease is 120s from this process clock, renewed
@@ -59,6 +61,8 @@ const hooks = {
   beforeAuthRpc: null,
   afterAuthRpc: null,
   acquireAttempts: null,
+  beforeRepairDecision: null,
+  afterRepairAuthorized: null,
 };
 
 function db() {
@@ -149,6 +153,11 @@ async function setProductBlockedIfCurrent(userId, expectedGeneration) {
   let wrote = false;
   await db().runTransaction(async (tx) => {
     const intentSnap = await tx.get(intentRef);
+    const lifeSnap = await tx.get(db().doc(`accountLifecycle/${userId}`));
+    if (lifeSnap.exists) {
+      wrote = false;
+      return;
+    }
     const intent = intentSnap.exists ? (intentSnap.data() || {}) : null;
     if (!intent || intent.generation !== expectedGeneration) {
       wrote = false;
@@ -234,6 +243,12 @@ async function commitOwnedSuspensionRecords(userId, ownerOperationId, generation
     await db().runTransaction(async (tx) => {
       const snap = await tx.get(lockRef);
       const intentSnap = await tx.get(intentRef);
+      const lifeSnap = await tx.get(db().doc(`accountLifecycle/${userId}`));
+      if (lifeSnap.exists) {
+        const fenced = new Error('deletion fence');
+        fenced.code = 'suspension/deletion-fenced';
+        throw fenced;
+      }
       const data = snap.exists ? (snap.data() || {}) : null;
       const intent = intentSnap.exists ? (intentSnap.data() || {}) : null;
       if (!data || data.ownerOperationId !== ownerOperationId || data.generation !== generation) {
@@ -252,6 +267,9 @@ async function commitOwnedSuspensionRecords(userId, ownerOperationId, generation
     });
     return { outcome: 'committed' };
   } catch (err) {
+    if (err && (err.code === 'suspension/deletion-fenced' || err.message === 'deletion fence')) {
+      return { outcome: 'fenced' };
+    }
     if (err && (err.code === 'suspension/lock-lost' || err.message === 'suspension lock lost')) {
       return { outcome: 'lost' };
     }
@@ -279,7 +297,14 @@ async function sendAndConfirm(userId, desiredDisabled) {
   }
 }
 
+function throwIfDeletionFenced(result) {
+  if (result && result.outcome === 'fenced') {
+    throw new HttpsError('failed-precondition', 'This account is being deleted. The deletion decision was not reversed.');
+  }
+}
+
 async function compensateTowardLatest(userId) {
+  if (await deletionFencePresent(userId)) return { matched: false, fenced: true };
   const intent = await readIntent(userId);
   if (!intent) return { matched: false, missing: true };
   const observed = await readDisabled(userId);
@@ -455,6 +480,7 @@ async function finishSuspend(request, userId, generation, reason, requireRevoke)
           recordWritten: true,
         });
     }, true);
+    throwIfDeletionFenced(completed);
     if (completed.outcome !== 'committed' || !revoked) {
       throw new HttpsError(
         'aborted',
@@ -520,6 +546,7 @@ async function finishUnsuspend(request, userId, generation) {
         ...auditBase(request, userId, now),
       });
     }, true);
+    throwIfDeletionFenced(completed);
     if (completed.outcome !== 'committed') {
       await setProductBlockedIfCurrent(userId, heldGeneration);
       throw new HttpsError(
@@ -533,6 +560,9 @@ async function finishUnsuspend(request, userId, generation) {
 }
 
 async function onAuthSettled(userId, generation, desiredDisabled, sent) {
+  if (sent && sent.outcome === 'fenced') {
+    throw new HttpsError('failed-precondition', 'This account is being deleted. The deletion decision was not reversed.');
+  }
   if (sent.outcome === 'not-found') {
     throw new HttpsError('not-found', 'User not found. The access block was kept.');
   }
@@ -584,16 +614,46 @@ async function adminSuspendUser(request) {
   if (!userId || typeof userId !== 'string') throw new HttpsError('invalid-argument', 'userId required.');
   if (!reason || typeof reason !== 'string' || !reason.trim()) throw new HttpsError('invalid-argument', 'reason required.');
   if (userId === request.auth.uid) throw new HttpsError('failed-precondition', 'You cannot suspend your own account.');
+  if (await deletionFencePresent(userId)) {
+    throw new HttpsError('failed-precondition', 'This account is being deleted. The deletion decision was not reversed.');
+  }
 
   if (!(await userRef(userId).get()).exists) throw new HttpsError('not-found', 'User not found.');
+  let targetUser;
   try {
-    await getAuth().getUser(userId);
+    targetUser = await getAuth().getUser(userId);
   } catch (err) {
     console.error('adminSuspendUser: auth step failed', { step: 'lookup', code: err && err.code ? String(err.code) : 'unknown' });
     throw mapSuspensionAuthError(err);
   }
 
-  await rejectIfLockedByOther(userId);
+  let removalLock = null;
+  let removalGeneration = null;
+  try {
+    if (targetUser.customClaims?.role === 'admin') {
+      removalLock = await acquireRoleLock(`suspend_${userId}_${randomUUID()}`);
+      const others = await countOtherReservedUsableAdmins(userId);
+      if (others === 0) {
+        throw new HttpsError('failed-precondition', 'Cannot suspend the last usable administrator.');
+      }
+      let removalWrote;
+      try {
+        removalWrote = await recordRemoval(userId, {
+          kind: 'suspend',
+          phase: 'intent',
+          roleLockGeneration: removalLock.generation,
+          ownerOperationId: removalLock.ownerOperationId,
+        });
+      } catch (err) {
+        throw new HttpsError('internal', 'The administrator removal could not be recorded. Sign-in was not changed.');
+      }
+      if (!removalWrote || removalWrote.committed !== true) {
+        throw new HttpsError('failed-precondition', 'The administrator removal could not be recorded. Sign-in was not changed.');
+      }
+      removalGeneration = removalWrote.generation;
+    }
+
+    await rejectIfLockedByOther(userId);
   const repairedSuspend = await reconcileStoredIntent(userId, true) === true;
   const stored = await readIntent(userId);
   if (stored && stored.desiredDisabled === true) {
@@ -604,7 +664,7 @@ async function adminSuspendUser(request) {
   }
 
   const trimmedReason = reason.trim();
-  return withUserSuspensionLock(userId, async (ownerOperationId, generation) => {
+  return await withUserSuspensionLock(userId, async (ownerOperationId, generation) => {
     const pendingRef = db().collection('adminAuditLog').doc();
     const wrote = await commitOwnedSuspensionRecords(userId, ownerOperationId, generation, (tx, now) => {
       tx.update(userRef(userId), {
@@ -639,6 +699,7 @@ async function adminSuspendUser(request) {
         recordWritten: true,
       });
     });
+    throwIfDeletionFenced(wrote);
     if (wrote.outcome === 'lost') {
       throw new HttpsError('aborted', 'Lock ownership lost before the access block was saved. Sign-in was not changed. Retry.');
     }
@@ -653,8 +714,36 @@ async function adminSuspendUser(request) {
     if (!(await renewSuspensionLock(userId, ownerOperationId, generation))) {
       throw new HttpsError('aborted', 'Lock ownership lost before the account was disabled. The access block was kept. Retry.');
     }
+    if (removalGeneration != null) {
+      let issued;
+      try {
+        issued = await recordRemoval(userId, {
+          generation: removalGeneration,
+          kind: 'suspend',
+          phase: 'rpc-issued',
+          ownerOperationId: removalLock.ownerOperationId,
+        });
+      } catch (err) {
+        throw new HttpsError('internal', 'The administrator removal could not be recorded. Sign-in was not changed.');
+      }
+      if (!issued || issued.committed !== true) {
+        throw new HttpsError('failed-precondition', 'The administrator removal could not be recorded. Sign-in was not changed.');
+      }
+    }
     if (typeof hooks.beforeAuthRpc === 'function') await hooks.beforeAuthRpc({ userId, ownerOperationId, op: 'suspend', generation });
+    if (await deletionFencePresent(userId)) {
+      throw new HttpsError('failed-precondition', 'This account is being deleted. The deletion decision was not reversed.');
+    }
     const sent = await sendAndConfirm(userId, true);
+    if (removalGeneration != null && sent.outcome === 'applied') {
+      await recordRemoval(userId, {
+        generation: removalGeneration,
+        kind: 'suspend',
+        phase: 'confirmed',
+        roleLockGeneration: removalGeneration,
+        ownerOperationId: removalLock.ownerOperationId,
+      });
+    }
     if (typeof hooks.afterAuthRpc === 'function') await hooks.afterAuthRpc({ userId, ownerOperationId, op: 'suspend', outcome: sent.outcome, generation });
     try {
       await onAuthSettled(userId, generation, true, sent);
@@ -726,6 +815,7 @@ async function adminSuspendUser(request) {
           recordWritten: true,
         });
     }, true);
+    throwIfDeletionFenced(completed);
     if (completed.outcome === 'lost') {
       throw new HttpsError('aborted', 'Lock ownership lost before the suspension audit was kept. The access block was kept. Retry.');
     }
@@ -738,12 +828,18 @@ async function adminSuspendUser(request) {
     }
     return { success: true };
   }, 'increment');
+  } finally {
+    await releaseRoleLock(removalLock);
+  }
 }
 
 async function adminUnsuspendUser(request) {
   await requireCurrentAdmin(request);
   const { userId } = request.data || {};
   if (!userId || typeof userId !== 'string') throw new HttpsError('invalid-argument', 'userId required.');
+  if (await deletionFencePresent(userId)) {
+    throw new HttpsError('failed-precondition', 'This account is being deleted. The deletion decision was not reversed.');
+  }
 
   if (!(await userRef(userId).get()).exists) throw new HttpsError('not-found', 'User not found.');
   try {
@@ -788,6 +884,7 @@ async function adminUnsuspendUser(request) {
         recordWritten: true,
       });
     });
+    throwIfDeletionFenced(wrote);
     if (wrote.outcome !== 'committed') {
       const pub = await userRef(userId).get().catch(() => null);
       const data = pub && pub.exists ? pub.data() : null;
@@ -800,6 +897,9 @@ async function adminUnsuspendUser(request) {
       throw new HttpsError('aborted', 'Lock ownership lost before sign-in was re-enabled. The access block was kept. Retry.');
     }
     if (typeof hooks.beforeAuthRpc === 'function') await hooks.beforeAuthRpc({ userId, ownerOperationId, op: 'unsuspend', generation });
+    if (await deletionFencePresent(userId)) {
+      throw new HttpsError('failed-precondition', 'This account is being deleted. The deletion decision was not reversed.');
+    }
     const sent = await sendAndConfirm(userId, false);
     if (typeof hooks.afterAuthRpc === 'function') await hooks.afterAuthRpc({ userId, ownerOperationId, op: 'unsuspend', outcome: sent.outcome, generation });
     try {
@@ -868,6 +968,7 @@ async function adminUnsuspendUser(request) {
         ...auditBase(request, userId, now),
       });
     }, true);
+    throwIfDeletionFenced(completed);
     if (completed.outcome !== 'committed') {
       await setProductBlockedIfCurrent(userId, generation).catch(() => {});
       throw new HttpsError(
@@ -880,9 +981,167 @@ async function adminUnsuspendUser(request) {
   }, 'increment');
 }
 
+function parseAuthIntent(data) {
+  if (!data || typeof data !== 'object') return null;
+  if (!Number.isInteger(data.generation) || data.generation < 0) return null;
+  if (typeof data.desiredDisabled !== 'boolean') return null;
+  if (data.phase !== 'pending' && data.phase !== 'confirmed') return null;
+  return data;
+}
+
+function repairResult(outcome, extra) {
+  return {
+    outcome,
+    issued: false,
+    retractable: false,
+    stable: false,
+    generation: null,
+    desiredDisabled: null,
+    observedDisabled: null,
+    ...extra,
+    retractable: false,
+    stable: false,
+  };
+}
+
+async function deletionBlocksRepair(userId) {
+  const job = await db().doc(`accountDeletionJobs/${userId}`).get();
+  if (job.exists) return true;
+  return deletionFencePresent(userId);
+}
+
+function denialAbsent(profile) {
+  return !!profile && !Object.prototype.hasOwnProperty.call(profile, 'productAccessBlocked');
+}
+
+function enableEligible(intent, profile) {
+  return !!intent
+    && intent.desiredDisabled === false
+    && intent.phase === 'confirmed'
+    && !!profile
+    && profile.status === 'Active'
+    && denialAbsent(profile);
+}
+
+async function readRepairSnapshot(userId) {
+  const intentRef = authIntentRef(userId);
+  const profileRef = userRef(userId);
+  const jobRef = db().doc(`accountDeletionJobs/${userId}`);
+  const lifeRef = db().doc(`accountLifecycle/${userId}`);
+  return db().runTransaction(async (tx) => {
+    const [intentSnap, profileSnap, jobSnap, lifeSnap] = await Promise.all([
+      tx.get(intentRef),
+      tx.get(profileRef),
+      tx.get(jobRef),
+      tx.get(lifeRef),
+    ]);
+    return {
+      intent: intentSnap.exists ? parseAuthIntent(intentSnap.data()) : null,
+      profile: profileSnap.exists ? (profileSnap.data() || {}) : null,
+      deletion: jobSnap.exists || lifeSnap.exists,
+    };
+  });
+}
+
+// One pass toward the current authIntent. It does not write the public
+// profile, the denial flag, or a success record. A matching getUser is not
+// a promise that an already-accepted updateUser will stay at that bit.
+//
+// An enable is issued only for a confirmed generation whose profile is
+// Active and whose denial flag is absent. The deletion job is read again
+// in that same transaction immediately before updateUser. A job created
+// after that transaction, or an Auth RPC accepted before it returns, can
+// still overlap deletion. This pass cannot close that gap.
+async function reconcileAuthReplica(userId) {
+  if (typeof userId !== 'string' || userId.length === 0) return repairResult('refused');
+  const profile = await userRef(userId).get();
+  if (!profile.exists) return repairResult('refused');
+  if (await deletionBlocksRepair(userId)) return repairResult('deletion');
+
+  const intentSnap = await authIntentRef(userId).get();
+  if (!intentSnap.exists) return repairResult('refused');
+  const intent = parseAuthIntent(intentSnap.data());
+  if (!intent) return repairResult('refused');
+
+  const lockSnap = await suspensionLockRef(userId).get();
+  if (lockSnap.exists && leaseIsLive(lockSnap.data(), Timestamp.now().toMillis())) {
+    return repairResult('lease-held', {
+      generation: intent.generation,
+      desiredDisabled: intent.desiredDisabled,
+    });
+  }
+
+  try {
+    return await withUserSuspensionLock(userId, async (ownerOperationId, heldGeneration) => {
+      if (typeof hooks.beforeRepairDecision === 'function') {
+        await hooks.beforeRepairDecision({ userId, generation: intent.generation });
+      }
+      const snap = await readRepairSnapshot(userId);
+      const base = { generation: intent.generation, desiredDisabled: intent.desiredDisabled };
+      if (snap.deletion) return repairResult('deletion', base);
+      if (!snap.profile) return repairResult('refused', base);
+      if (!snap.intent || snap.intent.generation !== intent.generation || snap.intent.desiredDisabled !== intent.desiredDisabled || heldGeneration !== intent.generation) {
+        return repairResult('superseded', base);
+      }
+      if (snap.intent.desiredDisabled === false && !enableEligible(snap.intent, snap.profile)) {
+        return repairResult('ineligible', base);
+      }
+      if (!(await renewSuspensionLock(userId, ownerOperationId, heldGeneration))) {
+        return repairResult('lease-held', base);
+      }
+      const observed = await readDisabled(userId);
+      if (observed.notFound) return repairResult('not-found', base);
+      if (!observed.ok) return repairResult('unconfirmed', base);
+      if (observed.disabled === snap.intent.desiredDisabled) {
+        return repairResult('matched', { ...base, observedDisabled: observed.disabled });
+      }
+      const gate = await readRepairSnapshot(userId);
+      if (gate.deletion) return repairResult('deletion', base);
+      if (!gate.intent || gate.intent.generation !== intent.generation || gate.intent.desiredDisabled !== intent.desiredDisabled) {
+        return repairResult('superseded', base);
+      }
+      if (gate.intent.desiredDisabled === false && !enableEligible(gate.intent, gate.profile)) {
+        return repairResult('ineligible', base);
+      }
+      if (typeof hooks.afterRepairAuthorized === 'function') {
+        await hooks.afterRepairAuthorized({ userId, generation: intent.generation });
+      }
+      const sent = await sendAndConfirm(userId, intent.desiredDisabled);
+      const afterSnap = await authIntentRef(userId).get();
+      const after = afterSnap.exists ? parseAuthIntent(afterSnap.data()) : null;
+      const moved = !after || after.generation !== intent.generation || after.desiredDisabled !== intent.desiredDisabled;
+      if (moved) {
+        return repairResult('superseded', {
+          ...base,
+          issued: true,
+          observedDisabled: sent.outcome === 'applied' ? intent.desiredDisabled : sent.disabled === true,
+        });
+      }
+      if (sent.outcome === 'not-found') return repairResult('not-found', { ...base, issued: true });
+      if (sent.outcome !== 'applied') {
+        return repairResult(sent.outcome === 'unconfirmed' ? 'unconfirmed' : 'rejected', {
+          ...base,
+          issued: true,
+          observedDisabled: typeof sent.disabled === 'boolean' ? sent.disabled : null,
+        });
+      }
+      return repairResult('repaired', { ...base, issued: true, observedDisabled: intent.desiredDisabled });
+    }, 'resume', intent.generation);
+  } catch (err) {
+    if (!suspensionLockBusy(err)) throw err;
+    const latestSnap = await authIntentRef(userId).get();
+    const latest = latestSnap.exists ? parseAuthIntent(latestSnap.data()) : null;
+    if (!latest || latest.generation !== intent.generation || latest.desiredDisabled !== intent.desiredDisabled) {
+      return repairResult('superseded', { generation: intent.generation, desiredDisabled: intent.desiredDisabled });
+    }
+    return repairResult('lease-held', { generation: intent.generation, desiredDisabled: intent.desiredDisabled });
+  }
+}
+
 module.exports = {
   hooks,
   SUSPENSION_CALL_TIMEOUT_SEC,
   adminSuspendUser,
   adminUnsuspendUser,
+  reconcileAuthReplica,
 };

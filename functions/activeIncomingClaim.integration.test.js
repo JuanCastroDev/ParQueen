@@ -1,5 +1,7 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+
 /**
  * Active-incoming-claim release and 15-minute stale-lock repair.
  * Exercises the real scheduled handlers and the spot-delete trigger against

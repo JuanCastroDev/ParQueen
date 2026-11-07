@@ -1,5 +1,8 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+const { emulatorOrigin } = require('./isolatedEmulatorGuard');
+
 /**
  * Behavioral integration tests — adminBackfillStreetIntelligence
  * (functions/index.js, logic in functions/backfillLogic.js).
@@ -45,8 +48,8 @@ const path = require('path');
 const { requireEmulatorProjectId } = require('./emulatorProjectId');
 const PROJECT_ID = requireEmulatorProjectId();
 const REGION = 'us-central1';
-const FUNCTIONS_BASE = `http://localhost:5001/${PROJECT_ID}/${REGION}`;
-const AUTH_EMULATOR = 'http://localhost:9099';
+const FUNCTIONS_BASE = `${emulatorOrigin('functions')}/${PROJECT_ID}/${REGION}`;
+const AUTH_EMULATOR = emulatorOrigin('auth');
 const APP_NAME = '__adminBackfill_intg__';
 
 const testApp =

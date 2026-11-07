@@ -1,5 +1,7 @@
 'use strict';
 
+require('./isolatedEmulatorGuard').assertIsolatedEmulator();
+
 /**
  * cleanupExpiredInterests exercises the real scheduled handler via .run()
  * against the Firestore emulator (no mocks). The emulator does NOT enforce
