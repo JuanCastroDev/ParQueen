@@ -1,0 +1,41 @@
+{
+  "schema": "parqueen-founder-provenance-evidence/v1",
+  "evidenceClass": "FOUNDER-EXECUTED",
+  "keyId": "parqueen-founder-20261028-r1",
+  "payload": {
+    "schema": "parqueen-founder-provenance-evidence/v1",
+    "evidenceClass": "FOUNDER-EXECUTED",
+    "repository": "JuanCastroDev/ParQueen",
+    "head": "4f5d71cae72c9cafe07a68af97da05786eba09db",
+    "tree": "21a357c9f914a03a81d2110e1095d03c64885767",
+    "base": "b151706716ae9d2252245e4bb5e6879b8d193ada",
+    "criticalPaths": [
+      "functions/package-lock.json",
+      "functions/package.json"
+    ],
+    "runner": {
+      "path": "scripts/ci/private-provenance-suite.mjs",
+      "sha256": "96a932f9c33482ac0a7ca43bb05f7e317e0c8e83e80bf40ce8a2f1395b10cd37"
+    },
+    "suite": {
+      "path": "functions/curbIntelligence/provenanceAndConflict.test.cjs",
+      "sha256": "ec331d80d5c29a4a367a9a4926d0f3fd7a5773bf030dd8388da3821e60d4c486"
+    },
+    "artifact": {
+      "size": 45710043,
+      "sha256": "e1ca91f7ba05e874449f168242509908ab7d587be3fc7f3352c66c0851cbc225"
+    },
+    "tests": {
+      "executed": 11,
+      "passed": 11,
+      "failed": 0,
+      "skipped": 0,
+      "exitCode": 0
+    },
+    "founderIdentity": "parqueen-founder",
+    "executedAt": "2026-11-07T03:47:57.623Z",
+    "attestationId": "3123d677-14cf-4700-8e90-0979523753f5",
+    "expiresAt": "2026-11-21T03:47:57.623Z"
+  },
+  "signature": "KkZaRrk00Rl7sbpaeriPQ1T0aXk5dnLIeSrfRs4W+Mp15I/vCxJuQhsabhOJgGp8tSw+4vl9CHXYul5FgzwhAQ=="
+}
