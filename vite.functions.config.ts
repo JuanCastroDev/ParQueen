@@ -48,6 +48,9 @@ export default defineConfig({
       'functions/adminAuth.revocation.integration.test.js',
       'functions/eventarcRetryHardening.integration.test.js',
       'functions/incrementTotalSpotsPinged.impactStats.integration.test.js',
+      // melvilleCanonicalPersistence.integration.test.js is not included.
+      // It requires demo-parkqueen-functions-test on 127.0.0.1:8080, which
+      // isolatedEmulatorGuard.js rejects. It is not run by this CI config.
       'functions/waitlist.integration.test.js',
       'functions/scheduleCleaningReminders.integration.test.js',
     ],

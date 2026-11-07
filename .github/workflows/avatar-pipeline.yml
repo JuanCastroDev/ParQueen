@@ -14,6 +14,8 @@ on:
       - storage.rules.test.ts
       - vite.functions.config.ts
       - .github/scripts/probe-functions-index-load.js
+      - scripts/release-preflight/run-functions-integration-ci.mjs
+      - firebase.s7-fn-iso.json
       - .github/workflows/avatar-pipeline.yml
   pull_request:
     paths:
@@ -28,6 +30,8 @@ on:
       - storage.rules.test.ts
       - vite.functions.config.ts
       - .github/scripts/probe-functions-index-load.js
+      - scripts/release-preflight/run-functions-integration-ci.mjs
+      - firebase.s7-fn-iso.json
       - .github/workflows/avatar-pipeline.yml
   workflow_dispatch:
 

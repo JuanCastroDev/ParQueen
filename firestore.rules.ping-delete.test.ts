@@ -69,7 +69,9 @@ describe('Ping direct-delete fallback rules', () => {
     await seed(['users', OTHER], { username: 'other', status: 'Active' });
   });
 
-  afterAll(async () => env.cleanup());
+  afterAll(async () => {
+    if (env) await env.cleanup();
+  });
 
   it('allows the owner to delete an available unclaimed Ping', async () => {
     await seed(['spots', 'open'], baseSpot());

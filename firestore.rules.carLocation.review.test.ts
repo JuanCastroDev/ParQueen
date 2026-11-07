@@ -53,7 +53,7 @@ describe('private/carLocation production bookmark under product denial', () => {
   });
 
   afterAll(async () => {
-    await env.cleanup();
+    if (env) await env.cleanup();
   });
 
   beforeEach(async () => {

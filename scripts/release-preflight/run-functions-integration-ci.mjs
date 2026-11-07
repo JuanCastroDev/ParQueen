@@ -10,7 +10,8 @@ import {
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const PROJECT_ID = 'demo-parkqueen-functions-test';
+const PROJECT_ID = 'demo-parkqueen-s7-fn-iso';
+const EMULATOR_CONFIG = 'firebase.s7-fn-iso.json';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const DEMO_ENV_PATH = resolve(REPO_ROOT, 'functions', `.env.${PROJECT_ID}`);
 const LOCAL_ENV_PATH = resolve(REPO_ROOT, 'functions', '.env.local');
@@ -37,8 +38,8 @@ function fail(message, code = 1) {
   process.exit(code);
 }
 
-if (PROJECT_ID !== 'demo-parkqueen-functions-test' || !PROJECT_ID.startsWith('demo-')) {
-  fail('Functions tests refuse every project except demo-parkqueen-functions-test');
+if (PROJECT_ID !== 'demo-parkqueen-s7-fn-iso' || !PROJECT_ID.startsWith('demo-')) {
+  fail('Functions tests refuse every project except demo-parkqueen-s7-fn-iso');
 }
 
 function pathStatus(path) {
@@ -50,10 +51,6 @@ function pathStatus(path) {
   }
 }
 
-const existing = pathStatus(DEMO_ENV_PATH);
-if (existing) {
-  fail(`${DEMO_ENV_PATH} already exists; refusing to overwrite it`);
-}
 if (pathStatus(LOCAL_ENV_PATH)) {
   fail(`${LOCAL_ENV_PATH} already exists; refusing to overwrite it`);
 }
@@ -103,21 +100,31 @@ function safeParameterFile(path) {
   return sawKey;
 }
 
+const existing = pathStatus(DEMO_ENV_PATH);
+const preserveCommittedEnv = Boolean(existing && safeParameterFile(DEMO_ENV_PATH));
+if (existing && !preserveCommittedEnv) {
+  fail(`${DEMO_ENV_PATH} already exists and is not the approved isolated parameter file`);
+}
+
 const localEnvExisted = Boolean(pathStatus(LOCAL_ENV_PATH));
 let created = false;
 let exitCode = 0;
 try {
-  const fd = openSync(DEMO_ENV_PATH, 'wx', 0o600);
-  created = true;
-  try {
-    writeSync(fd, DEMO_ENV_TEXT);
-  } finally {
-    closeSync(fd);
+  if (!preserveCommittedEnv) {
+    const fd = openSync(DEMO_ENV_PATH, 'wx', 0o600);
+    created = true;
+    try {
+      writeSync(fd, DEMO_ENV_TEXT);
+    } finally {
+      closeSync(fd);
+    }
   }
   const launch = firebaseLaunch();
   const result = spawnSync(launch.command, [
     ...launch.args,
     'emulators:exec',
+    '--config',
+    EMULATOR_CONFIG,
     '--only',
     'functions,firestore,auth,storage',
     '--project',
@@ -128,6 +135,9 @@ try {
     env: {
       ...process.env,
       GCLOUD_PROJECT: PROJECT_ID,
+      GOOGLE_CLOUD_PROJECT: PROJECT_ID,
+      S7_ISOLATED_PROJECT: PROJECT_ID,
+      GOOGLE_APPLICATION_CREDENTIALS: 'C:/Users/jayca/AppData/Local/ParQueen/s7-fn-iso-no-adc.json',
     },
     stdio: 'inherit',
   });

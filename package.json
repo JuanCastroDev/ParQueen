@@ -15,6 +15,8 @@
     "test:preflight:windows": "node scripts/release-preflight/run-root-tests.mjs",
     "test:rules:unit": "vitest run --config vite.rules.config.ts --project candidate-rules && vitest run --config vite.rules.config.ts --project original-30p --testNamePattern A1-15-30P",
     "test:rules": "firebase emulators:exec --only firestore --project demo-parkqueen-rules-test \"npm run test:rules:unit\"",
+    "test:rules:isolated:unit": "vitest run --config vite.rules.isolated.config.ts",
+    "test:rules:isolated": "firebase emulators:exec --config firebase.s7-fn-iso.json --only firestore --project demo-parkqueen-s7-fn-iso \"npm run test:rules:isolated:unit\"",
     "test:storage:rules:unit": "vitest run --config vite.storage-rules.config.ts",
     "test:storage:rules": "firebase emulators:exec --only firestore,storage --project demo-parkqueen-storage-test \"npm run test:storage:rules:unit\"",
     "install:functions": "npm install --prefix functions",

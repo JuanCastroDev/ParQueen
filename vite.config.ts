@@ -94,8 +94,16 @@ export default defineConfig(({ command, mode }) => {
           'firestore.rules.test.original-suite.ts',
           'firestore.rules.finder-notice.31ag.test.ts',
           'firestore.rules.ping-delete.test.ts',
+          'firestore.rules.carLocation.review.test.ts',
           'storage.rules.test.ts',
           'functions/*.integration.test.*',
+          // Node assert scripts. Run with node, not the root Vitest suite:
+          // node functions/isolatedEmulatorGuard.test.js
+          // node functions/isolatedNetworkGuard.test.js
+          // node functions/isolatedProcessEnv.test.js
+          'functions/isolatedEmulatorGuard.test.js',
+          'functions/isolatedNetworkGuard.test.js',
+          'functions/isolatedProcessEnv.test.js',
           // Emulator-only. Still required by vite.functions.config.ts.
           'functions/cancelClaim.export.test.js',
           ...(/^(localhost|127\.0\.0\.1):\d+$/.test(
