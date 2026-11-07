@@ -2800,44 +2800,39 @@ exports.reconcileLegacyAdminSingleton = onCall(
     // just an optimization: it also means a retry that only needs to recover a
     // missing audit record (see below) never re-derives ambiguity from scratch.
     if (!existing.exists) {
-      // Policy: disabled accounts are excluded from the admin-role count. A disabled
-      // account cannot obtain a valid ID token, so it cannot currently exercise admin
-      // privileges or contend for ownership — counting it would only make legitimate
-      // reconciliation fail closed forever on a stale, unusable claim, without adding
-      // any real security value (a disabled account can't claim the singleton either).
-      let adminUids = [];
-      let pageToken;
-      do {
-        const page = await getAuth().listUsers(1000, pageToken);
-        for (const u of page.users) {
-          if (!u.disabled && u.customClaims?.role === 'admin') adminUids.push(u.uid);
-        }
-        pageToken = page.pageToken;
-      } while (pageToken);
-
-      if (adminUids.length !== 1 || adminUids[0] !== uid) {
-        throw new HttpsError(
-          'failed-precondition',
-          'Cannot reconcile: admin-role state is not unambiguous.'
-        );
-      }
-
+      // Reserved-usable administrators only. A fenced, disabled, suspended,
+      // product-blocked, or pending-removal claim is not an unambiguous admin.
+      // This does not write custom claims. The role lock is held through the
+      // sentinel write so a concurrent demotion cannot change the count first.
+      const { acquireRoleLock, releaseRoleLock, listReservedUsableAdminUids } = require('./adminContinuity');
+      const continuityLock = await acquireRoleLock(`legacy_${uid}_${randomUUID()}`);
       try {
-        await db.runTransaction(async (tx) => {
-          const sentinel = await tx.get(sentinelRef);
-          if (sentinel.exists) {
-            if (sentinel.data().bootstrappedBy === uid) return;
-            throw new HttpsError('already-exists', 'Admin access has already been bootstrapped.');
-          }
-          tx.set(sentinelRef, {
-            bootstrappedAt: Timestamp.now(),
-            bootstrappedBy: uid,
-            reconciledLegacyAdmin: true,
+        const adminUids = await listReservedUsableAdminUids();
+        if (adminUids.length !== 1 || adminUids[0] !== uid) {
+          throw new HttpsError(
+            'failed-precondition',
+            'Cannot reconcile: admin-role state is not unambiguous.'
+          );
+        }
+        try {
+          await db.runTransaction(async (tx) => {
+            const sentinel = await tx.get(sentinelRef);
+            if (sentinel.exists) {
+              if (sentinel.data().bootstrappedBy === uid) return;
+              throw new HttpsError('already-exists', 'Admin access has already been bootstrapped.');
+            }
+            tx.set(sentinelRef, {
+              bootstrappedAt: Timestamp.now(),
+              bootstrappedBy: uid,
+              reconciledLegacyAdmin: true,
+            });
           });
-        });
-      } catch (err) {
-        if (err.code === 'already-exists') throw err;
-        throw new HttpsError('internal', 'Reconciliation failed; retry.');
+        } catch (err) {
+          if (err.code === 'already-exists' || err.code === 'failed-precondition') throw err;
+          throw new HttpsError('internal', 'Reconciliation failed; retry.');
+        }
+      } finally {
+        await releaseRoleLock(continuityLock);
       }
     }
 
@@ -2897,19 +2892,8 @@ exports.reconcileLegacyAdminSingleton = onCall(
 // someone else safe to remove. The target of the operation is excluded
 // by the caller.
 async function countOtherUsableAdmins(excludeUid) {
-  let count = 0;
-  let pageToken;
-  do {
-    const page = await getAuth().listUsers(1000, pageToken);
-    for (const user of page.users) {
-      if (user.uid === excludeUid || user.disabled || user.customClaims?.role !== 'admin') continue;
-      const fence = await db.doc(`accountLifecycle/${user.uid}`).get();
-      if (fence.exists) continue;
-      count++;
-    }
-    pageToken = page.pageToken;
-  } while (pageToken);
-  return count;
+  const { countOtherReservedUsableAdmins } = require('./adminContinuity');
+  return countOtherReservedUsableAdmins(excludeUid);
 }
 
 exports.setStaffRole = onCall(
@@ -3053,6 +3037,22 @@ exports.setStaffRole = onCall(
         if (otherUsableAdmins === 0) {
           throw new HttpsError('failed-precondition', 'Cannot remove the last active administrator.');
         }
+        const { recordRemoval } = require('./adminContinuity');
+        let removalWrote;
+        try {
+          removalWrote = await recordRemoval(uid, {
+            kind: 'demote',
+            phase: 'intent',
+            roleLockGeneration: null,
+            ownerOperationId: operationId,
+          });
+        } catch (err) {
+          throw new HttpsError('internal', 'The administrator removal could not be recorded. Sign-in was not changed.');
+        }
+        if (!removalWrote || removalWrote.committed !== true) {
+          throw new HttpsError('failed-precondition', 'The administrator removal could not be recorded. Sign-in was not changed.');
+        }
+        op.removalGeneration = removalWrote.generation;
       }
 
       // Merge rather than replace: setCustomUserClaims overwrites the entire
@@ -3071,11 +3071,47 @@ exports.setStaffRole = onCall(
         const { role: _oldRole, ...unrelatedClaims } = currentTarget.customClaims || {};
         const nextClaims = op.requestedRole ? { ...unrelatedClaims, role: op.requestedRole } : unrelatedClaims;
         await renewLockOrThrow();
+        if (removingAdmin && op.removalGeneration) {
+          const { recordRemoval } = require('./adminContinuity');
+          let issued;
+          try {
+            issued = await recordRemoval(uid, {
+              generation: op.removalGeneration,
+              kind: 'demote',
+              phase: 'rpc-issued',
+              ownerOperationId: operationId,
+            });
+          } catch (err) {
+            throw new HttpsError('internal', 'The administrator removal could not be recorded. Sign-in was not changed.');
+          }
+          if (!issued || issued.committed !== true) {
+            throw new HttpsError('failed-precondition', 'The administrator removal could not be recorded. Sign-in was not changed.');
+          }
+        }
         try {
           await getAuth().setCustomUserClaims(uid, nextClaims);
         } catch (err) {
           if (err.code === 'auth/user-not-found') throw new HttpsError('not-found', 'Target user not found.');
           throw new HttpsError('internal', 'Role update failed; retry.');
+        }
+        if (removingAdmin && op.removalGeneration) {
+          const { recordRemoval } = require('./adminContinuity');
+          let confirmed = false;
+          try {
+            const after = await getAuth().getUser(uid);
+            confirmed = after.customClaims?.role !== 'admin';
+          } catch (err) {
+            confirmed = false;
+          }
+          if (confirmed) {
+            await recordRemoval(uid, {
+              generation: op.removalGeneration,
+              kind: 'demote',
+              phase: 'confirmed',
+              roleLockGeneration: op.removalGeneration,
+              ownerOperationId: operationId,
+            });
+          }
         }
         if (removingAdmin) {
           // Best-effort: bounds exposure to the current ID token's remaining

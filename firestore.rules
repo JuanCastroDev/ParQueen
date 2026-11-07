@@ -1037,6 +1037,11 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Removal uncertainty for administrator continuity. Not a role grant.
+    match /adminContinuity/{userId} {
+      allow read, write: if false;
+    }
+
     match /rateLimits/{docId} {
       allow read, write: if false;
     }

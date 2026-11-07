@@ -6,6 +6,7 @@ const { getFirestore, Timestamp, FieldValue } = require('firebase-admin/firestor
 const { getAuth } = require('firebase-admin/auth');
 const { requireCurrentAdmin } = require('./adminAuth');
 const { deletionFencePresent } = require('./productAccess');
+const { acquireRoleLock, releaseRoleLock, recordRemoval, countOtherReservedUsableAdmins } = require('./adminContinuity');
 
 // Per-user suspension guard. adminSuspendUser and adminUnsuspendUser set
 // timeoutSeconds to 60. The lease is 120s from this process clock, renewed
@@ -618,14 +619,41 @@ async function adminSuspendUser(request) {
   }
 
   if (!(await userRef(userId).get()).exists) throw new HttpsError('not-found', 'User not found.');
+  let targetUser;
   try {
-    await getAuth().getUser(userId);
+    targetUser = await getAuth().getUser(userId);
   } catch (err) {
     console.error('adminSuspendUser: auth step failed', { step: 'lookup', code: err && err.code ? String(err.code) : 'unknown' });
     throw mapSuspensionAuthError(err);
   }
 
-  await rejectIfLockedByOther(userId);
+  let removalLock = null;
+  let removalGeneration = null;
+  try {
+    if (targetUser.customClaims?.role === 'admin') {
+      removalLock = await acquireRoleLock(`suspend_${userId}_${randomUUID()}`);
+      const others = await countOtherReservedUsableAdmins(userId);
+      if (others === 0) {
+        throw new HttpsError('failed-precondition', 'Cannot suspend the last usable administrator.');
+      }
+      let removalWrote;
+      try {
+        removalWrote = await recordRemoval(userId, {
+          kind: 'suspend',
+          phase: 'intent',
+          roleLockGeneration: removalLock.generation,
+          ownerOperationId: removalLock.ownerOperationId,
+        });
+      } catch (err) {
+        throw new HttpsError('internal', 'The administrator removal could not be recorded. Sign-in was not changed.');
+      }
+      if (!removalWrote || removalWrote.committed !== true) {
+        throw new HttpsError('failed-precondition', 'The administrator removal could not be recorded. Sign-in was not changed.');
+      }
+      removalGeneration = removalWrote.generation;
+    }
+
+    await rejectIfLockedByOther(userId);
   const repairedSuspend = await reconcileStoredIntent(userId, true) === true;
   const stored = await readIntent(userId);
   if (stored && stored.desiredDisabled === true) {
@@ -636,7 +664,7 @@ async function adminSuspendUser(request) {
   }
 
   const trimmedReason = reason.trim();
-  return withUserSuspensionLock(userId, async (ownerOperationId, generation) => {
+  return await withUserSuspensionLock(userId, async (ownerOperationId, generation) => {
     const pendingRef = db().collection('adminAuditLog').doc();
     const wrote = await commitOwnedSuspensionRecords(userId, ownerOperationId, generation, (tx, now) => {
       tx.update(userRef(userId), {
@@ -686,11 +714,36 @@ async function adminSuspendUser(request) {
     if (!(await renewSuspensionLock(userId, ownerOperationId, generation))) {
       throw new HttpsError('aborted', 'Lock ownership lost before the account was disabled. The access block was kept. Retry.');
     }
+    if (removalGeneration != null) {
+      let issued;
+      try {
+        issued = await recordRemoval(userId, {
+          generation: removalGeneration,
+          kind: 'suspend',
+          phase: 'rpc-issued',
+          ownerOperationId: removalLock.ownerOperationId,
+        });
+      } catch (err) {
+        throw new HttpsError('internal', 'The administrator removal could not be recorded. Sign-in was not changed.');
+      }
+      if (!issued || issued.committed !== true) {
+        throw new HttpsError('failed-precondition', 'The administrator removal could not be recorded. Sign-in was not changed.');
+      }
+    }
     if (typeof hooks.beforeAuthRpc === 'function') await hooks.beforeAuthRpc({ userId, ownerOperationId, op: 'suspend', generation });
     if (await deletionFencePresent(userId)) {
       throw new HttpsError('failed-precondition', 'This account is being deleted. The deletion decision was not reversed.');
     }
     const sent = await sendAndConfirm(userId, true);
+    if (removalGeneration != null && sent.outcome === 'applied') {
+      await recordRemoval(userId, {
+        generation: removalGeneration,
+        kind: 'suspend',
+        phase: 'confirmed',
+        roleLockGeneration: removalGeneration,
+        ownerOperationId: removalLock.ownerOperationId,
+      });
+    }
     if (typeof hooks.afterAuthRpc === 'function') await hooks.afterAuthRpc({ userId, ownerOperationId, op: 'suspend', outcome: sent.outcome, generation });
     try {
       await onAuthSettled(userId, generation, true, sent);
@@ -775,6 +828,9 @@ async function adminSuspendUser(request) {
     }
     return { success: true };
   }, 'increment');
+  } finally {
+    await releaseRoleLock(removalLock);
+  }
 }
 
 async function adminUnsuspendUser(request) {
