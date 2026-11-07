@@ -10,6 +10,7 @@ on:
       - functions/moderateAvatarUpload.integration.test.js
       - functions/rateLimitCallable.integration.test.js
       - functions/bootstrapAdmin.integration.test.js
+      - functions/cancelClaim.export.test.js
       - storage.rules
       - storage.rules.test.ts
       - vite.functions.config.ts
@@ -27,6 +28,7 @@ on:
       - functions/moderateAvatarUpload.integration.test.js
       - functions/rateLimitCallable.integration.test.js
       - functions/bootstrapAdmin.integration.test.js
+      - functions/cancelClaim.export.test.js
       - storage.rules
       - storage.rules.test.ts
       - vite.functions.config.ts

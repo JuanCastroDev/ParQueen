@@ -4,10 +4,12 @@ const fs = require('fs');
 const path = require('path');
 const { getFirestore, Timestamp } = require('firebase-admin/firestore');
 const { getAuth } = require('firebase-admin/auth');
+const { assertIsolatedEmulator, emulatorOrigin } = require('./isolatedEmulatorGuard');
 const { requireEmulatorProjectId } = require('./emulatorProjectId');
 
+assertIsolatedEmulator();
 const PROJECT_ID = requireEmulatorProjectId();
-if (PROJECT_ID !== 'demo-parkqueen-functions-test') {
+if (PROJECT_ID !== 'demo-parkqueen-s7-fn-iso') {
   throw new Error(`Refusing cancelClaim export tests for project ${PROJECT_ID}`);
 }
 if (!process.env.FIRESTORE_EMULATOR_HOST) {
@@ -18,7 +20,7 @@ const index = require('./index.js');
 const db = getFirestore();
 const CANCEL_SA = 'parqueen-cancel@parkqueen-46475363-ccf36.iam.gserviceaccount.com';
 const REGION = 'us-central1';
-const FUNCTIONS_BASE = `http://127.0.0.1:5001/${PROJECT_ID}/${REGION}`;
+const FUNCTIONS_BASE = `${emulatorOrigin('functions')}/${PROJECT_ID}/${REGION}`;
 const FINGERPRINT = 1_700_000_000_000;
 
 let sequence = 0;
