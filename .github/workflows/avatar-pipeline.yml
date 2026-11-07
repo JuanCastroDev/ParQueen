@@ -15,6 +15,7 @@ on:
       - vite.functions.config.ts
       - .github/scripts/probe-functions-index-load.js
       - scripts/release-preflight/run-functions-integration-ci.mjs
+      - functions/.env.demo-parkqueen-s7-fn-iso
       - firebase.s7-fn-iso.json
       - .github/workflows/avatar-pipeline.yml
   pull_request:
@@ -31,6 +32,7 @@ on:
       - vite.functions.config.ts
       - .github/scripts/probe-functions-index-load.js
       - scripts/release-preflight/run-functions-integration-ci.mjs
+      - functions/.env.demo-parkqueen-s7-fn-iso
       - firebase.s7-fn-iso.json
       - .github/workflows/avatar-pipeline.yml
   workflow_dispatch:
