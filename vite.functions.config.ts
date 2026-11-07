@@ -53,6 +53,8 @@ export default defineConfig({
       // isolatedEmulatorGuard.js rejects. It is not run by this CI config.
       'functions/waitlist.integration.test.js',
       'functions/scheduleCleaningReminders.integration.test.js',
+      'functions/authReplicaReconcile.integration.test.js',
+      'functions/accountDeletionFence.integration.test.js',
     ],
     testTimeout: 120000,
     hookTimeout: 120000,
