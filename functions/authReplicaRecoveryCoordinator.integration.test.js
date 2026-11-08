@@ -491,6 +491,104 @@ describe('auth replica recovery coordinator', () => {
     }
   });
 
+  it('does not persist a refused record when the intent is missing', async () => {
+    const uid = await user('no-intent', { status: 'Suspended', productAccessBlocked: true }, { disabled: false });
+    const orig = adminAuth.updateUser.bind(adminAuth);
+    let writes = 0;
+    adminAuth.updateUser = async (id, props) => {
+      if (id === uid) writes += 1;
+      return orig(id, props);
+    };
+    try {
+      const first = await runAuthReplicaRecovery(uid);
+      expect(first.outcome).toBe('refused');
+      expect(first.persisted).toBe(false);
+      expect(writes).toBe(0);
+      expect(await recordOf(uid)).toBeNull();
+      await intent(uid, { generation: 4, desiredDisabled: true, phase: 'confirmed' });
+      const second = await runAuthReplicaRecovery(uid);
+      expect(second.outcome).not.toBe('invalid-record');
+      expect(second.outcome).toBe('revocation-required');
+      expect((await adminAuth.getUser(uid)).disabled).toBe(true);
+      const saved = await recordOf(uid);
+      expect(saved.generation).toBe(4);
+      expect(saved.desiredDisabled).toBe(true);
+      expect(saved.attempts).toBe(1);
+      expect(saved.uncertain).toBe(false);
+      expect(typeof saved.outcome).toBe('string');
+      expect(saved.outcome.length).toBeGreaterThan(0);
+    } finally {
+      adminAuth.updateUser = orig;
+    }
+  });
+
+  it('does not persist a refused record when the profile is missing', async () => {
+    const uid = await user('no-profile', null, { disabled: false });
+    const orig = adminAuth.updateUser.bind(adminAuth);
+    let writes = 0;
+    adminAuth.updateUser = async (id, props) => {
+      if (id === uid) writes += 1;
+      return orig(id, props);
+    };
+    try {
+      const first = await runAuthReplicaRecovery(uid);
+      expect(first.outcome).toBe('refused');
+      expect(first.persisted).toBe(false);
+      expect(writes).toBe(0);
+      expect(await recordOf(uid)).toBeNull();
+      await db.doc(`users/${uid}`).set({ id: uid, status: 'Suspended', productAccessBlocked: true });
+      await intent(uid, { generation: 4, desiredDisabled: true, phase: 'confirmed' });
+      const second = await runAuthReplicaRecovery(uid);
+      expect(second.outcome).not.toBe('invalid-record');
+      expect(second.outcome).toBe('revocation-required');
+      const saved = await recordOf(uid);
+      expect(Number.isSafeInteger(saved.generation)).toBe(true);
+      expect(saved.desiredDisabled).toBe(true);
+      expect(Number.isSafeInteger(saved.attempts)).toBe(true);
+      expect(typeof saved.uncertain).toBe('boolean');
+    } finally {
+      adminAuth.updateUser = orig;
+    }
+  });
+
+  it('does not replace a valid recovery record when the intent disappears', async () => {
+    const uid = await user('keep-record', { status: 'Suspended', productAccessBlocked: true }, { disabled: true });
+    await intent(uid, { generation: 2, desiredDisabled: true, phase: 'confirmed' });
+    const original = {
+      generation: 2,
+      desiredDisabled: true,
+      attempts: 2,
+      uncertain: false,
+      administratorRequired: false,
+      revocationRequired: false,
+      outcome: 'rejected',
+      evidence: 'keep-valid',
+      stable: false,
+    };
+    await db.doc(`${COLLECTION}/${uid}`).set(original);
+    await db.doc(`users/${uid}/private/authIntent`).delete();
+    const orig = adminAuth.updateUser.bind(adminAuth);
+    let writes = 0;
+    adminAuth.updateUser = async (id, props) => {
+      if (id === uid) writes += 1;
+      return orig(id, props);
+    };
+    try {
+      const result = await runAuthReplicaRecovery(uid);
+      expect(result.outcome).toBe('refused');
+      expect(result.persisted).toBe(false);
+      expect(writes).toBe(0);
+      const saved = await recordOf(uid);
+      expect(saved.attempts).toBe(2);
+      expect(saved.evidence).toBe('keep-valid');
+      expect(saved.generation).toBe(2);
+      expect(saved.desiredDisabled).toBe(true);
+      expect(saved.outcome).toBe('rejected');
+    } finally {
+      adminAuth.updateUser = orig;
+    }
+  });
+
   it('denies client reads and writes of the recovery record', async () => {
     const uid = await user('rules', { status: 'Active' }, { disabled: false });
     const client = rulesEnv.authenticatedContext(uid).firestore();

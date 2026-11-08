@@ -112,41 +112,120 @@ function queueSpot(batch, id, data) {
     batch.set(db.doc(`spots/${id}`), data);
 }
 
+function assessSpotCreateCompletion({ baseline, current, expectedIds, receiptSpotIds }) {
+    const delta = current - baseline;
+    const counts = new Map();
+    for (const id of receiptSpotIds) {
+        counts.set(id, (counts.get(id) || 0) + 1);
+    }
+    const missing = [];
+    let duplicateSpotIds = 0;
+    let completed = 0;
+    for (const id of expectedIds) {
+        const seen = counts.get(id) || 0;
+        if (seen === 0) missing.push(id);
+        else {
+            completed += 1;
+            if (seen > 1) duplicateSpotIds += seen - 1;
+        }
+    }
+    if (delta < expectedIds.length) {
+        return { status: 'pending', stage: 'DRAIN', missing, duplicateSpotIds, completed };
+    }
+    if (delta !== expectedIds.length || missing.length > 0 || duplicateSpotIds > 0) {
+        return { status: 'fail', stage: 'DRAIN', missing, duplicateSpotIds, completed };
+    }
+    return { status: 'complete', stage: 'DRAIN', verifiedTotal: current, missing, duplicateSpotIds, completed };
+}
+
+function nextQuietObservation({ verifiedTotal, observation, streak }) {
+    if (observation !== verifiedTotal) {
+        return { status: 'fail', stage: 'POST_COMPLETION_QUIET', streak };
+    }
+    const next = streak + 1;
+    if (next >= 4) return { status: 'pass', stage: 'POST_COMPLETION_QUIET', streak: next };
+    return { status: 'pending', stage: 'POST_COMPLETION_QUIET', streak: next };
+}
+
+function settlementError({ stage, baseline, spotsCreated: expected, current, samples, completed, duplicateSpotIds, missing }) {
+    return new Error(
+        `spot-create counter did not settle at ${current} after ${expected} creates from ${baseline}; `
+        + `stage=${stage}; samples=${samples.join(',')}; eventDocs=${completed}; duplicateSpotIds=${duplicateSpotIds}; `
+        + `missingCreates=${missing.length}; missingIds=${missing.slice(0, 8).join(',')}`
+    );
+}
+
+async function incrementReceiptSpotIds() {
+    const events = await db.collection('functionEvents').get();
+    const ids = [];
+    for (const eventDoc of events.docs) {
+        const data = eventDoc.data() || {};
+        if (data.functionName === 'incrementTotalSpotsPinged' && typeof data.spotId === 'string') ids.push(data.spotId);
+    }
+    return ids;
+}
+
 async function settleSpotCreateCounter(baseline) {
     if (spotsCreated === 0) return;
     const statsRef = db.doc('stats/global');
-    let last = null;
-    let stableReads = 0;
     const samples = [];
+    let verdict = { status: 'pending', stage: 'DRAIN', missing: createdSpotIds.slice(), duplicateSpotIds: 0, completed: 0 };
+    let current = baseline;
     for (let attempt = 0; attempt < 200; attempt++) {
-        const current = (await statsRef.get()).data()?.totalSpotsPinged || 0;
+        current = (await statsRef.get()).data()?.totalSpotsPinged || 0;
         if (samples.length === 0 || samples[samples.length - 1] !== current) samples.push(current);
-        const caughtUp = current - baseline >= spotsCreated;
-        if (caughtUp && current === last) {
-            stableReads += 1;
-            if (stableReads >= 4) return;
-        } else {
-            stableReads = 0;
-            last = current;
+        if (current - baseline >= spotsCreated) {
+            verdict = assessSpotCreateCompletion({
+                baseline,
+                current,
+                expectedIds: createdSpotIds,
+                receiptSpotIds: await incrementReceiptSpotIds(),
+            });
+            if (verdict.status !== 'pending') break;
         }
         await new Promise((resolve) => setTimeout(resolve, 200));
     }
-    const current = (await statsRef.get()).data()?.totalSpotsPinged || 0;
-    const events = await db.collection('functionEvents').get();
-    const counted = new Set();
-    let duplicateSpotIds = 0;
-    for (const doc of events.docs) {
-        const data = doc.data() || {};
-        if (data.functionName !== 'incrementTotalSpotsPinged') continue;
-        if (counted.has(data.spotId)) duplicateSpotIds += 1;
-        counted.add(data.spotId);
+    if (verdict.status !== 'complete') {
+        if (verdict.status === 'pending') {
+            verdict = assessSpotCreateCompletion({
+                baseline,
+                current,
+                expectedIds: createdSpotIds,
+                receiptSpotIds: await incrementReceiptSpotIds(),
+            });
+            if (verdict.status === 'pending') verdict = { ...verdict, status: 'fail' };
+        }
+        throw settlementError({
+            stage: 'DRAIN',
+            baseline,
+            spotsCreated,
+            current,
+            samples,
+            completed: verdict.completed,
+            duplicateSpotIds: verdict.duplicateSpotIds,
+            missing: verdict.missing,
+        });
     }
-    const missing = createdSpotIds.filter((id) => !counted.has(id));
-    throw new Error(
-        `spot-create counter did not settle at ${current} after ${spotsCreated} creates from ${baseline}; `
-        + `samples=${samples.join(',')}; eventDocs=${counted.size}; duplicateSpotIds=${duplicateSpotIds}; `
-        + `missingCreates=${missing.length}; missingIds=${missing.slice(0, 8).join(',')}`
-    );
+    let streak = 0;
+    while (streak < 4) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        current = (await statsRef.get()).data()?.totalSpotsPinged || 0;
+        if (samples.length === 0 || samples[samples.length - 1] !== current) samples.push(current);
+        const step = nextQuietObservation({ verifiedTotal: verdict.verifiedTotal, observation: current, streak });
+        if (step.status === 'fail') {
+            throw settlementError({
+                stage: 'POST_COMPLETION_QUIET',
+                baseline,
+                spotsCreated,
+                current,
+                samples,
+                completed: verdict.completed,
+                duplicateSpotIds: 0,
+                missing: [],
+            });
+        }
+        streak = step.streak;
+    }
 }
 
 describe('cleanupExpiredSpotsHourly durability', () => {
@@ -313,5 +392,86 @@ describe('cleanupExpiredSpotsHourly durability', () => {
         expect(kept.data().status).toBe('occupied');
         expect(kept.data().arrivedAt.toMillis()).toBe(arrivedAt.toMillis());
         expect((await db.doc(`spots/${missingId}`).get()).exists).toBe(false);
+    });
+});
+
+describe('spot-create settlement barrier', () => {
+    it('passes when the exact total and receipts arrive on the last drain poll and four quiet reads follow', () => {
+        const expectedIds = ['a', 'b'];
+        let verdict = { status: 'pending' };
+        for (let attempt = 0; attempt < 200; attempt++) {
+            const current = attempt === 199 ? 2 : 0;
+            const receipts = attempt === 199 ? ['a', 'b'] : [];
+            if (current - 0 >= expectedIds.length) {
+                verdict = assessSpotCreateCompletion({ baseline: 0, current, expectedIds, receiptSpotIds: receipts });
+                if (verdict.status !== 'pending') break;
+            }
+        }
+        expect(verdict.status).toBe('complete');
+        let streak = 0;
+        for (const observation of [2, 2, 2, 2]) {
+            const step = nextQuietObservation({ verifiedTotal: 2, observation, streak });
+            streak = step.streak;
+            if (step.status === 'pass') break;
+        }
+        expect(streak).toBe(4);
+    });
+
+    it('fails the drain when the counter and receipts stay short', () => {
+        const verdict = assessSpotCreateCompletion({
+            baseline: 0,
+            current: 1,
+            expectedIds: ['s1', 's2'],
+            receiptSpotIds: ['s1'],
+        });
+        expect(verdict.status).toBe('pending');
+        expect(verdict.stage).toBe('DRAIN');
+        expect(verdict.missing).toEqual(['s2']);
+    });
+
+    it('fails when the counter matches but an expected receipt is missing', () => {
+        const verdict = assessSpotCreateCompletion({
+            baseline: 0,
+            current: 2,
+            expectedIds: ['s1', 's2'],
+            receiptSpotIds: ['s1', 'other'],
+        });
+        expect(verdict.status).toBe('fail');
+        expect(verdict.stage).toBe('DRAIN');
+        expect(verdict.missing).toEqual(['s2']);
+    });
+
+    it('fails when two receipts name the same expected spot', () => {
+        const verdict = assessSpotCreateCompletion({
+            baseline: 0,
+            current: 1,
+            expectedIds: ['s1'],
+            receiptSpotIds: ['s1', 's1'],
+        });
+        expect(verdict.status).toBe('fail');
+        expect(verdict.duplicateSpotIds).toBe(1);
+    });
+
+    it('fails when the counter moves after completion is proved', () => {
+        const step = nextQuietObservation({ verifiedTotal: 4, observation: 5, streak: 2 });
+        expect(step.status).toBe('fail');
+        expect(step.stage).toBe('POST_COMPLETION_QUIET');
+    });
+
+    it('passes when completion is proved before the drain budget ends and four quiet reads follow', () => {
+        const verdict = assessSpotCreateCompletion({
+            baseline: 10,
+            current: 12,
+            expectedIds: ['s1', 's2'],
+            receiptSpotIds: ['s1', 's2'],
+        });
+        expect(verdict.status).toBe('complete');
+        let streak = 0;
+        let last = null;
+        for (const observation of [12, 12, 12, 12]) {
+            last = nextQuietObservation({ verifiedTotal: verdict.verifiedTotal, observation, streak });
+            streak = last.streak;
+        }
+        expect(last.status).toBe('pass');
     });
 });

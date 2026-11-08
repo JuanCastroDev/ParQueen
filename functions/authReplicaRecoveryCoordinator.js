@@ -267,7 +267,17 @@ async function runAuthReplicaRecovery(userId) {
       });
     }
     if (!profileSnap.exists || !intent) {
-      return stop({ outcome: 'refused', attempts, errorCategory: 'refused' });
+      return {
+        action: 'stop',
+        record: {
+          ...(recoverySnap.exists ? prior : {}),
+          outcome: 'refused',
+          errorCategory: 'refused',
+          persisted: false,
+          stable: false,
+          retractable: false,
+        },
+      };
     }
     if (lifeSnap.exists || jobSnap.exists) {
       return stop({
