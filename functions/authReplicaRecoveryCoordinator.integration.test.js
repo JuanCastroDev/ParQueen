@@ -396,9 +396,13 @@ describe('auth replica recovery coordinator', () => {
       expect(result.stable).toBe(false);
       expect(result.retractable).toBe(false);
       expect(result.outcome).toBe('deletion-overlap');
+      expect(result.errorCategory).toBe('deletion');
       expect(result.uncertain).toBe(true);
       expect(result.administratorRequired).toBe(true);
       expect((await db.doc(`accountDeletionJobs/${uid}`).get()).exists).toBe(true);
+      const saved = await recordOf(uid);
+      expect(saved.outcome).toBe('deletion-overlap');
+      expect(saved.errorCategory).toBe('deletion');
       await runAuthReplicaRecovery(uid);
       expect(writes).toBeLessThanOrEqual(1);
     } finally {

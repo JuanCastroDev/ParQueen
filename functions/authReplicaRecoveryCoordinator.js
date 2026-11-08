@@ -115,6 +115,7 @@ function enableEligible(intent, profile) {
 function categoryFor(outcome) {
   if (outcome === 'revocation-required') return 'revocation-required';
   if (outcome === 'uncertain-stale') return 'uncertain-stale';
+  if (outcome === 'deletion-overlap') return 'deletion';
   if (ERROR_CATEGORIES.has(outcome)) return outcome;
   return 'internal';
 }
