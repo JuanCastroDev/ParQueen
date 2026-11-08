@@ -55,6 +55,7 @@ export default defineConfig({
       'functions/scheduleCleaningReminders.integration.test.js',
       'functions/authReplicaReconcile.integration.test.js',
       'functions/accountDeletionFence.integration.test.js',
+      'functions/authReplicaRecoveryCoordinator.integration.test.js',
     ],
     testTimeout: 120000,
     hookTimeout: 120000,
