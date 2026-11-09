@@ -56,6 +56,7 @@ export default defineConfig({
       'functions/authReplicaReconcile.integration.test.js',
       'functions/accountDeletionFence.integration.test.js',
       'functions/authReplicaRecoveryCoordinator.integration.test.js',
+      'functions/authObservation/classify.test.js',
     ],
     testTimeout: 120000,
     hookTimeout: 120000,
