@@ -132,6 +132,27 @@ function rules() {
   }));
 }
 
+async function seedTrustedPublication(db, clock, topologyResult, proof = proofResolver()) {
+  const { proveCanonicalCurbIdentity } = requireFromHere('./curbIntelligence/canonicalCurbIdentityProof');
+  const { persistCanonicalCurb } = requireFromHere('./curbIntelligence/canonicalCurbPersistence');
+  const identityProof = await proveCanonicalCurbIdentity(topologyResult, {
+    blockfaceResolver: proof.blockfaceResolver,
+  });
+  const seeded = await persistCanonicalCurb({
+    db,
+    Timestamp: clock.Timestamp,
+    topologyResult,
+    identityProof,
+    selectedRules: {
+      rules: [], cleaning: null, restrictions: [], timeLimits: [], meter: null, admin: [], conflicts: [],
+    },
+  });
+  if (!seeded?.success) {
+    throw new Error(`failed to seed trusted publication: ${seeded?.reason || 'unknown'}`);
+  }
+  return proof;
+}
+
 async function resolveWith(boundary, db, clock, resolveResult, extra = {}) {
   const proof = proofResolver();
   const seen = [];
@@ -167,6 +188,7 @@ describe('Street Intelligence product cache TTL', () => {
     const first = await resolveWith(boundary, db, clock, authenticPrimary);
     expect(first.result.status).toBe('high_confidence');
     expect(first.seen.at(-1).hit).toBe(false);
+    await seedTrustedPublication(db, clock, authenticPrimary, first.proof);
     const second = await resolveWith(boundary, db, clock, authenticPrimary);
     expect(second.seen.at(-1).hit).toBe(true);
     expect(second.result.status).toBe('high_confidence');
@@ -177,7 +199,7 @@ describe('Street Intelligence product cache TTL', () => {
     const db = memoryDb();
     const clock = clockAt(1_700_000_000_000);
     const boundary = createStreetIntelligenceCacheBoundary({ Timestamp: clock.Timestamp });
-    await resolveWith(boundary, db, clock, authenticPrimary);
+    await seedTrustedPublication(db, clock, authenticPrimary);
     clock.now += STREET_INTELLIGENCE_CACHE_TTL_MS;
     const atBoundary = await resolveWith(boundary, db, clock, authenticPrimary);
     expect(atBoundary.seen.at(-1).hit).toBe(true);
@@ -192,7 +214,7 @@ describe('Street Intelligence product cache TTL', () => {
     const db = memoryDb();
     const clock = clockAt(1_700_000_000_000);
     const boundary = createStreetIntelligenceCacheBoundary({ Timestamp: clock.Timestamp });
-    await resolveWith(boundary, db, clock, authenticPrimary);
+    await seedTrustedPublication(db, clock, authenticPrimary);
     const segment = [...db.docs.keys()].find(path => /^streetSegments(?:V2)?\/[^/]+$/.test(path));
 
     db.docs.get(segment).updatedAt = undefined;
@@ -216,7 +238,7 @@ describe('Street Intelligence product cache TTL', () => {
     const db = memoryDb();
     const clock = clockAt(1_700_000_000_000);
     const boundary = createStreetIntelligenceCacheBoundary({ Timestamp: clock.Timestamp });
-    await resolveWith(boundary, db, clock, authenticPrimary);
+    await seedTrustedPublication(db, clock, authenticPrimary);
     const identityPath = [...db.docs.keys()].find(path => path.startsWith('curbIdentities/'));
     const stored = db.docs.get(identityPath);
     stored.identity = {
@@ -239,7 +261,7 @@ describe('Street Intelligence product cache TTL', () => {
     const db = memoryDb();
     const clock = clockAt(1_700_000_000_000);
     const boundary = createStreetIntelligenceCacheBoundary({ Timestamp: clock.Timestamp });
-    await resolveWith(boundary, db, clock, authenticPrimary);
+    await seedTrustedPublication(db, clock, authenticPrimary);
     clock.now += STREET_INTELLIGENCE_CACHE_TTL_MS + 1;
     const expired = await resolveWith(boundary, db, clock, authenticPrimary);
     expect(expired.seen.at(-1).hit).toBe(false);
@@ -269,7 +291,7 @@ describe('Street Intelligence product cache TTL', () => {
     const db = memoryDb();
     const clock = clockAt(1_700_000_000_000);
     const boundary = createStreetIntelligenceCacheBoundary({ Timestamp: clock.Timestamp });
-    await resolveWith(boundary, db, clock, authenticPrimary);
+    await seedTrustedPublication(db, clock, authenticPrimary);
     const segment = [...db.docs.values()].find(doc => doc.segmentId);
     expect(segment.updatedAt.toMillis()).toBe(clock.now);
     const before = segment.updatedAt.toMillis();
