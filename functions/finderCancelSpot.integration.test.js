@@ -288,12 +288,12 @@ describe('finderCancelSpot emulator transactions', () => {
 });
 
 describe('finderCancelSpot export contract', () => {
-  it('enforces App Check and does not select a service account', () => {
+  it('enforces App Check and uses the shared cancel identity', () => {
     const src = readFileSync(require('node:path').join(__dirname, 'index.js'), 'utf8');
     const start = src.indexOf('exports.finderCancelSpot = onCall(');
     const end = src.indexOf('exports.awardCrowns', start);
     const slice = src.slice(start, end);
     expect(slice).toContain('enforceAppCheck: true');
-    expect(slice).not.toContain('serviceAccount');
+    expect(slice).toContain("serviceAccount: 'parqueen-cancel@parkqueen-46475363-ccf36.iam.gserviceaccount.com'");
   });
 });

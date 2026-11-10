@@ -54,6 +54,7 @@ function memoryDb(seed) {
   return {
     docs,
     times,
+    doc(path) { return ref(path); },
     collection(name) {
       return { doc(id) { return ref(`${name}/${id}`); } };
     },
@@ -157,24 +158,25 @@ describe('claimSpot generation identity', () => {
   const indexSrc = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
   const rulesSrc = fs.readFileSync(path.join(__dirname, '..', 'firestore.rules'), 'utf8');
 
-  it('exports claimSpot with App Check and does not add a service account', () => {
+  it('exports the parking callables with App Check and the shared cancel identity', () => {
     const starts = [...indexSrc.matchAll(/exports\.claimSpot\s*=\s*onCall\(/g)];
     expect(starts).toHaveLength(1);
-    const slice = indexSrc.slice(starts[0].index, starts[0].index + 450);
+    const slice = indexSrc.slice(starts[0].index, starts[0].index + 500);
     expect(slice).toMatch(/region:\s*'us-central1'/);
     expect(slice).toMatch(/enforceAppCheck:\s*true/);
     expect(slice).toContain('claimSpotHandler(request)');
     expect(slice).not.toContain('request.data');
-    expect(indexSrc.match(/parqueen-cancel@parkqueen-46475363-ccf36\.iam\.gserviceaccount\.com/g)).toHaveLength(1);
-    for (const name of ['prepareClaimIntent', 'revokeClaimIntent']) {
+    expect(slice).toContain("serviceAccount: 'parqueen-cancel@parkqueen-46475363-ccf36.iam.gserviceaccount.com'");
+    expect(indexSrc.match(/parqueen-cancel@parkqueen-46475363-ccf36\.iam\.gserviceaccount\.com/g)).toHaveLength(5);
+    for (const name of ['prepareClaimIntent', 'revokeClaimIntent', 'finderCancelSpot']) {
       const found = [...indexSrc.matchAll(new RegExp(`exports\\.${name}\\s*=\\s*onCall\\(`, 'g'))];
       expect(found).toHaveLength(1);
-      const body = indexSrc.slice(found[0].index, found[0].index + 450);
+      const body = indexSrc.slice(found[0].index, found[0].index + 550);
       expect(body).toMatch(/region:\s*'us-central1'/);
       expect(body).toMatch(/enforceAppCheck:\s*true/);
       expect(body).toContain(`${name}Handler(request)`);
       expect(body).not.toContain('request.data');
-      expect(body).not.toContain('serviceAccount');
+      expect(body).toContain("serviceAccount: 'parqueen-cancel@parkqueen-46475363-ccf36.iam.gserviceaccount.com'");
     }
     expect(rulesSrc.includes('claimSpotAttempts')).toBe(false);
     expect(rulesSrc.includes('claimIntentCounters')).toBe(false);

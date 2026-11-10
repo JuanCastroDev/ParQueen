@@ -51,7 +51,9 @@ const { requireEmulatorProjectId } = require('./emulatorProjectId');
 const PROJECT_ID = requireEmulatorProjectId();
 const REGION = 'us-central1';
 const FUNCTIONS_BASE = `http://localhost:5001/${PROJECT_ID}/${REGION}`;
-const AUTH_EMULATOR = 'http://localhost:9099';
+const AUTH_EMULATOR = process.env.FIREBASE_AUTH_EMULATOR_HOST
+    ? `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`
+    : 'http://localhost:9099';
 const APP_NAME = '__deleteAccount_intg__';
 
 // Named app avoids conflicts with any other admin SDK usage in the test process
@@ -618,9 +620,10 @@ describe('deleteAccount — Functions emulator integration', () => {
  * Admin-lockout safety (DA-*) — deleteAccount now shares adminRoleLock/singleton
  * with setStaffRole so account deletion is serialized against every admin-role
  * mutation, not just deletions that already looked admin-relevant when the call
- * started. Every deleteAccount call acquires this lock (deterministic per-uid
- * operationId `delete_${uid}`, not random — a crash-and-resume attempt for the
- * SAME uid naturally re-identifies as the same owner), holds it across the
+ * started. Every deleteAccount call acquires this lock. The logical identity
+ * remains `delete_${uid}`, but each invocation owns the lock with its own id.
+ * A second live call cannot renew or release that lock. Crash recovery waits
+ * for lease expiry. The lock is held across the
  * entire destructive lifecycle, and — only if the target currently has
  * customClaims.role === 'admin' — runs the same exhaustive paginated
  * last-admin scan setStaffRole and reconcileLegacyAdminSingleton use before
@@ -719,10 +722,24 @@ describe('deleteAccount — admin-lockout safety (DA)', () => {
         const authRecord = await adminAuth.getUser(uid).catch(() => null);
         expect(authRecord).not.toBeNull();
 
-        const job = (await db.doc(`accountDeletionJobs/${uid}`).get()).data();
-        expect(job?.state).toBe('failed');
-        expect(job?.lastError).toMatch(/adminSafetyCheck/);
-        expect(Object.keys(job?.steps || {})).toHaveLength(0); // no cleanup step ever ran
+        expect((await db.doc(`accountDeletionJobs/${uid}`).get()).exists).toBe(false);
+        expect((await db.doc(`accountLifecycle/${uid}`).get()).exists).toBe(false);
+
+        await db.doc(`accountDeletionJobs/${uid}`).set({
+            state: 'running',
+            steps: { profile: 'done' },
+            attemptNumber: 2,
+        });
+        await expect(callDirect(uid, Math.floor(Date.now() / 1000) - 30))
+            .rejects.toMatchObject({ code: 'failed-precondition' });
+        const existingJob = (await db.doc(`accountDeletionJobs/${uid}`).get()).data();
+        expect(existingJob.state).toBe('failed');
+        expect(existingJob.lastError).toMatch(/adminSafetyCheck/);
+        expect(existingJob.steps).toEqual({ profile: 'done' });
+        expect(existingJob.attemptNumber).toBe(2);
+        expect((await db.doc(`accountLifecycle/${uid}`).get()).exists).toBe(false);
+        expect((await db.doc(`users/${uid}`).get()).exists).toBe(true);
+        expect((await adminAuth.getUser(uid)).customClaims?.role).toBe('admin');
 
         await db.collection('usernames').doc('soleadmintestname').delete().catch(() => {});
     });
@@ -979,9 +996,9 @@ describe('deleteAccount — admin-lockout safety (DA)', () => {
     it('DA-17: a crashed deletion\'s lock is recoverable once its lease genuinely expires', async () => {
         await adminAuth.createUser({ uid }).catch(() => {});
         await db.doc('adminRoleLock/singleton').set({
-            ownerOperationId: `delete_${uid}`, // matches THIS uid's own deterministic id —
-            acquiredAt: Timestamp.fromMillis(Date.now() - 130000), // proves expiry (not sameOwner
-            leaseExpiresAt: Timestamp.fromMillis(Date.now() - 10000), // reacquire) governs recovery
+            ownerOperationId: `delete_${uid}:expired-invocation`,
+            acquiredAt: Timestamp.fromMillis(Date.now() - 130000),
+            leaseExpiresAt: Timestamp.fromMillis(Date.now() - 10000),
         });
 
         const result = await callDirect(uid, Math.floor(Date.now() / 1000) - 30);
@@ -1113,6 +1130,136 @@ describe('deleteAccount — admin-lockout safety (DA)', () => {
             expect(err.code).not.toMatch(/^auth\//);
         }
     });
+
+    it('DA-29: a losing same-uid deletion cannot release the invocation that owns the lock', async () => {
+        await adminAuth.createUser({ uid }).catch(() => {});
+        await adminAuth.setCustomUserClaims(uid, { role: 'admin' });
+        const defaultAuth = getAuth();
+        const originalGetUser = defaultAuth.getUser.bind(defaultAuth);
+        let release;
+        const hold = new Promise((resolve) => { release = resolve; });
+        let sawOwner;
+        const entered = new Promise((resolve) => { sawOwner = resolve; });
+        let targetReads = 0;
+        defaultAuth.getUser = async (id, ...args) => {
+            if (id === uid && ++targetReads === 1) {
+                sawOwner();
+                await hold;
+            }
+            return originalGetUser(id, ...args);
+        };
+        const first = callDirect(uid, Math.floor(Date.now() / 1000) - 30);
+        try {
+            await entered;
+            const lockWhileHeld = await db.doc('adminRoleLock/singleton').get();
+            const owner = lockWhileHeld.data().ownerOperationId;
+            expect(owner.startsWith(`delete_${uid}:`)).toBe(true);
+            expect(owner).not.toBe(`delete_${uid}`);
+            await expect(callDirect(uid, Math.floor(Date.now() / 1000) - 30))
+                .rejects.toMatchObject({ code: 'aborted' });
+            const lockAfterLoser = await db.doc('adminRoleLock/singleton').get();
+            expect(lockAfterLoser.data().ownerOperationId).toBe(owner);
+            release();
+            await expect(first).rejects.toMatchObject({ code: 'failed-precondition' });
+            expect((await adminAuth.getUser(uid)).customClaims?.role).toBe('admin');
+            expect((await db.doc(`accountLifecycle/${uid}`).get()).exists).toBe(false);
+            expect((await db.doc('adminRoleLock/singleton').get()).exists).toBe(false);
+        } finally {
+            release();
+            defaultAuth.getUser = originalGetUser;
+        }
+    }, 30000);
+
+    it('DA-30: staff demotion stays blocked while a deletion invocation owns the lock', async () => {
+        const caller = `${uid}_caller`;
+        await adminAuth.createUser({ uid }).catch(() => {});
+        await adminAuth.setCustomUserClaims(uid, { role: 'admin' });
+        await adminAuth.createUser({ uid: caller }).catch(() => {});
+        await adminAuth.setCustomUserClaims(caller, { role: 'admin' });
+        const defaultAuth = getAuth();
+        const originalGetUser = defaultAuth.getUser.bind(defaultAuth);
+        let release;
+        const hold = new Promise((resolve) => { release = resolve; });
+        let sawOwner;
+        const entered = new Promise((resolve) => { sawOwner = resolve; });
+        let targetReads = 0;
+        defaultAuth.getUser = async (id, ...args) => {
+            if (id === uid && ++targetReads === 1) {
+                sawOwner();
+                await hold;
+            }
+            return originalGetUser(id, ...args);
+        };
+        const first = callDirect(uid, Math.floor(Date.now() / 1000) - 30);
+        try {
+            await entered;
+            const owner = (await db.doc('adminRoleLock/singleton').get()).data().ownerOperationId;
+            const customToken = await adminAuth.createCustomToken(caller);
+            const signed = await fetch(`${AUTH_EMULATOR}/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=fake-key`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: customToken, returnSecureToken: true }),
+            }).then((response) => response.json());
+            await expect(setStaffRole.run({
+                data: { uid, role: null, operationId: 'demote_during_delete_01' },
+                auth: { uid: caller, token: { uid: caller, role: 'admin', auth_time: Math.floor(Date.now() / 1000) - 30 } },
+                rawRequest: { headers: { authorization: `Bearer ${signed.idToken}` } },
+            })).rejects.toMatchObject({ code: 'aborted' });
+            expect((await db.doc('adminRoleLock/singleton').get()).data().ownerOperationId).toBe(owner);
+            expect((await adminAuth.getUser(uid)).customClaims?.role).toBe('admin');
+        } finally {
+            release();
+            await first.catch(() => {});
+            defaultAuth.getUser = originalGetUser;
+            await adminAuth.deleteUser(caller).catch(() => {});
+        }
+    }, 30000);
+
+    it('DA-31: a stale invocation cannot release the lock acquired after its lease expired', async () => {
+        const other = `${uid}_other`;
+        await adminAuth.createUser({ uid }).catch(() => {});
+        await adminAuth.createUser({ uid: other }).catch(() => {});
+        await adminAuth.setCustomUserClaims(other, { role: 'admin' });
+        await db.doc('adminRoleLock/singleton').set({
+            ownerOperationId: 'expired-previous-invocation',
+            acquiredAt: Timestamp.fromMillis(Date.now() - 130000),
+            leaseExpiresAt: Timestamp.fromMillis(Date.now() - 10000),
+        });
+        const defaultAuth = getAuth();
+        const originalGetUser = defaultAuth.getUser.bind(defaultAuth);
+        let release;
+        const hold = new Promise((resolve) => { release = resolve; });
+        let sawOwner;
+        const entered = new Promise((resolve) => { sawOwner = resolve; });
+        let targetReads = 0;
+        defaultAuth.getUser = async (id, ...args) => {
+            if (id === uid && ++targetReads === 1) {
+                sawOwner();
+                await hold;
+            }
+            return originalGetUser(id, ...args);
+        };
+        const first = callDirect(uid, Math.floor(Date.now() / 1000) - 30);
+        try {
+            await entered;
+            const successor = `delete_${uid}:successor`;
+            await db.doc('adminRoleLock/singleton').set({
+                ownerOperationId: successor,
+                acquiredAt: Timestamp.now(),
+                leaseExpiresAt: Timestamp.fromMillis(Date.now() + 120000),
+            });
+            release();
+            await expect(first).rejects.toMatchObject({ code: 'aborted' });
+            expect((await db.doc('adminRoleLock/singleton').get()).data().ownerOperationId).toBe(successor);
+            expect((await db.doc(`accountLifecycle/${uid}`).get()).exists).toBe(false);
+            expect((await adminAuth.getUser(uid)).uid).toBe(uid);
+        } finally {
+            release();
+            defaultAuth.getUser = originalGetUser;
+            await db.doc('adminRoleLock/singleton').delete().catch(() => {});
+            await adminAuth.deleteUser(other).catch(() => {});
+        }
+    }, 30000);
 });
 
 // ─── Storage integrity (fail closed, 404 = success, retry-safe) ───────────────

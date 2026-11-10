@@ -1,7 +1,7 @@
 'use strict';
 
 const { HttpsError } = require('firebase-functions/v2/https');
-const { userRecordDenies, PRODUCT_ACCESS_DENIED } = require('./productAccess');
+const { userRecordDenies, deletionFencePresent, throwIfDeleting, PRODUCT_ACCESS_DENIED } = require('./productAccess');
 const { checkRateLimit } = require('./rateLimiter');
 const { sanitizeError } = require('./redactForLog');
 const { isClaimGenerationId } = require('./claimGeneration');
@@ -150,7 +150,7 @@ async function cancelClaim(request, deps = {}) {
   if (typeof uid !== 'string' || uid.length === 0) {
     throw new HttpsError('unauthenticated', 'Authentication is required.');
   }
-  if (deps.afterReads && deps.allowTestHooks !== true) {
+  if ((deps.afterReads || deps.afterLifecycleRead) && deps.allowTestHooks !== true) {
     throw new HttpsError('internal', FAILURE);
   }
   const input = parseInput(request.data);
@@ -160,6 +160,12 @@ async function cancelClaim(request, deps = {}) {
   const afterReads = deps.allowTestHooks === true && typeof deps.afterReads === 'function'
     ? deps.afterReads
     : null;
+  const afterLifecycleRead = deps.allowTestHooks === true && typeof deps.afterLifecycleRead === 'function'
+    ? deps.afterLifecycleRead
+    : null;
+  if (await deletionFencePresent(uid, db)) {
+    throw new HttpsError('permission-denied', PRODUCT_ACCESS_DENIED);
+  }
   await limit(uid, 'cancelClaim', RATE_LIMIT);
 
   let hookUsed = false;
@@ -182,6 +188,9 @@ async function cancelClaim(request, deps = {}) {
         hookUsed = true;
         await afterReads();
       }
+      const lifeSnap = await tx.get(db.collection('accountLifecycle').doc(uid));
+      if (afterLifecycleRead) await afterLifecycleRead(lifeSnap);
+      throwIfDeleting(lifeSnap);
       if (userSnap.exists && userRecordDenies(userSnap.data())) {
         throw new HttpsError('permission-denied', PRODUCT_ACCESS_DENIED);
       }

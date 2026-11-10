@@ -50,6 +50,7 @@ export default defineConfig({
       'functions/incrementTotalSpotsPinged.impactStats.integration.test.js',
       'functions/waitlist.integration.test.js',
       'functions/scheduleCleaningReminders.integration.test.js',
+      'functions/parkingCallableDeletionFence.test.js',
     ],
     testTimeout: 120000,
     hookTimeout: 120000,

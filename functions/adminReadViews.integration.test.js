@@ -612,12 +612,22 @@ describe('adminReadView — coordinated read-side session hardening', () => {
         // cleanupAbandonedArrivedHandoffs adds one more declaration of that
         // same parqueen-cleanup identity. It is not a new principal. This
         // counts serviceAccount declarations, not exported functions.
-        // cancelClaim adds the forty-sixth declaration, the dedicated
-        // parqueen-cancel identity. It is a new principal and must stay
-        // the only occurrence of that address.
+        // cancelClaim, claimSpot, prepareClaimIntent, revokeClaimIntent, and
+        // finderCancelSpot each declare the same parqueen-cancel identity.
+        // The address must appear on those five exports and nowhere else.
         const allServiceAccountMatches = indexSrc.match(/serviceAccount:\s*'[^']+'/g) || [];
-        expect(indexSrc.match(/parqueen-cancel@parkqueen-46475363-ccf36\.iam\.gserviceaccount\.com/g) || []).toHaveLength(1);
-        expect(allServiceAccountMatches).toHaveLength(46);
+        const cancelSa = 'parqueen-cancel@parkqueen-46475363-ccf36.iam.gserviceaccount.com';
+        for (const name of ['cancelClaim', 'claimSpot', 'prepareClaimIntent', 'revokeClaimIntent', 'finderCancelSpot']) {
+            const start = indexSrc.indexOf(`exports.${name} = onCall(`);
+            expect(start).toBeGreaterThan(-1);
+            const slice = indexSrc.slice(start, start + 450);
+            expect(slice).toContain(`serviceAccount: '${cancelSa}'`);
+            expect(slice).toMatch(/enforceAppCheck:\s*true/);
+            expect(slice).not.toMatch(/enforceAppCheck:\s*false/);
+            expect(slice).not.toMatch(/serviceAccount:\s*'(?!parqueen-cancel@)/);
+        }
+        expect(indexSrc.match(/parqueen-cancel@parkqueen-46475363-ccf36\.iam\.gserviceaccount\.com/g) || []).toHaveLength(5);
+        expect(allServiceAccountMatches).toHaveLength(50);
     });
 
     it("AR-29: Runtime-IAM canary config-contract — moderateAvatarUpload's serviceAccount is the dedicated avatar-moderator identity, Storage-trigger config unaffected", () => {
