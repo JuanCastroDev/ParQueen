@@ -187,6 +187,26 @@ async function readCanonicalCache({ db, topologyResult, identityProof }) {
   return { hit: true, identity: storedIdentityValue, publicSegment };
 }
 
+function writePermitted(input = {}) {
+  if (input.signal?.aborted) return false;
+  if (Number.isFinite(input.deadlineAt) && Date.now() >= input.deadlineAt) return false;
+  if (typeof input.persistAllowed === 'function') {
+    return input.persistAllowed(input.persistToken) === true;
+  }
+  return true;
+}
+
+function refuseWrite(input = {}) {
+  if (input.signal?.aborted) return { success: false, reason: 'request_aborted' };
+  if (Number.isFinite(input.deadlineAt) && Date.now() >= input.deadlineAt) {
+    return { success: false, reason: 'request_aborted' };
+  }
+  if (typeof input.persistAllowed === 'function' && input.persistAllowed(input.persistToken) !== true) {
+    return { success: false, reason: 'request_aborted' };
+  }
+  return null;
+}
+
 function trustedProductCaller(uid) {
   return typeof uid === 'string' && uid.length > 0 && uid.length <= 128 && !uid.includes('/');
 }
@@ -242,10 +262,16 @@ async function persistCanonicalCurb(input = {}) {
   ];
 
   // User-initiated saves name the authenticated caller. The access read and
-  // the curb writes commit in one transaction. Callers that do not supply
-  // callerUid are scheduled, internal, or test paths and keep the batch.
-  if (input.signal?.aborted) return { success: false, reason: 'request_aborted' };
+  // the curb writes commit in one transaction that re-checks the shared
+  // deadline, abort signal, and request-scoped persist token so a late
+  // commit after cancellation is refused. Callers that do not supply
+  // callerUid are scheduled, internal, or test paths and keep the batch
+  // only when transactions are unavailable.
+  const refused = refuseWrite(input);
+  if (refused) return refused;
   const userInitiated = Object.prototype.hasOwnProperty.call(input || {}, 'callerUid');
+  const useTransaction = typeof db.runTransaction === 'function'
+    && (userInitiated || input.signal || Number.isFinite(input.deadlineAt) || typeof input.persistAllowed === 'function');
   if (userInitiated) {
     const callerUid = input.callerUid;
     if (!trustedProductCaller(callerUid) || typeof db.runTransaction !== 'function') {
@@ -258,21 +284,51 @@ async function persistCanonicalCurb(input = {}) {
         const snap = await tx.get(db.doc(`users/${callerUid}`));
         const data = snap && snap.exists && typeof snap.data === 'function' ? snap.data() : null;
         if (userRecordDenies(data)) throw denied;
-        if (input.signal?.aborted) throw new Error('request_aborted');
+        if (!writePermitted(input)) throw new Error('request_aborted');
         for (const [ref, value] of documents) tx.set(ref, value);
       });
     } catch (err) {
       if (err === denied) return { success: false, reason: 'product_access_denied' };
-      if (input.signal?.aborted) return { success: false, reason: 'request_aborted' };
+      const late = refuseWrite(input);
+      if (late) return late;
+      if (String(err?.message || err) === 'request_aborted') {
+        return { success: false, reason: 'request_aborted' };
+      }
       throw err;
     }
+    const after = refuseWrite(input);
+    if (after) return after;
     return { success: true, publicCurbKey: key, ruleCount: rules.length };
   }
 
-  if (input.signal?.aborted) return { success: false, reason: 'request_aborted' };
+  if (useTransaction) {
+    try {
+      await db.runTransaction(async (tx) => {
+        if (!writePermitted(input)) throw new Error('request_aborted');
+        for (const [ref, value] of documents) tx.set(ref, value);
+      });
+    } catch (err) {
+      const late = refuseWrite(input);
+      if (late) return late;
+      if (String(err?.message || err) === 'request_aborted') {
+        return { success: false, reason: 'request_aborted' };
+      }
+      throw err;
+    }
+    const after = refuseWrite(input);
+    if (after) return after;
+    return { success: true, publicCurbKey: key, ruleCount: rules.length };
+  }
+
+  const beforeBatch = refuseWrite(input);
+  if (beforeBatch) return beforeBatch;
   const batch = db.batch();
   for (const [ref, value] of documents) batch.set(ref, value);
+  const beforeCommit = refuseWrite(input);
+  if (beforeCommit) return beforeCommit;
   await batch.commit();
+  const afterCommit = refuseWrite(input);
+  if (afterCommit) return afterCommit;
   return { success: true, publicCurbKey: key, ruleCount: rules.length };
 }
 

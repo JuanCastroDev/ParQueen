@@ -5100,8 +5100,16 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
     } : {}),
   });
   const initializationStartedAt = Date.now();
+  const {
+    createRequestDeadline,
+  } = require('./curbIntelligence/requestDeadline');
+  const requestDeadline = createRequestDeadline({ startedAt: initializationStartedAt });
   const orchestratorDependencies = {
     initializationStartedAt,
+    signal: requestDeadline.signal,
+    deadlineAt: requestDeadline.deadlineAt,
+    persistToken: requestDeadline.persistToken,
+    persistAllowed: requestDeadline.persistAllowed,
     db,
     Timestamp,
     planimetricStore: createPlanimetricCurbStore({ fetchFn: fetch }),
@@ -5144,9 +5152,13 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
     const { attachOwnerPilot } = require('./curbIntelligence/runtimeSourceArtifact');
     attachOwnerPilot(orchestratorDependencies, verifiedUid);
   }
-  const outcome = await runCanonicalCurbOrchestrator(requestData, orchestratorDependencies);
-  await assertProductAccess(verifiedUid);
-  return outcome;
+  try {
+    const outcome = await runCanonicalCurbOrchestrator(requestData, orchestratorDependencies);
+    await assertProductAccess(verifiedUid);
+    return outcome;
+  } finally {
+    requestDeadline.dispose();
+  }
 }
 
 // ─── Hydrant proximity (NYC DEP) ─────────────────────────────────────────────

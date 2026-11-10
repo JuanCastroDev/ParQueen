@@ -1,9 +1,13 @@
 'use strict';
 
 const { createHash, randomUUID } = require('node:crypto');
+const {
+  OVERALL_DEADLINE_MS,
+  childBudgetMs,
+  createRequestDeadline,
+} = require('./requestDeadline');
 const { publicCurbKey, toPublicCurb } = require('./canonicalCurbIdentity');
 const {
-  CSCL_SOURCE_BUDGET_MS,
   acquireAuthoritativeCscl,
   resolveCanonicalCurb,
   hasPrimaryTopologyAuthority,
@@ -22,7 +26,6 @@ const {
 } = require('./canonicalCurbIdentityProof');
 
 const defaultInFlight = new Map();
-const OVERALL_DEADLINE_MS = 8000;
 
 const unsupported = reason => ({ protocolVersion: 2, status: 'unsupported', reason });
 
@@ -124,6 +127,9 @@ async function persistSelected(resolution, identityProof, selectedRules, depende
       identityProof,
       selectedRules,
       signal: dependencies.signal,
+      deadlineAt: dependencies.deadlineAt,
+      persistToken: dependencies.persistToken,
+      persistAllowed: dependencies.persistAllowed,
     });
   } catch {
     return { success: false };
@@ -305,8 +311,14 @@ async function boundedExecute(request, dependencies) {
     finishAbort(unsupported('source_unavailable'));
   };
   dependencies.signal?.addEventListener('abort', abort, { once: true });
-  const timer = setTimeout(abort, OVERALL_DEADLINE_MS);
+  if (dependencies.signal?.aborted) abort();
+  const remaining = childBudgetMs(OVERALL_DEADLINE_MS, {
+    deadlineAt: dependencies.deadlineAt,
+    signal: dependencies.signal,
+  });
+  const timer = setTimeout(abort, remaining);
   try {
+    if (closed) return unsupported('source_unavailable');
     return await Promise.race([
       execute(request, {
         ...dependencies,
@@ -357,6 +369,11 @@ async function runBoundedSourceThenCanonical(request, dependencies) {
     getSocrataToken: dependencies.getSocrataToken,
     signal: dependencies.signal,
     acquisitionNonce: nonce,
+    deadlineAt: dependencies.deadlineAt,
+    sourceBudgetMs: childBudgetMs(OVERALL_DEADLINE_MS, {
+      deadlineAt: dependencies.deadlineAt,
+      signal: dependencies.signal,
+    }),
   });
   const sourceStageElapsedMs = Date.now() - sourceStarted;
   const timing = {
@@ -422,19 +439,45 @@ async function runBoundedSourceThenCanonical(request, dependencies) {
   return result;
 }
 
+function inFlightReusable(existing) {
+  if (!existing || typeof existing.then !== 'function') return false;
+  if (existing.signal?.aborted) return false;
+  if (Number.isFinite(existing.deadlineAt) && Date.now() >= existing.deadlineAt) return false;
+  return true;
+}
+
 async function runCanonicalCurbOrchestrator(request, dependencies = {}) {
   if (request?.protocolVersion !== 2) return null;
   if (!validRequest(request)) return unsupported('location_quality');
   const safe = { ...dependencies };
   delete safe.attestedRetrieval;
   delete safe.acquisitionNonce;
+  let ownedDeadline = null;
+  if (!safe.signal || !Number.isFinite(safe.deadlineAt) || typeof safe.persistAllowed !== 'function') {
+    ownedDeadline = createRequestDeadline({
+      startedAt: Number.isFinite(safe.initializationStartedAt)
+        ? safe.initializationStartedAt
+        : Date.now(),
+      signal: safe.signal,
+    });
+    safe.signal = ownedDeadline.signal;
+    safe.deadlineAt = ownedDeadline.deadlineAt;
+    safe.persistToken = ownedDeadline.persistToken;
+    safe.persistAllowed = ownedDeadline.persistAllowed;
+  }
   const inFlight = safe.inFlight || defaultInFlight;
   const key = requestKey(request);
-  if (inFlight.has(key)) return inFlight.get(key);
+  const existing = inFlight.get(key);
+  if (inFlightReusable(existing)) return existing;
   const pending = (typeof safe.fetchFn === 'function'
     ? runBoundedSourceThenCanonical(request, safe)
     : boundedExecute(request, safe)
-  ).finally(() => inFlight.delete(key));
+  ).finally(() => {
+    if (inFlight.get(key) === pending) inFlight.delete(key);
+    ownedDeadline?.dispose();
+  });
+  pending.deadlineAt = safe.deadlineAt;
+  pending.signal = safe.signal;
   inFlight.set(key, pending);
   return pending;
 }
@@ -442,6 +485,6 @@ async function runCanonicalCurbOrchestrator(request, dependencies = {}) {
 module.exports = {
   runCanonicalCurbOrchestrator,
   OVERALL_DEADLINE_MS,
-  CSCL_SOURCE_BUDGET_MS,
+  CSCL_SOURCE_BUDGET_MS: OVERALL_DEADLINE_MS,
   mapCanonicalAuthorityFailure,
 };

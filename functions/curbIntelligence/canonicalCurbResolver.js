@@ -32,6 +32,7 @@ const {
 } = require('./sideConfirmation');
 const { issueSideConfirmationToken } = require('./sideConfirmationToken');
 const { createDemoResolutionTrace } = require('./demoResolutionDiagnostic');
+const { OVERALL_DEADLINE_MS, childBudgetMs } = require('./requestDeadline');
 
 const NYC = Object.freeze({ minLat: 40.4, maxLat: 40.95, minLng: -74.3, maxLng: -73.65 });
 const BOROUGHS = Object.freeze({
@@ -40,7 +41,8 @@ const BOROUGHS = Object.freeze({
 const privateCandidateSets = new WeakMap();
 const authoritativeRetrievals = new WeakSet();
 const retrievalBindings = new WeakMap();
-const CSCL_SOURCE_BUDGET_MS = 15000;
+// Independent 15s CSCL budget removed. Acquisition shares the 8s end-to-end deadline.
+const CSCL_SOURCE_BUDGET_MS = OVERALL_DEADLINE_MS;
 const primaryTopologyResults = new WeakSet();
 const ambiguousTopologyResults = new WeakSet();
 const sideConfirmationResults = new WeakSet();
@@ -406,9 +408,13 @@ async function acquireAuthoritativeCscl(location, options = {}) {
       if (!settled) resolve({ aborted: true });
     }, { once: true });
   });
-  const timer = setTimeout(() => controller.abort(), CSCL_SOURCE_BUDGET_MS);
+  const sourceBudgetMs = childBudgetMs(
+    Number.isFinite(options.sourceBudgetMs) ? options.sourceBudgetMs : OVERALL_DEADLINE_MS,
+    { deadlineAt: options.deadlineAt, signal: options.signal },
+  );
+  const timer = setTimeout(() => controller.abort(), sourceBudgetMs);
   const onOuter = () => controller.abort();
-  if (options.signal?.aborted) controller.abort();
+  if (options.signal?.aborted || sourceBudgetMs === 0) controller.abort();
   else options.signal?.addEventListener('abort', onOuter, { once: true });
   try {
     if (controller.signal.aborted) return { ok: false, reasons: ['request_aborted'] };

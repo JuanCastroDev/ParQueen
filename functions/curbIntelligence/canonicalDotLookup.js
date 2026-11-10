@@ -5,6 +5,7 @@ const { parseNYCOpenDataRestriction, isCurrentUnvoidedRow } = require('../nycOpe
 const { classifyStreetCleaningSign } = require('./cleaningClassifier');
 const { normalizeBlockFaceId } = require('./curbIdentity');
 const { CURB_RESOLUTION_POLICY } = require('./curbResolutionPolicy');
+const { childBudgetMs } = require('./requestDeadline');
 const { letterForCardinal } = require('./productMeterModel');
 
 const RESOURCE_ID = 'nfid-uabd';
@@ -131,8 +132,13 @@ function defaultDotSource(options) {
   };
 }
 
-async function bounded(operation, parentSignal) {
+async function bounded(operation, parentSignal, deadlineAt) {
   if (parentSignal?.aborted) return { ok: false, reason: 'execution_timeout' };
+  const budget = childBudgetMs(CURB_RESOLUTION_POLICY.sourceDeadlineMs, {
+    deadlineAt,
+    signal: parentSignal,
+  });
+  if (budget <= 0) return { ok: false, reason: 'execution_timeout' };
   const controller = new AbortController();
   let timedOut = false;
   const abort = () => controller.abort();
@@ -140,7 +146,7 @@ async function bounded(operation, parentSignal) {
   const timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
-  }, CURB_RESOLUTION_POLICY.sourceDeadlineMs);
+  }, budget);
   try {
     return { ok: true, value: await operation(controller.signal) };
   } catch {
@@ -226,7 +232,7 @@ async function runCanonicalDotLookup(input = {}, options = {}) {
       rules: uniqueRules,
       reasons: mismatch ? ['official_blockface_mismatch'] : [],
     };
-  }, input.signal);
+  }, input.signal, input.deadlineAt ?? options.deadlineAt);
   return attempt.ok ? attempt.value : unavailable(attempt.reason);
 }
 
