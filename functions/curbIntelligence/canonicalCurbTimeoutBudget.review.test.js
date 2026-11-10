@@ -94,7 +94,10 @@ describe('canonical source and orchestration deadlines', () => {
     vi.useRealTimers();
   });
 
-  it('aborts a source that never responds at the source deadline and does not persist', async () => {
+  // The previous 15s CSCL + 8s canonical sequential contract allowed ~23s of
+  // user wait. The founder-approved successor uses one 8s end-to-end deadline
+  // from request handling through CSCL, official lookup, processing and persist.
+  it('aborts a source that never responds at the 8s end-to-end deadline and does not persist', async () => {
     vi.useFakeTimers();
     const started = Date.now();
     const fetchFn = hangingFetch();
@@ -108,13 +111,14 @@ describe('canonical source and orchestration deadlines', () => {
       telemetry: { emit: vi.fn() },
     }));
 
-    await vi.advanceTimersByTimeAsync(CSCL_SOURCE_BUDGET_MS - 1);
+    await vi.advanceTimersByTimeAsync(OVERALL_DEADLINE_MS - 1);
     expect(tracked.settled()).toBe(false);
 
     await vi.advanceTimersByTimeAsync(1);
     const result = await tracked.result;
 
-    expect(Date.now() - started).toBe(CSCL_SOURCE_BUDGET_MS);
+    expect(Date.now() - started).toBe(OVERALL_DEADLINE_MS);
+    expect(CSCL_SOURCE_BUDGET_MS).toBe(OVERALL_DEADLINE_MS);
     expect(result).toEqual({ protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' });
     expect(fetchFn).toHaveBeenCalledOnce();
     expect(loadCanonicalRules).not.toHaveBeenCalled();
@@ -122,10 +126,10 @@ describe('canonical source and orchestration deadlines', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('bounds stalled canonical work after a source that finishes just inside its own deadline', async () => {
+  it('does not grant leftover canonical time after a source that finishes just inside the shared deadline', async () => {
     vi.useFakeTimers();
     const started = Date.now();
-    const sourceDelay = CSCL_SOURCE_BUDGET_MS - 100;
+    const sourceDelay = OVERALL_DEADLINE_MS - 100;
     const fetchFn = sourceFetch(sourceDelay);
     const transport = vi.fn(request => new Promise(resolve => {
       request.signal?.addEventListener('abort', () => {
@@ -155,17 +159,15 @@ describe('canonical source and orchestration deadlines', () => {
 
     await vi.advanceTimersByTimeAsync(sourceDelay);
     expect(tracked.settled()).toBe(false);
-    await vi.advanceTimersByTimeAsync(OVERALL_DEADLINE_MS - 1);
+    await vi.advanceTimersByTimeAsync(99);
     expect(tracked.settled()).toBe(false);
 
-    await vi.advanceTimersToNextTimerAsync();
+    await vi.advanceTimersByTimeAsync(1);
     const result = await tracked.result;
     const elapsedAtDeadline = Date.now() - started;
 
-    expect(elapsedAtDeadline).toBeGreaterThanOrEqual(sourceDelay + OVERALL_DEADLINE_MS);
-    expect(elapsedAtDeadline).toBeLessThanOrEqual(sourceDelay + OVERALL_DEADLINE_MS + 5);
+    expect(elapsedAtDeadline).toBe(OVERALL_DEADLINE_MS);
     expect(result).toEqual({ protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' });
-    expect(transport).toHaveBeenCalledOnce();
     expect(loadCanonicalRules).not.toHaveBeenCalled();
     expect(persistCanonicalCurb).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);

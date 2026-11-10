@@ -300,4 +300,32 @@ describe('canonical curb V2 client contract', () => {
       ruleSummary: { cleaningAvailable: false },
     })).toThrow('Invalid canonical curb response');
   });
+
+  it('ignores a late backend response after the caller aborts', async () => {
+    const controller = new AbortController();
+    const collectLocation = vi.fn().mockResolvedValue({
+      lat: 40.7, lng: -74, accuracyMeters: 5, sampleCount: 4, consistencyMeters: 3,
+    });
+    const invoke = vi.fn().mockImplementation(async () => {
+      controller.abort();
+      return {
+        protocolVersion: 2,
+        status: 'high_confidence',
+        segmentId: 'curb2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        streetName: 'Late Street',
+        sideLabel: 'North',
+        ruleSummary: { cleaningAvailable: true },
+      };
+    });
+    await expect(resolveCanonicalCurbWithLocation({
+      collectLocation,
+      invoke,
+      signal: controller.signal,
+    })).resolves.toEqual({
+      protocolVersion: 2,
+      status: 'unsupported',
+      reason: 'source_unavailable',
+    });
+    expect(invoke).toHaveBeenCalledOnce();
+  });
 });

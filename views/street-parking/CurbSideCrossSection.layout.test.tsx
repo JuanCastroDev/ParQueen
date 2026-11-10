@@ -90,7 +90,7 @@ describe('curb cross-section rendered layout', () => {
           { token: token('2'), cardinal: 'North' })}
         onSelect={() => {}}
         onCancel={() => {}}
-        loading={false}
+        loading={false} allowDiagonalCurbDrawing
       />
     ));
     const laid = await boxes(page);
@@ -121,7 +121,7 @@ describe('curb cross-section rendered layout', () => {
           { token: token('4'), cardinal: 'South' })}
         onSelect={() => {}}
         onCancel={() => {}}
-        loading={false}
+        loading={false} allowDiagonalCurbDrawing
       />
     ));
     const laid = await boxes(page);
@@ -137,7 +137,7 @@ describe('curb cross-section rendered layout', () => {
           { token: token('6'), cardinal: 'West' })}
         onSelect={() => {}}
         onCancel={() => {}}
-        loading={false}
+        loading={false} allowDiagonalCurbDrawing
       />
     ));
     const laid = await boxes(page);
@@ -159,7 +159,7 @@ describe('curb cross-section rendered layout', () => {
           { token: token('8'), cardinal: 'East' })}
         onSelect={() => {}}
         onCancel={() => {}}
-        loading={false}
+        loading={false} allowDiagonalCurbDrawing
       />
     ));
     const laid = await boxes(page);
@@ -175,7 +175,7 @@ describe('curb cross-section rendered layout', () => {
           { token: token('2'), cardinal: 'East' })}
         onSelect={() => {}}
         onCancel={() => {}}
-        loading={false}
+        loading={false} allowDiagonalCurbDrawing
       />
     ));
     const laid = await boxes(page);
@@ -193,7 +193,7 @@ describe('curb cross-section rendered layout', () => {
       ],
     };
     await render(page, (
-      <CurbSideCrossSection confirmation={oblique} onSelect={() => {}} onCancel={() => {}} loading={false} />
+      <CurbSideCrossSection confirmation={oblique} onSelect={() => {}} onCancel={() => {}} loading={false} allowDiagonalCurbDrawing />
     ));
     const laid = await boxes(page);
     expect(laid.northMark!.y).toBeLessThan(laid.road!.y);
@@ -217,7 +217,7 @@ describe('curb cross-section rendered layout', () => {
       ],
     };
     const node = (
-      <CurbSideCrossSection confirmation={oneWay} onSelect={() => {}} onCancel={() => {}} loading={false} />
+      <CurbSideCrossSection confirmation={oneWay} onSelect={() => {}} onCancel={() => {}} loading={false} allowDiagonalCurbDrawing />
     );
     for (const viewport of [
       { width: 360, height: 800, label: 'portrait' },

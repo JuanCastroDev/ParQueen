@@ -11,6 +11,10 @@ const ORCHESTRATOR_SRC = readFileSync(
   resolve(__dirname, '../functions/curbIntelligence/canonicalCurbOrchestrator.js'),
   'utf8',
 );
+const REQUEST_DEADLINE_SRC = readFileSync(
+  resolve(__dirname, '../functions/curbIntelligence/requestDeadline.js'),
+  'utf8',
+);
 const RULE_SOURCES_SRC = readFileSync(
   resolve(__dirname, '../functions/curbIntelligence/canonicalRuleSources.js'),
   'utf8',
@@ -114,7 +118,7 @@ describe('Street Intelligence 2A.32 release gates', () => {
   it('resolves one canonical identity before every rule source lookup', () => {
     expect(ORCHESTRATOR_SRC.indexOf('const identity = resolution.identity;'))
       .toBeLessThan(ORCHESTRATOR_SRC.indexOf('await loadSelectedRules(identity, dependencies)'));
-    expect(RULE_SOURCES_SRC).toContain('const sourceInput = { identity, signal: options.signal };');
+    expect(RULE_SOURCES_SRC).toContain('const sourceInput = { identity, signal: options.signal, deadlineAt: options.deadlineAt };');
     expect(RULE_SOURCES_SRC).not.toContain('sweepNyc');
     expect(RULE_SOURCES_SRC.match(/boundedLookup\([^,]+, sourceInput, options\)/g)).toHaveLength(3);
     expect(RULE_SOURCES_SRC).not.toMatch(/boundedLookup\([^,]+,\s*\{[^}]*lat/i);
@@ -134,7 +138,8 @@ describe('Street Intelligence 2A.32 release gates', () => {
   });
 
   it('keeps the canonical orchestration single-shot and within its latency budget', () => {
-    expect(ORCHESTRATOR_SRC).toContain('const OVERALL_DEADLINE_MS = 8000;');
+    expect(REQUEST_DEADLINE_SRC).toContain('const OVERALL_DEADLINE_MS = 8000;');
+    expect(ORCHESTRATOR_SRC).toContain("require('./requestDeadline')");
     expect(POLICY_SRC).toContain('planimetricDeadlineMs: 900');
     expect(POLICY_SRC).toContain('sourceDeadlineMs: 2500');
     expect(LOCATION_BURST_SRC).toContain('maximumDurationMs: 1_800');

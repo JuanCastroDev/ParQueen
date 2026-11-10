@@ -47,7 +47,7 @@ describe('CurbSideCrossSection', () => {
     let renderer: TestRenderer.ReactTestRenderer;
     act(() => {
       renderer = TestRenderer.create(
-        <CurbSideCrossSection confirmation={confirmation} onSelect={onSelect} onCancel={onCancel} loading={false} />,
+        <CurbSideCrossSection confirmation={confirmation} onSelect={onSelect} onCancel={onCancel} loading={false} allowDiagonalCurbDrawing />,
       );
     });
     const north = renderer!.root.findByProps({ 'data-cardinal': 'North' });
@@ -79,7 +79,7 @@ describe('CurbSideCrossSection', () => {
     let renderer: TestRenderer.ReactTestRenderer;
     act(() => {
       renderer = TestRenderer.create(
-        <CurbSideCrossSection confirmation={vertical} onSelect={onSelect} onCancel={onCancel} loading={false} />,
+        <CurbSideCrossSection confirmation={vertical} onSelect={onSelect} onCancel={onCancel} loading={false} allowDiagonalCurbDrawing />,
       );
     });
     expect(renderer!.root.findByProps({ 'data-cardinal': 'West' }).props['data-place']).toBe('left');
@@ -101,7 +101,7 @@ describe('CurbSideCrossSection', () => {
     let renderer: TestRenderer.ReactTestRenderer;
     act(() => {
       renderer = TestRenderer.create(
-        <CurbSideCrossSection confirmation={broken} onSelect={onSelect} onCancel={vi.fn()} loading={false} />,
+        <CurbSideCrossSection confirmation={broken} onSelect={onSelect} onCancel={vi.fn()} loading={false} allowDiagonalCurbDrawing />,
       );
     });
     expect(renderer!.root.findAllByProps({ className: expect.stringContaining('pq-curb-side-choice') })).toHaveLength(0);
@@ -166,7 +166,7 @@ describe('CurbSideCrossSection', () => {
     let renderer: TestRenderer.ReactTestRenderer;
     act(() => {
       renderer = TestRenderer.create(
-        <CurbSideCrossSection confirmation={diagonal} onSelect={onSelect} onCancel={vi.fn()} loading={false} />,
+        <CurbSideCrossSection confirmation={diagonal} onSelect={onSelect} onCancel={vi.fn()} loading={false} allowDiagonalCurbDrawing />,
       );
     });
     const northwest = renderer!.root.findByProps({ 'data-cardinal': 'Northwest' });
@@ -205,7 +205,7 @@ describe('CurbSideCrossSection', () => {
     let loadingView: TestRenderer.ReactTestRenderer;
     act(() => {
       loadingView = TestRenderer.create(
-        <CurbSideCrossSection confirmation={diagonal} onSelect={onSelect} onCancel={vi.fn()} loading />,
+        <CurbSideCrossSection confirmation={diagonal} onSelect={onSelect} onCancel={vi.fn()} loading allowDiagonalCurbDrawing />,
       );
     });
     act(() => { loadingView!.root.findByProps({ 'data-cardinal': 'Northwest' }).props.onClick(); });
@@ -222,7 +222,7 @@ describe('CurbSideCrossSection', () => {
     let rejected: TestRenderer.ReactTestRenderer;
     act(() => {
       rejected = TestRenderer.create(
-        <CurbSideCrossSection confirmation={swapped} onSelect={onSelect} onCancel={vi.fn()} loading={false} />,
+        <CurbSideCrossSection confirmation={swapped} onSelect={onSelect} onCancel={vi.fn()} loading={false} allowDiagonalCurbDrawing />,
       );
     });
     expect(rejected!.root.findAllByProps({ className: expect.stringContaining('pq-curb-side-choice') })).toHaveLength(0);
@@ -241,7 +241,7 @@ describe('CurbSideCrossSection', () => {
     let renderer: TestRenderer.ReactTestRenderer;
     act(() => {
       renderer = TestRenderer.create(
-        <CurbSideCrossSection confirmation={oneWay} onSelect={onSelect} onCancel={vi.fn()} loading={false} />,
+        <CurbSideCrossSection confirmation={oneWay} onSelect={onSelect} onCancel={vi.fn()} loading={false} allowDiagonalCurbDrawing />,
       );
     });
     const markup = JSON.stringify(renderer!.toJSON());
@@ -272,5 +272,27 @@ describe('CurbSideCrossSection', () => {
     expect(loadingView!.root.findByProps({ className: 'pq-curb-side-cancel' }).props.disabled).toBeUndefined();
     act(() => { loadingRight.props.onClick(); });
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('does not draw a diagonal curb when the client feature gate is off', () => {
+    const diagonal: SideConfirmation = {
+      streetName: 'Diagonal Avenue',
+      orientation: { north: 'up', axis: 'oblique', bearingDegrees: 45 },
+      curbs: [
+        { token: token('nw'), cardinal: 'Northwest' },
+        { token: token('se'), cardinal: 'Southeast' },
+      ],
+    };
+    let renderer: TestRenderer.ReactTestRenderer;
+    act(() => {
+      renderer = TestRenderer.create(
+        <CurbSideCrossSection confirmation={diagonal} onSelect={vi.fn()} onCancel={vi.fn()} loading={false} />,
+      );
+    });
+    const markup = JSON.stringify(renderer!.toJSON());
+    expect(markup).toContain('could not distinguish the two curbs');
+    expect(markup).not.toContain('pq-curb-side-road');
+    expect(markup).not.toContain('rotate(');
+    expect(() => renderer!.root.findByProps({ className: 'pq-curb-side-diagram is-oblique' })).toThrow();
   });
 });

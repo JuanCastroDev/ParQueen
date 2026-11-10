@@ -21,7 +21,10 @@ describe('StreetParkingView canonical curb save contract', () => {
     expect(save).toContain('requestCanonicalCurb(lat, lng)');
     expect(save.indexOf('setSavedSpot(resolvingSpot)')).toBeLessThan(save.indexOf('requestCanonicalCurb(lat, lng)'));
     expect(source).toContain("savedSpot.curbResolutionStatus === 'resolving'");
-    expect(source).toContain("t(curbLookupStage === 'location' ? 'street_intel.getting_location' : 'street_intel.identifying_curb')");
+    expect(source).toContain('streetIntelClientFeatures');
+    expect(source).toContain("street_intel.getting_location");
+    expect(source).toContain("street_intel.identifying_curb");
+    expect(source).toContain("street_intel.verifying_curb");
   });
 
   it('uses one V2 request for a normal save and never invokes the 80 m matcher', () => {
