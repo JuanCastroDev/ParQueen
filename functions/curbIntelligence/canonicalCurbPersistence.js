@@ -11,6 +11,16 @@ const {
   associateDocumentAuthorities,
   bindDeadlineToFirestoreClock,
 } = require('./writeAuthority');
+const {
+  LEGACY_SEGMENT_COLLECTION,
+  LEGACY_RULES_SUBCOLLECTION,
+  FIRESTORE_MAX_WRITES_PER_TRANSACTION,
+  remapDeadlineBoundDocuments,
+  publicSegmentPath,
+  publicRulesCollectionPath,
+  legacySegmentPath,
+  legacyRulesCollectionPath,
+} = require('./publicCurbCollections');
 
 const PUBLIC_KEY = /^curb2_[a-f0-9]{32}$/;
 const RULE_SET_VERSION = /^curbrules2_[a-f0-9]{20}$/;
@@ -164,10 +174,18 @@ async function readCanonicalCache({ db, topologyResult, identityProof }) {
   const identity = topologyResult.identity;
   const key = publicCurbKey(identity);
   if (!db || !PUBLIC_KEY.test(key || '')) return { hit: false, reason: 'invalid_public_key' };
-  const [privateSnapshot, publicSnapshot] = await Promise.all([
+  const [privateSnapshot, versionedSnapshot, legacySnapshot] = await Promise.all([
     db.doc(`curbIdentities/${key}`).get(),
-    db.doc(`streetSegments/${key}`).get(),
+    db.doc(publicSegmentPath(key)).get(),
+    db.doc(legacySegmentPath(key)).get(),
   ]);
+  const identityHasAuthority = Boolean(
+    privateSnapshot?.exists
+    && typeof privateSnapshot.data === 'function'
+    && privateSnapshot.data()?.writeAuthority,
+  );
+  const useVersioned = Boolean(versionedSnapshot?.exists || identityHasAuthority);
+  const publicSnapshot = useVersioned ? versionedSnapshot : legacySnapshot;
   if (!privateSnapshot?.exists || !publicSnapshot?.exists) {
     return { hit: false, reason: 'exact_identity_missing' };
   }
@@ -199,7 +217,8 @@ async function readCanonicalCache({ db, topologyResult, identityProof }) {
   }
   if (associated.status === 'valid' && typeof db.collection === 'function'
     && publicSegment?.activeRuleSetVersion) {
-    const rulesSnap = await db.collection(`streetSegments/${key}/streetRules`)
+    const rulesPath = useVersioned ? publicRulesCollectionPath(key) : legacyRulesCollectionPath(key);
+    const rulesSnap = await db.collection(rulesPath)
       .where('ruleSetVersion', '==', publicSegment.activeRuleSetVersion)
       .get();
     const ruleDocs = Array.isArray(rulesSnap?.docs) ? rulesSnap.docs : [];
@@ -320,6 +339,12 @@ async function persistDeadlineBoundCurb(input, documents, key, rules) {
   const refusedAfterProbe = refuseWrite(input);
   if (refusedAfterProbe) return refusedAfterProbe;
 
+  const stagedDocuments = documents;
+  const publicDocuments = remapDeadlineBoundDocuments(input.db, stagedDocuments, key);
+  if (publicDocuments.length > FIRESTORE_MAX_WRITES_PER_TRANSACTION) {
+    return { success: false, reason: 'request_aborted' };
+  }
+
   const generationRef = input.db.doc(`curbWriteGenerations/${key}/generations/${generationId}`);
   const generationRecord = {
     scheme: WRITE_AUTHORITY_SCHEME,
@@ -327,10 +352,10 @@ async function persistDeadlineBoundCurb(input, documents, key, rules) {
     deadlineAtMs: bound.deadlineFsMs,
     committedAt: FieldValue.serverTimestamp(),
     publicCurbKey: key,
-    identity: documents.find(([ref]) => ref.path.startsWith('curbIdentities/'))?.[1] || null,
-    segment: documents.find(([ref]) => ref.path === `streetSegments/${key}`)?.[1] || null,
-    rules: documents
-      .filter(([ref]) => ref.path.startsWith(`streetSegments/${key}/streetRules/`))
+    identity: stagedDocuments.find(([ref]) => ref.path.startsWith('curbIdentities/'))?.[1] || null,
+    segment: stagedDocuments.find(([ref]) => ref.path === `${LEGACY_SEGMENT_COLLECTION}/${key}`)?.[1] || null,
+    rules: stagedDocuments
+      .filter(([ref]) => ref.path.startsWith(`${LEGACY_SEGMENT_COLLECTION}/${key}/${LEGACY_RULES_SUBCOLLECTION}/`))
       .map(([ref, value]) => ({ path: ref.path, value })),
   };
 
@@ -341,19 +366,24 @@ async function persistDeadlineBoundCurb(input, documents, key, rules) {
 
   const genSnap = await generationRef.get();
   const generated = genSnap && typeof genSnap.data === 'function' ? genSnap.data() : null;
-  const writeAuthority = {
+  const stagingAuthority = {
     scheme: WRITE_AUTHORITY_SCHEME,
     generationId,
     deadlineAtMs: bound.deadlineFsMs,
     committedAt: generated?.committedAt,
   };
-  const eligibility = evaluateWriteAuthority(writeAuthority);
+  const eligibility = evaluateWriteAuthority(stagingAuthority, { role: 'staging' });
   if (eligibility.status !== 'valid' || !writePermitted(input)) {
     return { success: false, reason: 'request_aborted' };
   }
 
+  const publicAuthority = {
+    ...stagingAuthority,
+    promotedAt: FieldValue.serverTimestamp(),
+  };
+
   const phase2 = await runGuardedPersistTransaction(input, async (tx) => {
-    const currentSnap = await tx.get(input.db.doc(`streetSegments/${key}`));
+    const currentSnap = await tx.get(input.db.doc(publicSegmentPath(key)));
     const current = currentSnap && currentSnap.exists && typeof currentSnap.data === 'function'
       ? currentSnap.data()
       : null;
@@ -361,22 +391,42 @@ async function persistDeadlineBoundCurb(input, documents, key, rules) {
     if (currentEval.status === 'valid' && currentEval.committedAtMs > eligibility.committedAtMs) {
       throw new Error('newer_valid_exists');
     }
-    for (const [ref, value] of documents) {
+    for (const [ref, value] of publicDocuments) {
       tx.set(ref, {
         ...value,
-        writeAuthority,
-        updatedAt: writeAuthority.committedAt,
+        writeAuthority: publicAuthority,
+        updatedAt: stagingAuthority.committedAt,
       });
     }
   });
   if (phase2.success === false) {
     return { success: false, reason: phase2.reason || 'request_aborted' };
   }
+  if (phase2.skipped === 'newer_valid_exists') {
+    return {
+      success: true,
+      publicCurbKey: key,
+      ruleCount: rules.length,
+      published: false,
+    };
+  }
+
+  const publishedSnap = await input.db.doc(publicSegmentPath(key)).get();
+  const publishedData = publishedSnap && typeof publishedSnap.data === 'function' ? publishedSnap.data() : null;
+  const publishedEval = evaluateWriteAuthority(publishedData?.writeAuthority);
+  if (publishedEval.status !== 'valid') {
+    return {
+      success: false,
+      reason: 'request_aborted',
+      published: false,
+      storedNonAuthoritative: true,
+    };
+  }
   return {
     success: true,
     publicCurbKey: key,
     ruleCount: rules.length,
-    published: phase2.skipped !== 'newer_valid_exists',
+    published: true,
   };
 }
 

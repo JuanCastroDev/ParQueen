@@ -667,7 +667,7 @@ export const MapView: React.FC<MapViewProps> = ({
             dbg(`geohash bounds queried: ${bounds.length} ranges`);
 
             const snaps = await Promise.all(
-                bounds.map(([start, end]) =>
+                bounds.flatMap(([start, end]) => ([
                     getDocs(
                         query(
                             collection(db, 'streetSegments'),
@@ -676,12 +676,27 @@ export const MapView: React.FC<MapViewProps> = ({
                             endAt(end),
                         ),
                     ),
-                ),
+                    getDocs(
+                        query(
+                            collection(db, 'streetSegmentsV2'),
+                            orderBy('geohash'),
+                            startAt(start),
+                            endAt(end),
+                        ),
+                    ),
+                ])),
             );
 
-            const allCandidates = snaps.flatMap(s =>
-                s.docs.map(d => ({ id: d.id, ...(d.data() as any) }))
-            );
+            const merged = new Map<string, any>();
+            for (const s of snaps) {
+                for (const d of s.docs) {
+                    const collectionId = d.ref.parent.id;
+                    const row = { id: d.id, ...(d.data() as any), __segmentCollection: collectionId };
+                    const prev = merged.get(d.id);
+                    if (!prev || collectionId === 'streetSegmentsV2') merged.set(d.id, row);
+                }
+            }
+            const allCandidates = [...merged.values()];
             // Exclude archived segments so stale data doesn't block a fresh SweepNYC lookup
             const candidates = allCandidates.filter(
                 (c: any) => !c.status || c.status === 'active' || c.status === 'needs_review'
@@ -755,9 +770,12 @@ export const MapView: React.FC<MapViewProps> = ({
                 }
             }
 
+            const nearestCollection = nearest.__segmentCollection === 'streetSegmentsV2'
+                ? 'streetSegmentsV2' : 'streetSegments';
+            const nearestRules = nearestCollection === 'streetSegmentsV2' ? 'streetRulesV2' : 'streetRules';
             const rulesSnap = await getDocs(
                 query(
-                    collection(db, 'streetSegments', nearest.id, 'streetRules'),
+                    collection(db, nearestCollection, nearest.id, nearestRules),
                     where('supersededAt', '==', null),
                 ),
             );

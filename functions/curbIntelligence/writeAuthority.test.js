@@ -22,13 +22,18 @@ describe('write authority evaluation', () => {
   });
 
   it('rejects malformed and inconsistent metadata', () => {
-    expect(evaluateWriteAuthority({ scheme: 2, generationId: gen, deadlineAtMs: 10, committedAt: 1 }).status).toBe('reject');
-    expect(evaluateWriteAuthority({ scheme: 1, generationId: 'short', deadlineAtMs: 10, committedAt: 1 }).status).toBe('reject');
-    expect(evaluateWriteAuthority({ scheme: 1, generationId: gen, deadlineAtMs: 10, committedAt: 10 })).toEqual({
+    expect(evaluateWriteAuthority({ scheme: 2, generationId: gen, deadlineAtMs: 10, committedAt: 1, promotedAt: 1 }).status).toBe('reject');
+    expect(evaluateWriteAuthority({ scheme: 1, generationId: 'short', deadlineAtMs: 10, committedAt: 1, promotedAt: 1 }).status).toBe('reject');
+    expect(evaluateWriteAuthority({ scheme: 1, generationId: gen, deadlineAtMs: 10, committedAt: 10, promotedAt: 1 })).toEqual({
       status: 'reject', reason: 'committed_at_or_after_deadline',
     });
+    expect(evaluateWriteAuthority({ scheme: 1, generationId: gen, deadlineAtMs: 10, committedAt: 1, promotedAt: 10 })).toEqual({
+      status: 'reject', reason: 'promoted_at_or_after_deadline',
+    });
+    expect(evaluateWriteAuthority({ scheme: 1, generationId: gen, deadlineAtMs: 10, committedAt: 1 }).status).toBe('reject');
+    expect(evaluateWriteAuthority({ scheme: 1, generationId: gen, deadlineAtMs: 10, committedAt: 1 }, { role: 'staging' }).status).toBe('valid');
     expect(associateDocumentAuthorities([
-      evaluateWriteAuthority({ scheme: 1, generationId: gen, deadlineAtMs: 10, committedAt: 1 }),
+      evaluateWriteAuthority({ scheme: 1, generationId: gen, deadlineAtMs: 10, committedAt: 1, promotedAt: 1 }),
       evaluateWriteAuthority(null),
     ]).reason).toBe('inconsistent_authority');
   });
@@ -38,8 +43,9 @@ describe('write authority evaluation', () => {
       scheme: WRITE_AUTHORITY_SCHEME,
       generationId: gen,
       deadlineAtMs: 20,
-      committedAt: { toMillis: () => 19 },
-    })).toMatchObject({ status: 'valid', generationId: gen, committedAtMs: 19 });
+      committedAt: { toMillis: () => 18 },
+      promotedAt: { toMillis: () => 19 },
+    })).toMatchObject({ status: 'valid', generationId: gen, committedAtMs: 18, promotedAtMs: 19 });
   });
 
   it('filters rules and hashes persist tokens without exposing them', () => {
@@ -47,10 +53,10 @@ describe('write authority evaluation', () => {
     const generationId = generationIdFromPersistToken(token);
     expect(generationId).toMatch(/^[a-f0-9]{32}$/);
     expect(generationId).not.toContain(token);
-    const segment = { writeAuthority: { scheme: 1, generationId, deadlineAtMs: 20, committedAt: 5 } };
+    const segment = { writeAuthority: { scheme: 1, generationId, deadlineAtMs: 20, committedAt: 5, promotedAt: 6 } };
     const rules = [
-      { id: 'keep', writeAuthority: { scheme: 1, generationId, deadlineAtMs: 20, committedAt: 5 } },
-      { id: 'late', writeAuthority: { scheme: 1, generationId, deadlineAtMs: 20, committedAt: 20 } },
+      { id: 'keep', writeAuthority: { scheme: 1, generationId, deadlineAtMs: 20, committedAt: 5, promotedAt: 6 } },
+      { id: 'late', writeAuthority: { scheme: 1, generationId, deadlineAtMs: 20, committedAt: 5, promotedAt: 20 } },
       { id: 'legacy' },
     ];
     expect(filterAuthoritativeRules(segment, rules).rules.map(rule => rule.id)).toEqual(['keep']);

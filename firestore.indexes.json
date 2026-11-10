@@ -151,6 +151,21 @@
       ]
     },
     {
+      "collectionGroup": "streetSegmentsV2",
+      "fieldPath": "status",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION" }
+      ]
+    },
+    {
+      "collectionGroup": "streetRulesV2",
+      "fieldPath": "supersededAt",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION" },
+        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }
+      ]
+    },
+    {
       "collectionGroup": "activeIncomingClaims",
       "fieldPath": "updatedAt",
       "indexes": [

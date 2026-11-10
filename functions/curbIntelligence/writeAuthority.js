@@ -2,9 +2,14 @@
 
 const { createHash } = require('node:crypto');
 
-// Scheme 1 authority: a write generation is eligible only when its
-// Firestore-resolved commit timestamp is strictly earlier than the
-// request deadline expressed in the Firestore time domain.
+// Scheme 1 authority: a write generation is publicly authoritative
+// only when both its private staging committedAt and its public
+// promotedAt (the Firestore server timestamp resolved at the public
+// promotion commit) are strictly earlier than the same deadline,
+// expressed in the Firestore time domain via bindDeadlineToFirestoreClock
+// (remaining Functions budget minus CLOCK_DRIFT_MARGIN_MS).
+// Staging-only evaluation (role: 'staging') checks committedAt alone
+// so phase 1 can be validated before promotion exists.
 const WRITE_AUTHORITY_SCHEME = 1;
 const GENERATION_ID_PATTERN = /^[a-f0-9]{32}$/;
 
@@ -41,7 +46,7 @@ function timestampToMillis(value) {
   return null;
 }
 
-function evaluateWriteAuthority(authority) {
+function evaluateWriteAuthority(authority, options = {}) {
   if (authority == null) return { status: 'legacy' };
   if (typeof authority !== 'object') {
     return { status: 'reject', reason: 'malformed_authority' };
@@ -63,10 +68,26 @@ function evaluateWriteAuthority(authority) {
   if (committedAtMs >= authority.deadlineAtMs) {
     return { status: 'reject', reason: 'committed_at_or_after_deadline' };
   }
+  if (options.role === 'staging') {
+    return {
+      status: 'valid',
+      generationId: authority.generationId,
+      committedAtMs,
+      deadlineAtMs: authority.deadlineAtMs,
+    };
+  }
+  const promotedAtMs = timestampToMillis(authority.promotedAt);
+  if (promotedAtMs == null) {
+    return { status: 'reject', reason: 'malformed_authority' };
+  }
+  if (promotedAtMs >= authority.deadlineAtMs) {
+    return { status: 'reject', reason: 'promoted_at_or_after_deadline' };
+  }
   return {
     status: 'valid',
     generationId: authority.generationId,
     committedAtMs,
+    promotedAtMs,
     deadlineAtMs: authority.deadlineAtMs,
   };
 }

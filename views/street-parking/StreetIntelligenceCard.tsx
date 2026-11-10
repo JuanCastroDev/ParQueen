@@ -114,7 +114,8 @@ export const StreetIntelligenceCard = ({
         const todayKey = toNYCDateKey(new Date());
         const horizonKey = addNYCDateKeyDays(todayKey, MAX_FORWARD_SEARCH_DAYS_AHEAD);
 
-        const [segSnap, suspSnap] = await Promise.all([
+        const [v2Snap, legacySnap, suspSnap] = await Promise.all([
+          getDoc(doc(db, 'streetSegmentsV2', segmentId)),
           getDoc(doc(db, 'streetSegments', segmentId)),
           getDocs(query(
             collection(db, 'suspensions'),
@@ -125,16 +126,21 @@ export const StreetIntelligenceCard = ({
         ]);
         if (cancelled) return;
 
-        const segment = segSnap.exists() ? segSnap.data() : null;
+        const useVersioned = typeof v2Snap.exists === 'function' ? v2Snap.exists() : Boolean(v2Snap.exists);
+        const segSnap = useVersioned ? v2Snap : legacySnap;
+        const segmentCollection = useVersioned ? 'streetSegmentsV2' : 'streetSegments';
+        const rulesCollection = useVersioned ? 'streetRulesV2' : 'streetRules';
+        const segment = (typeof segSnap.exists === 'function' ? segSnap.exists() : Boolean(segSnap.exists))
+          ? segSnap.data() : null;
         const activeRuleSetVersion = segment?.protocolVersion === 2
           ? segment.activeRuleSetVersion : null;
         const rulesSnap = await getDocs(activeRuleSetVersion
           ? query(
-            collection(db, 'streetSegments', segmentId, 'streetRules'),
+            collection(db, segmentCollection, segmentId, rulesCollection),
             where('ruleSetVersion', '==', activeRuleSetVersion),
           )
           : query(
-            collection(db, 'streetSegments', segmentId, 'streetRules'),
+            collection(db, segmentCollection, segmentId, rulesCollection),
             where('supersededAt', '==', null),
           ));
         if (cancelled) return;

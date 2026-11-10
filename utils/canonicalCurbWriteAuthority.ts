@@ -4,16 +4,23 @@
  *
  * A stored result is authoritative only when writeAuthority is absent
  * (trusted pre-contract legacy data) or when every used document shares
- * the same valid generation whose Firestore-resolved committedAt is
- * strictly earlier than deadlineAtMs. Clients compare stored server
- * fields only; they do not use the device clock.
+ * the same valid generation whose Firestore-resolved committedAt AND
+ * promotedAt are both strictly earlier than deadlineAtMs. Clients compare
+ * stored server fields only; they do not use the device clock.
+ * New-scheme publications live in streetSegmentsV2 / streetRulesV2 so
+ * older clients that query streetSegments / streetRules cannot consume
+ * unverified generations.
  */
 export const WRITE_AUTHORITY_SCHEME = 1;
+export const PUBLIC_SEGMENT_COLLECTION = 'streetSegmentsV2';
+export const PUBLIC_RULES_SUBCOLLECTION = 'streetRulesV2';
+export const LEGACY_SEGMENT_COLLECTION = 'streetSegments';
+export const LEGACY_RULES_SUBCOLLECTION = 'streetRules';
 const GENERATION_ID_PATTERN = /^[a-f0-9]{32}$/;
 
 export type WriteAuthorityEvaluation =
   | { status: 'legacy' }
-  | { status: 'valid'; generationId: string; committedAtMs: number; deadlineAtMs: number }
+  | { status: 'valid'; generationId: string; committedAtMs: number; deadlineAtMs: number; promotedAtMs?: number }
   | { status: 'reject'; reason: string };
 
 export type WriteAuthorityRecord = {
@@ -21,6 +28,11 @@ export type WriteAuthorityRecord = {
   generationId?: unknown;
   deadlineAtMs?: unknown;
   committedAt?: unknown;
+  promotedAt?: unknown;
+};
+
+export type EvaluateWriteAuthorityOptions = {
+  role?: 'staging' | 'public';
 };
 
 function timestampToMillis(value: unknown): number | null {
@@ -46,7 +58,10 @@ function timestampToMillis(value: unknown): number | null {
   return null;
 }
 
-export function evaluateWriteAuthority(authority: WriteAuthorityRecord | null | undefined): WriteAuthorityEvaluation {
+export function evaluateWriteAuthority(
+  authority: WriteAuthorityRecord | null | undefined,
+  options: EvaluateWriteAuthorityOptions = {},
+): WriteAuthorityEvaluation {
   if (authority == null) return { status: 'legacy' };
   if (typeof authority !== 'object') return { status: 'reject', reason: 'malformed_authority' };
   if (authority.scheme !== WRITE_AUTHORITY_SCHEME) {
@@ -63,10 +78,24 @@ export function evaluateWriteAuthority(authority: WriteAuthorityRecord | null | 
   if (committedAtMs >= authority.deadlineAtMs) {
     return { status: 'reject', reason: 'committed_at_or_after_deadline' };
   }
+  if (options.role === 'staging') {
+    return {
+      status: 'valid',
+      generationId: authority.generationId,
+      committedAtMs,
+      deadlineAtMs: authority.deadlineAtMs,
+    };
+  }
+  const promotedAtMs = timestampToMillis(authority.promotedAt);
+  if (promotedAtMs == null) return { status: 'reject', reason: 'malformed_authority' };
+  if (promotedAtMs >= authority.deadlineAtMs) {
+    return { status: 'reject', reason: 'promoted_at_or_after_deadline' };
+  }
   return {
     status: 'valid',
     generationId: authority.generationId,
     committedAtMs,
+    promotedAtMs,
     deadlineAtMs: authority.deadlineAtMs,
   };
 }

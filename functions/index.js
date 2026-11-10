@@ -4482,12 +4482,22 @@ async function _attachSweepnycProductEvidence(segmentId, segment, capture, ruleO
 }
 
 async function _loadActiveStreetRules(segmentId, segment) {
-  const snap = await db.collection(`streetSegments/${segmentId}/streetRules`)
+  const {
+    PUBLIC_SEGMENT_COLLECTION,
+    PUBLIC_RULES_SUBCOLLECTION,
+    LEGACY_SEGMENT_COLLECTION,
+    LEGACY_RULES_SUBCOLLECTION,
+  } = require('./curbIntelligence/publicCurbCollections');
+  const useVersioned = Boolean(segment && segment.writeAuthority);
+  const rulesPrefix = useVersioned
+    ? `${PUBLIC_SEGMENT_COLLECTION}/${segmentId}/${PUBLIC_RULES_SUBCOLLECTION}`
+    : `${LEGACY_SEGMENT_COLLECTION}/${segmentId}/${LEGACY_RULES_SUBCOLLECTION}`;
+  const snap = await db.collection(rulesPrefix)
     .where('supersededAt', '==', null)
     .get();
   let rules = snap.docs.map(doc => doc.data()).filter(Boolean);
-  if (!rules.some(rule => rule.type === 'streetCleaning')) {
-    const fallback = await db.doc(`streetSegments/${segmentId}/streetRules/sweepnyc_v1`).get();
+  if (!useVersioned && !rules.some(rule => rule.type === 'streetCleaning')) {
+    const fallback = await db.doc(`${LEGACY_SEGMENT_COLLECTION}/${segmentId}/${LEGACY_RULES_SUBCOLLECTION}/sweepnyc_v1`).get();
     if (fallback.exists) rules = [...rules.filter(rule => rule.type !== 'streetCleaning'), fallback.data()];
   }
   const { filterAuthoritativeRules } = require('./curbIntelligence/writeAuthority');

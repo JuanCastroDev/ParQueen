@@ -238,8 +238,11 @@ function SegmentRow({ seg, onDeleted }: { seg: SegmentDoc; onDeleted: () => void
 
   const loadRules = async () => {
     setLoadingRules(true);
+    const segmentCollection = (seg as SegmentDoc & { __segmentCollection?: string }).__segmentCollection === 'streetSegmentsV2'
+      ? 'streetSegmentsV2' : 'streetSegments';
+    const rulesCollection = segmentCollection === 'streetSegmentsV2' ? 'streetRulesV2' : 'streetRules';
     const snap = await getDocs(
-      query(collection(db, 'streetSegments', seg.id, 'streetRules'), where('supersededAt', '==', null))
+      query(collection(db, segmentCollection, seg.id, rulesCollection), where('supersededAt', '==', null))
     );
     const loaded = snap.docs.map(d => ({ id: d.id, ...d.data() } as StreetRuleDoc));
     const selected = filterAuthoritativeRules(seg, loaded);
@@ -618,11 +621,19 @@ export const StreetSegmentsPage = () => {
     const q = filter === 'all'
       ? query(collection(db, 'streetSegments'))
       : query(collection(db, 'streetSegments'), where('status', '==', filter));
-    const snap = await getDocs(q);
+    const qV2 = filter === 'all'
+      ? query(collection(db, 'streetSegmentsV2'))
+      : query(collection(db, 'streetSegmentsV2'), where('status', '==', filter));
+    const [snap, snapV2] = await Promise.all([getDocs(q), getDocs(qV2)]);
+    const merged = new Map<string, SegmentDoc & { __segmentCollection?: string }>();
+    for (const d of snap.docs) {
+      merged.set(d.id, { id: d.id, ...d.data(), __segmentCollection: 'streetSegments' } as SegmentDoc & { __segmentCollection?: string });
+    }
+    for (const d of snapV2.docs) {
+      merged.set(d.id, { id: d.id, ...d.data(), __segmentCollection: 'streetSegmentsV2' } as SegmentDoc & { __segmentCollection?: string });
+    }
     setSegments(
-      snap.docs
-        .map(d => ({ id: d.id, ...d.data() } as SegmentDoc))
-        .sort((a, b) => a.streetName.localeCompare(b.streetName))
+      [...merged.values()].sort((a, b) => a.streetName.localeCompare(b.streetName))
     );
     setLoading(false);
   };

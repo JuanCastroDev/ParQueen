@@ -35,7 +35,7 @@ function memoryDb({ commitNow } = {}) {
     beforeApply: null,
     publicWrites() {
       return writes.filter(write => (
-        write.path.startsWith('streetSegments/') || write.path.startsWith('curbIdentities/')
+        write.path.startsWith('streetSegments/') || write.path.startsWith('streetSegmentsV2/') || write.path.startsWith('curbIdentities/')
       ));
     },
     doc(path) {
@@ -161,7 +161,7 @@ describe('canonical curb late-commit authority', () => {
     const key = publicCurbKey(topologyResult.identity);
     expect(result.success).toBe(true);
     expect(result.published).toBe(true);
-    expect(evaluateWriteAuthority(db.docs.get(`streetSegments/${key}`).writeAuthority).status).toBe('valid');
+    expect(evaluateWriteAuthority(db.docs.get(`streetSegmentsV2/${key}`).writeAuthority).status).toBe('valid');
     deadline.dispose();
   });
 
@@ -182,7 +182,7 @@ describe('canonical curb late-commit authority', () => {
     const result = await persistCanonicalCurb(persistInput(db, topologyResult, identityProof, deadline));
     const key = publicCurbKey(topologyResult.identity);
     expect(result).toEqual({ success: false, reason: 'request_aborted' });
-    expect(db.docs.has(`streetSegments/${key}`)).toBe(false);
+    expect(db.docs.has(`streetSegmentsV2/${key}`)).toBe(false);
     expect(db.publicWrites()).toEqual([]);
     deadline.dispose();
   });
@@ -277,7 +277,7 @@ describe('canonical curb late-commit authority', () => {
     const key = publicCurbKey(topologyResult.identity);
     expect(firstResult.success).toBe(true);
     expect(secondResult.success).toBe(true);
-    const published = db.docs.get(`streetSegments/${key}`).writeAuthority.generationId;
+    const published = db.docs.get(`streetSegmentsV2/${key}`).writeAuthority.generationId;
     expect(typeof published).toBe('string');
     first.dispose();
     second.dispose();
@@ -298,12 +298,12 @@ describe('canonical curb late-commit authority', () => {
     };
     const firstResult = await persistCanonicalCurb(persistInput(db, topologyResult, identityProof, first));
     const key = publicCurbKey(topologyResult.identity);
-    const publishedGeneration = db.docs.get(`streetSegments/${key}`).writeAuthority.generationId;
+    const publishedGeneration = db.docs.get(`streetSegmentsV2/${key}`).writeAuthority.generationId;
     const second = createRequestDeadline({ startedAt: Date.now() });
     const secondResult = await persistCanonicalCurb(persistInput(db, topologyResult, identityProof, second));
     expect(firstResult.success).toBe(true);
     expect(secondResult).toEqual({ success: false, reason: 'request_aborted' });
-    expect(db.docs.get(`streetSegments/${key}`).writeAuthority.generationId).toBe(publishedGeneration);
+    expect(db.docs.get(`streetSegmentsV2/${key}`).writeAuthority.generationId).toBe(publishedGeneration);
     first.dispose();
     second.dispose();
   });
@@ -312,7 +312,7 @@ describe('canonical curb late-commit authority', () => {
     const topologyResult = await topology();
     const identityProof = await proofFor(topologyResult);
     const key = publicCurbKey(topologyResult.identity);
-    const valid = { scheme: 1, generationId: 'c'.repeat(32), deadlineAtMs: 100, committedAt: { toMillis: () => 10 } };
+    const valid = { scheme: 1, generationId: 'c'.repeat(32), deadlineAtMs: 100, committedAt: { toMillis: () => 10 }, promotedAt: { toMillis: () => 11 } };
     const db = memoryDb({ commitNow: () => 10 });
     db.docs.set(`curbIdentities/${key}`, {
       schemaVersion: 2,
@@ -321,7 +321,7 @@ describe('canonical curb late-commit authority', () => {
       identity: topologyResult.identity,
       writeAuthority: valid,
     });
-    db.docs.set(`streetSegments/${key}`, {
+    db.docs.set(`streetSegmentsV2/${key}`, {
       ...topologyResult.publicCurb,
       protocolVersion: 2,
       schemaVersion: 2,
@@ -359,7 +359,7 @@ describe('canonical curb late-commit authority', () => {
   });
 
   it('10 treats a direct-reader late public record as non-authoritative', async () => {
-    const late = { writeAuthority: { scheme: 1, generationId: 'e'.repeat(32), deadlineAtMs: 9, committedAt: { toMillis: () => 9 } } };
+    const late = { writeAuthority: { scheme: 1, generationId: 'e'.repeat(32), deadlineAtMs: 9, committedAt: { toMillis: () => 9 }, promotedAt: { toMillis: () => 9 } } };
     expect(evaluateWriteAuthority(late.writeAuthority).status).toBe('reject');
     const topologyResult = await topology();
     const identityProof = await proofFor(topologyResult);
@@ -372,7 +372,7 @@ describe('canonical curb late-commit authority', () => {
       identity: topologyResult.identity,
       writeAuthority: late.writeAuthority,
     });
-    db.docs.set(`streetSegments/${key}`, {
+    db.docs.set(`streetSegmentsV2/${key}`, {
       ...topologyResult.publicCurb,
       protocolVersion: 2,
       schemaVersion: 2,
@@ -415,6 +415,38 @@ describe('canonical curb late-commit authority', () => {
     };
     const result = await persistCanonicalCurb(persistInput(db, topologyResult, identityProof, deadline));
     expect(result.success).toBe(false);
+    const cache = await readCanonicalCache({ db, topologyResult, identityProof });
+    expect(cache.hit).toBe(false);
+    deadline.dispose();
+  });
+
+  it('13 does not treat a timely staging commit and a late public promotion as authoritative', async () => {
+    let fsNow = 10_000;
+    const db = memoryDb({ commitNow: () => fsNow });
+    const topologyResult = await topology();
+    const identityProof = await proofFor(topologyResult);
+    const deadline = createRequestDeadline({ startedAt: Date.now() });
+    let phase = 0;
+    db.beforeApply = (pending) => {
+      phase += 1;
+      if (phase === 1) {
+        const generation = pending.find(item => item.path.includes('/generations/'));
+        fsNow = generation.value.deadlineAtMs - 1;
+      }
+      if (phase === 2) {
+        const generation = [...db.docs.values()].find(value => value && Number.isFinite(value.deadlineAtMs));
+        fsNow = (generation?.deadlineAtMs ?? fsNow) + 746;
+      }
+    };
+    const result = await persistCanonicalCurb(persistInput(db, topologyResult, identityProof, deadline));
+    const key = publicCurbKey(topologyResult.identity);
+    expect(result.success).toBe(false);
+    expect(result.reason).toBe('request_aborted');
+    expect(db.docs.has(`streetSegments/${key}`)).toBe(false);
+    const published = db.docs.get(`streetSegmentsV2/${key}`);
+    expect(published).toBeTruthy();
+    expect(evaluateWriteAuthority(published.writeAuthority).status).toBe('reject');
+    expect(evaluateWriteAuthority(published.writeAuthority).reason).toBe('promoted_at_or_after_deadline');
     const cache = await readCanonicalCache({ db, topologyResult, identityProof });
     expect(cache.hit).toBe(false);
     deadline.dispose();

@@ -1187,6 +1187,24 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
 
+    // Isolated new-scheme publications. Older clients query streetSegments
+    // and collectionGroup('streetRules') only, so they cannot observe these
+    // documents. Clients may read them; writes remain Admin SDK / callable only.
+    match /streetSegmentsV2/{segmentId} {
+      allow read: if true;
+      allow create, update, delete: if false;
+
+      match /streetRulesV2/{ruleId} {
+        allow read: if true;
+        allow create, update, delete: if false;
+      }
+    }
+
+    match /{path=**}/streetRulesV2/{ruleId} {
+      allow read: if true;
+      allow create, update, delete: if false;
+    }
+
     match /suspensions/{suspensionId} {
       allow read: if true;
       // Direct admin writes removed: adminAddSuspension/adminArchiveSuspension

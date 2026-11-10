@@ -39,8 +39,13 @@ async function loadStreetOutcome(spot: SavedSpot): Promise<StreetOutcome> {
   try {
     const todayKey = toNYCDateKey(new Date());
     const horizonKey = addNYCDateKeyDays(todayKey, MAX_FORWARD_SEARCH_DAYS_AHEAD);
-    const [segSnap, rulesSnap, suspSnap] = await Promise.all([
+    const [v2Snap, legacySnap, v2RulesSnap, legacyRulesSnap, suspSnap] = await Promise.all([
+      getDoc(doc(db, 'streetSegmentsV2', spot.segmentId)),
       getDoc(doc(db, 'streetSegments', spot.segmentId)),
+      getDocs(query(
+        collection(db, 'streetSegmentsV2', spot.segmentId, 'streetRulesV2'),
+        where('supersededAt', '==', null),
+      )),
       getDocs(query(
         collection(db, 'streetSegments', spot.segmentId, 'streetRules'),
         where('supersededAt', '==', null),
@@ -52,6 +57,9 @@ async function loadStreetOutcome(spot: SavedSpot): Promise<StreetOutcome> {
         orderBy('date', 'desc'),
       )),
     ]);
+    const useVersioned = typeof v2Snap.exists === 'function' ? v2Snap.exists() : Boolean(v2Snap.exists);
+    const segSnap = useVersioned ? v2Snap : legacySnap;
+    const rulesSnap = useVersioned ? v2RulesSnap : legacyRulesSnap;
 
     const loadedRules = rulesSnap.docs.map(d => ({ id: d.id, ...d.data() } as StreetRuleDoc));
     const segment = segSnap.exists() ? segSnap.data() : null;

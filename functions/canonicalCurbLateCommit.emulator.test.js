@@ -26,8 +26,9 @@ describe.skipIf(!enabled)('canonical curb late-commit emulator', () => {
       doc: (path) => firestore.doc(path),
       collection: (path) => firestore.collection(path),
       runTransaction: (fn) => firestore.runTransaction(async (tx) => {
+        const result = await fn(tx);
         if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
-        return fn(tx);
+        return result;
       }),
     };
     const row = {
@@ -78,9 +79,14 @@ describe.skipIf(!enabled)('canonical curb late-commit emulator', () => {
       persistAllowed: deadline.persistAllowed,
     });
     const key = publicCurbKey(topologyResult.identity);
-    const published = await firestore.doc(`streetSegments/${key}`).get();
+    const published = await firestore.doc(`streetSegmentsV2/${key}`).get();
+    const legacy = await firestore.doc(`streetSegments/${key}`).get();
     expect(result.success).toBe(false);
-    expect(published.exists).toBe(false);
+    expect(legacy.exists).toBe(false);
+    if (published.exists) {
+      const { evaluateWriteAuthority } = require('./curbIntelligence/writeAuthority');
+      expect(evaluateWriteAuthority(published.data()?.writeAuthority).status).toBe('reject');
+    }
     deadline.dispose();
   }, 20_000);
 });

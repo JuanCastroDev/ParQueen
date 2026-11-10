@@ -33,7 +33,11 @@ vi.mock('firebase/firestore', () => ({
     query: (base: any, ...constraints: any[]) => ({ ...base, __constraints: constraints }),
     where: (field: string, op: string, value: any) => ({ __kind: 'where', field, op, value }),
     orderBy: (field: string, dir?: string) => ({ __kind: 'orderBy', field, dir }),
-    getDoc: (_ref: any) => {
+    getDoc: (ref: any) => {
+        const path = Array.isArray(ref?.__doc) ? ref.__doc : [];
+        if (path[0] === 'streetSegmentsV2') {
+            return Promise.resolve({ exists: () => false, data: () => undefined });
+        }
         const result = { exists: () => segmentExists, data: () => segmentData };
         if (!holdReads) return Promise.resolve(result);
         return new Promise(resolve => { releaseReads.push(() => resolve(result)); });
@@ -52,7 +56,7 @@ vi.mock('firebase/firestore', () => ({
                 (!gte || r.data.date >= gte.value) && (!lte || r.data.date <= lte.value));
             return Promise.resolve({ docs: filtered.map(r => ({ id: r.id, data: () => r.data })) });
         }
-        if (Array.isArray(q.__col) && q.__col[q.__col.length - 1] === 'streetRules') {
+        if (Array.isArray(q.__col) && (q.__col[q.__col.length - 1] === 'streetRules' || q.__col[q.__col.length - 1] === 'streetRulesV2')) {
             return Promise.resolve({ docs: streetRuleRows.map(r => ({ id: r.id, data: () => r.data })) });
         }
         return Promise.resolve({ docs: [] });
