@@ -55,7 +55,6 @@ async function loadStats(): Promise<{
     totalSnap, activeSnap, sweepnycSnap, adminSnap,
     archivedSnap, reviewSnap, rulesSnap, dashboardCounts,
     segmentDocs,
-    segmentDocsV2,
   ] = await Promise.all([
     getCountFromServer(collection(db!, 'streetSegments')),
     getCountFromServer(query(collection(db!, 'streetSegments'), where('status', '==', 'active'))),
@@ -67,18 +66,16 @@ async function loadStats(): Promise<{
     getCountFromServer(query(collectionGroup(db!, 'streetRules'), where('supersededAt', '==', null))),
     fetchDashboardCounts(),
     getDocs(collection(db!, 'streetSegments')),
-    getDocs(collection(db!, 'streetSegmentsV2')),
   ]);
-  const authoritativeV2 = segmentDocsV2.docs.filter((d) => segmentAllowsAuthoritativeRead(d.data()).ok);
-  const allSegmentDocs = [...segmentDocs.docs, ...authoritativeV2];
+  const allSegmentDocs = [...segmentDocs.docs];
 
   const stats: HealthStats = {
-    totalSegments: totalSnap.data().count + authoritativeV2.length,
-    activeSegments: activeSnap.data().count + authoritativeV2.filter((d) => d.data().status === 'active').length,
-    sweepnycSegments: sweepnycSnap.data().count + authoritativeV2.filter((d) => d.data().source === 'sweepnyc').length,
-    adminSegments: adminSnap.data().count + authoritativeV2.filter((d) => d.data().source === 'admin').length,
-    archivedSegments: archivedSnap.data().count + authoritativeV2.filter((d) => d.data().status === 'archived').length,
-    needsReviewSegments: reviewSnap.data().count + authoritativeV2.filter((d) => d.data().status === 'needs_review').length,
+    totalSegments: totalSnap.data().count,
+    activeSegments: activeSnap.data().count,
+    sweepnycSegments: sweepnycSnap.data().count,
+    adminSegments: adminSnap.data().count,
+    archivedSegments: archivedSnap.data().count,
+    needsReviewSegments: reviewSnap.data().count,
     activeRules: rulesSnap.data().count,
     unresolvedFailures: dashboardCounts.parseFailures,
   };

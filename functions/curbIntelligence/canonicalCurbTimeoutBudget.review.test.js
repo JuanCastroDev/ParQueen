@@ -202,6 +202,6 @@ describe('canonical source and orchestration deadlines', () => {
     expect(Date.now() - started).toBeLessThan(OVERALL_DEADLINE_MS);
     expect(result).toMatchObject({ protocolVersion: 2, status: 'high_confidence' });
     expect(transport).toHaveBeenCalledOnce();
-    expect(persistCanonicalCurb).toHaveBeenCalledOnce();
+    expect(persistCanonicalCurb).not.toHaveBeenCalled();
   });
 });

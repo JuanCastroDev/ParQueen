@@ -134,7 +134,7 @@ describe('SI-RELEASE-02 product path', () => {
     expect(result.segmentId).toMatch(/^curb2_[a-f0-9]{32}$/);
     expect(proof.transport).toHaveBeenCalledTimes(1);
     expect(effects.readCanonicalCache).toHaveBeenCalledTimes(1);
-    expect(effects.persistCanonicalCurb).toHaveBeenCalledTimes(1);
+    expect(effects.persistCanonicalCurb).not.toHaveBeenCalled();
     expect(JSON.stringify(result)).not.toMatch(/officialBlockFaceId|1000000001/);
   });
 

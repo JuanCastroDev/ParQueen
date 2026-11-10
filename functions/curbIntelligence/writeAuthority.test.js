@@ -10,7 +10,6 @@ const {
   associateDocumentAuthorities,
   filterAuthoritativeRules,
   segmentAllowsAuthoritativeRead,
-  bindDeadlineToFirestoreClock,
 } = require('./writeAuthority');
 
 const gen = 'a'.repeat(32);
@@ -63,29 +62,4 @@ describe('write authority evaluation', () => {
     expect(segmentAllowsAuthoritativeRead({ writeAuthority: { scheme: 1, generationId, deadlineAtMs: 20, committedAt: 20 } }).ok).toBe(false);
   });
 
-  it('binds remaining Functions budget onto a Firestore probe timestamp', async () => {
-    let stored;
-    const db = {
-      doc() {
-        return {
-          async set(value) { stored = value; },
-          async get() { return { exists: true, data: () => stored }; },
-        };
-      },
-    };
-    const bound = await bindDeadlineToFirestoreClock({
-      db,
-      FieldValue: { serverTimestamp: () => ({ toMillis: () => 1_000 }) },
-      key: 'curb2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-      generationId: gen,
-      deadlineAt: 5_000,
-      now: () => 3_000,
-    });
-    expect(bound).toEqual({
-      ok: true,
-      deadlineFsMs: 1_000 + (5_000 - 3_000) - CLOCK_DRIFT_MARGIN_MS,
-      sampledAtMs: 1_000,
-      remainingMs: 2_000,
-    });
-  });
 });

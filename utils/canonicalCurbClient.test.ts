@@ -74,6 +74,7 @@ describe('canonical curb V2 client contract', () => {
       lat: 40.7, lng: -74, accuracyMeters: 5, sampleCount: 4, consistencyMeters: 3,
     })).toEqual({
       protocolVersion: 2,
+      responseVersion: 1,
       location: { lat: 40.7, lng: -74, accuracyMeters: 5, sampleCount: 4, consistencyMeters: 3 },
     });
     expect(buildCanonicalCurbRequest({
@@ -128,6 +129,7 @@ describe('canonical curb V2 client contract', () => {
     expect(invoke).toHaveBeenCalledOnce();
     expect(invoke).toHaveBeenCalledWith({
       protocolVersion: 2,
+      responseVersion: 1,
       location: location(),
     });
   });
@@ -148,6 +150,7 @@ describe('canonical curb V2 client contract', () => {
     })).toEqual({ protocolVersion: 2, status: 'side_confirmation_required', confirmation });
     expect(buildCanonicalCurbRequest(location(), sideToken('N'))).toEqual({
       protocolVersion: 2,
+      responseVersion: 1,
       location: location(),
       candidateToken: sideToken('N'),
     });
@@ -327,5 +330,59 @@ describe('canonical curb V2 client contract', () => {
       reason: 'source_unavailable',
     });
     expect(invoke).toHaveBeenCalledOnce();
+  });
+});
+
+
+describe('A1 additive response compatibility', () => {
+  const key = 'curb2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const legacy = {
+    protocolVersion: 2 as const,
+    status: 'high_confidence' as const,
+    segmentId: key,
+    streetName: 'Maran Place',
+    sideLabel: 'North' as const,
+    ruleSummary: { cleaningAvailable: true },
+  };
+  const extended = {
+    ...legacy,
+    responseVersion: 1 as const,
+    cacheHit: false,
+    publicRules: [{
+      category: 'cleaning',
+      type: 'streetCleaning',
+      source: 'nyc_open_data',
+      schedules: [{ days: ['Mon'], startTime: '08:00', endTime: '09:30', side: 'North' }],
+    }],
+    publicSchedules: {
+      cleaning: [{ days: ['Mon'], startTime: '08:00', endTime: '09:30', side: 'North' }],
+      restrictions: [],
+      timeLimited: [],
+      meters: [],
+    },
+  };
+
+  function parseWithLegacyExactKeys(value: Record<string, unknown>): boolean {
+    const keys = Object.keys(value).sort();
+    const expected = ['protocolVersion', 'status', 'segmentId', 'streetName', 'sideLabel', 'ruleSummary'].sort();
+    return keys.length === expected.length && keys.every((item, index) => item === expected[index]);
+  }
+
+  it('still accepts the main high_confidence key set', () => {
+    expect(parseCanonicalCurbResponse(legacy).status).toBe('high_confidence');
+    expect(parseWithLegacyExactKeys(legacy)).toBe(true);
+  });
+
+  it('accepts versioned public rules while old exact-key clients reject extra fields rather than misread them', () => {
+    expect(parseCanonicalCurbResponse(extended).status).toBe('high_confidence');
+    expect((parseCanonicalCurbResponse(extended) as { publicSchedules?: { cleaning: unknown[] } }).publicSchedules?.cleaning).toHaveLength(1);
+    expect(parseWithLegacyExactKeys(extended)).toBe(false);
+  });
+
+  it('rejects private identity material in publicRules', () => {
+    expect(() => parseCanonicalCurbResponse({
+      ...extended,
+      publicRules: [{ category: 'cleaning', officialBlockFaceId: '1000000001' }],
+    })).toThrow(/Invalid canonical curb response/);
   });
 });

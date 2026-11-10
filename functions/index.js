@@ -4482,22 +4482,12 @@ async function _attachSweepnycProductEvidence(segmentId, segment, capture, ruleO
 }
 
 async function _loadActiveStreetRules(segmentId, segment) {
-  const {
-    PUBLIC_SEGMENT_COLLECTION,
-    PUBLIC_RULES_SUBCOLLECTION,
-    LEGACY_SEGMENT_COLLECTION,
-    LEGACY_RULES_SUBCOLLECTION,
-  } = require('./curbIntelligence/publicCurbCollections');
-  const useVersioned = Boolean(segment && segment.writeAuthority);
-  const rulesPrefix = useVersioned
-    ? `${PUBLIC_SEGMENT_COLLECTION}/${segmentId}/${PUBLIC_RULES_SUBCOLLECTION}`
-    : `${LEGACY_SEGMENT_COLLECTION}/${segmentId}/${LEGACY_RULES_SUBCOLLECTION}`;
-  const snap = await db.collection(rulesPrefix)
+  const snap = await db.collection(`streetSegments/${segmentId}/streetRules`)
     .where('supersededAt', '==', null)
     .get();
   let rules = snap.docs.map(doc => doc.data()).filter(Boolean);
-  if (!useVersioned && !rules.some(rule => rule.type === 'streetCleaning')) {
-    const fallback = await db.doc(`${LEGACY_SEGMENT_COLLECTION}/${segmentId}/${LEGACY_RULES_SUBCOLLECTION}/sweepnyc_v1`).get();
+  if (!rules.some(rule => rule.type === 'streetCleaning')) {
+    const fallback = await db.doc(`streetSegments/${segmentId}/streetRules/sweepnyc_v1`).get();
     if (fallback.exists) rules = [...rules.filter(rule => rule.type !== 'streetCleaning'), fallback.data()];
   }
   const { filterAuthoritativeRules } = require('./curbIntelligence/writeAuthority');
@@ -5119,6 +5109,21 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
     createRequestDeadline,
   } = require('./curbIntelligence/requestDeadline');
   const requestDeadline = createRequestDeadline({ startedAt: initializationStartedAt });
+  const { enforceUpstreamCostGuard } = require('./curbIntelligence/upstreamCostGuard');
+  const costGuard = enforceUpstreamCostGuard({
+    uid: verifiedUid,
+    location: requestData && requestData.location,
+  });
+  if (!costGuard.ok) {
+    try {
+      createCurbTelemetry().emit('upstream_cost_limited', {
+        protocolVersion: 2,
+        reason: costGuard.reason || 'source_unavailable',
+        hashedLocationKey: costGuard.hashedLocationKey,
+      });
+    } catch { /* telemetry is fail-soft */ }
+    return { protocolVersion: 2, status: 'unsupported', reason: costGuard.reason || 'source_unavailable' };
+  }
   const orchestratorDependencies = {
     initializationStartedAt,
     signal: requestDeadline.signal,
@@ -5148,13 +5153,10 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
     // authenticated uid is applied here, over any field in the orchestrator
     // payload, and persistCanonicalCurb reads that user inside the commit
     // transaction. Scheduled and internal callers do not set callerUid.
-    persistCanonicalCurb: async (input) => {
-      const supplied = input && typeof input === 'object' ? input : {};
-      return streetIntelligenceCache.persistCanonicalCurb({
-        ...supplied,
-        callerUid: verifiedUid,
-      });
-    },
+    persistCanonicalCurb: async () => ({
+      success: true,
+      skipped: 'user_request_not_authoritative',
+    }),
   };
   if (process.env.FUNCTIONS_EMULATOR === 'true') {
     const { localRuntimeDependencies } = require('./curbIntelligence/runtimeSourceArtifact');

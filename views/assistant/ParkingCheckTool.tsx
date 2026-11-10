@@ -33,39 +33,46 @@ interface StreetOutcome {
  */
 async function loadStreetOutcome(spot: SavedSpot): Promise<StreetOutcome> {
   const effectiveSide = effectiveParkingSide(spot);
-  if (!spot.segmentId) {
+  if (!spot.segmentId && !spot.publicRules?.length) {
     return { presentation: 'unknown', safeUntil: null, effectiveSide, failed: false };
   }
   try {
     const todayKey = toNYCDateKey(new Date());
     const horizonKey = addNYCDateKeyDays(todayKey, MAX_FORWARD_SEARCH_DAYS_AHEAD);
-    const [v2Snap, legacySnap, v2RulesSnap, legacyRulesSnap, suspSnap] = await Promise.all([
-      getDoc(doc(db, 'streetSegmentsV2', spot.segmentId)),
-      getDoc(doc(db, 'streetSegments', spot.segmentId)),
-      getDocs(query(
-        collection(db, 'streetSegmentsV2', spot.segmentId, 'streetRulesV2'),
-        where('supersededAt', '==', null),
-      )),
-      getDocs(query(
-        collection(db, 'streetSegments', spot.segmentId, 'streetRules'),
-        where('supersededAt', '==', null),
-      )),
-      getDocs(query(
-        collection(db, 'suspensions'),
-        where('date', '>=', todayKey),
-        where('date', '<=', horizonKey),
-        orderBy('date', 'desc'),
-      )),
-    ]);
-    const useVersioned = typeof v2Snap.exists === 'function' ? v2Snap.exists() : Boolean(v2Snap.exists);
-    const segSnap = useVersioned ? v2Snap : legacySnap;
-    const rulesSnap = useVersioned ? v2RulesSnap : legacyRulesSnap;
-
-    const loadedRules = rulesSnap.docs.map(d => ({ id: d.id, ...d.data() } as StreetRuleDoc));
-    const segment = segSnap.exists() ? segSnap.data() : null;
-    const selected = filterAuthoritativeRules(segment, loadedRules);
-    const rules = selected.ok ? selected.rules : [];
-    const presentation = classifyStreetIntelligence(selected.ok ? segment : null, rules).state;
+    const suspSnap = await getDocs(query(
+      collection(db, 'suspensions'),
+      where('date', '>=', todayKey),
+      where('date', '<=', horizonKey),
+      orderBy('date', 'desc'),
+    ));
+    let rules: StreetRuleDoc[] = [];
+    let segment: Record<string, unknown> | null = null;
+    if (Array.isArray(spot.publicRules)) {
+      rules = spot.publicRules.map((rule, index) => ({ id: `response_${index}`, ...(rule as StreetRuleDoc) }));
+      const source = typeof rules[0]?.source === 'string' ? rules[0].source : 'nyc_open_data';
+      segment = {
+        segmentId: spot.segmentId,
+        streetName: spot.segmentStreetName,
+        status: 'active',
+        source,
+        provenance: { provider: source },
+        confidenceScore: 1,
+      };
+    } else if (spot.segmentId) {
+      const [legacySnap, legacyRulesSnap] = await Promise.all([
+        getDoc(doc(db, 'streetSegments', spot.segmentId)),
+        getDocs(query(
+          collection(db, 'streetSegments', spot.segmentId, 'streetRules'),
+          where('supersededAt', '==', null),
+        )),
+      ]);
+      const loadedRules = legacyRulesSnap.docs.map(d => ({ id: d.id, ...d.data() } as StreetRuleDoc));
+      segment = legacySnap.exists() ? legacySnap.data() as Record<string, unknown> : null;
+      const selected = filterAuthoritativeRules(segment, loadedRules);
+      rules = selected.ok ? selected.rules : [];
+      segment = selected.ok ? segment : null;
+    }
+    const presentation = classifyStreetIntelligence(segment, rules).state;
     if (presentation === 'unknown' || !effectiveSide) {
       return { presentation, safeUntil: null, effectiveSide, failed: false };
     }

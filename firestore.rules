@@ -1152,14 +1152,6 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // Unpublished canonical write generations and clock probes. Admin SDK only.
-    match /curbWriteGenerations/{curbKey} {
-      allow read, write: if false;
-      match /{document=**} {
-        allow read, write: if false;
-      }
-    }
-
     // All streetSegments/streetRules mutations are admin-callable-only
     // (adminAddSegment, adminUpdateSegmentStatus, adminAddCleaningRule,
     // adminSupersedeRule, adminBackfillStreetIntelligence — all
@@ -1183,24 +1175,6 @@ service cloud.firestore {
     // Collection group rule required for collectionGroup('streetRules') queries.
     // Nested subcollection rules only cover path-based access, not cross-collection queries.
     match /{path=**}/streetRules/{ruleId} {
-      allow read: if true;
-      allow create, update, delete: if false;
-    }
-
-    // Isolated new-scheme publications. Older clients query streetSegments
-    // and collectionGroup('streetRules') only, so they cannot observe these
-    // documents. Clients may read them; writes remain Admin SDK / callable only.
-    match /streetSegmentsV2/{segmentId} {
-      allow read: if true;
-      allow create, update, delete: if false;
-
-      match /streetRulesV2/{ruleId} {
-        allow read: if true;
-        allow create, update, delete: if false;
-      }
-    }
-
-    match /{path=**}/streetRulesV2/{ruleId} {
       allow read: if true;
       allow create, update, delete: if false;
     }

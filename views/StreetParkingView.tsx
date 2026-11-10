@@ -40,6 +40,7 @@ import { countUsableStreetIntelligence, shouldCallEmptyCacheRefresh, shouldCallR
 function protocol2LocationRequest(lat: number, lng: number, accuracyMeters: number | null) {
     return {
         protocolVersion: 2 as const,
+        responseVersion: 1 as const,
         location: {
             lat,
             lng,
@@ -99,6 +100,7 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
     | 'streetIntelStatus' | 'streetIntelReason' | 'streetIntelCheckedAt'
     | 'curbProtocolVersion' | 'curbResolutionStatus' | 'curbSelector' | 'curbSideConfirmation'
     | 'sideConfidence' | 'confirmedParkingSide' | 'drivingSide'
+    | 'publicRules' | 'publicSchedules'
 > => {
     const checkedAt = new Date().toISOString();
     if (response.status === 'high_confidence') {
@@ -117,6 +119,8 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
             sideConfidence: 'high',
             confirmedParkingSide: null,
             drivingSide: null,
+            publicRules: response.publicRules ? [...response.publicRules] : null,
+            publicSchedules: response.publicSchedules ? { ...response.publicSchedules } : null,
         };
     }
     if (response.status === 'ambiguous') {
@@ -135,6 +139,8 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
             sideConfidence: 'unknown',
             confirmedParkingSide: null,
             drivingSide: null,
+            publicRules: null,
+            publicSchedules: null,
         };
     }
     if (response.status === 'side_confirmation_required') {
@@ -153,6 +159,8 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
             sideConfidence: 'unknown',
             confirmedParkingSide: null,
             drivingSide: null,
+            publicRules: null,
+            publicSchedules: null,
         };
     }
     return {
@@ -170,6 +178,8 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
         sideConfidence: 'unknown',
         confirmedParkingSide: null,
         drivingSide: null,
+        publicRules: null,
+        publicSchedules: null,
     };
 };
 
@@ -650,6 +660,7 @@ export const MapView: React.FC<MapViewProps> = ({
         const locationRequest = simulatedQa && streetIntelQaProbe
             ? {
                 protocolVersion: 2 as const,
+                responseVersion: 1 as const,
                 location: {
                     lat: userLat,
                     lng: userLng,
@@ -667,33 +678,20 @@ export const MapView: React.FC<MapViewProps> = ({
             dbg(`geohash bounds queried: ${bounds.length} ranges`);
 
             const snaps = await Promise.all(
-                bounds.flatMap(([start, end]) => ([
-                    getDocs(
-                        query(
-                            collection(db, 'streetSegments'),
-                            orderBy('geohash'),
-                            startAt(start),
-                            endAt(end),
-                        ),
+                bounds.map(([start, end]) => getDocs(
+                    query(
+                        collection(db, 'streetSegments'),
+                        orderBy('geohash'),
+                        startAt(start),
+                        endAt(end),
                     ),
-                    getDocs(
-                        query(
-                            collection(db, 'streetSegmentsV2'),
-                            orderBy('geohash'),
-                            startAt(start),
-                            endAt(end),
-                        ),
-                    ),
-                ])),
+                )),
             );
 
             const merged = new Map<string, any>();
             for (const s of snaps) {
                 for (const d of s.docs) {
-                    const collectionId = d.ref.parent.id;
-                    const row = { id: d.id, ...(d.data() as any), __segmentCollection: collectionId };
-                    const prev = merged.get(d.id);
-                    if (!prev || collectionId === 'streetSegmentsV2') merged.set(d.id, row);
+                    merged.set(d.id, { id: d.id, ...(d.data() as any) });
                 }
             }
             const allCandidates = [...merged.values()];
@@ -770,12 +768,9 @@ export const MapView: React.FC<MapViewProps> = ({
                 }
             }
 
-            const nearestCollection = nearest.__segmentCollection === 'streetSegmentsV2'
-                ? 'streetSegmentsV2' : 'streetSegments';
-            const nearestRules = nearestCollection === 'streetSegmentsV2' ? 'streetRulesV2' : 'streetRules';
             const rulesSnap = await getDocs(
                 query(
-                    collection(db, nearestCollection, nearest.id, nearestRules),
+                    collection(db, 'streetSegments', nearest.id, 'streetRules'),
                     where('supersededAt', '==', null),
                 ),
             );
@@ -2434,6 +2429,7 @@ export const MapView: React.FC<MapViewProps> = ({
                                 sideConfidence={savedSpot.sideConfidence ?? 'unknown'}
                                 confirmedParkingSide={savedSpot.confirmedParkingSide ?? null}
                                 drivingSide={savedSpot.drivingSide ?? null}
+                                resolvedPublicRules={savedSpot.publicRules ?? null}
                                 onConfirmSide={handleConfirmSide}
                                 onResult={r => {
                                     setCleaningAvailable(r.cleaningAvailable);

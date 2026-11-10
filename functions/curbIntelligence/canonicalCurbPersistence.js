@@ -5,22 +5,9 @@ const { publicCurbKey, toPublicCurb } = require('./canonicalCurbIdentity');
 const { hasPrimaryTopologyAuthority } = require('./canonicalCurbResolver');
 const { hasCanonicalCurbIdentityProof } = require('./canonicalCurbIdentityProof');
 const {
-  WRITE_AUTHORITY_SCHEME,
-  generationIdFromPersistToken,
   evaluateWriteAuthority,
   associateDocumentAuthorities,
-  bindDeadlineToFirestoreClock,
 } = require('./writeAuthority');
-const {
-  LEGACY_SEGMENT_COLLECTION,
-  LEGACY_RULES_SUBCOLLECTION,
-  FIRESTORE_MAX_WRITES_PER_TRANSACTION,
-  remapDeadlineBoundDocuments,
-  publicSegmentPath,
-  publicRulesCollectionPath,
-  legacySegmentPath,
-  legacyRulesCollectionPath,
-} = require('./publicCurbCollections');
 
 const PUBLIC_KEY = /^curb2_[a-f0-9]{32}$/;
 const RULE_SET_VERSION = /^curbrules2_[a-f0-9]{20}$/;
@@ -174,18 +161,10 @@ async function readCanonicalCache({ db, topologyResult, identityProof }) {
   const identity = topologyResult.identity;
   const key = publicCurbKey(identity);
   if (!db || !PUBLIC_KEY.test(key || '')) return { hit: false, reason: 'invalid_public_key' };
-  const [privateSnapshot, versionedSnapshot, legacySnapshot] = await Promise.all([
+  const [privateSnapshot, publicSnapshot] = await Promise.all([
     db.doc(`curbIdentities/${key}`).get(),
-    db.doc(publicSegmentPath(key)).get(),
-    db.doc(legacySegmentPath(key)).get(),
+    db.doc(`streetSegments/${key}`).get(),
   ]);
-  const identityHasAuthority = Boolean(
-    privateSnapshot?.exists
-    && typeof privateSnapshot.data === 'function'
-    && privateSnapshot.data()?.writeAuthority,
-  );
-  const useVersioned = Boolean(versionedSnapshot?.exists || identityHasAuthority);
-  const publicSnapshot = useVersioned ? versionedSnapshot : legacySnapshot;
   if (!privateSnapshot?.exists || !publicSnapshot?.exists) {
     return { hit: false, reason: 'exact_identity_missing' };
   }
@@ -215,24 +194,38 @@ async function readCanonicalCache({ db, topologyResult, identityProof }) {
   if (associated.status === 'reject') {
     return { hit: false, reason: associated.reason || 'write_authority_rejected' };
   }
-  if (associated.status === 'valid' && typeof db.collection === 'function'
-    && publicSegment?.activeRuleSetVersion) {
-    const rulesPath = useVersioned ? publicRulesCollectionPath(key) : legacyRulesCollectionPath(key);
-    const rulesSnap = await db.collection(rulesPath)
+  let publicRules = [];
+  if (typeof db.collection === 'function' && publicSegment?.activeRuleSetVersion) {
+    const rulesSnap = await db.collection(`streetSegments/${key}/streetRules`)
       .where('ruleSetVersion', '==', publicSegment.activeRuleSetVersion)
       .get();
     const ruleDocs = Array.isArray(rulesSnap?.docs) ? rulesSnap.docs : [];
-    const ruleEvals = ruleDocs.map((doc) => (
-      evaluateWriteAuthority((typeof doc.data === 'function' ? doc.data() : doc)?.writeAuthority)
-    ));
-    if (ruleEvals.length) {
+    if (associated.status === 'valid' && ruleDocs.length) {
+      const ruleEvals = ruleDocs.map((doc) => (
+        evaluateWriteAuthority((typeof doc.data === 'function' ? doc.data() : doc)?.writeAuthority)
+      ));
       const rulesAssociated = associateDocumentAuthorities([publicAuth, ...ruleEvals]);
       if (rulesAssociated.status === 'reject') {
         return { hit: false, reason: rulesAssociated.reason || 'write_authority_rejected' };
       }
     }
+    publicRules = ruleDocs.map((doc) => {
+      const data = typeof doc.data === 'function' ? doc.data() : doc;
+      return data && typeof data === 'object' ? { ...data } : null;
+    }).filter(Boolean).map((data) => {
+      const sanitized = toPublicRule(data);
+      if (sanitized) return sanitized;
+      return toPublicRule({
+        ...data,
+        category: typeof data.category === 'string' ? data.category
+          : data.type === 'streetCleaning' ? 'cleaning'
+          : data.type === 'meter' ? 'meter'
+          : data.type === 'timeLimited' ? 'timeLimit'
+          : 'restriction',
+      });
+    }).filter(Boolean);
   }
-  return { hit: true, identity: storedIdentityValue, publicSegment };
+  return { hit: true, identity: storedIdentityValue, publicSegment, publicRules };
 }
 
 function writePermitted(input = {}) {
@@ -323,113 +316,6 @@ async function runGuardedPersistTransaction(input, work) {
   return { success: true };
 }
 
-async function persistDeadlineBoundCurb(input, documents, key, rules) {
-  const FieldValue = resolveFieldValue(input);
-  const generationId = generationIdFromPersistToken(input.persistToken);
-  if (!generationId) return { success: false, reason: 'request_aborted' };
-  const bound = await bindDeadlineToFirestoreClock({
-    db: input.db,
-    FieldValue,
-    key,
-    generationId,
-    deadlineAt: input.deadlineAt,
-    now: () => Date.now(),
-  });
-  if (!bound.ok) return { success: false, reason: bound.reason || 'request_aborted' };
-  const refusedAfterProbe = refuseWrite(input);
-  if (refusedAfterProbe) return refusedAfterProbe;
-
-  const stagedDocuments = documents;
-  const publicDocuments = remapDeadlineBoundDocuments(input.db, stagedDocuments, key);
-  if (publicDocuments.length > FIRESTORE_MAX_WRITES_PER_TRANSACTION) {
-    return { success: false, reason: 'request_aborted' };
-  }
-
-  const generationRef = input.db.doc(`curbWriteGenerations/${key}/generations/${generationId}`);
-  const generationRecord = {
-    scheme: WRITE_AUTHORITY_SCHEME,
-    generationId,
-    deadlineAtMs: bound.deadlineFsMs,
-    committedAt: FieldValue.serverTimestamp(),
-    publicCurbKey: key,
-    identity: stagedDocuments.find(([ref]) => ref.path.startsWith('curbIdentities/'))?.[1] || null,
-    segment: stagedDocuments.find(([ref]) => ref.path === `${LEGACY_SEGMENT_COLLECTION}/${key}`)?.[1] || null,
-    rules: stagedDocuments
-      .filter(([ref]) => ref.path.startsWith(`${LEGACY_SEGMENT_COLLECTION}/${key}/${LEGACY_RULES_SUBCOLLECTION}/`))
-      .map(([ref, value]) => ({ path: ref.path, value })),
-  };
-
-  const phase1 = await runGuardedPersistTransaction(input, async (tx) => {
-    tx.set(generationRef, generationRecord);
-  });
-  if (!phase1.success) return { success: false, reason: phase1.reason || 'request_aborted' };
-
-  const genSnap = await generationRef.get();
-  const generated = genSnap && typeof genSnap.data === 'function' ? genSnap.data() : null;
-  const stagingAuthority = {
-    scheme: WRITE_AUTHORITY_SCHEME,
-    generationId,
-    deadlineAtMs: bound.deadlineFsMs,
-    committedAt: generated?.committedAt,
-  };
-  const eligibility = evaluateWriteAuthority(stagingAuthority, { role: 'staging' });
-  if (eligibility.status !== 'valid' || !writePermitted(input)) {
-    return { success: false, reason: 'request_aborted' };
-  }
-
-  const publicAuthority = {
-    ...stagingAuthority,
-    promotedAt: FieldValue.serverTimestamp(),
-  };
-
-  const phase2 = await runGuardedPersistTransaction(input, async (tx) => {
-    const currentSnap = await tx.get(input.db.doc(publicSegmentPath(key)));
-    const current = currentSnap && currentSnap.exists && typeof currentSnap.data === 'function'
-      ? currentSnap.data()
-      : null;
-    const currentEval = evaluateWriteAuthority(current?.writeAuthority);
-    if (currentEval.status === 'valid' && currentEval.committedAtMs > eligibility.committedAtMs) {
-      throw new Error('newer_valid_exists');
-    }
-    for (const [ref, value] of publicDocuments) {
-      tx.set(ref, {
-        ...value,
-        writeAuthority: publicAuthority,
-        updatedAt: stagingAuthority.committedAt,
-      });
-    }
-  });
-  if (phase2.success === false) {
-    return { success: false, reason: phase2.reason || 'request_aborted' };
-  }
-  if (phase2.skipped === 'newer_valid_exists') {
-    return {
-      success: true,
-      publicCurbKey: key,
-      ruleCount: rules.length,
-      published: false,
-    };
-  }
-
-  const publishedSnap = await input.db.doc(publicSegmentPath(key)).get();
-  const publishedData = publishedSnap && typeof publishedSnap.data === 'function' ? publishedSnap.data() : null;
-  const publishedEval = evaluateWriteAuthority(publishedData?.writeAuthority);
-  if (publishedEval.status !== 'valid') {
-    return {
-      success: false,
-      reason: 'request_aborted',
-      published: false,
-      storedNonAuthoritative: true,
-    };
-  }
-  return {
-    success: true,
-    publicCurbKey: key,
-    ruleCount: rules.length,
-    published: true,
-  };
-}
-
 async function persistCanonicalCurb(input = {}) {
   const { db, Timestamp, topologyResult, identityProof, selectedRules } = input || {};
   if (!hasPrimaryTopologyAuthority(topologyResult)) {
@@ -486,11 +372,17 @@ async function persistCanonicalCurb(input = {}) {
   // commit after cancellation is refused. Callers that do not supply
   // callerUid are scheduled, internal, or test paths and keep the batch
   // only when transactions are unavailable.
+  // Timed user requests carry deadlineAt / persistToken and must not publish.
+  if (Number.isFinite(input.deadlineAt) || (typeof input.persistToken === 'string' && input.persistToken)) {
+    return {
+      success: true,
+      skipped: 'user_request_not_authoritative',
+      publicCurbKey: key,
+      ruleCount: rules.length,
+    };
+  }
   const refused = refuseWrite(input);
   if (refused) return refused;
-  if (Number.isFinite(input.deadlineAt)) {
-    return persistDeadlineBoundCurb(input, documents, key, rules);
-  }
   const userInitiated = Object.prototype.hasOwnProperty.call(input || {}, 'callerUid');
   const useTransaction = typeof db.runTransaction === 'function'
     && (userInitiated || input.signal || Number.isFinite(input.deadlineAt) || typeof input.persistAllowed === 'function');
@@ -573,6 +465,7 @@ async function migrateCompatibleLegacyRules(input = {}) {
 module.exports = {
   readCanonicalCache,
   persistCanonicalCurb,
+  toPublicRule,
   migrateCompatibleLegacyRules,
   toPublicRule,
   compatibleIdentity,

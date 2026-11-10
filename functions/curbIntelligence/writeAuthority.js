@@ -146,40 +146,6 @@ function segmentAllowsAuthoritativeRead(segment) {
   return { ok: true, status: evaluation.status, generationId: evaluation.generationId || null };
 }
 
-async function bindDeadlineToFirestoreClock({
-  db,
-  FieldValue,
-  key,
-  generationId,
-  deadlineAt,
-  now,
-} = {}) {
-  const nowFn = typeof now === 'function' ? now : Date.now;
-  if (!Number.isFinite(deadlineAt) || nowFn() >= deadlineAt) {
-    return { ok: false, reason: 'request_aborted' };
-  }
-  if (!db || typeof db.doc !== 'function' || typeof FieldValue?.serverTimestamp !== 'function') {
-    return { ok: false, reason: 'clock_probe_invalid' };
-  }
-  if (typeof generationId !== 'string' || !GENERATION_ID_PATTERN.test(generationId)) {
-    return { ok: false, reason: 'malformed_authority' };
-  }
-  const probeRef = db.doc(`curbWriteGenerations/${key}/clockProbes/${generationId}`);
-  await probeRef.set({
-    sampledAt: FieldValue.serverTimestamp(),
-    scheme: WRITE_AUTHORITY_SCHEME,
-  });
-  const snap = await probeRef.get();
-  const data = snap && typeof snap.data === 'function' ? snap.data() : null;
-  const sampledAtMs = timestampToMillis(data?.sampledAt);
-  if (sampledAtMs == null) return { ok: false, reason: 'clock_probe_invalid' };
-  const remainingMs = deadlineAt - nowFn();
-  if (remainingMs <= 0) return { ok: false, reason: 'request_aborted' };
-  const deadlineFsMs = sampledAtMs + remainingMs - CLOCK_DRIFT_MARGIN_MS;
-  if (!(deadlineFsMs > sampledAtMs)) return { ok: false, reason: 'request_aborted' };
-  return { ok: true, deadlineFsMs, sampledAtMs, remainingMs };
-}
-
 module.exports = {
   WRITE_AUTHORITY_SCHEME,
   CLOCK_DRIFT_MARGIN_MS,
@@ -190,5 +156,4 @@ module.exports = {
   associateDocumentAuthorities,
   filterAuthoritativeRules,
   segmentAllowsAuthoritativeRead,
-  bindDeadlineToFirestoreClock,
 };

@@ -156,7 +156,7 @@ describe('runCanonicalCurbOrchestrator', () => {
     });
     expect(deps.resolveCanonicalCurb).toHaveBeenCalledOnce();
     expect(deps.loadCanonicalRules).toHaveBeenCalledOnce();
-    expect(deps.persistCanonicalCurb).toHaveBeenCalledOnce();
+    expect(deps.persistCanonicalCurb).not.toHaveBeenCalled();
     expect(JSON.stringify(result)).not.toMatch(/1000000001|global|physical|b5sc/);
   });
 

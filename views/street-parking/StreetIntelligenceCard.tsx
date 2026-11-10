@@ -23,6 +23,7 @@ interface Props {
   sideConfidence: 'high' | 'low' | 'unknown';
   confirmedParkingSide: string | null;
   drivingSide?: 'left' | 'right' | null;
+  resolvedPublicRules?: ReadonlyArray<Record<string, unknown>> | null;
   onConfirmSide: (side: string) => void;
   onResult?: (result: StreetIntelligenceCardResult) => void;
 }
@@ -61,7 +62,7 @@ const SIDE_KEY_MAP: Record<string, string> = {
 
 export const StreetIntelligenceCard = ({
   segmentId, parkingSide, streetName,
-  sideConfidence, confirmedParkingSide, drivingSide, onConfirmSide,
+  sideConfidence, confirmedParkingSide, drivingSide, resolvedPublicRules, onConfirmSide,
   onResult,
 }: Props) => {
   useLang();
@@ -114,42 +115,56 @@ export const StreetIntelligenceCard = ({
         const todayKey = toNYCDateKey(new Date());
         const horizonKey = addNYCDateKeyDays(todayKey, MAX_FORWARD_SEARCH_DAYS_AHEAD);
 
-        const [v2Snap, legacySnap, suspSnap] = await Promise.all([
-          getDoc(doc(db, 'streetSegmentsV2', segmentId)),
-          getDoc(doc(db, 'streetSegments', segmentId)),
+        const suspSnap = (await Promise.all([
           getDocs(query(
             collection(db, 'suspensions'),
             where('date', '>=', todayKey),
             where('date', '<=', horizonKey),
             orderBy('date', 'desc'),
           )),
-        ]);
+        ]))[0];
         if (cancelled) return;
 
-        const useVersioned = typeof v2Snap.exists === 'function' ? v2Snap.exists() : Boolean(v2Snap.exists);
-        const segSnap = useVersioned ? v2Snap : legacySnap;
-        const segmentCollection = useVersioned ? 'streetSegmentsV2' : 'streetSegments';
-        const rulesCollection = useVersioned ? 'streetRulesV2' : 'streetRules';
-        const segment = (typeof segSnap.exists === 'function' ? segSnap.exists() : Boolean(segSnap.exists))
-          ? segSnap.data() : null;
-        const activeRuleSetVersion = segment?.protocolVersion === 2
-          ? segment.activeRuleSetVersion : null;
-        const rulesSnap = await getDocs(activeRuleSetVersion
-          ? query(
-            collection(db, segmentCollection, segmentId, rulesCollection),
-            where('ruleSetVersion', '==', activeRuleSetVersion),
-          )
-          : query(
-            collection(db, segmentCollection, segmentId, rulesCollection),
-            where('supersededAt', '==', null),
-          ));
-        if (cancelled) return;
-        const loadedRules = rulesSnap.docs
-          .map(d => ({ id: d.id, ...d.data() } as StreetRuleDoc & { ruleSetVersion?: string }))
-          .filter(rule => !activeRuleSetVersion || rule.ruleSetVersion === activeRuleSetVersion);
-        const selected = filterAuthoritativeRules(segment, loadedRules);
-        const rules = selected.ok ? selected.rules : [];
-        const authoritativeSegment = selected.ok ? segment : null;
+        let rules: Array<StreetRuleDoc & { ruleSetVersion?: string }> = [];
+        let authoritativeSegment: Record<string, unknown> | null = null;
+        if (Array.isArray(resolvedPublicRules)) {
+          rules = resolvedPublicRules.map((rule, index) => ({
+            id: `response_${index}`,
+            ...(rule as StreetRuleDoc),
+          }));
+          const source = typeof rules[0]?.source === 'string' ? rules[0].source : 'nyc_open_data';
+          authoritativeSegment = {
+            segmentId,
+            streetName,
+            status: 'active',
+            source,
+            provenance: { provider: source },
+            confidenceScore: 1,
+          };
+        } else {
+          const segSnap = await getDoc(doc(db, 'streetSegments', segmentId));
+          if (cancelled) return;
+          const segment = (typeof segSnap.exists === 'function' ? segSnap.exists() : Boolean(segSnap.exists))
+            ? segSnap.data() : null;
+          const activeRuleSetVersion = segment?.protocolVersion === 2
+            ? segment.activeRuleSetVersion : null;
+          const rulesSnap = await getDocs(activeRuleSetVersion
+            ? query(
+              collection(db, 'streetSegments', segmentId, 'streetRules'),
+              where('ruleSetVersion', '==', activeRuleSetVersion),
+            )
+            : query(
+              collection(db, 'streetSegments', segmentId, 'streetRules'),
+              where('supersededAt', '==', null),
+            ));
+          if (cancelled) return;
+          const loadedRules = rulesSnap.docs
+            .map(d => ({ id: d.id, ...d.data() } as StreetRuleDoc & { ruleSetVersion?: string }))
+            .filter(rule => !activeRuleSetVersion || rule.ruleSetVersion === activeRuleSetVersion);
+          const selected = filterAuthoritativeRules(segment, loadedRules);
+          rules = selected.ok ? selected.rules : [];
+          authoritativeSegment = selected.ok ? segment : null;
+        }
         cdbg(`streetRules count: ${rules.length}`);
         const nextPresentation = classifyStreetIntelligence(authoritativeSegment, rules);
         cdbg(`presentation state: ${nextPresentation.state} | source: ${nextPresentation.source ?? 'none'}`);
@@ -235,7 +250,7 @@ export const StreetIntelligenceCard = ({
     load();
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [segmentId, effectiveSide]);
+  }, [segmentId, effectiveSide, resolvedPublicRules]);
 
   const debugBlock = isDebugMode && debugLines.length > 0 ? (
     <div style={{ marginTop: 8, padding: '6px 8px', background: 'rgba(0,0,0,0.85)', borderRadius: 8, border: '1px solid #1e75ff55' }}>

@@ -579,3 +579,30 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         expect(text).not.toContain('Parking information unavailable');
     });
 });
+
+
+describe('StreetIntelligenceCard — A1 response-provided rules', () => {
+    it('renders schedules from the callable payload when Firestore has no segment', async () => {
+        segmentExists = false;
+        streetRuleRows = [];
+        const { renderer } = await renderCard({
+            parkingSide: 'West',
+            sideConfidence: 'high',
+            resolvedPublicRules: [MELVILLE_RULE],
+        });
+        const text = renderedText(renderer);
+        expect(text).toContain('Safe Until');
+        expect(text).not.toContain('Parking information unavailable');
+    });
+
+    it('degrades to unknown instead of inventing a schedule when neither payload nor Firestore has rules', async () => {
+        segmentExists = false;
+        streetRuleRows = [];
+        const { renderer } = await renderCard({
+            parkingSide: 'West',
+            sideConfidence: 'high',
+        });
+        const text = renderedText(renderer);
+        expect(text).not.toContain('Safe Until');
+    });
+});

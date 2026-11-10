@@ -46,6 +46,8 @@ export interface SavedSpot {
   sideConfidence: SideConfidence;
   confirmedParkingSide: string | null;
   drivingSide?: 'left' | 'right' | null;
+  publicRules?: import('./canonicalCurbClient').CanonicalPublicRule[] | null;
+  publicSchedules?: import('./canonicalCurbClient').CanonicalPublicSchedules | null;
 }
 
 interface MinStorage {

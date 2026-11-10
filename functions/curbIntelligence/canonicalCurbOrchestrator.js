@@ -19,7 +19,12 @@ const { isSideConfirmationEnabled } = require('./sideConfirmation');
 const { SIDE_CONFIRMATION_TOKEN_MAX_LENGTH } = require('./sideConfirmationToken');
 const { applyVisualCurbSelection } = require('./visualCurbSelection');
 const { loadCanonicalRules } = require('./canonicalRuleSources');
-const { readCanonicalCache, persistCanonicalCurb } = require('./canonicalCurbPersistence');
+const { readCanonicalCache } = require('./canonicalCurbPersistence');
+const {
+  buildHighConfidenceResponse,
+  requestIncludesExtendedResponse,
+  selectedHasUnresolvedConflicts,
+} = require('./canonicalCurbPublicResponse');
 const {
   proveCanonicalCurbIdentity,
   hasCanonicalCurbIdentityProof,
@@ -74,15 +79,11 @@ function emit(telemetry, event, payload) {
   try { telemetry?.emit?.(event, payload); } catch { /* telemetry is fail-soft */ }
 }
 
-function highResponse(publicCurb, cleaningAvailable) {
-  return {
-    protocolVersion: 2,
-    status: 'high_confidence',
-    segmentId: publicCurb.segmentId,
-    streetName: publicCurb.streetName,
-    sideLabel: publicCurb.sideLabel,
-    ruleSummary: { cleaningAvailable: cleaningAvailable === true },
-  };
+function highResponse(publicCurb, selected, options = {}) {
+  return buildHighConfidenceResponse(publicCurb, selected, {
+    cacheHit: options.cacheHit === true,
+    includeExtended: options.includeExtended === true,
+  });
 }
 
 function emptySelected() {
@@ -98,7 +99,7 @@ async function loadSelectedRules(identity, dependencies) {
   try {
     rulesResult = await loadRules(identity, dependencies);
   } catch {
-    rulesResult = null;
+    return { aborted: true };
   }
   if (dependencies.signal?.aborted || dependencies.resolutionClosed?.()) return { aborted: true };
   const dotComplete = rulesResult?.sources?.dot?.state === 'complete';
@@ -115,27 +116,6 @@ async function loadSelectedRules(identity, dependencies) {
     });
   }
   return { aborted: false, dotComplete, selectedRules };
-}
-
-async function persistSelected(resolution, identityProof, selectedRules, dependencies) {
-  const persist = dependencies.persistCanonicalCurb || persistCanonicalCurb;
-  try {
-    return await persist({
-      db: dependencies.db,
-      Timestamp: dependencies.Timestamp,
-      FieldValue: dependencies.FieldValue,
-      topologyResult: resolution,
-      identityProof,
-      selectedRules,
-      signal: dependencies.signal,
-      deadlineAt: dependencies.deadlineAt,
-      persistToken: dependencies.persistToken,
-      persistAllowed: dependencies.persistAllowed,
-      ...(typeof dependencies.callerUid === 'string' ? { callerUid: dependencies.callerUid } : {}),
-    });
-  } catch {
-    return { success: false };
-  }
 }
 
 async function execute(request, dependencies) {
@@ -267,39 +247,45 @@ async function execute(request, dependencies) {
       protocolVersion: 2, reason: 'cache_curb_mismatch',
     });
   }
+  const includeExtended = requestIncludesExtendedResponse(request);
   if (cache?.hit && cache.publicSegment) {
     const summary = cache.publicSegment.ruleSummary || {};
-    if (summary.cleaningAvailable !== true && summary.rulesResolved !== true) {
+    const cachedRules = Array.isArray(cache.publicRules) ? cache.publicRules : [];
+    const cacheComplete = cachedRules.length > 0
+      || summary.cleaningAvailable === true
+      || summary.rulesResolved === true;
+    if (!cacheComplete) {
       const loaded = await loadSelectedRules(identity, dependencies);
       if (loaded.aborted) return unsupported('source_unavailable');
       if (loaded.dotComplete) {
-        const persisted = await persistSelected(resolution, identityProof, loaded.selectedRules, dependencies);
-        if (dependencies.signal?.aborted || dependencies.resolutionClosed?.()) return unsupported('source_unavailable');
-        if (persisted?.success) {
-          emit(dependencies.telemetry, 'curb_resolution_high', {
-            protocolVersion: 2, cacheHit: true, latencyMs: Date.now() - startedAt,
-          });
-          return highResponse(publicCurb, Boolean(loaded.selectedRules.cleaning));
+        if (selectedHasUnresolvedConflicts(loaded.selectedRules)) {
+          return unsupported('source_unavailable');
         }
+        if (dependencies.signal?.aborted || dependencies.resolutionClosed?.()) return unsupported('source_unavailable');
+        emit(dependencies.telemetry, 'curb_resolution_high', {
+          protocolVersion: 2, cacheHit: true, latencyMs: Date.now() - startedAt,
+        });
+        return highResponse(publicCurb, loaded.selectedRules, { cacheHit: true, includeExtended });
       }
+    } else if (cachedRules.length === 0 && summary.cleaningAvailable !== true && summary.rulesResolved !== true) {
+      return unsupported('source_unavailable');
+    } else {
+      emit(dependencies.telemetry, 'curb_resolution_high', {
+        protocolVersion: 2, cacheHit: true, latencyMs: Date.now() - startedAt,
+      });
+      return highResponse(cache.publicSegment, cachedRules, { cacheHit: true, includeExtended });
     }
-    emit(dependencies.telemetry, 'curb_resolution_high', {
-      protocolVersion: 2, cacheHit: true, latencyMs: Date.now() - startedAt,
-    });
-    return highResponse(cache.publicSegment, cache.publicSegment.ruleSummary?.cleaningAvailable);
   }
 
   const loaded = await loadSelectedRules(identity, dependencies);
   if (loaded.aborted) return unsupported('source_unavailable');
   const selectedRules = loaded.selectedRules;
   if (dependencies.signal?.aborted || dependencies.resolutionClosed?.()) return unsupported('source_unavailable');
-  const persisted = await persistSelected(resolution, identityProof, selectedRules, dependencies);
-  if (dependencies.signal?.aborted || dependencies.resolutionClosed?.()) return unsupported('source_unavailable');
-  if (!persisted?.success) return unsupported('source_unavailable');
+  if (selectedHasUnresolvedConflicts(selectedRules)) return unsupported('source_unavailable');
   emit(dependencies.telemetry, 'curb_resolution_high', {
     protocolVersion: 2, cacheHit: false, latencyMs: Date.now() - startedAt,
   });
-  return highResponse(publicCurb, Boolean(selectedRules.cleaning));
+  return highResponse(publicCurb, selectedRules, { cacheHit: false, includeExtended });
 }
 
 async function boundedExecute(request, dependencies) {
