@@ -18,7 +18,11 @@ const index = require('./index.js');
 const db = getFirestore();
 const CANCEL_SA = 'parqueen-cancel@parkqueen-46475363-ccf36.iam.gserviceaccount.com';
 const REGION = 'us-central1';
-const FUNCTIONS_BASE = `http://127.0.0.1:5001/${PROJECT_ID}/${REGION}`;
+const FUNCTIONS_HOST = process.env.FIREBASE_FUNCTIONS_EMULATOR_HOST || '127.0.0.1:5001';
+if (!/^127\.0\.0\.1:\d+$/.test(FUNCTIONS_HOST)) {
+  throw new Error('FIREBASE_FUNCTIONS_EMULATOR_HOST must be a loopback Functions emulator');
+}
+const FUNCTIONS_BASE = `http://${FUNCTIONS_HOST}/${PROJECT_ID}/${REGION}`;
 const FINGERPRINT = 1_700_000_000_000;
 
 let sequence = 0;
@@ -88,7 +92,7 @@ describe('cancelClaim callable export', () => {
     expect(slice).toContain(`serviceAccount: '${CANCEL_SA}'`);
     expect(slice).toContain('cancelClaimHandler(request)');
     expect(slice).not.toContain('request.data');
-    expect(indexSrc.match(/parqueen-cancel@parkqueen-46475363-ccf36\.iam\.gserviceaccount\.com/g)).toHaveLength(1);
+    expect(indexSrc.match(/parqueen-cancel@parkqueen-46475363-ccf36\.iam\.gserviceaccount\.com/g)).toHaveLength(5);
   });
 
   it('leaves sendMessage App Check and its runtime identity unchanged', () => {

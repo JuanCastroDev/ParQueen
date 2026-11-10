@@ -458,6 +458,7 @@ describe('cancelClaim suspension boundary', () => {
         collection(name) {
           return { doc(id) { return ref(`${path}/${name}/${id}`); } };
         },
+        async get() { return { exists: false, data: () => undefined }; },
       };
     }
     function txFor(docs) {
@@ -478,6 +479,7 @@ describe('cancelClaim suspension boundary', () => {
     let firstOutcome = null;
     let scratchStatus = null;
     const replayDb = {
+      doc(path) { return ref(path); },
       collection(name) {
         return { doc(id) { return ref(`${name}/${id}`); } };
       },

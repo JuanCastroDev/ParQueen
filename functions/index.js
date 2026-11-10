@@ -1226,6 +1226,15 @@ exports.moderateAvatarUpload = onObjectFinalized(
     const moderationRef  = db.collection("avatarModeration").doc(uid);
     const pendingRef     = db.doc(`users/${uid}/private/avatar`);
     const bucket         = getStorage().bucket(event.data.bucket);
+    try {
+      if ((await db.doc(`accountLifecycle/${uid}`).get()).exists) {
+        await bucket.file(filePath).delete({ ignoreNotFound: true }).catch(() => {});
+        return;
+      }
+    } catch (err) {
+      console.error(`[moderateAvatarUpload] ${maskedUid} fence read failed`);
+      return;
+    }
     const sourceFile     = bucket.file(filePath);
     const candidatePath  = `avatarCandidates/${uid}/${uploadId}.webp`;
     const candidateFile  = bucket.file(candidatePath);
@@ -2237,6 +2246,10 @@ exports.claimUsername = onCall(
     try {
       await db.runTransaction(async (tx) => {
         const existing = await tx.get(usernameRef);
+        const lifeSnap = await tx.get(db.doc(`accountLifecycle/${uid}`));
+        if (lifeSnap.exists) {
+          throw new HttpsError('permission-denied', 'Product access is not available.');
+        }
         if (existing.exists) {
           if (existing.data().uid !== uid) {
             // Belongs to a different user — reject normally
@@ -2394,16 +2407,18 @@ exports.claimSpot = onCall(
   {
     region: 'us-central1',
     enforceAppCheck: true,
+    serviceAccount: 'parqueen-cancel@parkqueen-46475363-ccf36.iam.gserviceaccount.com',
   },
   (request) => claimSpotHandler(request)
 );
 
-// Prepare and revoke are the intent protocol around claimSpot. Same region
-// and App Check switch. No service account is added. Neither export is deployed.
+// Prepare and revoke are the intent protocol around claimSpot. Same region,
+// App Check switch, and existing cancel runtime identity. No new account.
 exports.prepareClaimIntent = onCall(
   {
     region: 'us-central1',
     enforceAppCheck: true,
+    serviceAccount: 'parqueen-cancel@parkqueen-46475363-ccf36.iam.gserviceaccount.com',
   },
   (request) => prepareClaimIntentHandler(request)
 );
@@ -2412,6 +2427,7 @@ exports.revokeClaimIntent = onCall(
   {
     region: 'us-central1',
     enforceAppCheck: true,
+    serviceAccount: 'parqueen-cancel@parkqueen-46475363-ccf36.iam.gserviceaccount.com',
   },
   (request) => revokeClaimIntentHandler(request)
 );
@@ -2424,6 +2440,7 @@ exports.finderCancelSpot = onCall(
   {
     region: 'us-central1',
     enforceAppCheck: true,
+    serviceAccount: 'parqueen-cancel@parkqueen-46475363-ccf36.iam.gserviceaccount.com',
   },
   (request) => finderCancelSpotHandler(request)
 );
@@ -3332,53 +3349,25 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
     await checkRateLimit(uid, 'deleteAccount', { limit: 3, windowSec: 86400 });
 
     const jobRef = db.doc(`accountDeletionJobs/${uid}`);
+    const lifecycleRef = db.doc(`accountLifecycle/${uid}`);
     const maskedUid = uid.slice(0, 4) + '***';
 
-    // ── Atomic lock ───────────────────────────────────────────────────────────
-    // Transaction prevents two concurrent callers from both entering the deletion body.
-    // A fresh 'running' lease (< 10 min) is an active worker — reject the second caller.
-    // A stale lease or 'failed' state → claim the job and resume.
+    // A completed job is terminal. This read does not create a fence.
+    // A fresh running lease rejects the second caller before any fence write.
+    const preview = await jobRef.get();
+    if (preview.exists && (preview.data() || {}).state === 'completed') {
+        return { alreadyCompleted: true };
+    }
+    if (preview.exists && (preview.data() || {}).state === 'running') {
+        const leaseSeconds = preview.data().leaseAt && preview.data().leaseAt.seconds
+            ? preview.data().leaseAt.seconds : 0;
+        if ((Date.now() / 1000) - leaseSeconds < 600) {
+            throw new HttpsError('already-exists', 'A deletion request is already in progress.');
+        }
+    }
+
     let alreadyDone = false;
     let doneSteps = {};
-
-    await db.runTransaction(async (tx) => {
-        const snap = await tx.get(jobRef);
-        if (snap.exists) {
-            const job = snap.data();
-            if (job.state === 'completed') {
-                alreadyDone = true;
-                return;
-            }
-            if (job.state === 'running') {
-                const leaseAge = (Date.now() / 1000) - job.leaseAt.seconds;
-                if (leaseAge < 600) {
-                    throw new HttpsError('already-exists', 'A deletion request is already in progress.');
-                }
-                // Stale lease — previous worker died; take over and resume
-            }
-            // 'failed' or stale 'running' — resume from where we left off
-            doneSteps = job.steps || {};
-            tx.update(jobRef, {
-                state: 'running',
-                leaseAt: Timestamp.now(),
-                currentStep: null,
-                lastError: null,
-                attemptNumber: (job.attemptNumber || 0) + 1,
-            });
-        } else {
-            tx.set(jobRef, {
-                state: 'running',
-                leaseAt: Timestamp.now(),
-                startedAt: Timestamp.now(),
-                currentStep: null,
-                lastError: null,
-                attemptNumber: 1,
-                steps: {},
-            });
-        }
-    });
-
-    if (alreadyDone) return { alreadyCompleted: true };
 
     // ── Admin-lifecycle serialization ──────────────────────────────────────────
     // Shares adminRoleLock/singleton with setStaffRole so account deletion is
@@ -3490,17 +3479,82 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
             } while (pageToken);
 
             if (otherActiveAdmins === 0) {
-                await jobRef.update({
-                    state: 'failed',
-                    currentStep: null,
-                    lastError: 'adminSafetyCheck: cannot delete the last active administrator',
-                }).catch(() => {});
+                const existingJob = await jobRef.get();
+                if (existingJob.exists) {
+                    await jobRef.update({
+                        state: 'failed',
+                        currentStep: null,
+                        lastError: 'adminSafetyCheck: cannot delete the last active administrator',
+                    }).catch(() => {});
+                }
                 throw new HttpsError(
                     'failed-precondition',
                     'You are the last active administrator. Add or promote another administrator before deleting this account.'
                 );
             }
         }
+
+        // The fence and the accepted job commit together, after the last-admin
+        // rejection and before any profile cleanup. A retry does not delete a
+        // fence that already exists. A rejected request never reaches here.
+        let acceptance = 'proceed';
+        await db.runTransaction(async (tx) => {
+            const lockSnap = await tx.get(lockRef);
+            const jobSnap = await tx.get(jobRef);
+            const lifeSnap = await tx.get(lifecycleRef);
+            if (!lockSnap.exists || (lockSnap.data() || {}).ownerOperationId !== deletionOperationId) {
+                acceptance = 'lost';
+                return;
+            }
+            const job = jobSnap.exists ? (jobSnap.data() || {}) : null;
+            if (job && job.state === 'completed') {
+                alreadyDone = true;
+                return;
+            }
+            if (job && job.state === 'running') {
+                const leaseSeconds = job.leaseAt && job.leaseAt.seconds ? job.leaseAt.seconds : 0;
+                if ((Date.now() / 1000) - leaseSeconds < 600) {
+                    acceptance = 'busy';
+                    return;
+                }
+            }
+            if (job) doneSteps = job.steps || {};
+            const now = Timestamp.now();
+            if (!lifeSnap.exists) {
+                tx.set(lifecycleRef, {
+                    decision: 'delete',
+                    fenceGeneration: 1,
+                    fencedAt: now,
+                    source: 'deleteAccount',
+                });
+            }
+            if (!job) {
+                tx.set(jobRef, {
+                    state: 'running',
+                    leaseAt: now,
+                    startedAt: now,
+                    currentStep: null,
+                    lastError: null,
+                    attemptNumber: 1,
+                    steps: {},
+                });
+            } else {
+                tx.update(jobRef, {
+                    state: 'running',
+                    leaseAt: now,
+                    currentStep: null,
+                    lastError: null,
+                    attemptNumber: (job.attemptNumber || 0) + 1,
+                });
+            }
+        });
+        if (acceptance === 'busy') {
+            throw new HttpsError('already-exists', 'A deletion request is already in progress.');
+        }
+        if (acceptance === 'lost') {
+            throw new HttpsError('aborted', 'Lock ownership lost before deletion was committed; retry.');
+        }
+        if (alreadyDone) return { alreadyCompleted: true };
 
         // ── True cursor-based paginated delete ────────────────────────────────
         // Does NOT load the entire result set into memory. Uses startAfter cursor to

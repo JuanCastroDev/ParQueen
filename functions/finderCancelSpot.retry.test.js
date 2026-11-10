@@ -12,6 +12,9 @@ function ref(path) {
     collection(name) {
       return { doc: (id) => ref(`${path}/${name}/${id}`) };
     },
+    async get() {
+      return { exists: false, data: () => undefined };
+    },
   };
 }
 
