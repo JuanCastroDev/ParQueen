@@ -2913,6 +2913,7 @@ exports.setStaffRole = onCall(
     const actorUid = request.auth.uid;
     const lockRef = db.doc('adminRoleLock/singleton');
     const opRef = db.doc(`adminRoleOperations/${operationId}`);
+    const lockOperationId = `${operationId}:${randomUUID()}`;
 
     // Lease duration: this Function's own timeout is 60s (Cloud Functions v2
     // default, unchanged). A lease shorter than that would not structurally
@@ -2943,11 +2944,10 @@ exports.setStaffRole = onCall(
         if (snap.exists) {
           const data = snap.data();
           const expired = !data.leaseExpiresAt || data.leaseExpiresAt.toMillis() <= now.toMillis();
-          const sameOwner = data.ownerOperationId === operationId;
-          if (!expired && !sameOwner) return false;
+          if (!expired) return false;
         }
         tx.set(lockRef, {
-          ownerOperationId: operationId,
+          ownerOperationId: lockOperationId,
           acquiredAt: now,
           leaseExpiresAt: Timestamp.fromMillis(now.toMillis() + LEASE_MS),
         });
@@ -2968,10 +2968,10 @@ exports.setStaffRole = onCall(
     async function renewLockOrThrow() {
       const stillOwned = await db.runTransaction(async (tx) => {
         const snap = await tx.get(lockRef);
-        if (!snap.exists || snap.data().ownerOperationId !== operationId) return false;
+        if (!snap.exists || snap.data().ownerOperationId !== lockOperationId) return false;
         const now = Timestamp.now();
         tx.set(lockRef, {
-          ownerOperationId: operationId,
+          ownerOperationId: lockOperationId,
           acquiredAt: snap.data().acquiredAt,
           leaseExpiresAt: Timestamp.fromMillis(now.toMillis() + LEASE_MS),
         });
@@ -3122,7 +3122,7 @@ exports.setStaffRole = onCall(
       await db.runTransaction(async (tx) => {
         const snap = await tx.get(lockRef);
         if (!snap.exists) return;
-        if (snap.data().ownerOperationId !== operationId) return;
+        if (snap.data().ownerOperationId !== lockOperationId) return;
         tx.delete(lockRef);
       }).catch(() => {});
     }
@@ -3393,12 +3393,12 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
     // 60s (confirmed against the deployed config), so a 120s lease (2x margin)
     // guarantees any lease acquired or renewed at any point in this invocation's
     // life outlives the latest possible moment Cloud Functions could kill it.
-    // Deterministic per-uid, not random: at most one deletion can legitimately
-    // be in flight for a given uid at a time (already enforced by the
-    // accountDeletionJobs lease above), so a crash-and-resume attempt for the
-    // SAME uid naturally re-identifies as the same lock owner and can reclaim
-    // an unexpired lease immediately rather than needing to wait it out.
-    const deletionOperationId = `delete_${uid}`;
+    // The logical deletion identity stays delete_${uid}. Lock ownership is a
+    // different value for every invocation. A second live call for the same uid
+    // must not renew or release the first call's lock. Crash recovery waits
+    // until the recorded lease expires, then a new invocation may acquire it.
+    const deletionIdentity = `delete_${uid}`;
+    const deletionOperationId = `${deletionIdentity}:${randomUUID()}`;
     const lockRef = db.doc('adminRoleLock/singleton');
     const LOCK_LEASE_MS = 120000;
     const LOCK_ACQUIRE_ATTEMPTS = 6;
@@ -3431,8 +3431,7 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
             if (snap.exists) {
                 const data = snap.data();
                 const expired = !data.leaseExpiresAt || data.leaseExpiresAt.toMillis() <= now.toMillis();
-                const sameOwner = data.ownerOperationId === deletionOperationId;
-                if (!expired && !sameOwner) return false;
+                if (!expired) return false;
             }
             tx.set(lockRef, {
                 ownerOperationId: deletionOperationId,
