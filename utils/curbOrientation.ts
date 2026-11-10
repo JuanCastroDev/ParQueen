@@ -1,3 +1,6 @@
+// Compare the unrounded bearing to this limit. Exactly 20.0 degrees stays
+// axis-aligned; only a strictly greater offset is oblique. Round solely for
+// human-facing presentation, never for the boundary itself.
 export const ALIGNED_AXIS_LIMIT_DEGREES = 20;
 
 export const COMPASS = [
@@ -16,9 +19,21 @@ const AXIS: Readonly<Record<string, 'east-west' | 'north-south'>> = {
   North: 'east-west', South: 'east-west', East: 'north-south', West: 'north-south',
 };
 
+export function normalizeBearing(bearing: number): number | null {
+  if (!Number.isFinite(bearing)) return null;
+  return ((bearing % 360) + 360) % 360;
+}
+
 export function axisOffset(bearing: number): number {
-  const quadrant = bearing % 90;
+  const normalized = normalizeBearing(bearing);
+  if (normalized === null) return Number.NaN;
+  const quadrant = normalized % 90;
   return Math.min(quadrant, 90 - quadrant);
+}
+
+export function presentationBearingDegrees(bearing: number): number | null {
+  const normalized = normalizeBearing(bearing);
+  return normalized === null ? null : Math.round(normalized) % 360;
 }
 
 export function compassLabel(bearing: number): CurbCardinal {
@@ -26,9 +41,10 @@ export function compassLabel(bearing: number): CurbCardinal {
 }
 
 export function sidesForBearing(bearing: number): Readonly<{ LEFT: CurbCardinal; RIGHT: CurbCardinal }> | null {
-  if (!Number.isInteger(bearing) || bearing < 0 || bearing > 359) return null;
-  const left = compassLabel((bearing + 270) % 360);
-  const right = compassLabel((bearing + 90) % 360);
+  const normalized = normalizeBearing(bearing);
+  if (normalized === null) return null;
+  const left = compassLabel((normalized + 270) % 360);
+  const right = compassLabel((normalized + 90) % 360);
   if (OPPOSITE[left] !== right) return null;
   return { LEFT: left, RIGHT: right };
 }

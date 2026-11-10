@@ -14,9 +14,12 @@ const OPPOSITE = Object.freeze({
 const AXIS = Object.freeze({
   North: 'east-west', South: 'east-west', East: 'north-south', West: 'north-south',
 });
-// Streets within 20 degrees of east-west or north-south keep the original
-// axis-aligned drawing. A valid tangent beyond that limit is drawn obliquely.
-// A missing or zero-length tangent stays ineligible.
+// Streets whose unrounded axis offset is at most 20 degrees of east-west or
+// north-south keep the original axis-aligned drawing. Exactly 20.0 degrees
+// stays axis-aligned (the conservative historical boundary: refuse only when
+// the unrounded offset is greater than 20). A valid tangent beyond that limit
+// is drawn obliquely. A missing or zero-length tangent stays ineligible.
+// Rounding is used only for presented bearingDegrees, never for the boundary.
 const PRESENTATION_AXIS_LIMIT_DEGREES = 20;
 
 function isSideConfirmationEnabled(dependencies, env = process.env) {
@@ -25,13 +28,22 @@ function isSideConfirmationEnabled(dependencies, env = process.env) {
   return env?.CURB_SIDE_CONFIRMATION === 'on';
 }
 
-function roundedRoadBearing(tangent) {
+function rawRoadBearing(tangent) {
   const eastMeters = tangent?.eastMeters;
   const northMeters = tangent?.northMeters;
   if (!Number.isFinite(eastMeters) || !Number.isFinite(northMeters)) return null;
   if (Math.hypot(eastMeters, northMeters) < 1e-6) return null;
   const raw = Math.atan2(eastMeters, northMeters) * 180 / Math.PI;
-  return (Math.round((raw % 360 + 360) % 360)) % 360;
+  return (raw % 360 + 360) % 360;
+}
+
+function presentationBearingDegrees(bearing) {
+  return (Math.round((bearing % 360 + 360) % 360)) % 360;
+}
+
+function roundedRoadBearing(tangent) {
+  const bearing = rawRoadBearing(tangent);
+  return bearing === null ? null : presentationBearingDegrees(bearing);
 }
 
 function axisOffset(bearing) {
@@ -44,13 +56,14 @@ function compassLabel(bearing) {
 }
 
 function orientationForTangent(tangent) {
-  const bearing = roundedRoadBearing(tangent);
+  const bearing = rawRoadBearing(tangent);
   if (bearing === null) return null;
   const left = compassLabel((bearing + 270) % 360);
   const right = compassLabel((bearing + 90) % 360);
   if (OPPOSITE[left] !== right) return null;
   const sides = Object.freeze({ LEFT: left, RIGHT: right });
-  if (axisOffset(bearing) <= PRESENTATION_AXIS_LIMIT_DEGREES) {
+  const offset = axisOffset(bearing);
+  if (offset <= PRESENTATION_AXIS_LIMIT_DEGREES) {
     const axis = Math.min(Math.abs(bearing - 90), Math.abs(bearing - 270))
       <= PRESENTATION_AXIS_LIMIT_DEGREES ? 'east-west' : 'north-south';
     if (AXIS[left] !== axis) return null;
@@ -59,6 +72,9 @@ function orientationForTangent(tangent) {
   return Object.freeze({
     north: 'up',
     axis: 'oblique',
+    // Unrounded bearing is compared to the 20° boundary and sent to the client
+    // so 20.1° cannot be reclassified as axis-aligned after rounding.
+    // presentationBearingDegrees() is the display-only rounded value.
     bearingDegrees: bearing,
     sides,
   });
@@ -175,6 +191,8 @@ module.exports = {
   firstSideConfirmationEligibilityFailure,
   isSideConfirmationEnabled,
   orientationForTangent,
+  rawRoadBearing,
+  presentationBearingDegrees,
   sideConfirmationEligible,
   stableSideAuthorityDigest,
 };
