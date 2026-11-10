@@ -6,23 +6,31 @@ import {
   obliqueCardinalsMatch,
   OPPOSITE,
 } from '../../utils/curbOrientation';
+import { streetIntelClientFeaturesEnabled } from '../../utils/streetIntelClientFeatures';
 
 type Props = Readonly<{
   confirmation: SideConfirmation;
   onSelect: (candidateToken: string) => void;
   onCancel: () => void;
   loading: boolean;
+  allowDiagonalCurbDrawing?: boolean;
 }>;
 
 const AXIS: Readonly<Record<string, string>> = {
   North: 'east-west', South: 'east-west', East: 'north-south', West: 'north-south',
 };
 
-export function curbCrossSectionReady(confirmation: SideConfirmation): boolean {
+export function curbCrossSectionReady(
+  confirmation: SideConfirmation,
+  options: Readonly<{ allowDiagonalCurbDrawing?: boolean }> = {},
+): boolean {
   const [first, second] = confirmation.curbs;
   if (confirmation.orientation.north !== 'up' || first.token === second.token) return false;
   if (OPPOSITE[first.cardinal] !== second.cardinal) return false;
   if (confirmation.orientation.axis === 'oblique') {
+    const allowDiagonal = options.allowDiagonalCurbDrawing ?? streetIntelClientFeaturesEnabled();
+    const hasDrivingChoice = Boolean(first.drivingSide && second.drivingSide && first.drivingSide !== second.drivingSide);
+    if (!allowDiagonal && !hasDrivingChoice) return false;
     return obliqueCardinalsMatch(
       confirmation.orientation.bearingDegrees,
       first.cardinal,
@@ -72,12 +80,13 @@ function Fallback({ onCancel }: Readonly<{ onCancel: () => void }>) {
 
 export const CurbSideCrossSection: React.FC<Props> = ({
   confirmation, onSelect, onCancel, loading,
+  allowDiagonalCurbDrawing = streetIntelClientFeaturesEnabled(),
 }) => {
   const [chosenSide, setChosenSide] = React.useState<'left' | 'right' | null>(null);
   React.useEffect(() => {
     if (!loading) setChosenSide(null);
   }, [loading]);
-  if (!curbCrossSectionReady(confirmation)) return <Fallback onCancel={onCancel} />;
+  if (!curbCrossSectionReady(confirmation, { allowDiagonalCurbDrawing })) return <Fallback onCancel={onCancel} />;
 
   const left = confirmation.curbs.find(curb => curb.drivingSide === 'left');
   const right = confirmation.curbs.find(curb => curb.drivingSide === 'right');
@@ -128,6 +137,7 @@ export const CurbSideCrossSection: React.FC<Props> = ({
   );
 
   if (confirmation.orientation.axis === 'oblique') {
+    if (!allowDiagonalCurbDrawing) return <Fallback onCancel={onCancel} />;
     const bearing = confirmation.orientation.bearingDegrees;
     const placed = confirmation.curbs.map(curb => ({
       curb,

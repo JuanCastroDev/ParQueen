@@ -89,6 +89,7 @@ export const QaCurbFieldTest: React.FC<Props> = ({ enabled, onResolve, readGps }
           loading={running}
           onSelect={run}
           onCancel={() => setReport(cancelQaCurbFieldTest(report))}
+          allowDiagonalCurbDrawing
         />
       )}
       {report?.selector && (

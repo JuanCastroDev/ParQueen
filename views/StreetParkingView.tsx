@@ -27,6 +27,7 @@ import {
 } from './street-parking/arrivalLocation';
 import { aggregateLocationSamples, collectLocationBurst, readStreetIntelQaBurstTiming, retainedCanonicalLocation, type LocationSample } from '../utils/locationBurst';
 import { streetIntelQaBuild } from '../utils/demoFirebase';
+import { streetIntelClientFeaturesEnabled } from '../utils/streetIntelClientFeatures';
 import {
     resolveCanonicalCurbWithLocation,
     type CanonicalCurbResponse,
@@ -529,6 +530,8 @@ export const MapView: React.FC<MapViewProps> = ({
     }, [isDebugMode, dbg]);
 
     const [curbLookupStage, setCurbLookupStage] = useState<'location' | 'curb' | 'rules' | null>(null);
+    const curbRequestAbortRef = useRef<AbortController | null>(null);
+    const streetIntelClientFeatures = streetIntelClientFeaturesEnabled();
     const requestCanonicalCurb = useCallback(async (
         seedLat: number,
         seedLng: number,
@@ -558,8 +561,12 @@ export const MapView: React.FC<MapViewProps> = ({
             setCurbLookupStage(stage);
             onStage?.(stage);
         };
+        curbRequestAbortRef.current?.abort();
+        const controller = new AbortController();
+        curbRequestAbortRef.current = controller;
         return resolveCanonicalCurbWithLocation({
             collectLocation: async () => {
+                if (controller.signal.aborted) return null;
                 if (captureBurst && candidateToken) {
                     const fresh = retainedCanonicalLocation(Date.now());
                     if (fresh) {
@@ -595,11 +602,19 @@ export const MapView: React.FC<MapViewProps> = ({
                 return aggregate;
             },
             invoke: async request => {
+                // Firebase HTTPS callables do not cancel already-accepted
+                // server work when the client navigates away. The AbortSignal
+                // only prevents this client from applying a late response.
                 recordQaBurst({ invoked: true });
                 return (await callable(request)).data;
             },
             candidateToken,
+            signal: controller.signal,
         });
+    }, []);
+
+    useEffect(() => () => {
+        curbRequestAbortRef.current?.abort();
     }, []);
 
     // Pre-V2 sessions remain readable. Opening My Car does not look up or replace a curb.
@@ -2355,13 +2370,17 @@ export const MapView: React.FC<MapViewProps> = ({
                         <section className="pq-mycar-safety" aria-label="Street intelligence">
                         {savedSpot.curbResolutionStatus === 'resolving' ? (
                             <div className="pq-mycar-intel-unavailable" role="status" aria-live="polite">
-                                <p className="pq-mycar-intel-reason">{t(curbLookupStage === 'location' ? 'street_intel.getting_location' : 'street_intel.identifying_curb')}</p>
+                                <p className="pq-mycar-intel-reason">{t(streetIntelClientFeatures
+                                    ? (curbLookupStage === 'location' ? 'street_intel.getting_location' : 'street_intel.identifying_curb')
+                                    : 'street_intel.verifying_curb')}</p>
                             </div>
                         ) : savedSpot.curbResolutionStatus === 'side_confirmation_required' && savedSpot.curbSideConfirmation ? (
                             <>
                                 {curbSelectionLoading && (
                                     <p className="pq-mycar-intel-reason" role="status" aria-live="polite">
-                                        {t(curbLookupStage === 'location' ? 'street_intel.getting_location' : 'street_intel.checking_regulations')}
+                                        {t(streetIntelClientFeatures
+                                        ? (curbLookupStage === 'location' ? 'street_intel.getting_location' : 'street_intel.checking_regulations')
+                                        : 'street_intel.verifying_curb')}
                                     </p>
                                 )}
                             <CurbSideCrossSection
@@ -2369,13 +2388,16 @@ export const MapView: React.FC<MapViewProps> = ({
                                 onSelect={handleSideConfirmation}
                                 onCancel={handleSideConfirmationCancel}
                                 loading={curbSelectionLoading}
+                                allowDiagonalCurbDrawing={streetIntelClientFeatures}
                             />
                             </>
                         ) : savedSpot.curbResolutionStatus === 'ambiguous' && savedSpot.curbSelector ? (
                             <>
                                 {curbSelectionLoading && (
                                     <p className="pq-mycar-intel-reason" role="status" aria-live="polite">
-                                        {t(curbLookupStage === 'location' ? 'street_intel.getting_location' : 'street_intel.checking_regulations')}
+                                        {t(streetIntelClientFeatures
+                                        ? (curbLookupStage === 'location' ? 'street_intel.getting_location' : 'street_intel.checking_regulations')
+                                        : 'street_intel.verifying_curb')}
                                     </p>
                                 )}
                             <VisualCurbSelector

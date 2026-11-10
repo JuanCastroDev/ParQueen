@@ -1052,7 +1052,7 @@ const es: Record<string, string> = {
     'street_intel.getting_location': 'Obteniendo tu ubicación',
     'street_intel.identifying_curb': 'Identificando tu bordillo',
     'street_intel.checking_regulations': 'Comprobando las normas de estacionamiento',
-    'street_intel.verifying_curb': 'Comprobando el bordillo',
+    'street_intel.verifying_curb': 'Verificando el bordillo exacto y las reglas de estacionamiento…',
     'street_intel.curb_identified': 'Bordillo verificado',
     'street_intel.curb_identified_detail': 'Calle verificada',
     'street_intel.parked_left': 'Lado izquierdo',

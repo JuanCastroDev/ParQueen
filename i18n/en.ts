@@ -1052,7 +1052,7 @@ const en: Record<string, string> = {
     'street_intel.getting_location': 'Getting your location',
     'street_intel.identifying_curb': 'Identifying your curb',
     'street_intel.checking_regulations': 'Checking parking regulations',
-    'street_intel.verifying_curb': 'Checking the curb',
+    'street_intel.verifying_curb': 'Verifying the exact curb and parking rules…',
     'street_intel.choose_curb': 'Choose the highlighted curb where you parked.',
     'street_intel.could_not_verify': 'ParQueen could not verify the curb and parking rules here.',
     'street_intel.curb_identified': 'Curb verified',

@@ -201,14 +201,29 @@ export function buildCanonicalCurbRequest(
 
 export async function resolveCanonicalCurbWithLocation(input: {
   collectLocation: () => Promise<AggregatedLocation | null>;
-  invoke: (request: ResolveCurbRequestV2) => Promise<unknown>;
+  invoke: (request: ResolveCurbRequestV2, signal?: AbortSignal) => Promise<unknown>;
   candidateToken?: string;
+  signal?: AbortSignal;
 }): Promise<CanonicalCurbResponse> {
+  if (input.signal?.aborted) {
+    return {
+      protocolVersion: 2,
+      status: 'unsupported',
+      reason: 'source_unavailable',
+    };
+  }
   let location: AggregatedLocation | null;
   try {
     location = await input.collectLocation();
   } catch {
     location = null;
+  }
+  if (input.signal?.aborted) {
+    return {
+      protocolVersion: 2,
+      status: 'unsupported',
+      reason: 'source_unavailable',
+    };
   }
   if (!isCanonicalLocationReady(location)) {
     return {
@@ -218,8 +233,19 @@ export async function resolveCanonicalCurbWithLocation(input: {
     };
   }
 
-  const response = await input.invoke(
-    buildCanonicalCurbRequest(location, input.candidateToken),
-  );
+  const request = buildCanonicalCurbRequest(location, input.candidateToken);
+  const response = input.signal === undefined
+    ? await input.invoke(request)
+    : await input.invoke(request, input.signal);
+  // Ignore a late callable response after the user navigated away. HTTPS
+  // callables do not reliably cancel already-accepted server work when the
+  // browser aborts the HTTP request, so this only protects client state.
+  if (input.signal?.aborted) {
+    return {
+      protocolVersion: 2,
+      status: 'unsupported',
+      reason: 'source_unavailable',
+    };
+  }
   return parseCanonicalCurbResponse(response);
 }
