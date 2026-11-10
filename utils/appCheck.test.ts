@@ -26,7 +26,7 @@ const warn = vi.fn();
 const androidDeps = (): AppCheckInitDependencies => ({
   resolvePath: () => 'native-android',
   getNativeToken,
-  initializeAppCheck,
+  initializeAppCheck: initializeAppCheck as unknown as AppCheckInitDependencies['initializeAppCheck'],
   CustomProvider: CustomProvider as never,
   ReCaptchaEnterpriseProvider: ReCaptchaEnterpriseProvider as never,
   siteKey: 'web-recaptcha-site-key',

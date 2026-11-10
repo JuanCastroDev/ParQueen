@@ -1,3 +1,4 @@
+import { describe, expect, it } from 'vitest';
 import { classifyAppCheckToken, appCheckQaEnabled, failureCategory, expectedProviderFor } from './appCheckQa';
 import { simulatedDemoAppCheckToken } from './demoFirebaseAppCheck';
 
