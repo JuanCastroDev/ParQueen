@@ -3,7 +3,9 @@
 const { createHash } = require('node:crypto');
 const { CSCL_RESOURCE_ID, normalizeBlockFaceId } = require('./curbIdentity');
 
-const CARDINAL_SIDES = new Set(['North', 'South', 'East', 'West']);
+const CARDINAL_SIDES = new Set([
+  'North', 'Northeast', 'East', 'Southeast', 'South', 'Southwest', 'West', 'Northwest',
+]);
 const RESOLUTION_METHODS = new Set(['automatic', 'visual_selection']);
 
 const cleanString = value => (typeof value === 'string' && value.trim()

@@ -1,5 +1,11 @@
 import { isCanonicalLocationReady, type AggregatedLocation } from './locationBurst';
 import {
+  COMPASS,
+  type CurbCardinal,
+  obliqueCardinalsMatch,
+  OPPOSITE,
+} from './curbOrientation';
+import {
   SIDE_CONFIRMATION_TOKEN_BODY_MAX,
   SIDE_CONFIRMATION_TOKEN_BODY_MIN,
   SIDE_CONFIRMATION_TOKEN_MAC_LENGTH,
@@ -19,16 +25,22 @@ export type CanonicalCurbSelector = Readonly<{
   candidates: readonly [CanonicalCurbCandidate, CanonicalCurbCandidate];
 }>;
 
-export type CurbCardinal = 'North' | 'South' | 'East' | 'West';
+export type { CurbCardinal };
+
+export type DrivingSide = 'left' | 'right';
 
 export type SideConfirmationCurb = Readonly<{
   token: string;
   cardinal: CurbCardinal;
+  drivingSide?: DrivingSide;
 }>;
 
 export type SideConfirmation = Readonly<{
   streetName: string;
-  orientation: Readonly<{ north: 'up'; axis: 'north-south' | 'east-west' }>;
+  orientation: Readonly<
+    | { north: 'up'; axis: 'north-south' | 'east-west' }
+    | { north: 'up'; axis: 'oblique'; bearingDegrees: number }
+  >;
   curbs: readonly [SideConfirmationCurb, SideConfirmationCurb];
 }>;
 
@@ -38,7 +50,7 @@ export type CanonicalCurbResponse =
     status: 'high_confidence';
     segmentId: string;
     streetName: string;
-    sideLabel: 'North' | 'South' | 'East' | 'West';
+    sideLabel: CurbCardinal;
     ruleSummary: Readonly<{ cleaningAvailable: boolean }>;
   }>
   | Readonly<{ protocolVersion: 2; status: 'ambiguous'; selector: CanonicalCurbSelector }>
@@ -64,11 +76,8 @@ const CANDIDATE_TOKEN = /^candidate2_[a-f0-9]{16}_[a-f0-9]{32}$/;
 const SIDE_CONFIRMATION_TOKEN = new RegExp(
   `^sidec1\\.[A-Za-z0-9_-]{${SIDE_CONFIRMATION_TOKEN_BODY_MIN},${SIDE_CONFIRMATION_TOKEN_BODY_MAX}}\\.[A-Za-z0-9_-]{${SIDE_CONFIRMATION_TOKEN_MAC_LENGTH}}$`,
 );
-const SIDES = new Set(['North', 'South', 'East', 'West']);
-const OPPOSITE: Readonly<Record<string, string>> = {
-  North: 'South', South: 'North', East: 'West', West: 'East',
-};
-const AXIS: Readonly<Record<string, string>> = {
+const SIDES = new Set<string>(COMPASS);
+const ALIGNED_AXIS: Readonly<Record<string, string>> = {
   North: 'east-west', South: 'east-west', East: 'north-south', West: 'north-south',
 };
 const REASONS = new Set(['location_quality', 'candidate_incomplete', 'intersection_complex', 'source_unavailable']);
@@ -101,9 +110,14 @@ function parseCandidate(value: unknown): CanonicalCurbCandidate | null {
 }
 
 function parseSideCurb(value: unknown): SideConfirmationCurb | null {
-  if (!record(value) || !exactKeys(value, ['token', 'cardinal'])
+  if (!record(value)) return null;
+  const keys = Object.hasOwn(value, 'drivingSide')
+    ? ['token', 'cardinal', 'drivingSide'] : ['token', 'cardinal'];
+  if (!exactKeys(value, keys)
     || typeof value.token !== 'string' || !SIDE_CONFIRMATION_TOKEN.test(value.token)
     || typeof value.cardinal !== 'string' || !SIDES.has(value.cardinal)) return null;
+  if (Object.hasOwn(value, 'drivingSide')
+    && value.drivingSide !== 'left' && value.drivingSide !== 'right') return null;
   return value as SideConfirmationCurb;
 }
 
@@ -144,16 +158,24 @@ export function parseCanonicalCurbResponse(value: unknown): CanonicalCurbRespons
       || !exactKeys(value.confirmation, ['streetName', 'orientation', 'curbs'])
       || typeof value.confirmation.streetName !== 'string' || !value.confirmation.streetName.trim()
       || !record(value.confirmation.orientation)
-      || !exactKeys(value.confirmation.orientation, ['north', 'axis'])
       || value.confirmation.orientation.north !== 'up'
-      || (value.confirmation.orientation.axis !== 'north-south'
-        && value.confirmation.orientation.axis !== 'east-west')
       || !Array.isArray(value.confirmation.curbs) || value.confirmation.curbs.length !== 2) invalid();
+    const axis = value.confirmation.orientation.axis;
+    const aligned = axis === 'north-south' || axis === 'east-west';
+    if (!aligned && axis !== 'oblique') invalid();
+    if (aligned && !exactKeys(value.confirmation.orientation, ['north', 'axis'])) invalid();
+    if (axis === 'oblique' && !exactKeys(value.confirmation.orientation, ['north', 'axis', 'bearingDegrees'])) invalid();
     const curbs = value.confirmation.curbs.map(parseSideCurb);
-    if (!curbs[0] || !curbs[1]
-      || curbs[0].token === curbs[1].token
-      || OPPOSITE[curbs[0].cardinal] !== curbs[1].cardinal
-      || AXIS[curbs[0].cardinal] !== value.confirmation.orientation.axis) invalid();
+    if (!curbs[0] || !curbs[1] || curbs[0].token === curbs[1].token
+      || OPPOSITE[curbs[0].cardinal as CurbCardinal] !== curbs[1].cardinal) invalid();
+    const driving = curbs.map(curb => curb?.drivingSide);
+    if (driving.some(Boolean) && (driving[0] === driving[1] || driving.some(side => !side))) invalid();
+    if (aligned && ALIGNED_AXIS[curbs[0].cardinal] !== axis) invalid();
+    if (axis === 'oblique' && !obliqueCardinalsMatch(
+      value.confirmation.orientation.bearingDegrees as number,
+      curbs[0].cardinal,
+      curbs[1].cardinal,
+    )) invalid();
     return value as CanonicalCurbResponse;
   }
   return invalid();

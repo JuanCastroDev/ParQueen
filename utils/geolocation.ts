@@ -39,6 +39,16 @@ export interface AppPositionOptions {
   enableHighAccuracy?: boolean;
   timeout?: number;
   maximumAge?: number;
+  /**
+   * Android `watchPosition` update interval. Capacitor 8 uses `timeout` when
+   * this is omitted. It has no effect on iOS or the browser.
+   */
+  interval?: number;
+  /**
+   * Android minimum gap between `watchPosition` deliveries. It has no effect
+   * on iOS or the browser.
+   */
+  minimumUpdateInterval?: number;
 }
 
 export type LocationErrorKind = 'permission' | 'unavailable' | 'timeout' | 'services_disabled';

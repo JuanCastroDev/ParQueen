@@ -21,6 +21,7 @@ interface Props {
   streetName: string;
   sideConfidence: 'high' | 'low' | 'unknown';
   confirmedParkingSide: string | null;
+  drivingSide?: 'left' | 'right' | null;
   onConfirmSide: (side: string) => void;
   onResult?: (result: StreetIntelligenceCardResult) => void;
 }
@@ -59,7 +60,7 @@ const SIDE_KEY_MAP: Record<string, string> = {
 
 export const StreetIntelligenceCard = ({
   segmentId, parkingSide, streetName,
-  sideConfidence, confirmedParkingSide, onConfirmSide,
+  sideConfidence, confirmedParkingSide, drivingSide, onConfirmSide,
   onResult,
 }: Props) => {
   useLang();
@@ -236,7 +237,40 @@ export const StreetIntelligenceCard = ({
     </div>
   ) : null;
 
+  const curbVerified = sideConfidence === 'high' && Boolean(parkingSide);
+  const identifiedCurb = curbVerified ? (
+    <div className="pq-mycar-intel-street">
+      <CheckCircle size={14} className="text-[var(--color-text-secondary)] shrink-0" />
+      <div>
+        <p className="text-sm font-semibold text-[var(--color-text)]">{t('street_intel.curb_identified')}</p>
+        {drivingSide === 'left' || drivingSide === 'right' ? (
+          <p className="pq-mycar-intel-reason" style={{ marginBottom: 0 }}>
+            {t(drivingSide === 'right' ? 'street_intel.parked_right' : 'street_intel.parked_left')}
+          </p>
+        ) : null}
+      </div>
+    </div>
+  ) : null;
+  const parkingUnavailable = (
+    <div>
+      <p className="text-sm font-semibold text-[var(--color-text)]">{t('street_intel.parking_information_unavailable')}</p>
+      <p className="pq-mycar-intel-reason" style={{ marginBottom: 0 }}>
+        {t('street_intel.parking_information_unavailable_body')}
+      </p>
+    </div>
+  );
+
   if (loading) {
+    if (curbVerified) {
+      return (
+        <div className="pq-mycar-intel" role="status">
+          {identifiedCurb}
+          <p className="pq-mycar-intel-reason" style={{ marginBottom: 0 }}>
+            {t('street_intel.parking_information_loading')}
+          </p>
+        </div>
+      );
+    }
     return (
       <div className="pq-mycar-intel animate-pulse">
         <div className="h-3 w-24 bg-white/10 rounded mb-3" />
@@ -246,11 +280,16 @@ export const StreetIntelligenceCard = ({
     );
   }
 
-  if (loadError) {
-    return <StreetIntelligenceUnavailableCard />;
-  }
-
-  if (presentation.state === 'unknown' || presentation.state === 'caution') {
+  if (loadError || presentation.state === 'unknown' || presentation.state === 'caution') {
+    if (curbVerified) {
+      return (
+        <div className="pq-mycar-intel">
+          {identifiedCurb}
+          {parkingUnavailable}
+          {debugBlock}
+        </div>
+      );
+    }
     return <StreetIntelligenceUnavailableCard />;
   }
 
@@ -258,6 +297,7 @@ export const StreetIntelligenceCard = ({
     if (availableSides.length === 0) return null;
     return (
       <div className="pq-mycar-intel pq-mycar-intel--caution">
+        {identifiedCurb}
         <div className="pq-mycar-intel-street">
           <AlertTriangle size={14} className="text-[var(--color-warning)] shrink-0" />
           <p>{t('street_intel.info_available')}</p>
@@ -287,7 +327,9 @@ export const StreetIntelligenceCard = ({
   if (!result) return null;
 
   const effectiveSideLabel = sideLabel(effectiveSide);
-  const sideHeader = `${streetName} · ${effectiveSideLabel}${confirmedParkingSide ? ' ✓' : ''}`;
+  const sideHeader = drivingSide === 'left' || drivingSide === 'right'
+    ? `${streetName} · ${t(drivingSide === 'right' ? 'street_intel.parked_right' : 'street_intel.parked_left')}`
+    : streetName;
   const sideMeters = meterWindows.filter(window => !window.side || window.side === effectiveSide);
   const sideRestrictions = restrictionWindows.filter(window => !window.side || window.side === effectiveSide);
   const sideTimeLimits = timeLimitedWindows.filter(window => !window.side || window.side === effectiveSide);
@@ -343,7 +385,7 @@ export const StreetIntelligenceCard = ({
     </div>
   ) : (sideMeters.length || sideRestrictions.length) ? (
     <p className="pq-mycar-intel-reason" style={{ marginTop: 10, marginBottom: 0 }}>
-      {t('street_intel.no_cleaning_schedule_found')}
+      {t('street_intel.cleaning_schedule_unavailable')}
     </p>
   ) : null;
   const timeLimitDetails = sideTimeLimits.length ? (
@@ -361,6 +403,15 @@ export const StreetIntelligenceCard = ({
   ) : null;
 
   if (!result.scheduleDescription && !sideMeters.length && !sideRestrictions.length) {
+    if (curbVerified) {
+      return (
+        <div className="pq-mycar-intel">
+          {identifiedCurb}
+          {parkingUnavailable}
+          {debugBlock}
+        </div>
+      );
+    }
     return (
       <div className="pq-mycar-intel">
         <div className="pq-mycar-intel-street">
@@ -389,6 +440,7 @@ export const StreetIntelligenceCard = ({
 
   return (
     <div className={`pq-mycar-intel ${toneClass}`}>
+      {identifiedCurb}
       <div className="pq-mycar-intel-street">
         <Leaf size={14} className="text-[var(--color-text-secondary)]" />
         <p>{sideHeader}</p>

@@ -25,7 +25,8 @@ import {
     nextArrivalReading,
     type ArrivalLocationReading,
 } from './street-parking/arrivalLocation';
-import { aggregateLocationSamples, collectLocationBurst } from '../utils/locationBurst';
+import { aggregateLocationSamples, collectLocationBurst, readStreetIntelQaBurstTiming, retainedCanonicalLocation, type LocationSample } from '../utils/locationBurst';
+import { streetIntelQaBuild } from '../utils/demoFirebase';
 import {
     resolveCanonicalCurbWithLocation,
     type CanonicalCurbResponse,
@@ -77,6 +78,7 @@ import { NavigationBar } from './street-parking/NavigationBar';
 import { StreetIntelligenceCard, StreetIntelligenceUnavailableCard } from './street-parking/StreetIntelligenceCard';
 import { VisualCurbSelector } from './street-parking/VisualCurbSelector';
 import { CurbSideCrossSection } from './street-parking/CurbSideCrossSection';
+import { QaCurbFieldTest } from './street-parking/QaCurbFieldTest';
 import { useParkingTimer } from './street-parking/useParkingTimer';
 import { recordParkingAnalyticsEvent } from '../utils/parkingAnalytics';
 import { useMapChromePadding } from './street-parking/useMapChromePadding';
@@ -94,7 +96,7 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
     'segmentId' | 'parkingSide' | 'restrictionVersionId' | 'segmentStreetName'
     | 'streetIntelStatus' | 'streetIntelReason' | 'streetIntelCheckedAt'
     | 'curbProtocolVersion' | 'curbResolutionStatus' | 'curbSelector' | 'curbSideConfirmation'
-    | 'sideConfidence' | 'confirmedParkingSide'
+    | 'sideConfidence' | 'confirmedParkingSide' | 'drivingSide'
 > => {
     const checkedAt = new Date().toISOString();
     if (response.status === 'high_confidence') {
@@ -112,6 +114,7 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
             curbSideConfirmation: null,
             sideConfidence: 'high',
             confirmedParkingSide: null,
+            drivingSide: null,
         };
     }
     if (response.status === 'ambiguous') {
@@ -129,6 +132,7 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
             curbSideConfirmation: null,
             sideConfidence: 'unknown',
             confirmedParkingSide: null,
+            drivingSide: null,
         };
     }
     if (response.status === 'side_confirmation_required') {
@@ -146,6 +150,7 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
             curbSideConfirmation: response.confirmation,
             sideConfidence: 'unknown',
             confirmedParkingSide: null,
+            drivingSide: null,
         };
     }
     return {
@@ -162,6 +167,7 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
         curbSideConfirmation: null,
         sideConfidence: 'unknown',
         confirmedParkingSide: null,
+        drivingSide: null,
     };
 };
 
@@ -273,12 +279,11 @@ export const MapView: React.FC<MapViewProps> = ({
     ));
     // Tracks last GPS accuracy reading from watchPosition — used at saveMySpot time
     const lastGpsAccuracyRef = useRef<number | null>(null);
-    const lastGpsSampleRef = useRef<{
-        lat: number; lng: number; accuracyMeters: number; timestampMs: number;
-    } | null>(null);
+    const lastGpsSampleRef = useRef<LocationSample | null>(null);
     const emptyRulesRefreshAttemptedRef = useRef<Set<string>>(new Set());
     const restrictionRefreshAttemptedRef = useRef<Set<string>>(new Set());
     const matchInFlightRef = useRef<Map<string, Promise<any>>>(new Map());
+    const spotEpochRef = useRef(0);
     const saveInFlightRef = useRef(false);
 
     // Show first-run tutorial once map is ready and user is authenticated
@@ -452,6 +457,8 @@ export const MapView: React.FC<MapViewProps> = ({
 
     // ?debugStreet=1 — in-app street intelligence debug panel (no-op for normal users)
     const isDebugMode = useMemo(() => new URLSearchParams(window.location.search).has('debugStreet'), []);
+    const streetIntelQaProbe = import.meta.env.MODE === 'streetintelqa'
+        && import.meta.env.VITE_PARQUEEN_STREET_INTEL_QA === 'app.parqueen.qa';
     const [isDebugAdmin, setIsDebugAdmin] = useState(false);
     useEffect(() => {
         if (!isDebugMode) return;
@@ -521,11 +528,13 @@ export const MapView: React.FC<MapViewProps> = ({
         });
     }, [isDebugMode, dbg]);
 
+    const [curbLookupStage, setCurbLookupStage] = useState<'location' | 'curb' | 'rules' | null>(null);
     const requestCanonicalCurb = useCallback(async (
         seedLat: number,
         seedLng: number,
         candidateToken?: string,
         captureBurst = true,
+        onStage?: (stage: 'location' | 'curb' | 'rules') => void,
     ): Promise<CanonicalCurbResponse> => {
         const now = Date.now();
         const observed = lastGpsSampleRef.current;
@@ -539,40 +548,67 @@ export const MapView: React.FC<MapViewProps> = ({
             timestampMs: now,
         };
         const callable = httpsCallable(getFunctions(getApp(), 'us-central1'), 'createSegmentFromSweepNYC');
+        const recordQaBurst = (detail: Record<string, unknown>) => {
+            if (!streetIntelQaBuild() || typeof sessionStorage === 'undefined') return;
+            const prior = sessionStorage.getItem('pq_qa_location_burst');
+            const parsed = prior ? JSON.parse(prior) as Record<string, unknown> : {};
+            sessionStorage.setItem('pq_qa_location_burst', JSON.stringify({ ...parsed, ...detail }));
+        };
+        const reportStage = (stage: 'location' | 'curb' | 'rules') => {
+            setCurbLookupStage(stage);
+            onStage?.(stage);
+        };
         return resolveCanonicalCurbWithLocation({
-            collectLocation: () => captureBurst
-                ? collectLocationBurst({ seed: liveSeed })
-                : Promise.resolve(aggregateLocationSamples([fixedCoordinateSample], now)),
-            invoke: async request => (await callable(request)).data,
+            collectLocation: async () => {
+                if (captureBurst && candidateToken) {
+                    const fresh = retainedCanonicalLocation(Date.now());
+                    if (fresh) {
+                        reportStage('rules');
+                        recordQaBurst({
+                            sampleCount: fresh.sampleCount,
+                            accuracyMeters: fresh.accuracyMeters,
+                            consistencyMeters: fresh.consistencyMeters,
+                            durationMs: 0,
+                            reused: true,
+                            invoked: false,
+                        });
+                        return fresh;
+                    }
+                }
+                if (!captureBurst) {
+                    reportStage(candidateToken ? 'rules' : 'curb');
+                    return aggregateLocationSamples([fixedCoordinateSample], now);
+                }
+                reportStage('location');
+                const startedAt = Date.now();
+                const aggregate = await collectLocationBurst({ seed: liveSeed });
+                reportStage(candidateToken ? 'rules' : 'curb');
+                recordQaBurst({
+                    sampleCount: aggregate.sampleCount,
+                    accuracyMeters: aggregate.accuracyMeters,
+                    consistencyMeters: aggregate.consistencyMeters,
+                    durationMs: Date.now() - startedAt,
+                    sampleOffsetsMs: readStreetIntelQaBurstTiming(),
+                    reused: false,
+                    invoked: false,
+                });
+                return aggregate;
+            },
+            invoke: async request => {
+                recordQaBurst({ invoked: true });
+                return (await callable(request)).data;
+            },
             candidateToken,
         });
     }, []);
 
-    // Pre-V2 sessions remain readable and receive at most one lazy canonical refresh.
-    // Existing segment/side data is replaced only by a validated high-confidence V2 result.
+    // Pre-V2 sessions remain readable. Opening My Car does not look up or replace a curb.
     const segmentRetrySessionRef = useRef<string | null>(null);
     useEffect(() => {
         if (!showSessionSheet || !savedSpot) return;
         if (savedSpot.curbProtocolVersion === 2 || savedSpot.curbRefreshAttempted) return;
-        if (segmentRetrySessionRef.current === savedSpot.sessionId) return; // already retried this session
+        if (segmentRetrySessionRef.current === savedSpot.sessionId) return;
         segmentRetrySessionRef.current = savedSpot.sessionId;
-        const attempted: SavedSpot = { ...savedSpot, curbRefreshAttempted: true };
-        setSavedSpot(attempted);
-        writeSavedSpot(attempted);
-        (async () => {
-            try {
-                const response = await requestCanonicalCurb(savedSpot.lat, savedSpot.lng, undefined, false);
-                if (response.status !== 'high_confidence') return;
-                const updated: SavedSpot = {
-                    ...attempted,
-                    ...canonicalResponseFields(response),
-                };
-                setSavedSpot(updated);
-                writeSavedSpot(updated);
-            } catch {
-                // The durable attempt flag prevents a reload-triggered retry loop.
-            }
-        })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [showSessionSheet, savedSpot?.sessionId]);
 
@@ -594,7 +630,19 @@ export const MapView: React.FC<MapViewProps> = ({
         return () => clearInterval(id);
     }, [savedSpot?.savedAt]);
 
-    const matchNearestSegment = async (userLat: number, userLng: number) => {
+    const matchNearestSegment = async (userLat: number, userLng: number, simulatedQa = false) => {
+        const locationRequest = simulatedQa && streetIntelQaProbe
+            ? {
+                protocolVersion: 2 as const,
+                location: {
+                    lat: userLat,
+                    lng: userLng,
+                    accuracyMeters: 1,
+                    sampleCount: 3,
+                    consistencyMeters: 1,
+                },
+            }
+            : protocol2LocationRequest(userLat, userLng, lastGpsAccuracyRef.current);
         try {
             dbg('matchNearestSegment started');
             const radiusM = 80;
@@ -633,7 +681,7 @@ export const MapView: React.FC<MapViewProps> = ({
                 dbg('no active segments — calling createSegmentFromSweepNYC');
                 try {
                     const fn = httpsCallable(getFunctions(getApp(), 'us-central1'), 'createSegmentFromSweepNYC');
-                    const result = await fn(protocol2LocationRequest(userLat, userLng, lastGpsAccuracyRef.current));
+                    const result = await fn(locationRequest);
                     const data = result.data as { protocolVersion?: number; status?: string; segmentId?: string; sideLabel?: string; streetName?: string; reason?: string };
                     dbg(`CF result: status=${data?.status ?? 'none'} reason=${data?.reason ?? 'none'}`);
                     if (data?.protocolVersion !== 2 || data.status !== 'high_confidence' || !data.segmentId) {
@@ -672,7 +720,7 @@ export const MapView: React.FC<MapViewProps> = ({
                 // Any failure falls through to the existing caution data below.
                 try {
                     const fn = httpsCallable(getFunctions(getApp(), 'us-central1'), 'createSegmentFromSweepNYC');
-                    const result = await fn(protocol2LocationRequest(userLat, userLng, lastGpsAccuracyRef.current));
+                    const result = await fn(locationRequest);
                     const data = result.data as { protocolVersion?: number; status?: string; segmentId?: string; sideLabel?: string; streetName?: string; reason?: string };
                     if (data?.protocolVersion === 2 && data.status === 'high_confidence' && data.segmentId) {
                         return {
@@ -707,7 +755,7 @@ export const MapView: React.FC<MapViewProps> = ({
                 logStreetIntelEvent('cache_hit_empty_refresh', { via: 'nearby_80m', usableCount });
                 try {
                     const fn = httpsCallable(getFunctions(getApp(), 'us-central1'), 'createSegmentFromSweepNYC');
-                    const result = await fn(protocol2LocationRequest(userLat, userLng, lastGpsAccuracyRef.current));
+                    const result = await fn(locationRequest);
                     const data = result.data as { protocolVersion?: number; status?: string; segmentId?: string; sideLabel?: string; streetName?: string; reason?: string };
                     if (data?.protocolVersion === 2 && data.status === 'high_confidence' && data.segmentId) {
                         return {
@@ -733,7 +781,7 @@ export const MapView: React.FC<MapViewProps> = ({
                 logStreetIntelEvent('cache_hit_restriction_refresh', { via: 'nearby_80m', usableCount });
                 try {
                     const fn = httpsCallable(getFunctions(getApp(), 'us-central1'), 'createSegmentFromSweepNYC');
-                    const result = await fn(protocol2LocationRequest(userLat, userLng, lastGpsAccuracyRef.current));
+                    const result = await fn(locationRequest);
                     const data = result.data as { protocolVersion?: number; status?: string; segmentId?: string; sideLabel?: string; streetName?: string; reason?: string };
                     if (data?.protocolVersion === 2 && data.status === 'high_confidence' && data.segmentId) {
                         return {
@@ -772,7 +820,7 @@ export const MapView: React.FC<MapViewProps> = ({
             if (nearest.source === 'sweepnyc' && scheduleSides.length > 1) {
                 try {
                     const fn = httpsCallable(getFunctions(getApp(), 'us-central1'), 'createSegmentFromSweepNYC');
-                    const result = await fn(protocol2LocationRequest(userLat, userLng, lastGpsAccuracyRef.current));
+                    const result = await fn(locationRequest);
                     const data = result.data as { protocolVersion?: number; status?: string; segmentId?: string; sideLabel?: string };
                     if (data?.protocolVersion === 2 && data.status === 'high_confidence'
                         && data.segmentId === nearest.id && data.sideLabel) {
@@ -800,11 +848,11 @@ export const MapView: React.FC<MapViewProps> = ({
         }
     };
 
-    const runMatchNearestSegment = (userLat: number, userLng: number) => {
-        const key = `${userLat.toFixed(5)},${userLng.toFixed(5)}`;
+    const runMatchNearestSegment = (userLat: number, userLng: number, simulatedQa = false) => {
+        const key = `${userLat.toFixed(5)},${userLng.toFixed(5)},${simulatedQa ? 'sim' : 'live'}`;
         const existing = matchInFlightRef.current.get(key);
         if (existing) return existing;
-        const pending = matchNearestSegment(userLat, userLng).finally(() => {
+        const pending = matchNearestSegment(userLat, userLng, simulatedQa).finally(() => {
             matchInFlightRef.current.delete(key);
         });
         matchInFlightRef.current.set(key, pending);
@@ -820,7 +868,7 @@ export const MapView: React.FC<MapViewProps> = ({
         setSimSaveLoading(true);
         dbg('--- SIMULATED MY CAR SAVE ---');
         try {
-            const match = await runMatchNearestSegment(lat, lng);
+            const match = await runMatchNearestSegment(lat, lng, streetIntelQaProbe);
             dbg(`match: status=${match.streetIntelStatus} reason=${match.streetIntelReason ?? 'none'}`);
             const spot: SavedSpot = {
                 lat, lng,
@@ -859,10 +907,26 @@ export const MapView: React.FC<MapViewProps> = ({
         }
     };
 
+    const commitSpotIfCurrent = (epoch: number, sessionId: string, spot: SavedSpot): boolean => {
+        if (epoch !== spotEpochRef.current) return false;
+        const stored = readSavedSpot();
+        if (stored && stored.sessionId !== sessionId) return false;
+        if (stored?.curbResolutionStatus === 'high_confidence' && spot.curbResolutionStatus !== 'high_confidence') return false;
+        writeSavedSpot(spot);
+        setSavedSpot(spot);
+        return true;
+    };
+
     const saveMySpot = async () => {
         if (!userLocation) return;
         if (saveInFlightRef.current) return;
+        const existingSavedSpot = readSavedSpot();
+        if (existingSavedSpot) {
+            setSavedSpot(existingSavedSpot);
+            return;
+        }
         saveInFlightRef.current = true;
+        const epoch = ++spotEpochRef.current;
         try {
         const [lng, lat] = userLocation;
         dbg('saveMySpot started');
@@ -889,6 +953,7 @@ export const MapView: React.FC<MapViewProps> = ({
             sideConfidence: 'unknown',
             confirmedParkingSide: null,
         };
+        if (!commitSpotIfCurrent(epoch, resolvingSpot.sessionId, resolvingSpot)) return;
         writeSavedSpot(resolvingSpot);
         setSavedSpot(resolvingSpot);
         setShowPostSaveOffer(true);
@@ -906,8 +971,7 @@ export const MapView: React.FC<MapViewProps> = ({
             ...canonicalResponseFields(response),
         };
         dbg(`canonical curb: status=${spot.curbResolutionStatus}`);
-        writeSavedSpot(spot);
-        setSavedSpot(spot);
+        commitSpotIfCurrent(epoch, resolvingSpot.sessionId, spot);
         } finally {
             saveInFlightRef.current = false;
         }
@@ -915,6 +979,13 @@ export const MapView: React.FC<MapViewProps> = ({
 
     // Used after handoff — skips GPS, uses the already-known claimed Ping coordinates
     const saveMySpotFromCoords = async (lat: number, lng: number, address: string) => {
+        const existingSavedSpot = readSavedSpot();
+        if (existingSavedSpot) {
+            setSavedSpot(existingSavedSpot);
+            setShowSessionSheet(true);
+            return;
+        }
+        const epoch = ++spotEpochRef.current;
         const resolvingSpot: SavedSpot = {
             lat, lng, address,
             savedAt: Date.now(),
@@ -935,8 +1006,7 @@ export const MapView: React.FC<MapViewProps> = ({
             sideConfidence: 'unknown',
             confirmedParkingSide: null,
         };
-        writeSavedSpot(resolvingSpot);
-        setSavedSpot(resolvingSpot);
+        if (!commitSpotIfCurrent(epoch, resolvingSpot.sessionId, resolvingSpot)) return;
         setShowSessionSheet(true);
         let response: CanonicalCurbResponse;
         try {
@@ -945,74 +1015,52 @@ export const MapView: React.FC<MapViewProps> = ({
             response = { protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' };
         }
         const spot: SavedSpot = { ...resolvingSpot, ...canonicalResponseFields(response) };
-        writeSavedSpot(spot);
-        setSavedSpot(spot);
+        commitSpotIfCurrent(epoch, resolvingSpot.sessionId, spot);
     };
 
     const [curbSelectionLoading, setCurbSelectionLoading] = useState(false);
     const handleCanonicalCurbSelection = useCallback(async (candidateToken: string) => {
         if (!savedSpot || savedSpot.curbResolutionStatus !== 'ambiguous'
             || !savedSpot.curbSelector || curbSelectionLoading) return;
+        const epoch = ++spotEpochRef.current;
+        const sessionId = savedSpot.sessionId;
         setCurbSelectionLoading(true);
         try {
             const response = await requestCanonicalCurb(savedSpot.lat, savedSpot.lng, candidateToken);
+            if (response.status === 'unsupported') return;
             const updated: SavedSpot = {
                 ...savedSpot,
                 ...canonicalResponseFields(response),
                 curbRefreshAttempted: true,
             };
-            setSavedSpot(updated);
-            writeSavedSpot(updated);
+            commitSpotIfCurrent(epoch, sessionId, updated);
         } catch {
-            const updated: SavedSpot = {
-                ...savedSpot,
-                ...canonicalResponseFields({
-                    protocolVersion: 2,
-                    status: 'unsupported',
-                    reason: 'source_unavailable',
-                }),
-                curbRefreshAttempted: true,
-            };
-            setSavedSpot(updated);
-            writeSavedSpot(updated);
+            return;
         } finally {
             setCurbSelectionLoading(false);
         }
     }, [curbSelectionLoading, requestCanonicalCurb, savedSpot]);
 
-    const handleConfirmSide = useCallback((side: string) => {
-        if (!savedSpot) return;
-        const updated = { ...savedSpot, confirmedParkingSide: side };
-        setSavedSpot(updated);
-        localStorage.setItem(SAVED_SPOT_KEY, JSON.stringify(updated));
-    }, [savedSpot]);
-
     const handleSideConfirmation = useCallback(async (candidateToken: string) => {
         if (!savedSpot || savedSpot.curbResolutionStatus !== 'side_confirmation_required'
             || !savedSpot.curbSideConfirmation || curbSelectionLoading) return;
+        const epoch = ++spotEpochRef.current;
+        const sessionId = savedSpot.sessionId;
         setCurbSelectionLoading(true);
         try {
             const response = await requestCanonicalCurb(savedSpot.lat, savedSpot.lng, candidateToken);
+            if (response.status !== 'high_confidence') return;
+            const chosen = savedSpot.curbSideConfirmation.curbs.find(curb => curb.token === candidateToken);
             const updated: SavedSpot = {
                 ...savedSpot,
                 ...canonicalResponseFields(response),
                 curbRefreshAttempted: true,
                 confirmedParkingSide: null,
+                drivingSide: chosen?.drivingSide ?? null,
             };
-            setSavedSpot(updated);
-            writeSavedSpot(updated);
+            commitSpotIfCurrent(epoch, sessionId, updated);
         } catch {
-            const updated: SavedSpot = {
-                ...savedSpot,
-                ...canonicalResponseFields({
-                    protocolVersion: 2,
-                    status: 'unsupported',
-                    reason: 'source_unavailable',
-                }),
-                curbRefreshAttempted: true,
-            };
-            setSavedSpot(updated);
-            writeSavedSpot(updated);
+            return;
         } finally {
             setCurbSelectionLoading(false);
         }
@@ -1020,6 +1068,7 @@ export const MapView: React.FC<MapViewProps> = ({
 
     const handleSideConfirmationCancel = useCallback(() => {
         if (!savedSpot || savedSpot.curbResolutionStatus !== 'side_confirmation_required') return;
+        const epoch = ++spotEpochRef.current;
         const updated: SavedSpot = {
             ...savedSpot,
             ...canonicalResponseFields({
@@ -1030,14 +1079,22 @@ export const MapView: React.FC<MapViewProps> = ({
             curbRefreshAttempted: true,
             confirmedParkingSide: null,
         };
+        commitSpotIfCurrent(epoch, savedSpot.sessionId, updated);
+    }, [savedSpot]);
+
+    const handleConfirmSide = useCallback((side: string) => {
+        if (!savedSpot) return;
+        const updated = { ...savedSpot, confirmedParkingSide: side };
         setSavedSpot(updated);
-        writeSavedSpot(updated);
+        localStorage.setItem(SAVED_SPOT_KEY, JSON.stringify(updated));
     }, [savedSpot]);
 
     const retryStreetIntelInFlightRef = useRef(false);
     const [retryingStreetIntel, setRetryingStreetIntel] = useState(false);
     const handleRetryStreetIntel = useCallback(async () => {
         if (!savedSpot || retryStreetIntelInFlightRef.current) return;
+        const epoch = ++spotEpochRef.current;
+        const sessionId = savedSpot.sessionId;
         retryStreetIntelInFlightRef.current = true;
         setRetryingStreetIntel(true);
         try {
@@ -1048,8 +1105,7 @@ export const MapView: React.FC<MapViewProps> = ({
                 curbRefreshAttempted: true,
                 gpsAccuracyMeters: lastGpsAccuracyRef.current ?? null,
             };
-            setSavedSpot(updated);
-            writeSavedSpot(updated);
+            commitSpotIfCurrent(epoch, sessionId, updated);
         } finally {
             retryStreetIntelInFlightRef.current = false;
             setRetryingStreetIntel(false);
@@ -1304,11 +1360,15 @@ export const MapView: React.FC<MapViewProps> = ({
                     const { longitude, latitude, accuracy } = position.coords;
                     lastGpsAccuracyRef.current = accuracy ?? null;
                     if (Number.isFinite(accuracy) && (accuracy as number) > 0) {
+                        const providerTimestampMs = Number.isFinite(position.timestampMs)
+                            ? position.timestampMs
+                            : undefined;
                         lastGpsSampleRef.current = {
                             lat: latitude,
                             lng: longitude,
                             accuracyMeters: accuracy as number,
-                            timestampMs: Date.now(),
+                            timestampMs: providerTimestampMs ?? Date.now(),
+                            ...(providerTimestampMs === undefined ? {} : { providerTimestampMs }),
                         };
                     } else {
                         lastGpsSampleRef.current = null;
@@ -2295,21 +2355,35 @@ export const MapView: React.FC<MapViewProps> = ({
                         <section className="pq-mycar-safety" aria-label="Street intelligence">
                         {savedSpot.curbResolutionStatus === 'resolving' ? (
                             <div className="pq-mycar-intel-unavailable" role="status" aria-live="polite">
-                                <p className="pq-mycar-intel-reason">{t('street_intel.verifying_curb')}</p>
+                                <p className="pq-mycar-intel-reason">{t(curbLookupStage === 'location' ? 'street_intel.getting_location' : 'street_intel.identifying_curb')}</p>
                             </div>
                         ) : savedSpot.curbResolutionStatus === 'side_confirmation_required' && savedSpot.curbSideConfirmation ? (
+                            <>
+                                {curbSelectionLoading && (
+                                    <p className="pq-mycar-intel-reason" role="status" aria-live="polite">
+                                        {t(curbLookupStage === 'location' ? 'street_intel.getting_location' : 'street_intel.checking_regulations')}
+                                    </p>
+                                )}
                             <CurbSideCrossSection
                                 confirmation={savedSpot.curbSideConfirmation}
                                 onSelect={handleSideConfirmation}
                                 onCancel={handleSideConfirmationCancel}
                                 loading={curbSelectionLoading}
                             />
+                            </>
                         ) : savedSpot.curbResolutionStatus === 'ambiguous' && savedSpot.curbSelector ? (
+                            <>
+                                {curbSelectionLoading && (
+                                    <p className="pq-mycar-intel-reason" role="status" aria-live="polite">
+                                        {t(curbLookupStage === 'location' ? 'street_intel.getting_location' : 'street_intel.checking_regulations')}
+                                    </p>
+                                )}
                             <VisualCurbSelector
                                 selector={savedSpot.curbSelector}
                                 onSelect={handleCanonicalCurbSelection}
                                 loading={curbSelectionLoading}
                             />
+                            </>
                         ) : savedSpot.segmentId && savedSpot.segmentStreetName ? (
                             <StreetIntelligenceCard
                                 segmentId={savedSpot.segmentId}
@@ -2317,6 +2391,7 @@ export const MapView: React.FC<MapViewProps> = ({
                                 streetName={savedSpot.segmentStreetName}
                                 sideConfidence={savedSpot.sideConfidence ?? 'unknown'}
                                 confirmedParkingSide={savedSpot.confirmedParkingSide ?? null}
+                                drivingSide={savedSpot.drivingSide ?? null}
                                 onConfirmSide={handleConfirmSide}
                                 onResult={r => {
                                     setCleaningAvailable(r.cleaningAvailable);
@@ -3229,13 +3304,31 @@ export const MapView: React.FC<MapViewProps> = ({
 
                     {/* Car (toggle) + Locate stacked vertically on the right */}
                     <div className="map-secondary-controls flex flex-col items-end gap-3 max-w-none mx-auto w-full mb-3">
+                        {streetIntelQaProbe && userLocation && (
+                            <QaCurbFieldTest
+                                enabled
+                                onResolve={(candidateToken, onStage) => requestCanonicalCurb(userLocation[1], userLocation[0], candidateToken, true, onStage)}
+                                readGps={() => {
+                                    try {
+                                        const raw = sessionStorage.getItem('pq_qa_location_burst');
+                                        return raw ? JSON.parse(raw) : null;
+                                    } catch {
+                                        return null;
+                                    }
+                                }}
+                            />
+                        )}
                         {userLocation && (
                             <button
                                 data-tour="my-car"
                                 onClick={() => {
-                                    if (!savedSpot) saveMySpot();
+                                    const storedSpot = savedSpot ?? readSavedSpot();
+                                    if (!storedSpot) saveMySpot();
                                     else if (isNearSavedSpot) setShowDepartureSheet(true);
-                                    else setShowSessionSheet(true);
+                                    else {
+                                        if (!savedSpot) setSavedSpot(storedSpot);
+                                        setShowSessionSheet(true);
+                                    }
                                 }}
                                 title={t('common.my_car')}
                                 className={`map-control-button pointer-events-auto flex items-center justify-center transition-all active:scale-90 ${
@@ -3311,7 +3404,7 @@ export const MapView: React.FC<MapViewProps> = ({
                     </div>
                     {debugPanelOpen && (
                         <div style={{ overflowY: 'auto', flex: 1, padding: '6px 10px 10px' }}>
-                            {isDebugAdmin && (
+                            {(isDebugAdmin || streetIntelQaProbe) && (
                             <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' }}>
                                 <input
                                     value={manualLat}

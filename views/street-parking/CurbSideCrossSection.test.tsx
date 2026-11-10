@@ -144,5 +144,133 @@ describe('CurbSideCrossSection', () => {
     expect(cancel).not.toContain('requestCanonicalCurb');
     expect(cancel).toContain("status: 'unsupported'");
     expect(cancel).toContain('confirmedParkingSide: null');
+    const select = view.slice(view.indexOf('const handleSideConfirmation ='), view.indexOf('const handleSideConfirmationCancel'));
+    expect(select).toContain('canonicalResponseFields(response)');
+    expect(select).toContain('requestCanonicalCurb(savedSpot.lat, savedSpot.lng, candidateToken)');
+    expect(select).not.toMatch(/notifyNearby|incrementTotalSpotsPinged|createPing/);
+    const fields = view.slice(view.indexOf('const canonicalResponseFields'), view.indexOf('const segmentRetrySessionRef'));
+    expect(fields).toContain('parkingSide: response.sideLabel');
+    expect(fields).toContain('segmentId: response.segmentId');
+  });
+
+  it('draws a diagonal road at its bearing and submits the matching token', () => {
+    const onSelect = vi.fn();
+    const diagonal: SideConfirmation = {
+      streetName: 'Diagonal Avenue',
+      orientation: { north: 'up', axis: 'oblique', bearingDegrees: 45 },
+      curbs: [
+        { token: token('nw'), cardinal: 'Northwest' },
+        { token: token('se'), cardinal: 'Southeast' },
+      ],
+    };
+    let renderer: TestRenderer.ReactTestRenderer;
+    act(() => {
+      renderer = TestRenderer.create(
+        <CurbSideCrossSection confirmation={diagonal} onSelect={onSelect} onCancel={vi.fn()} loading={false} />,
+      );
+    });
+    const northwest = renderer!.root.findByProps({ 'data-cardinal': 'Northwest' });
+    const southeast = renderer!.root.findByProps({ 'data-cardinal': 'Southeast' });
+    const place = (style: { left: string; top: string }) => ({
+      left: Number.parseFloat(style.left),
+      top: Number.parseFloat(style.top),
+    });
+    const northwestPlace = place(northwest.props.style);
+    const southeastPlace = place(southeast.props.style);
+    expect(northwestPlace.top).toBeLessThan(southeastPlace.top);
+    expect(northwestPlace.left).toBeLessThan(southeastPlace.left);
+    const road = renderer!.root.findByProps({ className: 'pq-curb-side-road' });
+    expect(road.props.style.transform).toBe('translate(-50%, -50%) rotate(-45deg)');
+    const markup = JSON.stringify(renderer!.toJSON());
+    expect(markup).toContain('North is up');
+    expect(markup).toContain('where your vehicle is parked');
+    expect(markup).toContain('Diagonal Avenue');
+    expect(markup).not.toContain('reserved');
+    expect(markup).not.toContain(token('nw'));
+    expect(markup).not.toContain(token('se'));
+    act(() => { northwest.props.onClick(); });
+    expect(onSelect).toHaveBeenCalledWith(token('nw'));
+  });
+
+  it('does not select a curb while loading and rejects a swapped diagonal pair', () => {
+    const onSelect = vi.fn();
+    const diagonal: SideConfirmation = {
+      streetName: 'Diagonal Avenue',
+      orientation: { north: 'up', axis: 'oblique', bearingDegrees: 45 },
+      curbs: [
+        { token: token('nw'), cardinal: 'Northwest' },
+        { token: token('se'), cardinal: 'Southeast' },
+      ],
+    };
+    let loadingView: TestRenderer.ReactTestRenderer;
+    act(() => {
+      loadingView = TestRenderer.create(
+        <CurbSideCrossSection confirmation={diagonal} onSelect={onSelect} onCancel={vi.fn()} loading />,
+      );
+    });
+    act(() => { loadingView!.root.findByProps({ 'data-cardinal': 'Northwest' }).props.onClick(); });
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(loadingView!.root.findByProps({ className: 'pq-curb-side-cancel' }).props.disabled).toBe(true);
+
+    const swapped: SideConfirmation = {
+      ...diagonal,
+      curbs: [
+        { token: token('n'), cardinal: 'North' },
+        { token: token('s'), cardinal: 'South' },
+      ],
+    };
+    let rejected: TestRenderer.ReactTestRenderer;
+    act(() => {
+      rejected = TestRenderer.create(
+        <CurbSideCrossSection confirmation={swapped} onSelect={onSelect} onCancel={vi.fn()} loading={false} />,
+      );
+    });
+    expect(rejected!.root.findAllByProps({ className: expect.stringContaining('pq-curb-side-choice') })).toHaveLength(0);
+  });
+
+  it('offers left and right for a verified one-way without a road drawing', () => {
+    const onSelect = vi.fn();
+    const oneWay: SideConfirmation = {
+      streetName: 'Maran Place',
+      orientation: { north: 'up', axis: 'oblique', bearingDegrees: 321 },
+      curbs: [
+        { token: token('sw'), cardinal: 'Southwest', drivingSide: 'left' },
+        { token: token('ne'), cardinal: 'Northeast', drivingSide: 'right' },
+      ],
+    };
+    let renderer: TestRenderer.ReactTestRenderer;
+    act(() => {
+      renderer = TestRenderer.create(
+        <CurbSideCrossSection confirmation={oneWay} onSelect={onSelect} onCancel={vi.fn()} loading={false} />,
+      );
+    });
+    const markup = JSON.stringify(renderer!.toJSON());
+    expect(markup).toContain('Which side did you park on?');
+    expect(markup).toContain('Facing the direction of traffic');
+    expect(markup).toContain('← Left side');
+    expect(markup).toContain('Right side →');
+    expect(markup).not.toContain('Maran Place');
+    expect(markup).not.toContain('pq-curb-side-road');
+    expect(markup).not.toContain('rotate(');
+    expect(markup).not.toContain('Northeast curb');
+    const right = renderer!.root.findByProps({ 'data-driving-side': 'right' });
+    act(() => { right.props.onClick(); });
+    expect(onSelect).toHaveBeenCalledWith(token('ne'));
+    expect(renderer!.root.findByProps({ 'data-driving-side': 'right' }).props['aria-pressed']).toBe(true);
+    act(() => { renderer!.root.findByProps({ 'data-driving-side': 'left' }).props.onClick(); });
+    expect(onSelect).toHaveBeenCalledTimes(1);
+
+    onSelect.mockClear();
+    let loadingView: TestRenderer.ReactTestRenderer;
+    act(() => {
+      loadingView = TestRenderer.create(
+        <CurbSideCrossSection confirmation={oneWay} onSelect={onSelect} onCancel={vi.fn()} loading />,
+      );
+    });
+    const loadingRight = loadingView!.root.findByProps({ 'data-driving-side': 'right' });
+    expect(loadingRight.props.disabled).toBe(true);
+    expect(loadingView!.root.findByProps({ className: 'pq-curb-side-cancel' }).props.disabled).toBeUndefined();
+    act(() => { loadingRight.props.onClick(); });
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });

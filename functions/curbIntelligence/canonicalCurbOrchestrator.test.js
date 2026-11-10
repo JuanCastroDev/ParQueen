@@ -310,7 +310,7 @@ describe('runCanonicalCurbOrchestrator', () => {
         identity,
         publicSegment: {
           segmentId: key, streetName: 'MARAN PLACE', sideLabel: 'North',
-          ruleSummary: { cleaningAvailable: false },
+          ruleSummary: { cleaningAvailable: false, rulesResolved: true },
         },
       })),
     });

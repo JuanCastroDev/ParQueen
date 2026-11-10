@@ -3,7 +3,6 @@
 const { normalizeBlockFaceId } = require('./curbIdentity');
 const { CURB_RESOLUTION_POLICY } = require('./curbResolutionPolicy');
 const { runCanonicalDotLookup } = require('./canonicalDotLookup');
-const { runCanonicalSweepLookup } = require('./canonicalSweepLookup');
 const { runCanonicalMeterLookup } = require('./productMeterLookup');
 const { selectRuleSet } = require('./ruleConflictPolicy');
 
@@ -41,15 +40,13 @@ async function loadCanonicalRules(identity, options = {}) {
   const sourceInput = { identity, signal: options.signal };
   const dotLookup = options.dotLookup || runCanonicalDotLookup;
   const parkNycLookup = options.parkNycLookup || runCanonicalMeterLookup;
-  const sweepLookup = options.sweepLookup || runCanonicalSweepLookup;
   const adminLookup = options.adminLookup || (async () => ({ state: 'complete', rules: [] }));
-  const [dot, parkNyc, sweepNyc, admin] = await Promise.all([
+  const [dot, parkNyc, admin] = await Promise.all([
     boundedLookup(dotLookup, sourceInput, options),
     boundedLookup(parkNycLookup, sourceInput, options),
-    boundedLookup(sweepLookup, sourceInput, options),
     boundedLookup(adminLookup, sourceInput, options),
   ]);
-  const sources = { dot, parkNyc, sweepNyc, admin };
+  const sources = { dot, parkNyc, admin };
   return { state: 'complete', sources, selected: selectRuleSet(sources) };
 }
 
