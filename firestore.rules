@@ -1152,6 +1152,14 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Unpublished canonical write generations and clock probes. Admin SDK only.
+    match /curbWriteGenerations/{curbKey} {
+      allow read, write: if false;
+      match /{document=**} {
+        allow read, write: if false;
+      }
+    }
+
     // All streetSegments/streetRules mutations are admin-callable-only
     // (adminAddSegment, adminUpdateSegmentStatus, adminAddCleaningRule,
     // adminSupersedeRule, adminBackfillStreetIntelligence — all

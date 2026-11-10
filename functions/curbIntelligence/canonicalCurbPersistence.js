@@ -4,6 +4,13 @@ const { createHash } = require('node:crypto');
 const { publicCurbKey, toPublicCurb } = require('./canonicalCurbIdentity');
 const { hasPrimaryTopologyAuthority } = require('./canonicalCurbResolver');
 const { hasCanonicalCurbIdentityProof } = require('./canonicalCurbIdentityProof');
+const {
+  WRITE_AUTHORITY_SCHEME,
+  generationIdFromPersistToken,
+  evaluateWriteAuthority,
+  associateDocumentAuthorities,
+  bindDeadlineToFirestoreClock,
+} = require('./writeAuthority');
 
 const PUBLIC_KEY = /^curb2_[a-f0-9]{32}$/;
 const RULE_SET_VERSION = /^curbrules2_[a-f0-9]{20}$/;
@@ -184,6 +191,28 @@ async function readCanonicalCache({ db, topologyResult, identityProof }) {
     || canonicalGeometry(publicSegment.geometry) !== canonicalGeometry(currentPublic?.geometry)) {
     return { hit: false, reason: 'cache_curb_mismatch' };
   }
+  const privateAuth = evaluateWriteAuthority(privateData?.writeAuthority);
+  const publicAuth = evaluateWriteAuthority(publicSegment?.writeAuthority);
+  const associated = associateDocumentAuthorities([privateAuth, publicAuth]);
+  if (associated.status === 'reject') {
+    return { hit: false, reason: associated.reason || 'write_authority_rejected' };
+  }
+  if (associated.status === 'valid' && typeof db.collection === 'function'
+    && publicSegment?.activeRuleSetVersion) {
+    const rulesSnap = await db.collection(`streetSegments/${key}/streetRules`)
+      .where('ruleSetVersion', '==', publicSegment.activeRuleSetVersion)
+      .get();
+    const ruleDocs = Array.isArray(rulesSnap?.docs) ? rulesSnap.docs : [];
+    const ruleEvals = ruleDocs.map((doc) => (
+      evaluateWriteAuthority((typeof doc.data === 'function' ? doc.data() : doc)?.writeAuthority)
+    ));
+    if (ruleEvals.length) {
+      const rulesAssociated = associateDocumentAuthorities([publicAuth, ...ruleEvals]);
+      if (rulesAssociated.status === 'reject') {
+        return { hit: false, reason: rulesAssociated.reason || 'write_authority_rejected' };
+      }
+    }
+  }
   return { hit: true, identity: storedIdentityValue, publicSegment };
 }
 
@@ -209,6 +238,146 @@ function refuseWrite(input = {}) {
 
 function trustedProductCaller(uid) {
   return typeof uid === 'string' && uid.length > 0 && uid.length <= 128 && !uid.includes('/');
+}
+
+
+function resolveFieldValue(input = {}) {
+  if (input.FieldValue && typeof input.FieldValue.serverTimestamp === 'function') {
+    return input.FieldValue;
+  }
+  try {
+    return require('firebase-admin/firestore').FieldValue;
+  } catch {
+    return null;
+  }
+}
+
+async function runGuardedPersistTransaction(input, work) {
+  const db = input.db;
+  const userInitiated = Object.prototype.hasOwnProperty.call(input || {}, 'callerUid');
+  if (userInitiated) {
+    const callerUid = input.callerUid;
+    if (!trustedProductCaller(callerUid) || typeof db.runTransaction !== 'function') {
+      return { success: false, reason: 'product_access_denied' };
+    }
+    const { userRecordDenies } = require('../productAccess');
+    const denied = Symbol('product-access-denied');
+    try {
+      await db.runTransaction(async (tx) => {
+        const snap = await tx.get(db.doc(`users/${callerUid}`));
+        const data = snap && snap.exists && typeof snap.data === 'function' ? snap.data() : null;
+        if (userRecordDenies(data)) throw denied;
+        if (!writePermitted(input)) throw new Error('request_aborted');
+        await work(tx);
+      });
+    } catch (err) {
+      if (err === denied) return { success: false, reason: 'product_access_denied' };
+      const late = refuseWrite(input);
+      if (late) return late;
+      if (String(err?.message || err) === 'request_aborted') {
+        return { success: false, reason: 'request_aborted' };
+      }
+      if (String(err?.message || err) === 'newer_valid_exists') {
+        return { success: true, published: false, skipped: 'newer_valid_exists' };
+      }
+      throw err;
+    }
+    return { success: true };
+  }
+
+  try {
+    await db.runTransaction(async (tx) => {
+      if (!writePermitted(input)) throw new Error('request_aborted');
+      await work(tx);
+    });
+  } catch (err) {
+    const late = refuseWrite(input);
+    if (late) return late;
+    if (String(err?.message || err) === 'request_aborted') {
+      return { success: false, reason: 'request_aborted' };
+    }
+    if (String(err?.message || err) === 'newer_valid_exists') {
+      return { success: true, published: false, skipped: 'newer_valid_exists' };
+    }
+    throw err;
+  }
+  return { success: true };
+}
+
+async function persistDeadlineBoundCurb(input, documents, key, rules) {
+  const FieldValue = resolveFieldValue(input);
+  const generationId = generationIdFromPersistToken(input.persistToken);
+  if (!generationId) return { success: false, reason: 'request_aborted' };
+  const bound = await bindDeadlineToFirestoreClock({
+    db: input.db,
+    FieldValue,
+    key,
+    generationId,
+    deadlineAt: input.deadlineAt,
+    now: () => Date.now(),
+  });
+  if (!bound.ok) return { success: false, reason: bound.reason || 'request_aborted' };
+  const refusedAfterProbe = refuseWrite(input);
+  if (refusedAfterProbe) return refusedAfterProbe;
+
+  const generationRef = input.db.doc(`curbWriteGenerations/${key}/generations/${generationId}`);
+  const generationRecord = {
+    scheme: WRITE_AUTHORITY_SCHEME,
+    generationId,
+    deadlineAtMs: bound.deadlineFsMs,
+    committedAt: FieldValue.serverTimestamp(),
+    publicCurbKey: key,
+    identity: documents.find(([ref]) => ref.path.startsWith('curbIdentities/'))?.[1] || null,
+    segment: documents.find(([ref]) => ref.path === `streetSegments/${key}`)?.[1] || null,
+    rules: documents
+      .filter(([ref]) => ref.path.startsWith(`streetSegments/${key}/streetRules/`))
+      .map(([ref, value]) => ({ path: ref.path, value })),
+  };
+
+  const phase1 = await runGuardedPersistTransaction(input, async (tx) => {
+    tx.set(generationRef, generationRecord);
+  });
+  if (!phase1.success) return { success: false, reason: phase1.reason || 'request_aborted' };
+
+  const genSnap = await generationRef.get();
+  const generated = genSnap && typeof genSnap.data === 'function' ? genSnap.data() : null;
+  const writeAuthority = {
+    scheme: WRITE_AUTHORITY_SCHEME,
+    generationId,
+    deadlineAtMs: bound.deadlineFsMs,
+    committedAt: generated?.committedAt,
+  };
+  const eligibility = evaluateWriteAuthority(writeAuthority);
+  if (eligibility.status !== 'valid' || !writePermitted(input)) {
+    return { success: false, reason: 'request_aborted' };
+  }
+
+  const phase2 = await runGuardedPersistTransaction(input, async (tx) => {
+    const currentSnap = await tx.get(input.db.doc(`streetSegments/${key}`));
+    const current = currentSnap && currentSnap.exists && typeof currentSnap.data === 'function'
+      ? currentSnap.data()
+      : null;
+    const currentEval = evaluateWriteAuthority(current?.writeAuthority);
+    if (currentEval.status === 'valid' && currentEval.committedAtMs > eligibility.committedAtMs) {
+      throw new Error('newer_valid_exists');
+    }
+    for (const [ref, value] of documents) {
+      tx.set(ref, {
+        ...value,
+        writeAuthority,
+        updatedAt: writeAuthority.committedAt,
+      });
+    }
+  });
+  if (phase2.success === false) {
+    return { success: false, reason: phase2.reason || 'request_aborted' };
+  }
+  return {
+    success: true,
+    publicCurbKey: key,
+    ruleCount: rules.length,
+    published: phase2.skipped !== 'newer_valid_exists',
+  };
 }
 
 async function persistCanonicalCurb(input = {}) {
@@ -269,6 +438,9 @@ async function persistCanonicalCurb(input = {}) {
   // only when transactions are unavailable.
   const refused = refuseWrite(input);
   if (refused) return refused;
+  if (Number.isFinite(input.deadlineAt)) {
+    return persistDeadlineBoundCurb(input, documents, key, rules);
+  }
   const userInitiated = Object.prototype.hasOwnProperty.call(input || {}, 'callerUid');
   const useTransaction = typeof db.runTransaction === 'function'
     && (userInitiated || input.signal || Number.isFinite(input.deadlineAt) || typeof input.persistAllowed === 'function');

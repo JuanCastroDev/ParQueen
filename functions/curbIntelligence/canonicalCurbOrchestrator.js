@@ -123,6 +123,7 @@ async function persistSelected(resolution, identityProof, selectedRules, depende
     return await persist({
       db: dependencies.db,
       Timestamp: dependencies.Timestamp,
+      FieldValue: dependencies.FieldValue,
       topologyResult: resolution,
       identityProof,
       selectedRules,
@@ -130,6 +131,7 @@ async function persistSelected(resolution, identityProof, selectedRules, depende
       deadlineAt: dependencies.deadlineAt,
       persistToken: dependencies.persistToken,
       persistAllowed: dependencies.persistAllowed,
+      callerUid: dependencies.callerUid,
     });
   } catch {
     return { success: false };

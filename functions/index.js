@@ -4463,9 +4463,12 @@ async function _attachSweepnycProductEvidence(segmentId, segment, capture, ruleO
       const snap = await db.collection(`streetSegments/${segmentId}/streetRules`)
         .where('supersededAt', '==', null)
         .get();
-      rules = snap.docs.map(doc => doc.data()).filter(rule => (
+      const loadedSweep = snap.docs.map(doc => doc.data()).filter(rule => (
         rule && rule.type === 'streetCleaning' && rule.source === 'sweepnyc'
       ));
+      const { filterAuthoritativeRules } = require('./curbIntelligence/writeAuthority');
+      const selectedSweep = filterAuthoritativeRules(segment || {}, loadedSweep);
+      rules = selectedSweep.ok ? selectedSweep.rules : [];
       if (!rules.length) {
         const fallback = await db.doc(`streetSegments/${segmentId}/streetRules/sweepnyc_v1`).get();
         if (fallback.exists) rules = [fallback.data()];
@@ -4478,7 +4481,7 @@ async function _attachSweepnycProductEvidence(segmentId, segment, capture, ruleO
   }
 }
 
-async function _loadActiveStreetRules(segmentId) {
+async function _loadActiveStreetRules(segmentId, segment) {
   const snap = await db.collection(`streetSegments/${segmentId}/streetRules`)
     .where('supersededAt', '==', null)
     .get();
@@ -4487,14 +4490,16 @@ async function _loadActiveStreetRules(segmentId) {
     const fallback = await db.doc(`streetSegments/${segmentId}/streetRules/sweepnyc_v1`).get();
     if (fallback.exists) rules = [...rules.filter(rule => rule.type !== 'streetCleaning'), fallback.data()];
   }
-  return rules;
+  const { filterAuthoritativeRules } = require('./curbIntelligence/writeAuthority');
+  const selected = filterAuthoritativeRules(segment || {}, rules);
+  return selected.ok ? selected.rules : [];
 }
 
 async function _considerSweepnycDedup({ segmentId, segment, lat, lng, captureProductEvidence, via }) {
   if (segment.status === 'archived') {
     return { action: 'return', value: { success: false, reason: 'archived_segment' } };
   }
-  const rules = await _loadActiveStreetRules(segmentId);
+  const rules = await _loadActiveStreetRules(segmentId, segment);
   const usableCount = countUsableStreetIntelligence(rules);
   if (decideDedupPath(usableCount) === 'fast') {
     logStreetIntelEvent('dedup_hit_usable', { via, usableCount });
@@ -5112,6 +5117,7 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
     persistAllowed: requestDeadline.persistAllowed,
     db,
     Timestamp,
+    FieldValue,
     planimetricStore: createPlanimetricCurbStore({ fetchFn: fetch }),
     parkNycStore: createParkNycCandidateStore({
       fetchFn: fetch,

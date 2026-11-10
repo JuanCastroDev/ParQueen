@@ -28,6 +28,7 @@ import {
 import { aggregateLocationSamples, collectLocationBurst, readStreetIntelQaBurstTiming, retainedCanonicalLocation, type LocationSample } from '../utils/locationBurst';
 import { streetIntelQaBuild } from '../utils/demoFirebase';
 import { streetIntelClientFeaturesEnabled } from '../utils/streetIntelClientFeatures';
+import { filterAuthoritativeRules, segmentAllowsAuthoritativeRead } from '../utils/canonicalCurbWriteAuthority';
 import {
     resolveCanonicalCurbWithLocation,
     type CanonicalCurbResponse,
@@ -684,7 +685,7 @@ export const MapView: React.FC<MapViewProps> = ({
             // Exclude archived segments so stale data doesn't block a fresh SweepNYC lookup
             const candidates = allCandidates.filter(
                 (c: any) => !c.status || c.status === 'active' || c.status === 'needs_review'
-            );
+            ).filter((c: any) => segmentAllowsAuthoritativeRead(c).ok);
             console.log('[matchNearestSegment] candidate counts:', {
                 total: allCandidates.length, active: candidates.length,
             });
@@ -762,7 +763,8 @@ export const MapView: React.FC<MapViewProps> = ({
             );
             const restrictionVersionId = rulesSnap.docs[0]?.id || null;
             dbg(`streetRules count: ${rulesSnap.docs.length}`);
-            const nearbyRules = rulesSnap.docs.map(d => d.data());
+            const nearbySelected = filterAuthoritativeRules(nearest, rulesSnap.docs.map(d => d.data()));
+            const nearbyRules = nearbySelected.ok ? nearbySelected.rules : [];
             const usableCount = countUsableStreetIntelligence(nearbyRules);
             const alreadyAttemptedEmptyRefresh = emptyRulesRefreshAttemptedRef.current.has(nearest.id);
             if (shouldCallEmptyCacheRefresh(usableCount, alreadyAttemptedEmptyRefresh)) {

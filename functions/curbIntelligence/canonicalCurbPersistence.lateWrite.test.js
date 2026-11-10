@@ -10,6 +10,7 @@ const { createRequestDeadline, childBudgetMs, OVERALL_DEADLINE_MS } = require('.
 const { runCanonicalCurbOrchestrator } = require('./canonicalCurbOrchestrator');
 
 const Timestamp = { now: () => 'timestamp-now' };
+const FieldValue = { serverTimestamp: () => ({ toMillis: () => Date.now() }) };
 const metadata = { id: 'inkn-q76z', rowsUpdatedAt: 1767225600, viewLastModified: 1767225660 };
 
 function memoryDb() {
@@ -24,6 +25,10 @@ function memoryDb() {
         async get() {
           const value = docs.get(path);
           return { exists: value !== undefined, data: () => value };
+        },
+        async set(value) {
+          docs.set(path, value);
+          writes.push({ path, value });
         },
       };
     },
@@ -102,6 +107,7 @@ describe('cancelled and expired persistence', () => {
     const result = await persistCanonicalCurb({
       db,
       Timestamp,
+      FieldValue,
       topologyResult,
       identityProof,
       selectedRules: { rules: [] },
@@ -128,6 +134,7 @@ describe('cancelled and expired persistence', () => {
     const result = await persistCanonicalCurb({
       db,
       Timestamp,
+      FieldValue,
       topologyResult,
       identityProof,
       selectedRules: { rules: [] },
@@ -137,7 +144,9 @@ describe('cancelled and expired persistence', () => {
       persistAllowed: deadline.persistAllowed,
     });
     expect(result).toEqual({ success: false, reason: 'request_aborted' });
-    expect(db.writes).toEqual([]);
+    expect(db.writes.filter((write) => (
+      write.path.startsWith('streetSegments/') || write.path.startsWith('curbIdentities/')
+    ))).toEqual([]);
     deadline.dispose();
   });
 

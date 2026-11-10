@@ -13,6 +13,7 @@ import {
   classifyStreetIntelligence,
   StreetIntelligencePresentation,
 } from '../../utils/streetIntelligencePresentation';
+import { filterAuthoritativeRules } from '../../utils/canonicalCurbWriteAuthority';
 import { t, useLang } from '../../i18n';
 
 interface Props {
@@ -137,11 +138,14 @@ export const StreetIntelligenceCard = ({
             where('supersededAt', '==', null),
           ));
         if (cancelled) return;
-        const rules = rulesSnap.docs
+        const loadedRules = rulesSnap.docs
           .map(d => ({ id: d.id, ...d.data() } as StreetRuleDoc & { ruleSetVersion?: string }))
           .filter(rule => !activeRuleSetVersion || rule.ruleSetVersion === activeRuleSetVersion);
+        const selected = filterAuthoritativeRules(segment, loadedRules);
+        const rules = selected.ok ? selected.rules : [];
+        const authoritativeSegment = selected.ok ? segment : null;
         cdbg(`streetRules count: ${rules.length}`);
-        const nextPresentation = classifyStreetIntelligence(segment, rules);
+        const nextPresentation = classifyStreetIntelligence(authoritativeSegment, rules);
         cdbg(`presentation state: ${nextPresentation.state} | source: ${nextPresentation.source ?? 'none'}`);
         setPresentation(nextPresentation);
 

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { filterAuthoritativeRules } from '../../utils/canonicalCurbWriteAuthority';
 import { db } from '../../firebase';
 import {
   collection, getDocs, query, orderBy, where,
@@ -240,7 +241,9 @@ function SegmentRow({ seg, onDeleted }: { seg: SegmentDoc; onDeleted: () => void
     const snap = await getDocs(
       query(collection(db, 'streetSegments', seg.id, 'streetRules'), where('supersededAt', '==', null))
     );
-    setRules(snap.docs.map(d => ({ id: d.id, ...d.data() } as StreetRuleDoc)));
+    const loaded = snap.docs.map(d => ({ id: d.id, ...d.data() } as StreetRuleDoc));
+    const selected = filterAuthoritativeRules(seg, loaded);
+    setRules(selected.ok ? selected.rules : []);
     setLoadingRules(false);
   };
 

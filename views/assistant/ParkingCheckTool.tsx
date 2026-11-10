@@ -12,6 +12,7 @@ import {
   classifyStreetIntelligence, type StreetIntelligencePresentationState,
 } from '../../utils/streetIntelligencePresentation';
 import { evaluateParkingCheck, type ParkingCheckResult } from '../../utils/parkingCheck';
+import { filterAuthoritativeRules } from '../../utils/canonicalCurbWriteAuthority';
 import { assessHydrantDistance, type HydrantAssessment } from '../../utils/hydrantDistance';
 import { lookupNearestHydrant } from './HydrantDistanceTool';
 import { HydrantIcon } from './HydrantIcon';
@@ -52,9 +53,11 @@ async function loadStreetOutcome(spot: SavedSpot): Promise<StreetOutcome> {
       )),
     ]);
 
-    const rules = rulesSnap.docs.map(d => ({ id: d.id, ...d.data() } as StreetRuleDoc));
+    const loadedRules = rulesSnap.docs.map(d => ({ id: d.id, ...d.data() } as StreetRuleDoc));
     const segment = segSnap.exists() ? segSnap.data() : null;
-    const presentation = classifyStreetIntelligence(segment, rules).state;
+    const selected = filterAuthoritativeRules(segment, loadedRules);
+    const rules = selected.ok ? selected.rules : [];
+    const presentation = classifyStreetIntelligence(selected.ok ? segment : null, rules).state;
     if (presentation === 'unknown' || !effectiveSide) {
       return { presentation, safeUntil: null, effectiveSide, failed: false };
     }

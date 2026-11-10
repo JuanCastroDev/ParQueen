@@ -53,6 +53,10 @@ function memoryDb(seed = {}) {
           const value = docs.get(path);
           return { exists: value !== undefined, data: () => value };
         },
+        async set(value) {
+          docs.set(path, value);
+          writes.push({ path, value });
+        },
       };
     },
     batch() {
