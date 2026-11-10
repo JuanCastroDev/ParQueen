@@ -131,7 +131,7 @@ async function persistSelected(resolution, identityProof, selectedRules, depende
       deadlineAt: dependencies.deadlineAt,
       persistToken: dependencies.persistToken,
       persistAllowed: dependencies.persistAllowed,
-      callerUid: dependencies.callerUid,
+      ...(typeof dependencies.callerUid === 'string' ? { callerUid: dependencies.callerUid } : {}),
     });
   } catch {
     return { success: false };

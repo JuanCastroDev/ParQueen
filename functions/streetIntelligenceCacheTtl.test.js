@@ -41,6 +41,9 @@ function memoryDb() {
         async get() {
           return { exists: docs.has(path), data: () => docs.get(path) };
         },
+        async set(value) {
+          docs.set(path, value);
+        },
       };
     },
     batch() {
@@ -51,6 +54,17 @@ function memoryDb() {
           for (const [path, data] of ops) docs.set(path, data);
         },
       };
+    },
+    async runTransaction(fn) {
+      const pending = [];
+      const tx = {
+        async get(ref) {
+          return { exists: docs.has(ref.path), data: () => docs.get(ref.path) };
+        },
+        set(ref, value) { pending.push([ref.path, value]); },
+      };
+      await fn(tx);
+      for (const [path, value] of pending) docs.set(path, value);
     },
   };
 }
@@ -124,6 +138,7 @@ async function resolveWith(boundary, db, clock, resolveResult, extra = {}) {
   const result = await runCanonicalCurbOrchestrator({ protocolVersion: 2, location }, {
     db,
     Timestamp: clock.Timestamp,
+    FieldValue: { serverTimestamp: () => clock.Timestamp.now() },
     resolveCanonicalCurb: vi.fn(async () => resolveResult),
     blockfaceResolver: proof.blockfaceResolver,
     readCanonicalCache: async (input) => {
