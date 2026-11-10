@@ -158,6 +158,15 @@ jobs:
         env:
           FIREBASE_CLI_EXPERIMENTS: webframeworks
 
+      - name: Run isolated parking fence tests (Linux)
+        if: success() || failure()
+        run: |
+          echo "FUNCTIONS_ISOLATED_EMULATOR_EXEC_START"
+          npm run test:functions:isolated
+          echo "FUNCTIONS_ISOLATED_EMULATOR_EXEC_DONE"
+        env:
+          FIREBASE_CLI_EXPERIMENTS: webframeworks
+
       # firebase-debug.log is present when the CLI writes one; firestore-debug.log
       # is created by the Firestore emulator. Upload neither unless the suite failed.
       - name: Upload emulator debug logs

@@ -719,10 +719,24 @@ describe('deleteAccount — admin-lockout safety (DA)', () => {
         const authRecord = await adminAuth.getUser(uid).catch(() => null);
         expect(authRecord).not.toBeNull();
 
-        const job = (await db.doc(`accountDeletionJobs/${uid}`).get()).data();
-        expect(job?.state).toBe('failed');
-        expect(job?.lastError).toMatch(/adminSafetyCheck/);
-        expect(Object.keys(job?.steps || {})).toHaveLength(0); // no cleanup step ever ran
+        expect((await db.doc(`accountDeletionJobs/${uid}`).get()).exists).toBe(false);
+        expect((await db.doc(`accountLifecycle/${uid}`).get()).exists).toBe(false);
+
+        await db.doc(`accountDeletionJobs/${uid}`).set({
+            state: 'running',
+            steps: { profile: 'done' },
+            attemptNumber: 2,
+        });
+        await expect(callDirect(uid, Math.floor(Date.now() / 1000) - 30))
+            .rejects.toMatchObject({ code: 'failed-precondition' });
+        const existingJob = (await db.doc(`accountDeletionJobs/${uid}`).get()).data();
+        expect(existingJob.state).toBe('failed');
+        expect(existingJob.lastError).toMatch(/adminSafetyCheck/);
+        expect(existingJob.steps).toEqual({ profile: 'done' });
+        expect(existingJob.attemptNumber).toBe(2);
+        expect((await db.doc(`accountLifecycle/${uid}`).get()).exists).toBe(false);
+        expect((await db.doc(`users/${uid}`).get()).exists).toBe(true);
+        expect((await adminAuth.getUser(uid)).customClaims?.role).toBe('admin');
 
         await db.collection('usernames').doc('soleadmintestname').delete().catch(() => {});
     });
