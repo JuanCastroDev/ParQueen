@@ -193,7 +193,7 @@ describe('Street Intelligence product cache TTL', () => {
     const clock = clockAt(1_700_000_000_000);
     const boundary = createStreetIntelligenceCacheBoundary({ Timestamp: clock.Timestamp });
     await resolveWith(boundary, db, clock, authenticPrimary);
-    const segment = [...db.docs.keys()].find(path => path.startsWith('streetSegments/'));
+    const segment = [...db.docs.keys()].find(path => /^streetSegments(?:V2)?\/[^/]+$/.test(path));
 
     db.docs.get(segment).updatedAt = undefined;
     const missing = await resolveWith(boundary, db, clock, authenticPrimary);

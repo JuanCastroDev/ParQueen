@@ -94,6 +94,7 @@ export default defineConfig(({ command, mode }) => {
           'firestore.rules.test.original-suite.ts',
           'firestore.rules.finder-notice.31ag.test.ts',
           'firestore.rules.ping-delete.test.ts',
+          'firestore.rules.streetSegmentsV2.test.ts',
           'storage.rules.test.ts',
           'functions/*.integration.test.*',
           // Emulator-only. Still required by vite.functions.config.ts.

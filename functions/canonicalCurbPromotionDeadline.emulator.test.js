@@ -121,15 +121,18 @@ async function inspect(firestore, key) {
   };
 }
 
-describe.skipIf(!enabled)('canonical curb public promotion deadline emulator', () => {
+function emulatorFirestore() {
   if (!host.startsWith('127.0.0.1:') || host.endsWith(':8080')) {
     throw new Error(`Refusing emulator host ${host}`);
   }
   const app = getApps().find((item) => item.name === 't640u-promotion')
     || initializeApp({ projectId: 'demo-parkqueen-promotion-deadline' }, 't640u-promotion');
-  const firestore = getFirestore(app);
+  return getFirestore(app);
+}
 
+describe.skipIf(!enabled)('canonical curb public promotion deadline emulator', () => {
   it('publishes an on-time staging and on-time promotion only to V2', async () => {
+    const firestore = emulatorFirestore();
     const built = await topology(firestore, `on-time-${Date.now()}`);
     const { result, deadline } = await persistWith(firestore, built, { startedAt: Date.now() });
     const seen = await inspect(firestore, built.key);
@@ -147,6 +150,7 @@ describe.skipIf(!enabled)('canonical curb public promotion deadline emulator', (
   }, 30_000);
 
   it('rejects the original late-promotion race and hides it from legacy collections', async () => {
+    const firestore = emulatorFirestore();
     await firestore.doc('_t640u_warmup/ping').set({ at: FieldValue.serverTimestamp() });
     const built = await topology(firestore, `late-${Date.now()}`);
     const { result, deadline } = await persistWith(firestore, built, {
@@ -175,6 +179,7 @@ describe.skipIf(!enabled)('canonical curb public promotion deadline emulator', (
   }, 30_000);
 
   it('does not let a delayed older promotion overwrite a newer valid generation', async () => {
+    const firestore = emulatorFirestore();
     const built = await topology(firestore, `race-${Date.now()}`);
     let releaseOlder;
     const olderGate = new Promise((resolve) => { releaseOlder = resolve; });
