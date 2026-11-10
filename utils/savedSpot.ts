@@ -48,6 +48,7 @@ export interface SavedSpot {
   drivingSide?: 'left' | 'right' | null;
   publicRules?: import('./canonicalCurbClient').CanonicalPublicRule[] | null;
   publicSchedules?: import('./canonicalCurbClient').CanonicalPublicSchedules | null;
+  regulationStatus?: 'verified' | 'partial' | 'unknown' | 'verified_empty' | null;
 }
 
 interface MinStorage {

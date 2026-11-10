@@ -354,6 +354,10 @@ describe('A1 additive response compatibility', () => {
       source: 'nyc_open_data',
       schedules: [{ days: ['Mon'], startTime: '08:00', endTime: '09:30', side: 'North' }],
     }],
+    identityConfidence: 'high' as const,
+    regulationStatus: 'verified' as const,
+    regulationCompleteness: 'complete' as const,
+    regulationAvailability: 'available' as const,
     publicSchedules: {
       cleaning: [{ days: ['Mon'], startTime: '08:00', endTime: '09:30', side: 'North' }],
       restrictions: [],

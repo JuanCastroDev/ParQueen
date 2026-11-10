@@ -99,7 +99,7 @@ function dependencies(overrides = {}) {
   return {
     resolveCanonicalCurb: vi.fn(async () => supported()),
     applyVisualCurbSelection: vi.fn(async () => supported()),
-    loadCanonicalRules: vi.fn(async () => ({ state: 'complete', selected: selectedRules, sources: {} })),
+    loadCanonicalRules: vi.fn(async () => ({ state: 'complete', selected: selectedRules, sources: { dot: { state: 'complete' } } })),
     readCanonicalCache: vi.fn(async () => ({ hit: false, reason: 'exact_identity_missing' })),
     persistCanonicalCurb: vi.fn(async () => ({ success: true, publicCurbKey: publicCurbKey(identity), ruleCount: 1 })),
     requestNonceFactory: () => 'server-nonce',

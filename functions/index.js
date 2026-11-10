@@ -5202,14 +5202,22 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
       .readConfiguredSideConfirmationHmacKey(process.env),
     sideConfirmationHmacKeyName: curbSideConfirmationHmacKey.name,
     readCanonicalCache: streetIntelligenceCache.readCanonicalCache,
-    // The orchestrator fetches external evidence before this write. The
-    // authenticated uid is applied here, over any field in the orchestrator
-    // payload, and persistCanonicalCurb reads that user inside the commit
-    // transaction. Scheduled and internal callers do not set callerUid.
-    persistCanonicalCurb: async () => ({
-      success: true,
-      skipped: 'user_request_not_authoritative',
-    }),
+    // STREET_INTEL_A1_RESPONSE_ONLY defaults off. Off preserves main
+    // publication. On refuses shared writes for every caller.
+    publishUserResolution: !require('./curbIntelligence/a1ResponseOnlyFlag').isA1ResponseOnlyEnabled(),
+    persistCanonicalCurb: require('./curbIntelligence/a1ResponseOnlyFlag').isA1ResponseOnlyEnabled()
+      ? async () => ({
+        success: true,
+        skipped: 'user_request_not_authoritative',
+      })
+      : async (input) => {
+        const supplied = input && typeof input === 'object' ? input : {};
+        return streetIntelligenceCache.persistCanonicalCurb({
+          ...supplied,
+          callerUid: verifiedUid,
+          allowUserPublication: true,
+        });
+      },
   };
   if (process.env.FUNCTIONS_EMULATOR === 'true') {
     const { localRuntimeDependencies } = require('./curbIntelligence/runtimeSourceArtifact');

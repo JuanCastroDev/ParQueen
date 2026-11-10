@@ -19,7 +19,7 @@ const { isSideConfirmationEnabled } = require('./sideConfirmation');
 const { SIDE_CONFIRMATION_TOKEN_MAX_LENGTH } = require('./sideConfirmationToken');
 const { applyVisualCurbSelection } = require('./visualCurbSelection');
 const { loadCanonicalRules } = require('./canonicalRuleSources');
-const { readCanonicalCache } = require('./canonicalCurbPersistence');
+const { readCanonicalCache, persistCanonicalCurb } = require('./canonicalCurbPersistence');
 const {
   buildHighConfidenceResponse,
   requestIncludesExtendedResponse,
@@ -83,7 +83,33 @@ function highResponse(publicCurb, selected, options = {}) {
   return buildHighConfidenceResponse(publicCurb, selected, {
     cacheHit: options.cacheHit === true,
     includeExtended: options.includeExtended === true,
+    dotComplete: options.dotComplete,
+    sourceUnavailable: options.sourceUnavailable === true,
+    dotState: options.dotState,
+    dotReasons: options.dotReasons,
   });
+}
+
+async function persistFreshResolution(resolution, identityProof, selectedRules, dependencies) {
+  if (dependencies.publishUserResolution !== true) return { success: true, skipped: 'a1_response_only' };
+  const persist = dependencies.persistCanonicalCurb || persistCanonicalCurb;
+  try {
+    return await persist({
+      db: dependencies.db,
+      Timestamp: dependencies.Timestamp,
+      topologyResult: resolution,
+      identityProof,
+      selectedRules,
+      deadlineAt: dependencies.deadlineAt,
+      persistToken: dependencies.persistToken,
+      persistAllowed: dependencies.persistAllowed,
+      signal: dependencies.signal,
+      callerUid: dependencies.callerUid,
+      allowUserPublication: true,
+    });
+  } catch {
+    return { success: false };
+  }
 }
 
 function emptySelected() {
@@ -99,13 +125,14 @@ async function loadSelectedRules(identity, dependencies) {
   try {
     rulesResult = await loadRules(identity, dependencies);
   } catch {
-    return { aborted: true };
+    return { aborted: false, failed: true, dotComplete: false, selectedRules: emptySelected(), sources: {} };
   }
   if (dependencies.signal?.aborted || dependencies.resolutionClosed?.()) return { aborted: true };
   const dotComplete = rulesResult?.sources?.dot?.state === 'complete';
   const selectedRules = {
     ...(rulesResult?.selected || emptySelected()),
     rulesResolved: dotComplete,
+    sources: rulesResult?.sources,
   };
   for (const conflict of selectedRules.conflicts || []) {
     emit(dependencies.telemetry, 'source_conflict', {
@@ -115,7 +142,7 @@ async function loadSelectedRules(identity, dependencies) {
       ruleCategory: conflict?.category,
     });
   }
-  return { aborted: false, dotComplete, selectedRules };
+  return { aborted: false, failed: false, dotComplete, selectedRules, sources: rulesResult?.sources || {} };
 }
 
 async function execute(request, dependencies) {
@@ -265,7 +292,14 @@ async function execute(request, dependencies) {
         emit(dependencies.telemetry, 'curb_resolution_high', {
           protocolVersion: 2, cacheHit: true, latencyMs: Date.now() - startedAt,
         });
-        return highResponse(publicCurb, loaded.selectedRules, { cacheHit: true, includeExtended });
+        return highResponse(publicCurb, loaded.selectedRules, {
+          cacheHit: true,
+          includeExtended,
+          dotComplete: loaded.dotComplete,
+          sourceUnavailable: loaded.failed === true,
+          dotState: loaded.sources?.dot?.state,
+          dotReasons: loaded.sources?.dot?.reasons,
+        });
       }
     } else if (cachedRules.length === 0 && summary.cleaningAvailable !== true && summary.rulesResolved !== true) {
       return unsupported('source_unavailable');
@@ -273,7 +307,12 @@ async function execute(request, dependencies) {
       emit(dependencies.telemetry, 'curb_resolution_high', {
         protocolVersion: 2, cacheHit: true, latencyMs: Date.now() - startedAt,
       });
-      return highResponse(cache.publicSegment, cachedRules, { cacheHit: true, includeExtended });
+      return highResponse(cache.publicSegment, cachedRules, {
+        cacheHit: true,
+        includeExtended,
+        dotComplete: summary.rulesResolved === true
+          || (summary.cleaningAvailable === true && cachedRules.length > 0),
+      });
     }
   }
 
@@ -282,10 +321,24 @@ async function execute(request, dependencies) {
   const selectedRules = loaded.selectedRules;
   if (dependencies.signal?.aborted || dependencies.resolutionClosed?.()) return unsupported('source_unavailable');
   if (selectedHasUnresolvedConflicts(selectedRules)) return unsupported('source_unavailable');
+  // Flag off matches main: a source throw is unsupported and does not persist.
+  // Flag on keeps verified curb identity and reports unknown regulations.
+  if (loaded.failed && dependencies.publishUserResolution === true) {
+    return unsupported('source_unavailable');
+  }
+  const persisted = await persistFreshResolution(resolution, identityProof, selectedRules, dependencies);
+  if (!persisted?.success) return unsupported('source_unavailable');
   emit(dependencies.telemetry, 'curb_resolution_high', {
     protocolVersion: 2, cacheHit: false, latencyMs: Date.now() - startedAt,
   });
-  return highResponse(publicCurb, selectedRules, { cacheHit: false, includeExtended });
+  return highResponse(publicCurb, selectedRules, {
+    cacheHit: false,
+    includeExtended,
+    dotComplete: loaded.dotComplete,
+    sourceUnavailable: loaded.failed === true,
+    dotState: loaded.sources?.dot?.state,
+    dotReasons: loaded.sources?.dot?.reasons,
+  });
 }
 
 async function boundedExecute(request, dependencies) {

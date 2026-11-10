@@ -131,6 +131,8 @@ describe('A1 response-only user resolution', () => {
     expect(fresh.status).toBe('high_confidence');
     expect(fresh.responseVersion).toBe(1);
     expect(fresh.cacheHit).toBe(false);
+    expect(fresh.regulationStatus).toBe('verified');
+    expect(fresh.identityConfidence).toBe('high');
     expect(fresh.publicRules[0]).toMatchObject({ type: 'streetCleaning', source: 'nyc_open_data' });
     expect(fresh.publicSchedules.cleaning[0]).toMatchObject({ days: ['Mon'], startTime: '08:00' });
     expect(freshDeps.persistCanonicalCurb).not.toHaveBeenCalled();
@@ -183,9 +185,12 @@ describe('A1 response-only user resolution', () => {
       loadCanonicalRules: vi.fn(async () => { throw new Error('dot down'); }),
     });
     // loadSelectedRules catches and continues with empty selected; no persist
-    const failed = await runCanonicalCurbOrchestrator({ protocolVersion: 2, location }, failDeps);
+    const failed = await runCanonicalCurbOrchestrator({ protocolVersion: 2, location, responseVersion: 1 }, failDeps);
     expect(failDeps.persistCanonicalCurb).not.toHaveBeenCalled();
-    expect(failed.status).toBe('unsupported');
+    expect(failed.status).toBe('high_confidence');
+    expect(failed.identityConfidence).toBe('high');
+    expect(failed.regulationStatus).toBe('unknown');
+    expect(failed.ruleSummary.cleaningAvailable).toBe(false);
 
     const conflictDeps = dependencies({
       loadCanonicalRules: vi.fn(async () => ({
@@ -197,5 +202,63 @@ describe('A1 response-only user resolution', () => {
     const conflicted = await runCanonicalCurbOrchestrator({ protocolVersion: 2, location }, conflictDeps);
     expect(conflicted).toEqual({ protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' });
     expect(conflictDeps.persistCanonicalCurb).not.toHaveBeenCalled();
+  });
+
+  it('classifies incomplete, unavailable, and verified-empty DOT outcomes without publishing rules', async () => {
+    const incompleteDeps = dependencies({
+      loadCanonicalRules: vi.fn(async () => ({
+        state: 'complete',
+        selected: { cleaning: null, restrictions: [], timeLimits: [], meter: null, admin: [], conflicts: [], rules: [] },
+        sources: { dot: { state: 'incomplete', reasons: ['partial_rows'] } },
+      })),
+    });
+    const incomplete = await runCanonicalCurbOrchestrator({ protocolVersion: 2, responseVersion: 1, location }, incompleteDeps);
+    expect(incomplete.status).toBe('high_confidence');
+    expect(incomplete.identityConfidence).toBe('high');
+    expect(incomplete.regulationStatus).toBe('unknown');
+    expect(incomplete.regulationCompleteness).toBe('incomplete');
+    expect(incomplete.publicRules).toEqual([]);
+    expect(incomplete.ruleSummary.cleaningAvailable).toBe(false);
+    expect(incompleteDeps.persistCanonicalCurb).not.toHaveBeenCalled();
+
+    const partialDeps = dependencies({
+      loadCanonicalRules: vi.fn(async () => ({
+        state: 'complete',
+        selected: selectedRules,
+        sources: { dot: { state: 'incomplete' } },
+      })),
+    });
+    const partial = await runCanonicalCurbOrchestrator({ protocolVersion: 2, responseVersion: 1, location }, partialDeps);
+    expect(partial.regulationStatus).toBe('partial');
+    expect(partial.publicRules).toEqual([]);
+    expect(partial.ruleSummary.cleaningAvailable).toBe(false);
+
+    const emptyDeps = dependencies({
+      loadCanonicalRules: vi.fn(async () => ({
+        state: 'complete',
+        selected: { cleaning: null, restrictions: [], timeLimits: [], meter: null, admin: [], conflicts: [], rules: [] },
+        sources: { dot: { state: 'complete' } },
+      })),
+    });
+    const empty = await runCanonicalCurbOrchestrator({ protocolVersion: 2, responseVersion: 1, location }, emptyDeps);
+    expect(empty.regulationStatus).toBe('verified_empty');
+    expect(empty.publicRules).toEqual([]);
+    expect(empty.ruleSummary.cleaningAvailable).toBe(false);
+  });
+
+  it('restores main publication only when publishUserResolution is explicitly enabled', async () => {
+    const publishDeps = dependencies({ publishUserResolution: true });
+    const published = await runCanonicalCurbOrchestrator({ protocolVersion: 2, location }, publishDeps);
+    expect(published.status).toBe('high_confidence');
+    expect(publishDeps.persistCanonicalCurb).toHaveBeenCalledOnce();
+    expect(publishDeps.persistCanonicalCurb.mock.calls[0][0].allowUserPublication).toBe(true);
+
+    const failPublish = dependencies({
+      publishUserResolution: true,
+      loadCanonicalRules: vi.fn(async () => { throw new Error('dot down'); }),
+    });
+    const failed = await runCanonicalCurbOrchestrator({ protocolVersion: 2, location }, failPublish);
+    expect(failed).toEqual({ protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' });
+    expect(failPublish.persistCanonicalCurb).not.toHaveBeenCalled();
   });
 });

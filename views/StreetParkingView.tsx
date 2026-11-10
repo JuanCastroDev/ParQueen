@@ -100,7 +100,7 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
     | 'streetIntelStatus' | 'streetIntelReason' | 'streetIntelCheckedAt'
     | 'curbProtocolVersion' | 'curbResolutionStatus' | 'curbSelector' | 'curbSideConfirmation'
     | 'sideConfidence' | 'confirmedParkingSide' | 'drivingSide'
-    | 'publicRules' | 'publicSchedules'
+    | 'publicRules' | 'publicSchedules' | 'regulationStatus'
 > => {
     const checkedAt = new Date().toISOString();
     if (response.status === 'high_confidence') {
@@ -121,6 +121,7 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
             drivingSide: null,
             publicRules: response.publicRules ? [...response.publicRules] : null,
             publicSchedules: response.publicSchedules ? { ...response.publicSchedules } : null,
+            regulationStatus: response.regulationStatus ?? null,
         };
     }
     if (response.status === 'ambiguous') {
@@ -141,6 +142,7 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
             drivingSide: null,
             publicRules: null,
             publicSchedules: null,
+            regulationStatus: null,
         };
     }
     if (response.status === 'side_confirmation_required') {
@@ -161,6 +163,7 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
             drivingSide: null,
             publicRules: null,
             publicSchedules: null,
+            regulationStatus: null,
         };
     }
     return {
@@ -2430,6 +2433,7 @@ export const MapView: React.FC<MapViewProps> = ({
                                 confirmedParkingSide={savedSpot.confirmedParkingSide ?? null}
                                 drivingSide={savedSpot.drivingSide ?? null}
                                 resolvedPublicRules={savedSpot.publicRules ?? null}
+                                resolvedRegulationStatus={savedSpot.regulationStatus ?? null}
                                 onConfirmSide={handleConfirmSide}
                                 onResult={r => {
                                     setCleaningAvailable(r.cleaningAvailable);

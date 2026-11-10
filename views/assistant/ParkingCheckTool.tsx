@@ -47,7 +47,9 @@ async function loadStreetOutcome(spot: SavedSpot): Promise<StreetOutcome> {
     ));
     let rules: StreetRuleDoc[] = [];
     let segment: Record<string, unknown> | null = null;
-    if (Array.isArray(spot.publicRules)) {
+    const resolvedAreVerified = Array.isArray(spot.publicRules)
+      && (spot.regulationStatus == null || spot.regulationStatus === 'verified');
+    if (resolvedAreVerified) {
       rules = spot.publicRules.map((rule, index) => ({ id: `response_${index}`, ...(rule as StreetRuleDoc) }));
       const source = typeof rules[0]?.source === 'string' ? rules[0].source : 'nyc_open_data';
       segment = {
@@ -57,6 +59,17 @@ async function loadStreetOutcome(spot: SavedSpot): Promise<StreetOutcome> {
         source,
         provenance: { provider: source },
         confidenceScore: 1,
+      };
+    } else if (Array.isArray(spot.publicRules) && spot.regulationStatus && spot.regulationStatus !== 'verified') {
+      rules = [];
+      segment = {
+        segmentId: spot.segmentId,
+        streetName: spot.segmentStreetName,
+        status: 'active',
+        source: 'nyc_open_data',
+        provenance: { provider: 'nyc_open_data' },
+        confidenceScore: 1,
+        protocolVersion: 2,
       };
     } else if (spot.segmentId) {
       const [legacySnap, legacyRulesSnap] = await Promise.all([

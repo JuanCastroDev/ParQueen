@@ -24,6 +24,7 @@ interface Props {
   confirmedParkingSide: string | null;
   drivingSide?: 'left' | 'right' | null;
   resolvedPublicRules?: ReadonlyArray<Record<string, unknown>> | null;
+  resolvedRegulationStatus?: 'verified' | 'partial' | 'unknown' | 'verified_empty' | null;
   onConfirmSide: (side: string) => void;
   onResult?: (result: StreetIntelligenceCardResult) => void;
 }
@@ -62,7 +63,7 @@ const SIDE_KEY_MAP: Record<string, string> = {
 
 export const StreetIntelligenceCard = ({
   segmentId, parkingSide, streetName,
-  sideConfidence, confirmedParkingSide, drivingSide, resolvedPublicRules, onConfirmSide,
+  sideConfidence, confirmedParkingSide, drivingSide, resolvedPublicRules, resolvedRegulationStatus, onConfirmSide,
   onResult,
 }: Props) => {
   useLang();
@@ -127,7 +128,9 @@ export const StreetIntelligenceCard = ({
 
         let rules: Array<StreetRuleDoc & { ruleSetVersion?: string }> = [];
         let authoritativeSegment: Record<string, unknown> | null = null;
-        if (Array.isArray(resolvedPublicRules)) {
+        const resolvedAreVerified = Array.isArray(resolvedPublicRules)
+          && (resolvedRegulationStatus == null || resolvedRegulationStatus === 'verified');
+        if (resolvedAreVerified) {
           rules = resolvedPublicRules.map((rule, index) => ({
             id: `response_${index}`,
             ...(rule as StreetRuleDoc),
@@ -140,6 +143,17 @@ export const StreetIntelligenceCard = ({
             source,
             provenance: { provider: source },
             confidenceScore: 1,
+          };
+        } else if (Array.isArray(resolvedPublicRules) && resolvedRegulationStatus && resolvedRegulationStatus !== 'verified') {
+          rules = [];
+          authoritativeSegment = {
+            segmentId,
+            streetName,
+            status: 'active',
+            source: 'nyc_open_data',
+            provenance: { provider: 'nyc_open_data' },
+            confidenceScore: 1,
+            protocolVersion: 2,
           };
         } else {
           const segSnap = await getDoc(doc(db, 'streetSegments', segmentId));
@@ -250,7 +264,7 @@ export const StreetIntelligenceCard = ({
     load();
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [segmentId, effectiveSide, resolvedPublicRules]);
+  }, [segmentId, effectiveSide, resolvedPublicRules, resolvedRegulationStatus]);
 
   const debugBlock = isDebugMode && debugLines.length > 0 ? (
     <div style={{ marginTop: 8, padding: '6px 8px', background: 'rgba(0,0,0,0.85)', borderRadius: 8, border: '1px solid #1e75ff55' }}>

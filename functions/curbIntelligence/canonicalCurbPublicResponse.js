@@ -1,8 +1,10 @@
-﻿'use strict';
+
+'use strict';
 
 const { toPublicRule } = require('./canonicalCurbPersistence');
 
 const PUBLIC_RESPONSE_VERSION = 1;
+const REGULATION_STATUSES = Object.freeze(['verified', 'partial', 'unknown', 'verified_empty']);
 
 function selectedHasUnresolvedConflicts(selectedRules) {
   return Boolean(selectedRules && !Array.isArray(selectedRules)
@@ -65,6 +67,75 @@ function buildPublicSchedules(publicRules) {
   return { cleaning, restrictions, timeLimited, meters };
 }
 
+function hasSelectedRules(selected, publicRules) {
+  if (publicRules.length > 0) return true;
+  return Boolean(selected && !Array.isArray(selected) && selected.cleaning != null);
+}
+
+/**
+ * Separate verified curb identity from parking-regulation confidence.
+ * Empty rules are verified_empty only when the DOT lookup completed and
+ * did not report a face-mismatch reason. Any other empty set is unknown.
+ */
+function classifyRegulationStatus(selected, options = {}) {
+  if (selectedHasUnresolvedConflicts(selected)) {
+    return {
+      regulationStatus: 'unknown',
+      regulationCompleteness: 'unknown',
+      regulationAvailability: 'conflict',
+    };
+  }
+  const publicRules = Array.isArray(options.publicRules) ? options.publicRules : rulesFromSelected(selected);
+  const present = hasSelectedRules(selected, publicRules);
+  const sourceState = options.dotState
+    || (selected && !Array.isArray(selected) ? selected.sources?.dot?.state : null)
+    || options.sourceState;
+  const reasons = options.dotReasons
+    || (selected && !Array.isArray(selected) ? selected.sources?.dot?.reasons : null)
+    || [];
+  const mismatch = Array.isArray(reasons) && reasons.includes('official_blockface_mismatch');
+  const dotComplete = options.dotComplete === true || sourceState === 'complete';
+
+  if (options.sourceUnavailable === true) {
+    return {
+      regulationStatus: present ? 'partial' : 'unknown',
+      regulationCompleteness: 'unknown',
+      regulationAvailability: 'unavailable',
+    };
+  }
+  if (!dotComplete) {
+    const incomplete = sourceState === 'incomplete' || options.dotComplete === false;
+    return {
+      regulationStatus: present ? 'partial' : 'unknown',
+      regulationCompleteness: incomplete ? 'incomplete' : 'unknown',
+      regulationAvailability: 'unavailable',
+    };
+  }
+  if (mismatch && !present) {
+    return {
+      regulationStatus: 'unknown',
+      regulationCompleteness: 'complete',
+      regulationAvailability: 'unavailable',
+    };
+  }
+  if (!present) {
+    return {
+      regulationStatus: 'verified_empty',
+      regulationCompleteness: 'complete',
+      regulationAvailability: 'available',
+    };
+  }
+  return {
+    regulationStatus: 'verified',
+    regulationCompleteness: 'complete',
+    regulationAvailability: 'available',
+  };
+}
+
+function regulationsAreAuthoritative(regulationStatus) {
+  return regulationStatus === 'verified';
+}
+
 function buildHighConfidenceResponse(publicCurb, selected, options = {}) {
   if (!publicCurb || typeof publicCurb.segmentId !== 'string'
     || typeof publicCurb.streetName !== 'string'
@@ -75,7 +146,12 @@ function buildHighConfidenceResponse(publicCurb, selected, options = {}) {
     return { protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' };
   }
   const publicRules = rulesFromSelected(selected);
-  const cleaningAvailable = cleaningAvailableFrom(publicRules, selected);
+  const regulation = options.regulation || classifyRegulationStatus(selected, {
+    ...options,
+    publicRules,
+  });
+  const cleaningAvailable = regulation.regulationStatus === 'verified'
+    && cleaningAvailableFrom(publicRules, selected);
   const response = {
     protocolVersion: 2,
     status: 'high_confidence',
@@ -85,12 +161,17 @@ function buildHighConfidenceResponse(publicCurb, selected, options = {}) {
     ruleSummary: { cleaningAvailable },
   };
   if (options.includeExtended !== true) return response;
+  const publishRules = regulation.regulationStatus === 'verified' ? publicRules : [];
   return {
     ...response,
     responseVersion: PUBLIC_RESPONSE_VERSION,
     cacheHit: options.cacheHit === true,
-    publicRules,
-    publicSchedules: buildPublicSchedules(publicRules),
+    identityConfidence: 'high',
+    regulationStatus: regulation.regulationStatus,
+    regulationCompleteness: regulation.regulationCompleteness,
+    regulationAvailability: regulation.regulationAvailability,
+    publicRules: publishRules,
+    publicSchedules: buildPublicSchedules(publishRules),
   };
 }
 
@@ -100,10 +181,13 @@ function requestIncludesExtendedResponse(request) {
 
 module.exports = {
   PUBLIC_RESPONSE_VERSION,
+  REGULATION_STATUSES,
   selectedHasUnresolvedConflicts,
   rulesFromSelected,
   buildPublicSchedules,
   buildHighConfidenceResponse,
   requestIncludesExtendedResponse,
   sanitizeAlreadyPublic,
+  classifyRegulationStatus,
+  regulationsAreAuthoritative,
 };

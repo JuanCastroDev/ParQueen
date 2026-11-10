@@ -175,6 +175,25 @@ describe('canonical curb persistence', () => {
     expect([...db.docs.keys()]).toEqual([]);
   });
 
+  it('writes timed user requests only when allowUserPublication is explicit', async () => {
+    const db = memoryDb();
+    const topologyResult = await topology();
+    const identityProof = await proofFor(topologyResult);
+    const result = await persistCanonicalCurb({
+      db,
+      Timestamp,
+      topologyResult,
+      identityProof,
+      selectedRules: { rules: [{ category: 'cleaning', source: 'dot', schedules: [] }] },
+      deadlineAt: Date.now() + 8000,
+      persistToken: 'timed-user-persist-token',
+      allowUserPublication: true,
+    });
+    expect(result.success).toBe(true);
+    expect(result.skipped).toBeUndefined();
+    expect([...db.docs.keys()].length).toBeGreaterThan(0);
+  });
+
   it('writes private identity only to curbIdentities and sanitized public segment/rules', async () => {
     const db = memoryDb();
     const topologyResult = await topology();

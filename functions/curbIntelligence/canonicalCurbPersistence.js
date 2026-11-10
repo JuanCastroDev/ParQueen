@@ -372,8 +372,10 @@ async function persistCanonicalCurb(input = {}) {
   // commit after cancellation is refused. Callers that do not supply
   // callerUid are scheduled, internal, or test paths and keep the batch
   // only when transactions are unavailable.
-  // Timed user requests carry deadlineAt / persistToken and must not publish.
-  if (Number.isFinite(input.deadlineAt) || (typeof input.persistToken === 'string' && input.persistToken)) {
+  // Timed A1 user requests carry deadlineAt / persistToken and must not
+  // publish unless the migration flag is off and the callable opts in.
+  if (input.allowUserPublication !== true
+    && (Number.isFinite(input.deadlineAt) || (typeof input.persistToken === 'string' && input.persistToken))) {
     return {
       success: true,
       skipped: 'user_request_not_authoritative',

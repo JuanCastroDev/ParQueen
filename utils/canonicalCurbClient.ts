@@ -83,6 +83,10 @@ export type CanonicalCurbResponse =
     ruleSummary: Readonly<{ cleaningAvailable: boolean; rulesResolved?: boolean }>;
     responseVersion?: 1;
     cacheHit?: boolean;
+    identityConfidence?: 'high';
+    regulationStatus?: 'verified' | 'partial' | 'unknown' | 'verified_empty';
+    regulationCompleteness?: 'complete' | 'incomplete' | 'unknown';
+    regulationAvailability?: 'available' | 'unavailable' | 'conflict';
     publicRules?: readonly CanonicalPublicRule[];
     publicSchedules?: CanonicalPublicSchedules;
   }>
@@ -216,7 +220,8 @@ export function parseCanonicalCurbResponse(value: unknown): CanonicalCurbRespons
     if (!allowedKeys(
       value,
       ['protocolVersion', 'status', 'segmentId', 'streetName', 'sideLabel', 'ruleSummary'],
-      ['responseVersion', 'publicRules', 'publicSchedules', 'cacheHit'],
+      ['responseVersion', 'publicRules', 'publicSchedules', 'cacheHit',
+        'identityConfidence', 'regulationStatus', 'regulationCompleteness', 'regulationAvailability'],
     )
       || typeof value.segmentId !== 'string' || !PUBLIC_KEY.test(value.segmentId)
       || typeof value.streetName !== 'string' || !value.streetName.trim()
@@ -229,6 +234,15 @@ export function parseCanonicalCurbResponse(value: unknown): CanonicalCurbRespons
     if (Object.hasOwn(value, 'publicRules') && !parsePublicRules(value.publicRules)) invalid();
     if (Object.hasOwn(value, 'publicSchedules') && !parsePublicSchedules(value.publicSchedules)) invalid();
     if (value.responseVersion === 1 && !parsePublicRules(value.publicRules)) invalid();
+    if (value.responseVersion === 1) {
+      if (value.identityConfidence !== 'high') invalid();
+      if (value.regulationStatus !== 'verified' && value.regulationStatus !== 'partial'
+        && value.regulationStatus !== 'unknown' && value.regulationStatus !== 'verified_empty') invalid();
+      if (value.regulationCompleteness !== 'complete' && value.regulationCompleteness !== 'incomplete'
+        && value.regulationCompleteness !== 'unknown') invalid();
+      if (value.regulationAvailability !== 'available' && value.regulationAvailability !== 'unavailable'
+        && value.regulationAvailability !== 'conflict') invalid();
+    }
     return value as CanonicalCurbResponse;
   }
   if (value.status === 'unsupported') {

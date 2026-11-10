@@ -50,6 +50,7 @@ export function readQaFieldGps(raw: unknown): QaFieldGps | null {
 
 function rulesFor(response: CanonicalCurbResponse): QaFieldRules | null {
   if (response.status !== 'high_confidence') return null;
+  if (response.regulationStatus && response.regulationStatus !== 'verified') return 'unavailable';
   return response.ruleSummary.cleaningAvailable ? 'confirmed' : 'unavailable';
 }
 
