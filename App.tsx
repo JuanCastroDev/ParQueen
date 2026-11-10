@@ -5,6 +5,9 @@ import { LoadingScreen } from './components/LoadingScreen';
 import { AuthStartupRecovery } from './components/AuthStartupRecovery';
 import { OnboardingView } from './views/OnboardingView';
 const LocationPromptView = lazy(() => import('./views/LocationPromptView').then(m => ({ default: m.LocationPromptView })));
+const AppCheckQaPanel = import.meta.env.VITE_PARQUEEN_APPCHECK_QA === 'true'
+  ? lazy(() => import('./utils/AppCheckQaPanel'))
+  : null;
 
 // All other views are lazy-loaded so the initial bundle only contains what's
 // needed for the login screen. Each view is brought in on demand the first
@@ -1141,6 +1144,11 @@ export default function App() {
 
   return (
     <div className="h-full w-full flex flex-col bg-[var(--color-bg)] text-[var(--color-text)] font-sans selection:bg-queen-500 selection:text-white transition-colors duration-300">
+      {AppCheckQaPanel && (
+        <Suspense fallback={null}>
+          <AppCheckQaPanel />
+        </Suspense>
+      )}
       <main className={`flex-1 min-h-0 relative ${isMapView ? 'overflow-hidden' : 'overflow-y-auto'}`}>
         <ErrorBoundary>
           <Suspense fallback={<LoadingScreen />}>

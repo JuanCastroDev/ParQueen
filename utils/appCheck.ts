@@ -4,6 +4,7 @@ import {
   ReCaptchaEnterpriseProvider,
 } from 'firebase/app-check';
 import type { FirebaseApp } from 'firebase/app';
+import type { AppCheck } from 'firebase/app-check';
 import { nativeGetAppCheckToken, type NativeAppCheckToken } from './appCheckNative';
 import { resolveAppCheckPath, type AppCheckPath } from './appCheckPlatform';
 import { localDemoAppCheckOptions, streetIntelQaAppCheckOptions } from './demoFirebaseAppCheck';
@@ -21,10 +22,14 @@ export interface AppCheckInitDependencies {
 }
 
 let initialized = false;
+let appCheckInstance: AppCheck | null = null;
 
 export const resetParQueenAppCheckInitForTests = (): void => {
   initialized = false;
+  appCheckInstance = null;
 };
+
+export const getParQueenAppCheck = (): AppCheck | null => appCheckInstance;
 
 const sanitizeNativeToken = (result: NativeAppCheckToken | null | undefined): NativeAppCheckToken => {
   const token = typeof result?.token === 'string' ? result.token : '';
@@ -86,7 +91,7 @@ export const initializeParQueenAppCheck = (
 
   if (path === 'native-android' || path === 'native-ios') {
     try {
-      init(app, {
+      appCheckInstance = init(app, {
         provider: new Custom({
           getToken: () => fetchNativeAppCheckToken(getNativeToken, warn),
         }),
@@ -105,14 +110,14 @@ export const initializeParQueenAppCheck = (
     CustomProvider: Custom,
   });
   if (demoAppCheck) {
-    init(app, demoAppCheck);
+    appCheckInstance = init(app, demoAppCheck);
     return;
   }
 
   const appCheckSiteKey = siteKey;
   if (appCheckSiteKey) {
     try {
-      init(app, {
+      appCheckInstance = init(app, {
         provider: new Recaptcha(appCheckSiteKey),
         isTokenAutoRefreshEnabled: true,
       });

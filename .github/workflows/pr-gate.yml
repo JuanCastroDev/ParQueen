@@ -365,6 +365,15 @@ jobs:
         env:
           FIREBASE_CLI_EXPERIMENTS: webframeworks
 
+      - name: FUNCTIONS — Run isolated parking fence tests (Linux)
+        if: (success() || failure()) && steps.classify.outputs.run_functions == 'true'
+        run: |
+          echo "FUNCTIONS_ISOLATED_EMULATOR_EXEC_START"
+          npm run test:functions:isolated
+          echo "FUNCTIONS_ISOLATED_EMULATOR_EXEC_DONE"
+        env:
+          FIREBASE_CLI_EXPERIMENTS: webframeworks
+
       - name: Upload emulator debug logs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

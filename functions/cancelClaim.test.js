@@ -26,6 +26,7 @@ function memoryDb(seed) {
       collection(name) {
         return { doc(id) { return ref(`${path}/${name}/${id}`); } };
       },
+      async get() { return snap(path); },
     };
   }
   function snap(path) {
@@ -35,6 +36,7 @@ function memoryDb(seed) {
   }
   return {
     docs,
+    doc(path) { return ref(path); },
     collection(name) {
       return { doc(id) { return ref(`${name}/${id}`); } };
     },

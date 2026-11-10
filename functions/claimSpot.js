@@ -2,7 +2,7 @@
 
 const { HttpsError } = require('firebase-functions/v2/https');
 const { Timestamp } = require('firebase-admin/firestore');
-const { userRecordDenies, PRODUCT_ACCESS_DENIED } = require('./productAccess');
+const { userRecordDenies, deletionFencePresent, throwIfDeleting, PRODUCT_ACCESS_DENIED } = require('./productAccess');
 const { checkRateLimit } = require('./rateLimiter');
 const { pingHoldsActiveClaim } = require('./activeIncomingClaimLogic');
 const { CLEAR_FIELDS, REASONS } = require('./cancelClaim');
@@ -312,15 +312,17 @@ function requireUid(request) {
 }
 
 function openDeps(deps) {
-  if (deps.afterReads && deps.allowTestHooks !== true) {
+  if ((deps.afterReads || deps.afterLifecycleRead) && deps.allowTestHooks !== true) {
     throw new HttpsError('internal', FAILURE);
   }
+  const hook = (name) => (deps.allowTestHooks === true && typeof deps[name] === 'function' ? deps[name] : null);
   return {
     db: deps.db || require('firebase-admin/firestore').getFirestore(),
     limit: deps.checkRateLimit || checkRateLimit,
     now: deps.now || (() => Timestamp.now()),
     randomBytes: deps.randomBytes || ((size) => require('crypto').randomBytes(size)),
-    afterReads: deps.allowTestHooks === true && typeof deps.afterReads === 'function' ? deps.afterReads : null,
+    afterReads: hook('afterReads'),
+    afterLifecycleRead: hook('afterLifecycleRead'),
   };
 }
 
@@ -361,7 +363,10 @@ function dropPrepared(tx, counterRef, uid, ids, attemptId) {
 async function prepareClaimIntent(request, deps = {}) {
   const uid = requireUid(request);
   const input = parseInput(request.data);
-  const { db, limit, now } = openDeps(deps);
+  const { db, limit, now, afterReads, afterLifecycleRead } = openDeps(deps);
+  if (await deletionFencePresent(uid, db)) {
+    throw new HttpsError('permission-denied', PRODUCT_ACCESS_DENIED);
+  }
   const attemptRef = db.collection(ATTEMPT_COLLECTION).doc(input.attemptId);
   const existing = await attemptRef.get();
   if (!existing.exists) await limit(uid, 'claimIntentPrepare', RATE_LIMIT);
@@ -373,6 +378,7 @@ async function prepareClaimIntent(request, deps = {}) {
       const counterRef = db.collection(COUNTER_COLLECTION).doc(uid);
       const userRef = db.collection('users').doc(uid);
       const spotRef = db.collection('spots').doc(input.spotId);
+      const lifeRef = db.collection('accountLifecycle').doc(uid);
       const attemptSnap = await tx.get(attemptRef);
       const counterSnap = await tx.get(counterRef);
       const siblingIds = preparedIdsOf(counterSnap).filter((id) => id !== input.attemptId);
@@ -386,16 +392,21 @@ async function prepareClaimIntent(request, deps = {}) {
       if (nowMs == null) throw new HttpsError('internal', FAILURE);
 
       const liveIds = [];
+      const expireRefs = [];
       for (let i = 0; i < siblingSnaps.length; i += 1) {
         const sibling = siblingSnaps[i];
         if (!sibling.exists) continue;
         const record = sibling.data() || {};
         if (record.uid !== uid || record.state !== 'prepared') continue;
-        if (intentExpired(record, createdAt)) {
-          tx.update(siblingRefs[i], { state: 'expired', outcome: 'expired' });
-        } else {
-          liveIds.push(siblingIds[i]);
-        }
+        if (intentExpired(record, createdAt)) expireRefs.push(siblingRefs[i]);
+        else liveIds.push(siblingIds[i]);
+      }
+      if (afterReads) await afterReads();
+      const lifeSnap = await tx.get(lifeRef);
+      if (afterLifecycleRead) await afterLifecycleRead(lifeSnap);
+      throwIfDeleting(lifeSnap);
+      for (const expireRef of expireRefs) {
+        tx.update(expireRef, { state: 'expired', outcome: 'expired' });
       }
 
       if (attemptSnap.exists) {
@@ -461,7 +472,10 @@ async function prepareClaimIntent(request, deps = {}) {
 async function claimSpot(request, deps = {}) {
   const uid = requireUid(request);
   const input = parseInput(request.data);
-  const { db, limit, now, randomBytes, afterReads } = openDeps(deps);
+  const { db, limit, now, randomBytes, afterReads, afterLifecycleRead } = openDeps(deps);
+  if (await deletionFencePresent(uid, db)) {
+    throw new HttpsError('permission-denied', PRODUCT_ACCESS_DENIED);
+  }
   const attemptRef = db.collection(ATTEMPT_COLLECTION).doc(input.attemptId);
   const existing = await attemptRef.get();
   if (!existing.exists) throw new HttpsError('failed-precondition', FAILURE);
@@ -491,6 +505,9 @@ async function claimSpot(request, deps = {}) {
         hookUsed = true;
         await afterReads();
       }
+      const claimLife = await tx.get(db.collection('accountLifecycle').doc(uid));
+      if (afterLifecycleRead) await afterLifecycleRead(claimLife);
+      throwIfDeleting(claimLife);
       if (!attemptSnap.exists) throw new HttpsError('failed-precondition', FAILURE);
       const record = attemptSnap.data() || {};
       if (record.uid !== uid) throw new HttpsError('permission-denied', FAILURE);
@@ -566,7 +583,13 @@ function spotStillThisGeneration(spot, uid, generationId) {
 async function revokeClaimIntent(request, deps = {}) {
   const uid = requireUid(request);
   const input = parseInput(request.data);
-  const { db, limit, now, afterReads } = openDeps(deps);
+  const { db, limit, now, afterReads, afterLifecycleRead } = openDeps(deps);
+  // deleteAccount already releases this user's claims. A fence denies revoke
+  // outright so this handler cannot create a revoked tombstone, notice, or
+  // spot/lock write while deletion is in progress.
+  if (await deletionFencePresent(uid, db)) {
+    throw new HttpsError('permission-denied', PRODUCT_ACCESS_DENIED);
+  }
   const attemptRef = db.collection(ATTEMPT_COLLECTION).doc(input.attemptId);
   const existing = await attemptRef.get();
   if (!existing.exists) await limit(uid, 'claimIntentRevoke', RATE_LIMIT);
@@ -591,6 +614,11 @@ async function revokeClaimIntent(request, deps = {}) {
         hookUsed = true;
         await afterReads();
       }
+      const revokeLife = await tx.get(db.collection('accountLifecycle').doc(uid));
+      if (afterLifecycleRead && (!preread || preread.state !== 'claimed')) {
+        await afterLifecycleRead(revokeLife);
+      }
+      throwIfDeleting(revokeLife);
 
       if (!attemptSnap.exists) {
         const record = attemptRecord(input, uid, 'revoked', null, createdAt);
@@ -617,6 +645,9 @@ async function revokeClaimIntent(request, deps = {}) {
         hookUsed = true;
         await afterReads();
       }
+      const releaseLife = await tx.get(db.collection('accountLifecycle').doc(uid));
+      if (afterLifecycleRead) await afterLifecycleRead(releaseLife);
+      throwIfDeleting(releaseLife);
       const spot = spotSnap.exists ? (spotSnap.data() || {}) : null;
       if (!spot || !spotStillThisGeneration(spot, uid, generationId)) {
         const liveOther = spot && holdsLiveClaim(spot, spot.interestedUserId) && isClaimGenerationId(spot.claimGenerationId);
