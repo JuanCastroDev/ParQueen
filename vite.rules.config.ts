@@ -16,7 +16,9 @@ export default defineConfig({
             'firestore.rules.test.candidate-aware.ts',
             'firestore.rules.finder-notice.31ag.test.ts',
             'firestore.rules.ping-delete.test.ts',
-            ],
+            // Offline index-baseline guard; runs whenever firestore.indexes.json changes.
+            'firestore.indexes.production-baseline.test.ts',
+          ],
         },
       },
       {
