@@ -17,6 +17,22 @@ const callable = indexSource.slice(
   indexSource.indexOf('function _existingNYCOpenDataResult'),
 );
 
+function callArgument(line, name) {
+  const marker = `${name}(`;
+  const start = line.indexOf(marker);
+  if (start < 0 || line.includes('httpsCallable(')) return null;
+  let depth = 0;
+  const open = start + name.length;
+  for (let index = open; index < line.length; index += 1) {
+    if (line[index] === '(') depth += 1;
+    else if (line[index] === ')') {
+      depth -= 1;
+      if (depth === 0) return line.slice(open + 1, index).trim();
+    }
+  }
+  return null;
+}
+
 const location = Object.freeze({
   lat: 40.7,
   lng: -73.9999,
@@ -118,7 +134,7 @@ describe('SI-RELEASE-02 product path', () => {
     expect(result.segmentId).toMatch(/^curb2_[a-f0-9]{32}$/);
     expect(proof.transport).toHaveBeenCalledTimes(1);
     expect(effects.readCanonicalCache).toHaveBeenCalledTimes(1);
-    expect(effects.persistCanonicalCurb).toHaveBeenCalledTimes(1);
+    expect(effects.persistCanonicalCurb).not.toHaveBeenCalled();
     expect(JSON.stringify(result)).not.toMatch(/officialBlockFaceId|1000000001/);
   });
 
@@ -227,22 +243,44 @@ describe('SI-RELEASE-02 product path', () => {
   });
 
   it('sends protocol 2 from every Street Parking callable site and withholds the card without a proven segment', () => {
-    const marker = "'createSegmentFromSweepNYC'";
-    const indexes = [];
-    let from = 0;
-    while (from < clientSource.length) {
-      const found = clientSource.indexOf(marker, from);
-      if (found < 0) break;
-      indexes.push(found);
-      from = found + marker.length;
+    const helper = clientSource.slice(clientSource.indexOf('function protocol2LocationRequest'));
+    expect(helper.slice(0, helper.indexOf('function ', 1))).toContain('protocolVersion: 2');
+    const locationRequest = clientSource.slice(
+      clientSource.indexOf('const locationRequest ='),
+      clientSource.indexOf('try {', clientSource.indexOf('const locationRequest =')),
+    );
+    expect(locationRequest).toContain('protocolVersion: 2');
+    expect(locationRequest).toContain('protocol2LocationRequest(');
+    const clientBuilder = readFileSync(join(__dirname, '..', 'utils', 'canonicalCurbClient.ts'), 'utf8');
+    const builder = clientBuilder.slice(
+      clientBuilder.indexOf('export function buildCanonicalCurbRequest'),
+      clientBuilder.indexOf('export async function resolveCanonicalCurbWithLocation'),
+    );
+    expect(builder).toContain('protocolVersion: 2');
+    expect(clientSource).not.toMatch(/httpsCallable\([\s\S]{0,240}?'createSegmentFromSweepNYC'\s*\)\s*\(/);
+
+    const lines = clientSource.split(/\r?\n/);
+    const bindings = [];
+    for (const line of lines) {
+      const declared = line.match(/const\s+([A-Za-z0-9_]+)\s*=\s*httpsCallable\(/);
+      if (declared && line.includes("'createSegmentFromSweepNYC'")) bindings.push(declared[1]);
     }
-    expect(indexes.length).toBeGreaterThan(0);
-    for (const found of indexes) {
-      const window = clientSource.slice(found, found + 700);
-      const usesProtocol2 = window.includes('protocol2LocationRequest(')
-        || window.includes('resolveCanonicalCurbWithLocation');
-      expect(usesProtocol2).toBe(true);
+    expect(bindings.length).toBeGreaterThan(0);
+    const invocations = [];
+    for (const line of lines) {
+      for (const name of new Set(bindings)) {
+        const argument = callArgument(line, name);
+        if (argument !== null) invocations.push({ name, argument });
+      }
     }
+    expect(invocations.length).toBe(bindings.length);
+    for (const { name, argument } of invocations) {
+      const protocol2 = argument.startsWith('protocol2LocationRequest(')
+        || argument === 'locationRequest'
+        || argument === 'request';
+      expect(protocol2, `${name}(${argument})`).toBe(true);
+    }
+    expect(clientSource).toContain('return (await callable(request)).data');
     expect(clientSource).toContain('resolveCanonicalCurbWithLocation');
     expect(clientSource).toContain("status === 'high_confidence'");
     expect(clientSource).toContain('segmentId: null');

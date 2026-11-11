@@ -213,7 +213,7 @@ describe('Melville canonical persistence on the local demo emulator', () => {
     geosupport?.child.kill();
   });
 
-  it('persists both proven faces, reuses the exact identity, and keeps the schedules apart', async () => {
+  it('returns both proven faces without publishing, then reuses a separately published identity', async () => {
     expect(getApps()[0].options.projectId).toBe('demo-parkqueen-functions-test');
     expect(process.env.FIRESTORE_EMULATOR_HOST).toBe('127.0.0.1:8080');
     await assertNoWrites();
@@ -314,12 +314,13 @@ describe('Melville canonical persistence on the local demo emulator', () => {
     const writeFailure = await runCanonicalCurbOrchestrator(requestFor(sides.left), dependencies({ db: failingDb() }));
     const writeMs = Date.now() - writeStarted;
     expect(writeFailure, JSON.stringify({ writeMs, fetchLog })).toMatchObject({
-      status: 'unsupported', reason: 'source_unavailable',
+      status: 'high_confidence',
+      ruleSummary: { cleaningAvailable: true },
     });
     await assertNoWrites();
     fetchLog.length = 0;
 
-    const faces = [];
+    const pendingFaces = [];
     for (const point of [sides.left, sides.right]) {
       const events = [];
       const started = Date.now();
@@ -333,7 +334,26 @@ describe('Melville canonical persistence on the local demo emulator', () => {
         ruleSummary: { cleaningAvailable: true },
       });
       expect(events.some(event => event.event === 'curb_resolution_high' && event.payload.cacheHit === false)).toBe(true);
-      const key = response.segmentId;
+      pendingFaces.push({ point, response });
+    }
+    await assertNoWrites();
+
+    const faces = [];
+    for (const pending of pendingFaces) {
+      const topology = await resolveCanonicalCurb({
+        ...pending.point, accuracyMeters: 1, sampleCount: 3, consistencyMeters: 1,
+      }, { fetchFn, getSocrataToken: () => '', officialLionPrimary: admitted });
+      const identityProof = await proveCanonicalCurbIdentity(topology, { blockfaceResolver });
+      const loadedRules = await loadCanonicalRules(topology.identity, dependencies());
+      const published = await persistCanonicalCurb({
+        db,
+        Timestamp,
+        topologyResult: topology,
+        identityProof,
+        selectedRules: loadedRules.selected,
+      });
+      expect(published, JSON.stringify(published)).toMatchObject({ success: true });
+      const key = pending.response.segmentId;
       const [identitySnap, segmentSnap, rulesSnap] = await Promise.all([
         db.doc(`curbIdentities/${key}`).get(),
         db.doc(`streetSegments/${key}`).get(),
@@ -343,8 +363,8 @@ describe('Melville canonical persistence on the local demo emulator', () => {
       expect(segmentSnap.exists).toBe(true);
       expect(rulesSnap.empty).toBe(false);
       faces.push({
-        point,
-        response,
+        point: pending.point,
+        response: pending.response,
         key,
         identity: identitySnap.data().identity,
         segment: segmentSnap.data(),

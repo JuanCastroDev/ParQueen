@@ -99,7 +99,7 @@ function dependencies(overrides = {}) {
   return {
     resolveCanonicalCurb: vi.fn(async () => supported()),
     applyVisualCurbSelection: vi.fn(async () => supported()),
-    loadCanonicalRules: vi.fn(async () => ({ state: 'complete', selected: selectedRules, sources: {} })),
+    loadCanonicalRules: vi.fn(async () => ({ state: 'complete', selected: selectedRules, sources: { dot: { state: 'complete' } } })),
     readCanonicalCache: vi.fn(async () => ({ hit: false, reason: 'exact_identity_missing' })),
     persistCanonicalCurb: vi.fn(async () => ({ success: true, publicCurbKey: publicCurbKey(identity), ruleCount: 1 })),
     requestNonceFactory: () => 'server-nonce',
@@ -156,7 +156,7 @@ describe('runCanonicalCurbOrchestrator', () => {
     });
     expect(deps.resolveCanonicalCurb).toHaveBeenCalledOnce();
     expect(deps.loadCanonicalRules).toHaveBeenCalledOnce();
-    expect(deps.persistCanonicalCurb).toHaveBeenCalledOnce();
+    expect(deps.persistCanonicalCurb).not.toHaveBeenCalled();
     expect(JSON.stringify(result)).not.toMatch(/1000000001|global|physical|b5sc/);
   });
 
@@ -310,7 +310,7 @@ describe('runCanonicalCurbOrchestrator', () => {
         identity,
         publicSegment: {
           segmentId: key, streetName: 'MARAN PLACE', sideLabel: 'North',
-          ruleSummary: { cleaningAvailable: false },
+          ruleSummary: { cleaningAvailable: false, rulesResolved: true },
         },
       })),
     });

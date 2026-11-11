@@ -4516,9 +4516,12 @@ async function _attachSweepnycProductEvidence(segmentId, segment, capture, ruleO
       const snap = await db.collection(`streetSegments/${segmentId}/streetRules`)
         .where('supersededAt', '==', null)
         .get();
-      rules = snap.docs.map(doc => doc.data()).filter(rule => (
+      const loadedSweep = snap.docs.map(doc => doc.data()).filter(rule => (
         rule && rule.type === 'streetCleaning' && rule.source === 'sweepnyc'
       ));
+      const { filterAuthoritativeRules } = require('./curbIntelligence/writeAuthority');
+      const selectedSweep = filterAuthoritativeRules(segment || {}, loadedSweep);
+      rules = selectedSweep.ok ? selectedSweep.rules : [];
       if (!rules.length) {
         const fallback = await db.doc(`streetSegments/${segmentId}/streetRules/sweepnyc_v1`).get();
         if (fallback.exists) rules = [fallback.data()];
@@ -4531,7 +4534,7 @@ async function _attachSweepnycProductEvidence(segmentId, segment, capture, ruleO
   }
 }
 
-async function _loadActiveStreetRules(segmentId) {
+async function _loadActiveStreetRules(segmentId, segment) {
   const snap = await db.collection(`streetSegments/${segmentId}/streetRules`)
     .where('supersededAt', '==', null)
     .get();
@@ -4540,14 +4543,16 @@ async function _loadActiveStreetRules(segmentId) {
     const fallback = await db.doc(`streetSegments/${segmentId}/streetRules/sweepnyc_v1`).get();
     if (fallback.exists) rules = [...rules.filter(rule => rule.type !== 'streetCleaning'), fallback.data()];
   }
-  return rules;
+  const { filterAuthoritativeRules } = require('./curbIntelligence/writeAuthority');
+  const selected = filterAuthoritativeRules(segment || {}, rules);
+  return selected.ok ? selected.rules : [];
 }
 
 async function _considerSweepnycDedup({ segmentId, segment, lat, lng, captureProductEvidence, via }) {
   if (segment.status === 'archived') {
     return { action: 'return', value: { success: false, reason: 'archived_segment' } };
   }
-  const rules = await _loadActiveStreetRules(segmentId);
+  const rules = await _loadActiveStreetRules(segmentId, segment);
   const usableCount = countUsableStreetIntelligence(rules);
   if (decideDedupPath(usableCount) === 'fast') {
     logStreetIntelEvent('dedup_hit_usable', { via, usableCount });
@@ -5152,9 +5157,35 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
       getIdToken: localBinding.getIdToken,
     } : {}),
   });
+  const initializationStartedAt = Date.now();
+  const {
+    createRequestDeadline,
+  } = require('./curbIntelligence/requestDeadline');
+  const requestDeadline = createRequestDeadline({ startedAt: initializationStartedAt });
+  const { enforceUpstreamCostGuard } = require('./curbIntelligence/upstreamCostGuard');
+  const costGuard = enforceUpstreamCostGuard({
+    uid: verifiedUid,
+    location: requestData && requestData.location,
+  });
+  if (!costGuard.ok) {
+    try {
+      createCurbTelemetry().emit('upstream_cost_limited', {
+        protocolVersion: 2,
+        reason: costGuard.reason || 'source_unavailable',
+        hashedLocationKey: costGuard.hashedLocationKey,
+      });
+    } catch { /* telemetry is fail-soft */ }
+    return { protocolVersion: 2, status: 'unsupported', reason: costGuard.reason || 'source_unavailable' };
+  }
   const orchestratorDependencies = {
+    initializationStartedAt,
+    signal: requestDeadline.signal,
+    deadlineAt: requestDeadline.deadlineAt,
+    persistToken: requestDeadline.persistToken,
+    persistAllowed: requestDeadline.persistAllowed,
     db,
     Timestamp,
+    FieldValue,
     planimetricStore: createPlanimetricCurbStore({ fetchFn: fetch }),
     parkNycStore: createParkNycCandidateStore({
       fetchFn: fetch,
@@ -5171,17 +5202,22 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
       .readConfiguredSideConfirmationHmacKey(process.env),
     sideConfirmationHmacKeyName: curbSideConfirmationHmacKey.name,
     readCanonicalCache: streetIntelligenceCache.readCanonicalCache,
-    // The orchestrator fetches external evidence before this write. The
-    // authenticated uid is applied here, over any field in the orchestrator
-    // payload, and persistCanonicalCurb reads that user inside the commit
-    // transaction. Scheduled and internal callers do not set callerUid.
-    persistCanonicalCurb: async (input) => {
-      const supplied = input && typeof input === 'object' ? input : {};
-      return streetIntelligenceCache.persistCanonicalCurb({
-        ...supplied,
-        callerUid: verifiedUid,
-      });
-    },
+    // STREET_INTEL_A1_RESPONSE_ONLY defaults off. Off preserves main
+    // publication. On refuses shared writes for every caller.
+    publishUserResolution: !require('./curbIntelligence/a1ResponseOnlyFlag').isA1ResponseOnlyEnabled(),
+    persistCanonicalCurb: require('./curbIntelligence/a1ResponseOnlyFlag').isA1ResponseOnlyEnabled()
+      ? async () => ({
+        success: true,
+        skipped: 'user_request_not_authoritative',
+      })
+      : async (input) => {
+        const supplied = input && typeof input === 'object' ? input : {};
+        return streetIntelligenceCache.persistCanonicalCurb({
+          ...supplied,
+          callerUid: verifiedUid,
+          allowUserPublication: true,
+        });
+      },
   };
   if (process.env.FUNCTIONS_EMULATOR === 'true') {
     const { localRuntimeDependencies } = require('./curbIntelligence/runtimeSourceArtifact');
@@ -5195,9 +5231,13 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
     const { attachOwnerPilot } = require('./curbIntelligence/runtimeSourceArtifact');
     attachOwnerPilot(orchestratorDependencies, verifiedUid);
   }
-  const outcome = await runCanonicalCurbOrchestrator(requestData, orchestratorDependencies);
-  await assertProductAccess(verifiedUid);
-  return outcome;
+  try {
+    const outcome = await runCanonicalCurbOrchestrator(requestData, orchestratorDependencies);
+    await assertProductAccess(verifiedUid);
+    return outcome;
+  } finally {
+    requestDeadline.dispose();
+  }
 }
 
 // ─── Hydrant proximity (NYC DEP) ─────────────────────────────────────────────

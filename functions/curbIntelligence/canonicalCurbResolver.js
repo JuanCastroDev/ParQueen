@@ -25,11 +25,14 @@ const {
 const { readOfficialLionPrimary } = require('./officialLionPrimaryTopology');
 const {
   consistentOfficialFaces,
+  firstSideConfirmationEligibilityFailure,
+  drivingChoices,
   orientationForTangent,
-  sideConfirmationEligible,
   stableSideAuthorityDigest,
 } = require('./sideConfirmation');
 const { issueSideConfirmationToken } = require('./sideConfirmationToken');
+const { createDemoResolutionTrace } = require('./demoResolutionDiagnostic');
+const { OVERALL_DEADLINE_MS, childBudgetMs } = require('./requestDeadline');
 
 const NYC = Object.freeze({ minLat: 40.4, maxLat: 40.95, minLng: -74.3, maxLng: -73.65 });
 const BOROUGHS = Object.freeze({
@@ -37,6 +40,9 @@ const BOROUGHS = Object.freeze({
 });
 const privateCandidateSets = new WeakMap();
 const authoritativeRetrievals = new WeakSet();
+const retrievalBindings = new WeakMap();
+// Independent 15s CSCL budget removed. Acquisition shares the 8s end-to-end deadline.
+const CSCL_SOURCE_BUDGET_MS = OVERALL_DEADLINE_MS;
 const primaryTopologyResults = new WeakSet();
 const ambiguousTopologyResults = new WeakSet();
 const sideConfirmationResults = new WeakSet();
@@ -215,10 +221,15 @@ function sideIdentity(selected, csclSide, cardinal) {
   });
 }
 
+function notifyDemo(input, detail) {
+  if (typeof input?.onDemoDiagnostic !== 'function') return;
+  try { input.onDemoDiagnostic(detail); } catch { /* diagnostics never change resolution */ }
+}
+
 function sideConfirmationResult(input) {
   const orientation = orientationForTangent(input.selected.projection.tangent);
   const faces = consistentOfficialFaces(input.selected.group.records);
-  if (!sideConfirmationEligible({
+  const eligibility = firstSideConfirmationEligibilityFailure({
     enabled: input.enabled,
     consideredCount: input.consideredCount,
     sideCrossesCenterline: input.sideCrossesCenterline,
@@ -230,17 +241,40 @@ function sideConfirmationResult(input) {
     decisionReasons: input.decision.reasons,
     faces,
     orientation,
-  })) return null;
+  });
+  if (eligibility) {
+    const classifier = eligibility === 'classifier_state' || eligibility === 'classifier_reason';
+    notifyDemo(input, {
+      stage: classifier ? 'classification' : 'side_confirmation_eligibility',
+      sideConfirmationEligibility: eligibility,
+      internalReason: classifier
+        ? (Array.isArray(input.decision?.reasons) ? input.decision.reasons[0] : eligibility)
+        : eligibility,
+    });
+    return null;
+  }
   const authorityContextDigest = stableSideAuthorityDigest({
     sourceVersion: input.selected.identity.sourceVersion,
     records: input.selected.group.records,
     faces,
   });
-  if (!authorityContextDigest) return null;
+  if (!authorityContextDigest) {
+    notifyDemo(input, {
+      stage: 'side_confirmation_signing',
+      sideConfirmationEligibility: null,
+      internalReason: 'signing_authority',
+    });
+    return null;
+  }
   const issuedAt = Number.isSafeInteger(input.nowMs) ? input.nowMs : Date.now();
+  let signingFailure = null;
   const built = ['LEFT', 'RIGHT'].map((csclSide, rank) => {
+    if (signingFailure) return null;
     const created = sideIdentity(input.selected, csclSide, orientation.sides[csclSide]);
-    if (!created.ok || created.identity.officialBlockFaceId !== faces[csclSide]) return null;
+    if (!created.ok || created.identity.officialBlockFaceId !== faces[csclSide]) {
+      signingFailure = 'official_face_mismatch';
+      return null;
+    }
     const key = publicCurbKey(created.identity);
     const token = issueSideConfirmationToken({
       uid: input.callerUid,
@@ -254,7 +288,10 @@ function sideConfirmationResult(input) {
       now: issuedAt,
       nonce: typeof input.nonceForRank === 'function' ? input.nonceForRank(rank) : undefined,
     });
-    if (!token) return null;
+    if (!token) {
+      signingFailure = 'signing_authority';
+      return null;
+    }
     return {
       token,
       cardinal: orientation.sides[csclSide],
@@ -267,6 +304,11 @@ function sideConfirmationResult(input) {
     };
   });
   if (built.some(side => !side) || built[0].cardinal === built[1].cardinal || built[0].token === built[1].token) {
+    notifyDemo(input, {
+      stage: 'side_confirmation_signing',
+      sideConfirmationEligibility: null,
+      internalReason: signingFailure || 'street_orientation',
+    });
     return null;
   }
   const result = deepFreeze({
@@ -274,8 +316,14 @@ function sideConfirmationResult(input) {
     reasons: ['side_uncertain'],
     confirmation: {
       streetName: input.selected.streetName,
-      orientation: { north: 'up', axis: orientation.axis },
-      curbs: built.map(side => ({ token: side.token, cardinal: side.cardinal })),
+      orientation: orientation.axis === 'oblique'
+        ? { north: 'up', axis: 'oblique', bearingDegrees: orientation.bearingDegrees }
+        : { north: 'up', axis: orientation.axis },
+      curbs: built.map(side => {
+        const curb = { token: side.token, cardinal: side.cardinal };
+        const drivingSide = drivingChoices(input.selected.group.records)?.[side.csclSide];
+        return drivingSide ? { ...curb, drivingSide } : curb;
+      }),
     },
   });
   sideConfirmationResults.add(result);
@@ -302,104 +350,261 @@ function publicCandidate(candidate, tokenContext, rank, authorityContextDigest) 
   };
 }
 
-async function resolveCanonicalCurb(location, options = {}) {
-  if (!validLocation(location)) return unsupported(['unsupported_off_network_location']);
-  const quality = locationQuality(location);
-  if (quality.state !== 'SUPPORTED') return unsupported(quality.reasons);
-  const productionStore = typeof options.fetchFn === 'function'
-    ? createCsclCandidateStore({ fetchFn: options.fetchFn, getSocrataToken: options.getSocrataToken })
-    : null;
-  const sourceStore = productionStore || options.candidateStore;
-  if (!sourceStore || typeof sourceStore.queryCandidates !== 'function') {
-    return unsupported(['candidate_coverage_incomplete']);
+function attestCompleteRetrieval(retrieved, policy) {
+  if (!(retrieved?.completeness?.state === 'COMPLETE'
+    && retrieved.envelope === policy.canonicalEnvelope
+    && retrieved.envelopeDigest === policy.canonicalEnvelope.digest
+    && retrieved.retrievalContractVersion === 'canonical-cscl-intersects-1')) {
+    return {
+      ok: false,
+      reason: retrieved?.completeness?.reason || 'authority_attestation_invalid',
+    };
   }
+  const population = buildCanonicalCsclPopulation(retrieved.candidates);
+  if (!population.ok) return { ok: false, reason: population.reason };
+  const attested = deepFreeze({
+    ...retrieved,
+    candidates: population.candidates,
+    populationIdentity: population.populationIdentity,
+    populationSchema: population.schema,
+  });
+  authoritativeRetrievals.add(attested);
+  return { ok: true, retrieved: attested };
+}
+
+function bindRetrieval(retrieved, nonce) {
+  retrievalBindings.set(retrieved, {
+    nonce,
+    consumed: false,
+    envelopeDigest: retrieved.envelopeDigest,
+    version: retrieved.sourceVersion?.version ?? null,
+    resourceId: retrieved.sourceVersion?.resourceId ?? null,
+    populationIdentity: retrieved.populationIdentity,
+  });
+}
+
+function claimAuthoritativeRetrieval(retrieved, policy, nonce) {
+  const binding = retrievalBindings.get(retrieved);
+  if (!authoritativeRetrievals.has(retrieved) || !binding || binding.consumed) return false;
+  if (typeof nonce !== 'string' || binding.nonce !== nonce) return false;
+  if (binding.envelopeDigest !== policy.canonicalEnvelope?.digest) return false;
+  if (retrieved.envelopeDigest !== policy.canonicalEnvelope.digest) return false;
+  if (binding.populationIdentity !== retrieved.populationIdentity) return false;
+  if (binding.version !== (retrieved.sourceVersion?.version ?? null)) return false;
+  if (binding.resourceId !== (retrieved.sourceVersion?.resourceId ?? null)) return false;
+  binding.consumed = true;
+  return true;
+}
+
+async function acquireAuthoritativeCscl(location, options = {}) {
+  const nonce = options.acquisitionNonce;
+  if (typeof nonce !== 'string' || nonce.length < 16 || options.candidateStore) {
+    return { ok: false, reasons: ['authority_attestation_invalid'] };
+  }
+  const controller = new AbortController();
+  let settled = false;
+  const abortResult = new Promise(resolve => {
+    controller.signal.addEventListener('abort', () => {
+      if (!settled) resolve({ aborted: true });
+    }, { once: true });
+  });
+  const sourceBudgetMs = childBudgetMs(
+    Number.isFinite(options.sourceBudgetMs) ? options.sourceBudgetMs : OVERALL_DEADLINE_MS,
+    { deadlineAt: options.deadlineAt, signal: options.signal },
+  );
+  const timer = setTimeout(() => controller.abort(), sourceBudgetMs);
+  const onOuter = () => controller.abort();
+  if (options.signal?.aborted || sourceBudgetMs === 0) controller.abort();
+  else options.signal?.addEventListener('abort', onOuter, { once: true });
+  try {
+    if (controller.signal.aborted) return { ok: false, reasons: ['request_aborted'] };
+    if (typeof options.fetchFn !== 'function') {
+      return { ok: false, reasons: ['candidate_coverage_incomplete'] };
+    }
+    if (!validLocation(location)) return { ok: false, reasons: ['unsupported_off_network_location'] };
+    const quality = locationQuality(location);
+    if (quality.state !== 'SUPPORTED') return { ok: false, reasons: quality.reasons };
+    const policy = searchPolicy(location, {
+      modelErrorMeters: CURB_RESOLUTION_POLICY.modelErrorMeters,
+      maxSearchRadiusMeters: 500,
+    });
+    const productionStore = createCsclCandidateStore({
+      fetchFn: options.fetchFn,
+      getSocrataToken: options.getSocrataToken,
+    });
+    const raced = await Promise.race([
+      productionStore.queryCandidates({
+        lat: location.lat,
+        lng: location.lng,
+        ...policy,
+        signal: controller.signal,
+      }).then(retrieved => ({ retrieved })),
+      abortResult,
+    ]);
+    const stageTiming = raced?.retrieved?.stageTiming ?? null;
+    if (raced?.retrieved) delete raced.retrieved.stageTiming;
+    if (controller.signal.aborted || raced?.aborted) {
+      return { ok: false, reasons: ['request_aborted'], stageTiming };
+    }
+    const attested = attestCompleteRetrieval(raced.retrieved, policy);
+    if (controller.signal.aborted) return { ok: false, reasons: ['request_aborted'], stageTiming };
+    if (!attested.ok) {
+      const count = Array.isArray(raced.retrieved?.candidates) ? raced.retrieved.candidates.length : 0;
+      return { ok: false, reasons: [attested.reason], candidateCount: count, stageTiming };
+    }
+    bindRetrieval(attested.retrieved, nonce);
+    return {
+      ok: true,
+      retrieval: attested.retrieved,
+      candidateCount: attested.retrieved.candidates.length,
+      stageTiming,
+    };
+  } catch {
+    return { ok: false, reasons: [controller.signal.aborted ? 'request_aborted' : 'source_unavailable'] };
+  } finally {
+    settled = true;
+    clearTimeout(timer);
+    options.signal?.removeEventListener('abort', onOuter);
+  }
+}
+
+async function resolveCanonicalCurb(location, options = {}) {
+  const trace = createDemoResolutionTrace(options.env);
+  const fail = (reasons, diagnostics, stage, extra) => {
+    const result = unsupported(reasons, diagnostics);
+    trace?.record(result, stage, extra);
+    return result;
+  };
+  if (!validLocation(location)) {
+    return fail(['unsupported_off_network_location'], undefined, 'classification', {
+      internalReason: 'unsupported_off_network_location',
+      classifierState: 'UNSUPPORTED',
+      classifierReason: 'unsupported_off_network_location',
+    });
+  }
+  const quality = locationQuality(location);
+  if (quality.state !== 'SUPPORTED') {
+    return fail(quality.reasons, undefined, 'classification', {
+      internalReason: quality.reasons[0],
+      classifierState: quality.state,
+      classifierReason: quality.reasons[0],
+    });
+  }
+  trace?.mark();
   const policy = searchPolicy(location, {
     modelErrorMeters: CURB_RESOLUTION_POLICY.modelErrorMeters,
     maxSearchRadiusMeters: 500,
   });
-  let retrieved = await sourceStore.queryCandidates({
-    lat: location.lat,
-    lng: location.lng,
-    ...policy,
-    signal: options.signal,
-  });
-  if (productionStore && retrieved?.completeness?.state === 'COMPLETE'
-    && retrieved.envelope === policy.canonicalEnvelope
-    && retrieved.envelopeDigest === policy.canonicalEnvelope.digest
-    && retrieved.retrievalContractVersion === 'canonical-cscl-intersects-1') {
-    const population = buildCanonicalCsclPopulation(retrieved.candidates);
-    if (!population.ok) return unsupported([population.reason]);
-    retrieved = deepFreeze({
-      ...retrieved,
-      candidates: population.candidates,
-      populationIdentity: population.populationIdentity,
-      populationSchema: population.schema,
+  let retrieved;
+  if (options.attestedRetrieval) {
+    if (!claimAuthoritativeRetrieval(options.attestedRetrieval, policy, options.acquisitionNonce)) {
+      return fail(['authority_attestation_invalid'], undefined, 'cscl_retrieval', {
+        internalReason: 'authority_attestation_invalid',
+      });
+    }
+    retrieved = options.attestedRetrieval;
+  } else {
+    const productionStore = typeof options.fetchFn === 'function'
+      ? createCsclCandidateStore({ fetchFn: options.fetchFn, getSocrataToken: options.getSocrataToken })
+      : null;
+    const sourceStore = productionStore || options.candidateStore;
+    if (!sourceStore || typeof sourceStore.queryCandidates !== 'function') {
+      return fail(['candidate_coverage_incomplete'], undefined, 'cscl_retrieval', {
+        internalReason: 'candidate_coverage_incomplete',
+      });
+    }
+    retrieved = await sourceStore.queryCandidates({
+      lat: location.lat,
+      lng: location.lng,
+      ...policy,
+      signal: options.signal,
     });
-    authoritativeRetrievals.add(retrieved);
+    if (productionStore) {
+      const attested = attestCompleteRetrieval(retrieved, policy);
+      if (!attested.ok) {
+        const retrievedCount = Array.isArray(retrieved?.candidates) ? retrieved.candidates.length : null;
+        trace?.setCounts({ rawCsclCandidateCount: retrievedCount });
+        return fail([attested.reason], {
+          candidateCount: retrievedCount || 0,
+        }, 'cscl_retrieval', { internalReason: attested.reason });
+      }
+      retrieved = attested.retrieved;
+    }
   }
   if (!authoritativeRetrievals.has(retrieved)) {
-    const retrievalReason = productionStore
-      ? retrieved?.completeness?.reason || 'authority_attestation_invalid'
-      : 'authority_attestation_invalid';
-    return unsupported([retrievalReason], {
-      candidateCount: Array.isArray(retrieved?.candidates) ? retrieved.candidates.length : 0,
-    });
+    const retrievalReason = 'authority_attestation_invalid';
+    const retrievedCount = Array.isArray(retrieved?.candidates) ? retrieved.candidates.length : null;
+    trace?.setCounts({ rawCsclCandidateCount: retrievedCount });
+    return fail([retrievalReason], {
+      candidateCount: retrievedCount || 0,
+    }, 'cscl_retrieval', { internalReason: retrievalReason });
   }
   const candidateStore = {
     async queryCandidates() { return retrieved; },
   };
-  const planimetricPromise = options.planimetricStore?.queryCurbs
-    ? options.planimetricStore.queryCurbs({
-      lat: location.lat,
-      lng: location.lng,
-      radiusMeters: Math.min(100, Math.max(30, location.accuracyMeters + 15)),
-      signal: options.signal,
-    })
-    : Promise.resolve({ candidates: [], completeness: { state: 'INCOMPLETE', reason: 'source_unavailable' } });
-  const [runtime] = await Promise.all([
-    resolveOfficialCurbRuntime(location, {
-      candidateStore,
-      signal: options.signal,
-      precomputedSearchPolicy: policy,
-      modelErrorMeters: CURB_RESOLUTION_POLICY.modelErrorMeters,
-      maxCandidates: CURB_RESOLUTION_POLICY.maximumCsclCandidates,
-    }),
-    planimetricPromise,
-  ]);
+  const runtime = await resolveOfficialCurbRuntime(location, {
+    candidateStore,
+    signal: options.signal,
+    precomputedSearchPolicy: policy,
+    modelErrorMeters: CURB_RESOLUTION_POLICY.modelErrorMeters,
+    maxCandidates: CURB_RESOLUTION_POLICY.maximumCsclCandidates,
+  });
 
   const rawRecords = Array.isArray(retrieved?.candidates) ? retrieved.candidates : [];
+  trace?.setCounts({ rawCsclCandidateCount: rawRecords.length });
+  trace?.mark();
   const records = rawRecords.slice(0, CURB_RESOLUTION_POLICY.maximumCsclCandidates);
   const sourceCandidateSetComplete = retrieved?.completeness?.state === 'COMPLETE'
     && rawRecords.length <= CURB_RESOLUTION_POLICY.maximumCsclCandidates
     && authoritativeRetrievals.has(retrieved);
   if (!sourceCandidateSetComplete) {
-    return unsupported(['candidate_coverage_incomplete'], { candidateCount: rawRecords.length });
+    return fail(['candidate_coverage_incomplete'], { candidateCount: rawRecords.length }, 'candidate_coverage', {
+      internalReason: 'candidate_coverage_incomplete',
+    });
   }
-  if (!records.length) return unsupported(['canonical_candidate_missing'], { candidateCount: 0 });
+  if (!records.length) {
+    return fail(['canonical_candidate_missing'], { candidateCount: 0 }, 'candidate_coverage', {
+      internalReason: 'canonical_candidate_missing',
+    });
+  }
   const candidateSetComplete = sourceCandidateSetComplete
     && runtime?.resolution?.candidateCompleteness?.state === 'COMPLETE'
     && runtime?.resolution?.searchEnvelopeComplete === true;
   if (!candidateSetComplete) {
-    return unsupported(['candidate_coverage_incomplete'], { candidateCount: records.length });
+    return fail(['candidate_coverage_incomplete'], { candidateCount: records.length }, 'candidate_coverage', {
+      internalReason: 'candidate_coverage_incomplete',
+    });
   }
   const sourceVersionConsistent = new Set(records.map(sourceVersionKey)).size === 1
     && !records.some(record => !record?.sourceVersion?.version);
   if (!sourceVersionConsistent) {
-    return unsupported(['source_version_problem'], { candidateCount: records.length });
+    return fail(['source_version_problem'], { candidateCount: records.length }, 'cscl_retrieval', {
+      internalReason: 'source_version_problem',
+    });
   }
   if (records.some(record => !roadwaySupported(record))) {
-    return unsupported(['unsupported_roadway_status'], { candidateCount: records.length });
+    return fail(['unsupported_roadway_status'], { candidateCount: records.length }, 'cscl_retrieval', {
+      internalReason: 'unsupported_roadway_status',
+    });
   }
 
+  trace?.mark();
   const ranked = rankGroups({ lat: location.lat, lng: location.lng }, records);
-  if (!ranked.length) return unsupported(['implausible_geometry'], { candidateCount: 0 });
+  if (!ranked.length) {
+    return fail(['implausible_geometry'], { candidateCount: 0 }, 'geometric_ranking', {
+      internalReason: 'implausible_geometry',
+    });
+  }
   const uncertainty = location.accuracyMeters + CURB_RESOLUTION_POLICY.modelErrorMeters;
   const bestDistance = ranked[0].best.projection.distanceMeters;
   const materialRanked = ranked.filter(value => (
     value.best.projection.distanceMeters - uncertainty <= bestDistance + uncertainty
   ));
+  trace?.setCounts({ materialRoadwayCandidateCount: materialRanked.length });
   if (materialRanked.length > 2) {
-    return unsupported(['intersection_complex'], { candidateCount: materialRanked.length });
+    return fail(['intersection_complex'], { candidateCount: materialRanked.length }, 'material_selection', {
+      internalReason: 'intersection_complex',
+    });
   }
   const retainPrivateSourceContext = options.privateSourceContextRetention === RETENTION_MODE;
   const evidence = shadowSourceEvidence(options);
@@ -410,17 +615,17 @@ async function resolveCanonicalCurb(location, options = {}) {
     try {
       officialRelationships = await officialPrimary.relationshipsFor(materialRanked.map(group => group.best));
     } catch {
-      return unsupported(['lion_primary_unavailable'], { candidateCount: materialRanked.length });
+      return fail(['lion_primary_unavailable'], { candidateCount: materialRanked.length }, 'lion_relationships', {
+        internalReason: 'lion_primary_unavailable',
+      });
     }
   }
-  const identityFailure = retainPrivateSourceContext || evidence || officialRelationships
-    ? { reason: null, enrichment: null }
-    : null;
+  const identityFailure = { reason: null, enrichment: null };
+  trace?.mark();
   const candidates = materialRanked.map(rankedGroup => (
-    identityFailure || officialRelationships
-      ? buildCandidate(rankedGroup, { identityFailure, evidence, officialRelationships })
-      : buildCandidate(rankedGroup)
+    buildCandidate(rankedGroup, { identityFailure, evidence, officialRelationships })
   )).filter(Boolean);
+  trace?.setCounts({ constructedCanonicalCandidateCount: candidates.length });
   if (retainPrivateSourceContext) {
     observePrivateSourceContext(materialRanked, options, identityFailure.reason);
   }
@@ -435,7 +640,9 @@ async function resolveCanonicalCurb(location, options = {}) {
     const reasons = typeof lionReason === 'string' && lionReason.startsWith('lion_')
       ? [lionReason]
       : ['candidate_incomplete'];
-    return unsupported(reasons, { candidateCount: materialRanked.length });
+    return fail(reasons, { candidateCount: materialRanked.length }, 'candidate_construction', {
+      internalReason: typeof lionReason === 'string' ? lionReason : reasons[0],
+    });
   }
   if (identityFailure?.enrichment?.fromStreet && identityFailure.enrichment.toStreet) {
     emitPilotStage(options.telemetry, 'enrichment_accepted');
@@ -465,6 +672,7 @@ async function resolveCanonicalCurb(location, options = {}) {
     rank: index,
     visuallyDistinct: considered.length === 1 || pairDistinct,
   }));
+  trace?.mark();
   const decision = classifyCanonicalCurb({
     reportedAccuracyMeters: location.accuracyMeters,
     sampleCount: location.sampleCount,
@@ -494,7 +702,11 @@ async function resolveCanonicalCurb(location, options = {}) {
     if (evidence?.sourceAdmission) diagnostics.sourceAdmission = evidence.sourceAdmission;
     emitPilotStage(options.telemetry, 'topology_primary_rejected');
     emitPilotStage(options.telemetry, 'native_proof_not_invoked');
-    return unsupported(['topology_primary_required'], diagnostics);
+    return fail(['topology_primary_required'], diagnostics, 'classification', {
+      internalReason: 'topology_primary_required',
+      classifierState: decision.state,
+      classifierReason: decision.reasons[0] || null,
+    });
   }
 
   if (decision.state === 'SUPPORTED') {
@@ -516,6 +728,8 @@ async function resolveCanonicalCurb(location, options = {}) {
     sourceVersion: retrieved.sourceVersion,
   })).digest('hex');
   if (decision.state !== 'AMBIGUOUS') {
+    trace?.mark();
+    let sideDiagnostic = null;
     const sideConfirmation = sideConfirmationResult({
       enabled: options.sideConfirmationEnabled === true,
       selected,
@@ -532,15 +746,25 @@ async function resolveCanonicalCurb(location, options = {}) {
       hmacKey: options.sideConfirmationHmacKey,
       nowMs: Number.isSafeInteger(options.sideConfirmationNow) ? options.sideConfirmationNow : Date.now(),
       nonceForRank: options.sideConfirmationNonceForRank,
+      onDemoDiagnostic: trace ? (detail) => { sideDiagnostic = detail; } : undefined,
     });
     if (sideConfirmation) return sideConfirmation;
-    return unsupported(decision.reasons, { candidateCount: considered.length });
+    return fail(decision.reasons, { candidateCount: considered.length }, sideDiagnostic?.stage || 'classification', {
+      internalReason: sideDiagnostic?.internalReason || decision.reasons[0],
+      classifierState: decision.state,
+      classifierReason: decision.reasons[0] || null,
+      sideConfirmationEligibility: sideDiagnostic?.sideConfirmationEligibility ?? null,
+    });
   }
   const publicCandidates = considered.map((candidate, index) => (
     publicCandidate(candidate, tokenContext, index, authorityContextDigest)
   ));
   if (publicCandidates.some(candidate => !candidate.token)) {
-    return unsupported(['candidate_token_unavailable'], { candidateCount: considered.length });
+    return fail(['candidate_token_unavailable'], { candidateCount: considered.length }, 'candidate_token', {
+      internalReason: 'candidate_token_unavailable',
+      classifierState: decision.state,
+      classifierReason: decision.reasons[0] || null,
+    });
   }
   const result = deepFreeze({
     state: 'AMBIGUOUS',
@@ -596,8 +820,10 @@ function promoteAttestedSideConfirmation(resolution, candidateToken) {
     ...selected.identity,
     resolution: { ...selected.identity.resolution, method: 'visual_selection' },
   });
+  const expectedOfficialBlockFaceIds = [...new Set(privateSet.map(candidate => candidate.officialBlockFaceId))];
   const result = deepFreeze({
     state: 'SUPPORTED', reasons: [], identity, publicCurb: toPublicCurb(identity),
+    expectedOfficialBlockFaceIds,
   });
   primaryTopologyResults.add(result);
   return result;
@@ -624,6 +850,8 @@ function promoteAttestedVisualSelection(resolution, candidateToken) {
 }
 
 module.exports = {
+  CSCL_SOURCE_BUDGET_MS,
+  acquireAuthoritativeCscl,
   resolveCanonicalCurb,
   buildCandidate,
   hasPrimaryTopologyAuthority,

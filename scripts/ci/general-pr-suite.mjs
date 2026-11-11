@@ -1,4 +1,6 @@
 // General PR suite.
+// Scoped to this runner: Vitest uses two workers to avoid CI contention.
+// Assertions, the 5s timeout, and the exclusion list are unchanged.
 // Omits only the private 26C provenance file. npm test is unchanged and
 // still runs that file. Release preflight also still calls vitest directly.
 // A provenance-critical change needs founder-signed FOUNDER-EXECUTED evidence.
@@ -31,6 +33,7 @@ if (process.env.GITHUB_STEP_SUMMARY) {
 const child = spawnSync(process.execPath, [
   VITEST,
   'run',
+  '--maxWorkers=2',
   '--exclude',
   PRIVATE_SUITE,
   ...process.argv.slice(2),

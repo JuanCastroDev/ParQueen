@@ -74,6 +74,7 @@ describe('canonical curb V2 client contract', () => {
       lat: 40.7, lng: -74, accuracyMeters: 5, sampleCount: 4, consistencyMeters: 3,
     })).toEqual({
       protocolVersion: 2,
+      responseVersion: 1,
       location: { lat: 40.7, lng: -74, accuracyMeters: 5, sampleCount: 4, consistencyMeters: 3 },
     });
     expect(buildCanonicalCurbRequest({
@@ -128,6 +129,7 @@ describe('canonical curb V2 client contract', () => {
     expect(invoke).toHaveBeenCalledOnce();
     expect(invoke).toHaveBeenCalledWith({
       protocolVersion: 2,
+      responseVersion: 1,
       location: location(),
     });
   });
@@ -148,6 +150,7 @@ describe('canonical curb V2 client contract', () => {
     })).toEqual({ protocolVersion: 2, status: 'side_confirmation_required', confirmation });
     expect(buildCanonicalCurbRequest(location(), sideToken('N'))).toEqual({
       protocolVersion: 2,
+      responseVersion: 1,
       location: location(),
       candidateToken: sideToken('N'),
     });
@@ -202,5 +205,188 @@ describe('canonical curb V2 client contract', () => {
         ],
       },
     })).toThrow('Invalid canonical curb response');
+  });
+
+  it('accepts the staged oblique response and rejects a malformed bearing', () => {
+    const oblique = {
+      streetName: 'Maran Place',
+      orientation: { north: 'up' as const, axis: 'oblique' as const, bearingDegrees: 45 },
+      curbs: [
+        { token: sideToken('NW'), cardinal: 'Northwest' as const },
+        { token: sideToken('SE'), cardinal: 'Southeast' as const },
+      ],
+    };
+    expect(parseCanonicalCurbResponse({
+      protocolVersion: 2, status: 'side_confirmation_required', confirmation: oblique,
+    })).toMatchObject({
+      status: 'side_confirmation_required',
+      confirmation: { orientation: { axis: 'oblique', bearingDegrees: 45 } },
+    });
+    const oneWay = {
+      ...oblique,
+      orientation: { north: 'up' as const, axis: 'oblique' as const, bearingDegrees: 321 },
+      curbs: [
+        { token: sideToken('SW'), cardinal: 'Southwest' as const, drivingSide: 'left' as const },
+        { token: sideToken('NE'), cardinal: 'Northeast' as const, drivingSide: 'right' as const },
+      ],
+    };
+    expect(parseCanonicalCurbResponse({
+      protocolVersion: 2, status: 'side_confirmation_required', confirmation: oneWay,
+    }).status).toBe('side_confirmation_required');
+    expect(() => parseCanonicalCurbResponse({
+      protocolVersion: 2,
+      status: 'side_confirmation_required',
+      confirmation: {
+        ...oneWay,
+        curbs: oneWay.curbs.map(curb => ({ ...curb, drivingSide: 'right' as const })),
+      },
+    })).toThrow('Invalid canonical curb response');
+    expect(parseCanonicalCurbResponse({
+      protocolVersion: 2,
+      status: 'high_confidence',
+      segmentId: key,
+      streetName: 'Maran Place',
+      sideLabel: 'Northwest',
+      ruleSummary: { cleaningAvailable: false },
+    })).toMatchObject({ sideLabel: 'Northwest' });
+    expect(() => parseCanonicalCurbResponse({
+      protocolVersion: 2,
+      status: 'side_confirmation_required',
+      confirmation: {
+        ...oblique,
+        curbs: [
+          { token: sideToken('N'), cardinal: 'North' },
+          { token: sideToken('S'), cardinal: 'South' },
+        ],
+      },
+    })).toThrow('Invalid canonical curb response');
+    expect(() => parseCanonicalCurbResponse({
+      protocolVersion: 2,
+      status: 'side_confirmation_required',
+      confirmation: {
+        ...oblique,
+        orientation: { north: 'up', axis: 'oblique', bearingDegrees: 80 },
+      },
+    })).toThrow('Invalid canonical curb response');
+    expect(() => parseCanonicalCurbResponse({
+      protocolVersion: 2,
+      status: 'side_confirmation_required',
+      confirmation: {
+        ...oblique,
+        orientation: { north: 'up', axis: 'oblique' },
+      },
+    })).toThrow('Invalid canonical curb response');
+    expect(() => parseCanonicalCurbResponse({
+      protocolVersion: 2,
+      status: 'high_confidence',
+      segmentId: key,
+      streetName: 'Maran Place',
+      sideLabel: 'Left',
+      ruleSummary: { cleaningAvailable: false },
+    })).toThrow('Invalid canonical curb response');
+    for (const sideLabel of ['Northwest', 'Southeast', 'Northeast', 'Southwest']) {
+      expect(parseCanonicalCurbResponse({
+        protocolVersion: 2,
+        status: 'high_confidence',
+        segmentId: key,
+        streetName: 'Maran Place',
+        sideLabel,
+        ruleSummary: { cleaningAvailable: false },
+      })).toMatchObject({ status: 'high_confidence', segmentId: key, sideLabel });
+    }
+    expect(() => parseCanonicalCurbResponse({
+      protocolVersion: 2,
+      status: 'high_confidence',
+      segmentId: key,
+      streetName: 'Maran Place',
+      sideLabel: 'NW',
+      ruleSummary: { cleaningAvailable: false },
+    })).toThrow('Invalid canonical curb response');
+  });
+
+  it('ignores a late backend response after the caller aborts', async () => {
+    const controller = new AbortController();
+    const collectLocation = vi.fn().mockResolvedValue({
+      lat: 40.7, lng: -74, accuracyMeters: 5, sampleCount: 4, consistencyMeters: 3,
+    });
+    const invoke = vi.fn().mockImplementation(async () => {
+      controller.abort();
+      return {
+        protocolVersion: 2,
+        status: 'high_confidence',
+        segmentId: 'curb2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        streetName: 'Late Street',
+        sideLabel: 'North',
+        ruleSummary: { cleaningAvailable: true },
+      };
+    });
+    await expect(resolveCanonicalCurbWithLocation({
+      collectLocation,
+      invoke,
+      signal: controller.signal,
+    })).resolves.toEqual({
+      protocolVersion: 2,
+      status: 'unsupported',
+      reason: 'source_unavailable',
+    });
+    expect(invoke).toHaveBeenCalledOnce();
+  });
+});
+
+
+describe('A1 additive response compatibility', () => {
+  const key = 'curb2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const legacy = {
+    protocolVersion: 2 as const,
+    status: 'high_confidence' as const,
+    segmentId: key,
+    streetName: 'Maran Place',
+    sideLabel: 'North' as const,
+    ruleSummary: { cleaningAvailable: true },
+  };
+  const extended = {
+    ...legacy,
+    responseVersion: 1 as const,
+    cacheHit: false,
+    publicRules: [{
+      category: 'cleaning',
+      type: 'streetCleaning',
+      source: 'nyc_open_data',
+      schedules: [{ days: ['Mon'], startTime: '08:00', endTime: '09:30', side: 'North' }],
+    }],
+    identityConfidence: 'high' as const,
+    regulationStatus: 'verified' as const,
+    regulationCompleteness: 'complete' as const,
+    regulationAvailability: 'available' as const,
+    publicSchedules: {
+      cleaning: [{ days: ['Mon'], startTime: '08:00', endTime: '09:30', side: 'North' }],
+      restrictions: [],
+      timeLimited: [],
+      meters: [],
+    },
+  };
+
+  function parseWithLegacyExactKeys(value: Record<string, unknown>): boolean {
+    const keys = Object.keys(value).sort();
+    const expected = ['protocolVersion', 'status', 'segmentId', 'streetName', 'sideLabel', 'ruleSummary'].sort();
+    return keys.length === expected.length && keys.every((item, index) => item === expected[index]);
+  }
+
+  it('still accepts the main high_confidence key set', () => {
+    expect(parseCanonicalCurbResponse(legacy).status).toBe('high_confidence');
+    expect(parseWithLegacyExactKeys(legacy)).toBe(true);
+  });
+
+  it('accepts versioned public rules while old exact-key clients reject extra fields rather than misread them', () => {
+    expect(parseCanonicalCurbResponse(extended).status).toBe('high_confidence');
+    expect((parseCanonicalCurbResponse(extended) as { publicSchedules?: { cleaning: unknown[] } }).publicSchedules?.cleaning).toHaveLength(1);
+    expect(parseWithLegacyExactKeys(extended)).toBe(false);
+  });
+
+  it('rejects private identity material in publicRules', () => {
+    expect(() => parseCanonicalCurbResponse({
+      ...extended,
+      publicRules: [{ category: 'cleaning', officialBlockFaceId: '1000000001' }],
+    })).toThrow(/Invalid canonical curb response/);
   });
 });

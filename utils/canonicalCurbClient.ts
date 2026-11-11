@@ -1,5 +1,11 @@
 import { isCanonicalLocationReady, type AggregatedLocation } from './locationBurst';
 import {
+  COMPASS,
+  type CurbCardinal,
+  obliqueCardinalsMatch,
+  OPPOSITE,
+} from './curbOrientation';
+import {
   SIDE_CONFIRMATION_TOKEN_BODY_MAX,
   SIDE_CONFIRMATION_TOKEN_BODY_MIN,
   SIDE_CONFIRMATION_TOKEN_MAC_LENGTH,
@@ -19,17 +25,52 @@ export type CanonicalCurbSelector = Readonly<{
   candidates: readonly [CanonicalCurbCandidate, CanonicalCurbCandidate];
 }>;
 
-export type CurbCardinal = 'North' | 'South' | 'East' | 'West';
+export type { CurbCardinal };
+
+export type DrivingSide = 'left' | 'right';
 
 export type SideConfirmationCurb = Readonly<{
   token: string;
   cardinal: CurbCardinal;
+  drivingSide?: DrivingSide;
 }>;
 
 export type SideConfirmation = Readonly<{
   streetName: string;
-  orientation: Readonly<{ north: 'up'; axis: 'north-south' | 'east-west' }>;
+  orientation: Readonly<
+    | { north: 'up'; axis: 'north-south' | 'east-west' }
+    | { north: 'up'; axis: 'oblique'; bearingDegrees: number }
+  >;
   curbs: readonly [SideConfirmationCurb, SideConfirmationCurb];
+}>;
+
+export type CanonicalPublicSchedule = Readonly<{
+  side?: string;
+  days?: readonly string[];
+  startTime?: string;
+  endTime?: string;
+  anytime?: boolean;
+  durationMinutes?: number;
+  type?: string;
+}>;
+
+export type CanonicalPublicRule = Readonly<{
+  category?: string;
+  type?: string;
+  source?: string;
+  side?: string;
+  restrictionLevel?: number;
+  maxStayMinutes?: number;
+  schedules?: readonly CanonicalPublicSchedule[];
+  rate?: Readonly<{ kind?: string; unitMinutes?: number; amount?: number; display?: string }>;
+  meterTerms?: Readonly<{ maxStayMinutes?: number; rateDisplay?: string }>;
+}>;
+
+export type CanonicalPublicSchedules = Readonly<{
+  cleaning: readonly CanonicalPublicSchedule[];
+  restrictions: readonly CanonicalPublicSchedule[];
+  timeLimited: readonly CanonicalPublicSchedule[];
+  meters: readonly CanonicalPublicSchedule[];
 }>;
 
 export type CanonicalCurbResponse =
@@ -38,8 +79,16 @@ export type CanonicalCurbResponse =
     status: 'high_confidence';
     segmentId: string;
     streetName: string;
-    sideLabel: 'North' | 'South' | 'East' | 'West';
-    ruleSummary: Readonly<{ cleaningAvailable: boolean }>;
+    sideLabel: CurbCardinal;
+    ruleSummary: Readonly<{ cleaningAvailable: boolean; rulesResolved?: boolean }>;
+    responseVersion?: 1;
+    cacheHit?: boolean;
+    identityConfidence?: 'high';
+    regulationStatus?: 'verified' | 'partial' | 'unknown' | 'verified_empty';
+    regulationCompleteness?: 'complete' | 'incomplete' | 'unknown';
+    regulationAvailability?: 'available' | 'unavailable' | 'conflict';
+    publicRules?: readonly CanonicalPublicRule[];
+    publicSchedules?: CanonicalPublicSchedules;
   }>
   | Readonly<{ protocolVersion: 2; status: 'ambiguous'; selector: CanonicalCurbSelector }>
   | Readonly<{
@@ -57,6 +106,7 @@ export type ResolveCurbRequestV2 = Readonly<{
   protocolVersion: 2;
   location: AggregatedLocation;
   candidateToken?: string;
+  responseVersion?: 1;
 }>;
 
 const PUBLIC_KEY = /^curb2_[a-f0-9]{32}$/;
@@ -64,11 +114,8 @@ const CANDIDATE_TOKEN = /^candidate2_[a-f0-9]{16}_[a-f0-9]{32}$/;
 const SIDE_CONFIRMATION_TOKEN = new RegExp(
   `^sidec1\\.[A-Za-z0-9_-]{${SIDE_CONFIRMATION_TOKEN_BODY_MIN},${SIDE_CONFIRMATION_TOKEN_BODY_MAX}}\\.[A-Za-z0-9_-]{${SIDE_CONFIRMATION_TOKEN_MAC_LENGTH}}$`,
 );
-const SIDES = new Set(['North', 'South', 'East', 'West']);
-const OPPOSITE: Readonly<Record<string, string>> = {
-  North: 'South', South: 'North', East: 'West', West: 'East',
-};
-const AXIS: Readonly<Record<string, string>> = {
+const SIDES = new Set<string>(COMPASS);
+const ALIGNED_AXIS: Readonly<Record<string, string>> = {
   North: 'east-west', South: 'east-west', East: 'north-south', West: 'north-south',
 };
 const REASONS = new Set(['location_quality', 'candidate_incomplete', 'intersection_complex', 'source_unavailable']);
@@ -80,6 +127,16 @@ const exactKeys = (value: Record<string, unknown>, keys: readonly string[]): boo
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+};
+
+const allowedKeys = (
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): boolean => {
+  const keys = Object.keys(value);
+  return required.every(key => keys.includes(key))
+    && keys.every(key => required.includes(key) || optional.includes(key));
 };
 
 const finitePoint = (value: unknown): value is readonly [number, number] =>
@@ -101,9 +158,14 @@ function parseCandidate(value: unknown): CanonicalCurbCandidate | null {
 }
 
 function parseSideCurb(value: unknown): SideConfirmationCurb | null {
-  if (!record(value) || !exactKeys(value, ['token', 'cardinal'])
+  if (!record(value)) return null;
+  const keys = Object.hasOwn(value, 'drivingSide')
+    ? ['token', 'cardinal', 'drivingSide'] : ['token', 'cardinal'];
+  if (!exactKeys(value, keys)
     || typeof value.token !== 'string' || !SIDE_CONFIRMATION_TOKEN.test(value.token)
     || typeof value.cardinal !== 'string' || !SIDES.has(value.cardinal)) return null;
+  if (Object.hasOwn(value, 'drivingSide')
+    && value.drivingSide !== 'left' && value.drivingSide !== 'right') return null;
   return value as SideConfirmationCurb;
 }
 
@@ -111,15 +173,76 @@ function invalid(): never {
   throw new Error('Invalid canonical curb response');
 }
 
+
+function parsePublicSchedule(value: unknown): value is CanonicalPublicSchedule {
+  if (!record(value)) return false;
+  const allowed = ['side', 'days', 'startTime', 'endTime', 'anytime', 'durationMinutes', 'type'];
+  if (!Object.keys(value).every(key => allowed.includes(key))) return false;
+  if (value.side !== undefined && typeof value.side !== 'string') return false;
+  if (value.startTime !== undefined && typeof value.startTime !== 'string') return false;
+  if (value.endTime !== undefined && typeof value.endTime !== 'string') return false;
+  if (value.type !== undefined && typeof value.type !== 'string') return false;
+  if (value.anytime !== undefined && typeof value.anytime !== 'boolean') return false;
+  if (value.durationMinutes !== undefined && !Number.isFinite(value.durationMinutes)) return false;
+  if (value.days !== undefined && (!Array.isArray(value.days) || value.days.some(day => typeof day !== 'string'))) return false;
+  return true;
+}
+
+function parsePublicRules(value: unknown): value is readonly CanonicalPublicRule[] {
+  if (!Array.isArray(value)) return false;
+  return value.every((rule) => {
+    if (!record(rule)) return false;
+    const allowed = ['category', 'type', 'source', 'side', 'restrictionLevel', 'maxStayMinutes', 'schedules', 'rate', 'meterTerms'];
+    if (!Object.keys(rule).every(key => allowed.includes(key))) return false;
+    if (rule.category !== undefined && typeof rule.category !== 'string') return false;
+    if (rule.type !== undefined && typeof rule.type !== 'string') return false;
+    if (!rule.category && !rule.type) return false;
+    if (rule.source !== undefined && typeof rule.source !== 'string') return false;
+    if (rule.side !== undefined && typeof rule.side !== 'string') return false;
+    if (rule.restrictionLevel !== undefined && !Number.isFinite(rule.restrictionLevel)) return false;
+    if (rule.maxStayMinutes !== undefined && !Number.isFinite(rule.maxStayMinutes)) return false;
+    if (rule.schedules !== undefined && (!Array.isArray(rule.schedules) || !rule.schedules.every(parsePublicSchedule))) return false;
+    return true;
+  });
+}
+
+function parsePublicSchedules(value: unknown): value is CanonicalPublicSchedules {
+  if (!record(value) || !exactKeys(value, ['cleaning', 'restrictions', 'timeLimited', 'meters'])) return false;
+  return ['cleaning', 'restrictions', 'timeLimited', 'meters'].every((key) => {
+    const rows = value[key];
+    return Array.isArray(rows) && rows.every(parsePublicSchedule);
+  });
+}
+
 export function parseCanonicalCurbResponse(value: unknown): CanonicalCurbResponse {
   if (!record(value) || value.protocolVersion !== 2 || typeof value.status !== 'string') invalid();
   if (value.status === 'high_confidence') {
-    if (!exactKeys(value, ['protocolVersion', 'status', 'segmentId', 'streetName', 'sideLabel', 'ruleSummary'])
+    if (!allowedKeys(
+      value,
+      ['protocolVersion', 'status', 'segmentId', 'streetName', 'sideLabel', 'ruleSummary'],
+      ['responseVersion', 'publicRules', 'publicSchedules', 'cacheHit',
+        'identityConfidence', 'regulationStatus', 'regulationCompleteness', 'regulationAvailability'],
+    )
       || typeof value.segmentId !== 'string' || !PUBLIC_KEY.test(value.segmentId)
       || typeof value.streetName !== 'string' || !value.streetName.trim()
       || typeof value.sideLabel !== 'string' || !SIDES.has(value.sideLabel)
-      || !record(value.ruleSummary) || !exactKeys(value.ruleSummary, ['cleaningAvailable'])
+      || !record(value.ruleSummary)
+      || !allowedKeys(value.ruleSummary, ['cleaningAvailable'], ['rulesResolved'])
       || typeof value.ruleSummary.cleaningAvailable !== 'boolean') invalid();
+    if (Object.hasOwn(value, 'responseVersion') && value.responseVersion !== 1) invalid();
+    if (Object.hasOwn(value, 'cacheHit') && typeof value.cacheHit !== 'boolean') invalid();
+    if (Object.hasOwn(value, 'publicRules') && !parsePublicRules(value.publicRules)) invalid();
+    if (Object.hasOwn(value, 'publicSchedules') && !parsePublicSchedules(value.publicSchedules)) invalid();
+    if (value.responseVersion === 1 && !parsePublicRules(value.publicRules)) invalid();
+    if (value.responseVersion === 1) {
+      if (value.identityConfidence !== 'high') invalid();
+      if (value.regulationStatus !== 'verified' && value.regulationStatus !== 'partial'
+        && value.regulationStatus !== 'unknown' && value.regulationStatus !== 'verified_empty') invalid();
+      if (value.regulationCompleteness !== 'complete' && value.regulationCompleteness !== 'incomplete'
+        && value.regulationCompleteness !== 'unknown') invalid();
+      if (value.regulationAvailability !== 'available' && value.regulationAvailability !== 'unavailable'
+        && value.regulationAvailability !== 'conflict') invalid();
+    }
     return value as CanonicalCurbResponse;
   }
   if (value.status === 'unsupported') {
@@ -144,16 +267,24 @@ export function parseCanonicalCurbResponse(value: unknown): CanonicalCurbRespons
       || !exactKeys(value.confirmation, ['streetName', 'orientation', 'curbs'])
       || typeof value.confirmation.streetName !== 'string' || !value.confirmation.streetName.trim()
       || !record(value.confirmation.orientation)
-      || !exactKeys(value.confirmation.orientation, ['north', 'axis'])
       || value.confirmation.orientation.north !== 'up'
-      || (value.confirmation.orientation.axis !== 'north-south'
-        && value.confirmation.orientation.axis !== 'east-west')
       || !Array.isArray(value.confirmation.curbs) || value.confirmation.curbs.length !== 2) invalid();
+    const axis = value.confirmation.orientation.axis;
+    const aligned = axis === 'north-south' || axis === 'east-west';
+    if (!aligned && axis !== 'oblique') invalid();
+    if (aligned && !exactKeys(value.confirmation.orientation, ['north', 'axis'])) invalid();
+    if (axis === 'oblique' && !exactKeys(value.confirmation.orientation, ['north', 'axis', 'bearingDegrees'])) invalid();
     const curbs = value.confirmation.curbs.map(parseSideCurb);
-    if (!curbs[0] || !curbs[1]
-      || curbs[0].token === curbs[1].token
-      || OPPOSITE[curbs[0].cardinal] !== curbs[1].cardinal
-      || AXIS[curbs[0].cardinal] !== value.confirmation.orientation.axis) invalid();
+    if (!curbs[0] || !curbs[1] || curbs[0].token === curbs[1].token
+      || OPPOSITE[curbs[0].cardinal as CurbCardinal] !== curbs[1].cardinal) invalid();
+    const driving = curbs.map(curb => curb?.drivingSide);
+    if (driving.some(Boolean) && (driving[0] === driving[1] || driving.some(side => !side))) invalid();
+    if (aligned && ALIGNED_AXIS[curbs[0].cardinal] !== axis) invalid();
+    if (axis === 'oblique' && !obliqueCardinalsMatch(
+      value.confirmation.orientation.bearingDegrees as number,
+      curbs[0].cardinal,
+      curbs[1].cardinal,
+    )) invalid();
     return value as CanonicalCurbResponse;
   }
   return invalid();
@@ -165,6 +296,7 @@ export function buildCanonicalCurbRequest(
 ): ResolveCurbRequestV2 {
   const request: ResolveCurbRequestV2 = {
     protocolVersion: 2,
+    responseVersion: 1,
     location: {
       lat: location.lat,
       lng: location.lng,
@@ -179,14 +311,29 @@ export function buildCanonicalCurbRequest(
 
 export async function resolveCanonicalCurbWithLocation(input: {
   collectLocation: () => Promise<AggregatedLocation | null>;
-  invoke: (request: ResolveCurbRequestV2) => Promise<unknown>;
+  invoke: (request: ResolveCurbRequestV2, signal?: AbortSignal) => Promise<unknown>;
   candidateToken?: string;
+  signal?: AbortSignal;
 }): Promise<CanonicalCurbResponse> {
+  if (input.signal?.aborted) {
+    return {
+      protocolVersion: 2,
+      status: 'unsupported',
+      reason: 'source_unavailable',
+    };
+  }
   let location: AggregatedLocation | null;
   try {
     location = await input.collectLocation();
   } catch {
     location = null;
+  }
+  if (input.signal?.aborted) {
+    return {
+      protocolVersion: 2,
+      status: 'unsupported',
+      reason: 'source_unavailable',
+    };
   }
   if (!isCanonicalLocationReady(location)) {
     return {
@@ -196,8 +343,19 @@ export async function resolveCanonicalCurbWithLocation(input: {
     };
   }
 
-  const response = await input.invoke(
-    buildCanonicalCurbRequest(location, input.candidateToken),
-  );
+  const request = buildCanonicalCurbRequest(location, input.candidateToken);
+  const response = input.signal === undefined
+    ? await input.invoke(request)
+    : await input.invoke(request, input.signal);
+  // Ignore a late callable response after the user navigated away. HTTPS
+  // callables do not reliably cancel already-accepted server work when the
+  // browser aborts the HTTP request, so this only protects client state.
+  if (input.signal?.aborted) {
+    return {
+      protocolVersion: 2,
+      status: 'unsupported',
+      reason: 'source_unavailable',
+    };
+  }
   return parseCanonicalCurbResponse(response);
 }

@@ -5,6 +5,7 @@ import {
   query, where,
 } from 'firebase/firestore';
 import { fetchDashboardCounts } from '../../utils/adminReadService';
+import { segmentAllowsAuthoritativeRead } from '../../utils/canonicalCurbWriteAuthority';
 import { RefreshCw, AlertCircle, CheckCircle, AlertTriangle } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -66,6 +67,7 @@ async function loadStats(): Promise<{
     fetchDashboardCounts(),
     getDocs(collection(db!, 'streetSegments')),
   ]);
+  const allSegmentDocs = [...segmentDocs.docs];
 
   const stats: HealthStats = {
     totalSegments: totalSnap.data().count,
@@ -82,7 +84,7 @@ async function loadStats(): Promise<{
   const boroughCounts: Record<string, number> = {};
   let unknownCount = 0;
 
-  for (const d of segmentDocs.docs) {
+  for (const d of allSegmentDocs) {
     const borough = d.data().borough as string | undefined;
     if (borough && BOROUGH_ORDER.includes(borough)) {
       boroughCounts[borough] = (boroughCounts[borough] ?? 0) + 1;
@@ -102,7 +104,7 @@ async function loadStats(): Promise<{
 
   // Data quality checks from loaded docs
   let missingStatus = 0, missingSource = 0, missingScore = 0, missingProvenance = 0;
-  for (const d of segmentDocs.docs) {
+  for (const d of allSegmentDocs) {
     const data = d.data();
     if (data.status == null) missingStatus++;
     if (data.source == null) missingSource++;

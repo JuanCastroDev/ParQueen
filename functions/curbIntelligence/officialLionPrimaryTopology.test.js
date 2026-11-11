@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -20,10 +20,18 @@ const { nyLongIslandUsFtToWgs84 } = require('./lionStatePlane');
 const { resolveCanonicalCurb, hasPrimaryTopologyAuthority } = require('./canonicalCurbResolver');
 const { proveCanonicalCurbIdentity } = require('./canonicalCurbIdentityProof');
 const { createPrivateBlockfaceResolver } = require('./privateBlockfaceResolver');
+const { relationshipIndexPath } = require('./lionRelationshipIndex');
 
 const ARCHIVE = process.env.CURB_LION_PRIMARY_ARCHIVE ?? '';
 const GDAL = process.env.CURB_LION_GDAL_MODULE ?? '';
-const liveLion = ARCHIVE !== '' && GDAL !== '' && existsSync(ARCHIVE) && existsSync(GDAL);
+const configuredIndex = ARCHIVE ? relationshipIndexPath(ARCHIVE) : '';
+const privateLionArchive = ARCHIVE !== ''
+  && configuredIndex
+  && existsSync(ARCHIVE)
+  && existsSync(configuredIndex)
+  ? ARCHIVE
+  : '';
+const liveLion = privateLionArchive !== '' && GDAL !== '' && existsSync(GDAL);
 const SERVICE_URL = 'https://local-demo-disabled.run.app';
 const GEOMETRY = Object.freeze({
   type: 'MultiLineString',
@@ -323,4 +331,59 @@ describe('official LION primary topology', () => {
     const mismatch = await proveCanonicalCurbIdentity(left, { blockfaceResolver: mismatched });
     expect(mismatch).toEqual({ state: 'IDENTITY_NOT_PROVEN', reason: 'function3c_bfi_mismatch' });
   }, 90000);
+
+  it('fails closed instead of scanning FileGDB when the pinned index is missing or corrupt', () => {
+    const source = readFileSync(new URL('./officialLionPrimaryTopology.js', import.meta.url), 'utf8');
+    const body = source.slice(
+      source.indexOf('async function openApprovedLionArchive'),
+      source.indexOf('let admittedCatalog'),
+    );
+    expect(body).toContain('loadPinnedRelationshipIndex');
+    expect(body).toContain('createUnavailableCatalog()');
+    expect(body).not.toContain('extractVerifiedBytes');
+    expect(body).not.toContain('openGdalSession');
+  });
+
+  it.skipIf(!privateLionArchive)('fails closed on the configured archive when its pinned index is missing or corrupt', async () => {
+    const archive = privateLionArchive;
+    const directory = mkdtempSync(join(tmpdir(), 'lion-no-index-'));
+    const copy = join(directory, 'archive.raw');
+    linkSync(archive, copy);
+    try {
+      const started = Date.now();
+      const missing = await openApprovedLionArchive(copy);
+      const missingResult = await readOfficialLionPrimary(missing).relationshipsFor([
+        { sourceNative: { physicalid: '98053' } },
+      ]);
+      expect([...missingResult.values()][0]).toMatchObject({ ok: false, reason: 'lion_primary_unavailable' });
+      writeFileSync(`${copy}.relationship-index`, Buffer.from('corrupted-index'));
+      const corrupt = await openApprovedLionArchive(copy);
+      const corruptResult = await readOfficialLionPrimary(corrupt).relationshipsFor([
+        { sourceNative: { physicalid: '98053' } },
+      ]);
+      expect([...corruptResult.values()][0]).toMatchObject({ ok: false, reason: 'lion_primary_unavailable' });
+      expect(Date.now() - started).toBeLessThan(5000);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(!privateLionArchive)('admits the configured pinned index and preserves the Melville relationship', async () => {
+    const archive = privateLionArchive;
+    const admitted = await openApprovedLionArchive(archive);
+    expect(readOfficialLionPrimary(admitted)?.ok).toBe(true);
+    const relationships = await admitted.relationshipsFor([
+      record(),
+      { sourceNative: { physicalid: '999999999' } },
+    ]);
+    const values = [...relationships.values()];
+    expect(values[0]).toMatchObject({
+      ok: true,
+      onStreet: 'MELVILLE STREET',
+      fromStreet: 'VAN NEST AVENUE',
+      toStreet: 'MORRIS PARK AVENUE',
+      segmentId: '0085847',
+    });
+    expect(values[1]).toMatchObject({ ok: false, reason: 'lion_primary_unavailable' });
+  });
 });

@@ -285,14 +285,25 @@ function resolveRuntimeArtifactPath() {
   return ARTIFACT_PATH;
 }
 
+let pinnedRuntimeArtifact = null;
+
 function loadPinnedRuntimeArtifact() {
+  const filePath = resolveRuntimeArtifactPath();
   let bytes;
   try {
-    bytes = fs.readFileSync(resolveRuntimeArtifactPath());
+    bytes = fs.readFileSync(filePath);
   } catch {
     return sealServerSourceFailure('artifact_missing');
   }
-  return openRuntimeSourceArtifact(bytes);
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  if (pinnedRuntimeArtifact?.path === filePath && pinnedRuntimeArtifact.digest === digest) {
+    return pinnedRuntimeArtifact.evidence;
+  }
+  const evidence = openRuntimeSourceArtifact(bytes);
+  if (evidence?.ok === true) {
+    pinnedRuntimeArtifact = { path: filePath, digest, evidence };
+  }
+  return evidence;
 }
 
 let deploymentPilotLoad = null;

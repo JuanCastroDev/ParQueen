@@ -1,25 +1,36 @@
 'use strict';
 
 const { createHash, randomUUID } = require('node:crypto');
+const {
+  OVERALL_DEADLINE_MS,
+  childBudgetMs,
+  createRequestDeadline,
+} = require('./requestDeadline');
 const { publicCurbKey, toPublicCurb } = require('./canonicalCurbIdentity');
 const {
+  acquireAuthoritativeCscl,
   resolveCanonicalCurb,
   hasPrimaryTopologyAuthority,
   hasAmbiguousTopologyAuthority,
   hasSideConfirmationAuthority,
 } = require('./canonicalCurbResolver');
+const { logDemoResolutionDiagnostic } = require('./demoResolutionDiagnostic');
 const { isSideConfirmationEnabled } = require('./sideConfirmation');
 const { SIDE_CONFIRMATION_TOKEN_MAX_LENGTH } = require('./sideConfirmationToken');
 const { applyVisualCurbSelection } = require('./visualCurbSelection');
 const { loadCanonicalRules } = require('./canonicalRuleSources');
 const { readCanonicalCache, persistCanonicalCurb } = require('./canonicalCurbPersistence');
 const {
+  buildHighConfidenceResponse,
+  requestIncludesExtendedResponse,
+  selectedHasUnresolvedConflicts,
+} = require('./canonicalCurbPublicResponse');
+const {
   proveCanonicalCurbIdentity,
   hasCanonicalCurbIdentityProof,
 } = require('./canonicalCurbIdentityProof');
 
 const defaultInFlight = new Map();
-const OVERALL_DEADLINE_MS = 8000;
 
 const unsupported = reason => ({ protocolVersion: 2, status: 'unsupported', reason });
 
@@ -68,15 +79,70 @@ function emit(telemetry, event, payload) {
   try { telemetry?.emit?.(event, payload); } catch { /* telemetry is fail-soft */ }
 }
 
-function highResponse(publicCurb, cleaningAvailable) {
+function highResponse(publicCurb, selected, options = {}) {
+  return buildHighConfidenceResponse(publicCurb, selected, {
+    cacheHit: options.cacheHit === true,
+    includeExtended: options.includeExtended === true,
+    dotComplete: options.dotComplete,
+    sourceUnavailable: options.sourceUnavailable === true,
+    dotState: options.dotState,
+    dotReasons: options.dotReasons,
+  });
+}
+
+async function persistFreshResolution(resolution, identityProof, selectedRules, dependencies) {
+  if (dependencies.publishUserResolution !== true) return { success: true, skipped: 'a1_response_only' };
+  const persist = dependencies.persistCanonicalCurb || persistCanonicalCurb;
+  try {
+    return await persist({
+      db: dependencies.db,
+      Timestamp: dependencies.Timestamp,
+      topologyResult: resolution,
+      identityProof,
+      selectedRules,
+      deadlineAt: dependencies.deadlineAt,
+      persistToken: dependencies.persistToken,
+      persistAllowed: dependencies.persistAllowed,
+      signal: dependencies.signal,
+      callerUid: dependencies.callerUid,
+      allowUserPublication: true,
+    });
+  } catch {
+    return { success: false };
+  }
+}
+
+function emptySelected() {
   return {
-    protocolVersion: 2,
-    status: 'high_confidence',
-    segmentId: publicCurb.segmentId,
-    streetName: publicCurb.streetName,
-    sideLabel: publicCurb.sideLabel,
-    ruleSummary: { cleaningAvailable: cleaningAvailable === true },
+    cleaning: null, restrictions: [], timeLimits: [], meter: null, admin: [], conflicts: [], rules: [],
   };
+}
+
+async function loadSelectedRules(identity, dependencies) {
+  const loadRules = dependencies.loadCanonicalRules || loadCanonicalRules;
+  if (dependencies.signal?.aborted) return { aborted: true };
+  let rulesResult;
+  try {
+    rulesResult = await loadRules(identity, dependencies);
+  } catch {
+    return { aborted: false, failed: true, dotComplete: false, selectedRules: emptySelected(), sources: {} };
+  }
+  if (dependencies.signal?.aborted || dependencies.resolutionClosed?.()) return { aborted: true };
+  const dotComplete = rulesResult?.sources?.dot?.state === 'complete';
+  const selectedRules = {
+    ...(rulesResult?.selected || emptySelected()),
+    rulesResolved: dotComplete,
+    sources: rulesResult?.sources,
+  };
+  for (const conflict of selectedRules.conflicts || []) {
+    emit(dependencies.telemetry, 'source_conflict', {
+      protocolVersion: 2,
+      reason: 'source_conflict',
+      sourceCategory: conflict?.sources?.[0],
+      ruleCategory: conflict?.category,
+    });
+  }
+  return { aborted: false, failed: false, dotComplete, selectedRules, sources: rulesResult?.sources || {} };
 }
 
 async function execute(request, dependencies) {
@@ -208,68 +274,98 @@ async function execute(request, dependencies) {
       protocolVersion: 2, reason: 'cache_curb_mismatch',
     });
   }
+  const includeExtended = requestIncludesExtendedResponse(request);
   if (cache?.hit && cache.publicSegment) {
-    emit(dependencies.telemetry, 'curb_resolution_high', {
-      protocolVersion: 2, cacheHit: true, latencyMs: Date.now() - startedAt,
-    });
-    return highResponse(cache.publicSegment, cache.publicSegment.ruleSummary?.cleaningAvailable);
+    const summary = cache.publicSegment.ruleSummary || {};
+    const cachedRules = Array.isArray(cache.publicRules) ? cache.publicRules : [];
+    const cacheComplete = cachedRules.length > 0
+      || summary.cleaningAvailable === true
+      || summary.rulesResolved === true;
+    if (!cacheComplete) {
+      const loaded = await loadSelectedRules(identity, dependencies);
+      if (loaded.aborted) return unsupported('source_unavailable');
+      if (loaded.dotComplete) {
+        if (selectedHasUnresolvedConflicts(loaded.selectedRules)) {
+          return unsupported('source_unavailable');
+        }
+        if (dependencies.signal?.aborted || dependencies.resolutionClosed?.()) return unsupported('source_unavailable');
+        emit(dependencies.telemetry, 'curb_resolution_high', {
+          protocolVersion: 2, cacheHit: true, latencyMs: Date.now() - startedAt,
+        });
+        return highResponse(publicCurb, loaded.selectedRules, {
+          cacheHit: true,
+          includeExtended,
+          dotComplete: loaded.dotComplete,
+          sourceUnavailable: loaded.failed === true,
+          dotState: loaded.sources?.dot?.state,
+          dotReasons: loaded.sources?.dot?.reasons,
+        });
+      }
+    } else if (cachedRules.length === 0 && summary.cleaningAvailable !== true && summary.rulesResolved !== true) {
+      return unsupported('source_unavailable');
+    } else {
+      emit(dependencies.telemetry, 'curb_resolution_high', {
+        protocolVersion: 2, cacheHit: true, latencyMs: Date.now() - startedAt,
+      });
+      return highResponse(cache.publicSegment, cachedRules, {
+        cacheHit: true,
+        includeExtended,
+        dotComplete: summary.rulesResolved === true
+          || (summary.cleaningAvailable === true && cachedRules.length > 0),
+      });
+    }
   }
 
-  const loadRules = dependencies.loadCanonicalRules || loadCanonicalRules;
-  if (dependencies.signal?.aborted) return unsupported('source_unavailable');
-  let rulesResult;
-  try {
-    rulesResult = await loadRules(identity, dependencies);
-  } catch {
-    rulesResult = { state: 'complete', sources: {}, selected: {
-      cleaning: null, restrictions: [], timeLimits: [], meter: null, admin: [], conflicts: [], rules: [],
-    } };
+  const loaded = await loadSelectedRules(identity, dependencies);
+  if (loaded.aborted) return unsupported('source_unavailable');
+  const selectedRules = loaded.selectedRules;
+  if (dependencies.signal?.aborted || dependencies.resolutionClosed?.()) return unsupported('source_unavailable');
+  if (selectedHasUnresolvedConflicts(selectedRules)) return unsupported('source_unavailable');
+  // Flag off matches main: a source throw is unsupported and does not persist.
+  // Flag on keeps verified curb identity and reports unknown regulations.
+  if (loaded.failed && dependencies.publishUserResolution === true) {
+    return unsupported('source_unavailable');
   }
-  const selectedRules = rulesResult?.selected || {
-    cleaning: null, restrictions: [], timeLimits: [], meter: null, admin: [], conflicts: [], rules: [],
-  };
-  for (const conflict of selectedRules.conflicts || []) {
-    emit(dependencies.telemetry, 'source_conflict', {
-      protocolVersion: 2,
-      reason: 'source_conflict',
-      sourceCategory: conflict?.sources?.[0],
-      ruleCategory: conflict?.category,
-    });
-  }
-  if (dependencies.signal?.aborted) return unsupported('source_unavailable');
-  const persist = dependencies.persistCanonicalCurb || persistCanonicalCurb;
-  let persisted;
-  try {
-    persisted = await persist({
-      db: dependencies.db,
-      Timestamp: dependencies.Timestamp,
-      topologyResult: resolution,
-      identityProof,
-      selectedRules,
-    });
-  } catch {
-    persisted = { success: false };
-  }
+  const persisted = await persistFreshResolution(resolution, identityProof, selectedRules, dependencies);
   if (!persisted?.success) return unsupported('source_unavailable');
   emit(dependencies.telemetry, 'curb_resolution_high', {
     protocolVersion: 2, cacheHit: false, latencyMs: Date.now() - startedAt,
   });
-  return highResponse(publicCurb, Boolean(selectedRules.cleaning));
+  return highResponse(publicCurb, selectedRules, {
+    cacheHit: false,
+    includeExtended,
+    dotComplete: loaded.dotComplete,
+    sourceUnavailable: loaded.failed === true,
+    dotState: loaded.sources?.dot?.state,
+    dotReasons: loaded.sources?.dot?.reasons,
+  });
 }
 
 async function boundedExecute(request, dependencies) {
   const controller = new AbortController();
+  let closed = false;
   let finishAbort;
   const aborted = new Promise(resolve => { finishAbort = resolve; });
   const abort = () => {
+    closed = true;
     controller.abort();
     finishAbort(unsupported('source_unavailable'));
   };
   dependencies.signal?.addEventListener('abort', abort, { once: true });
-  const timer = setTimeout(abort, OVERALL_DEADLINE_MS);
+  if (dependencies.signal?.aborted) abort();
+  const remaining = childBudgetMs(OVERALL_DEADLINE_MS, {
+    deadlineAt: dependencies.deadlineAt,
+    signal: dependencies.signal,
+  });
+  const timer = setTimeout(abort, remaining);
   try {
+    if (closed) return unsupported('source_unavailable');
     return await Promise.race([
-      execute(request, { ...dependencies, signal: controller.signal }),
+      execute(request, {
+        ...dependencies,
+        signal: controller.signal,
+        resolutionClosed: () => closed,
+      }),
       aborted,
     ]);
   } finally {
@@ -278,15 +374,158 @@ async function boundedExecute(request, dependencies) {
   }
 }
 
+function publishStageTiming(dependencies, timing) {
+  try { dependencies.observeResolutionTiming?.(timing); } catch { /* timing never changes resolution */ }
+  logDemoResolutionDiagnostic({
+    internalReason: timing.internalReason,
+    stage: timing.stage,
+    rawCsclCandidateCount: timing.rawCsclCandidateCount,
+    elapsedMs: timing.totalServerElapsedMs,
+    stageElapsedMs: timing.canonicalStageElapsedMs,
+    sourceStageElapsedMs: timing.sourceStageElapsedMs,
+    canonicalStageElapsedMs: timing.canonicalStageElapsedMs,
+    initializationElapsedMs: timing.initializationElapsedMs,
+    totalServerElapsedMs: timing.totalServerElapsedMs,
+    ...(Number.isInteger(timing.spatialMs) ? {
+      metadataBeforeMs: timing.metadataBeforeMs,
+      spatialMs: timing.spatialMs,
+      metadataAfterMs: timing.metadataAfterMs,
+      spatialAttempts: timing.spatialAttempts,
+    } : {}),
+    ...(timing.spatialProtocol === 'soda2' || timing.spatialProtocol === 'soda3'
+      ? { spatialProtocol: timing.spatialProtocol } : {}),
+  }, dependencies.env);
+}
+
+async function runBoundedSourceThenCanonical(request, dependencies) {
+  const enteredAt = Date.now();
+  const initializationStartedAt = Number.isFinite(dependencies.initializationStartedAt)
+    ? dependencies.initializationStartedAt
+    : enteredAt;
+  const initializationElapsedMs = Math.max(0, enteredAt - initializationStartedAt);
+  const nonce = randomUUID();
+  const sourceStarted = Date.now();
+  const acquired = await acquireAuthoritativeCscl(request.location, {
+    fetchFn: dependencies.fetchFn,
+    getSocrataToken: dependencies.getSocrataToken,
+    signal: dependencies.signal,
+    acquisitionNonce: nonce,
+    deadlineAt: dependencies.deadlineAt,
+    sourceBudgetMs: childBudgetMs(OVERALL_DEADLINE_MS, {
+      deadlineAt: dependencies.deadlineAt,
+      signal: dependencies.signal,
+    }),
+  });
+  const sourceStageElapsedMs = Date.now() - sourceStarted;
+  const timing = {
+    initializationElapsedMs,
+    sourceStageElapsedMs,
+    rawCsclCandidateCount: Number.isInteger(acquired.candidateCount) ? acquired.candidateCount : 0,
+    metadataBeforeMs: acquired.stageTiming?.metadataBeforeMs,
+    spatialMs: acquired.stageTiming?.spatialMs,
+    metadataAfterMs: acquired.stageTiming?.metadataAfterMs,
+    spatialAttempts: acquired.stageTiming?.spatialAttempts,
+    spatialProtocol: acquired.stageTiming?.spatialProtocol,
+  };
+  if (!acquired.ok && mapCanonicalAuthorityFailure(acquired.reasons) === 'location_quality') {
+    const canonicalStarted = Date.now();
+    const result = await boundedExecute(request, {
+      ...dependencies,
+      fetchFn: undefined,
+      attestedRetrieval: undefined,
+      acquisitionNonce: undefined,
+    });
+    publishStageTiming(dependencies, {
+      ...timing,
+      canonicalStageElapsedMs: Date.now() - canonicalStarted,
+      totalServerElapsedMs: Date.now() - initializationStartedAt,
+      internalReason: result?.reason || acquired.reasons?.[0] || null,
+      stage: 'classification',
+    });
+    return result;
+  }
+  if (!acquired.ok || dependencies.signal?.aborted) {
+    const internalReason = acquired.reasons?.[0] || 'request_aborted';
+    publishStageTiming(dependencies, {
+      ...timing,
+      canonicalStageElapsedMs: 0,
+      totalServerElapsedMs: Date.now() - initializationStartedAt,
+      internalReason,
+      stage: 'cscl_retrieval',
+    });
+    return unsupported(mapCanonicalAuthorityFailure(acquired.reasons || ['request_aborted']));
+  }
+  const canonicalStarted = Date.now();
+  const boundResolve = (location, options = {}) => resolveCanonicalCurb(location, {
+    ...options,
+    fetchFn: undefined,
+    candidateStore: undefined,
+    attestedRetrieval: acquired.retrieval,
+    acquisitionNonce: nonce,
+  });
+  const result = await boundedExecute(request, {
+    ...dependencies,
+    fetchFn: undefined,
+    attestedRetrieval: undefined,
+    acquisitionNonce: undefined,
+    resolveCanonicalCurb: boundResolve,
+  });
+  publishStageTiming(dependencies, {
+    ...timing,
+    canonicalStageElapsedMs: Date.now() - canonicalStarted,
+    totalServerElapsedMs: Date.now() - initializationStartedAt,
+    internalReason: result?.status === 'unsupported' ? result.reason : null,
+    stage: result?.status === 'unsupported' ? 'cscl_retrieval' : null,
+  });
+  return result;
+}
+
+function inFlightReusable(existing) {
+  if (!existing || typeof existing.then !== 'function') return false;
+  if (existing.signal?.aborted) return false;
+  if (Number.isFinite(existing.deadlineAt) && Date.now() >= existing.deadlineAt) return false;
+  return true;
+}
+
 async function runCanonicalCurbOrchestrator(request, dependencies = {}) {
   if (request?.protocolVersion !== 2) return null;
   if (!validRequest(request)) return unsupported('location_quality');
-  const inFlight = dependencies.inFlight || defaultInFlight;
+  const safe = { ...dependencies };
+  delete safe.attestedRetrieval;
+  delete safe.acquisitionNonce;
+  let ownedDeadline = null;
+  if (!safe.signal || !Number.isFinite(safe.deadlineAt) || typeof safe.persistAllowed !== 'function') {
+    ownedDeadline = createRequestDeadline({
+      startedAt: Number.isFinite(safe.initializationStartedAt)
+        ? safe.initializationStartedAt
+        : Date.now(),
+      signal: safe.signal,
+    });
+    safe.signal = ownedDeadline.signal;
+    safe.deadlineAt = ownedDeadline.deadlineAt;
+    safe.persistToken = ownedDeadline.persistToken;
+    safe.persistAllowed = ownedDeadline.persistAllowed;
+  }
+  const inFlight = safe.inFlight || defaultInFlight;
   const key = requestKey(request);
-  if (inFlight.has(key)) return inFlight.get(key);
-  const pending = boundedExecute(request, dependencies).finally(() => inFlight.delete(key));
+  const existing = inFlight.get(key);
+  if (inFlightReusable(existing)) return existing;
+  const pending = (typeof safe.fetchFn === 'function'
+    ? runBoundedSourceThenCanonical(request, safe)
+    : boundedExecute(request, safe)
+  ).finally(() => {
+    if (inFlight.get(key) === pending) inFlight.delete(key);
+    ownedDeadline?.dispose();
+  });
+  pending.deadlineAt = safe.deadlineAt;
+  pending.signal = safe.signal;
   inFlight.set(key, pending);
   return pending;
 }
 
-module.exports = { runCanonicalCurbOrchestrator, OVERALL_DEADLINE_MS, mapCanonicalAuthorityFailure };
+module.exports = {
+  runCanonicalCurbOrchestrator,
+  OVERALL_DEADLINE_MS,
+  CSCL_SOURCE_BUDGET_MS: OVERALL_DEADLINE_MS,
+  mapCanonicalAuthorityFailure,
+};

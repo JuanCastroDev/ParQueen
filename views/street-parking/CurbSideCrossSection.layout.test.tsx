@@ -10,7 +10,7 @@ import { sampleSideConfirmationToken } from '../../utils/sideConfirmationTokenFi
 const token = (rank: string) => sampleSideConfirmationToken(rank);
 const css = (() => {
   const source = readFileSync(new URL('../../index.css', import.meta.url), 'utf8');
-  const start = source.indexOf('.pq-curb-side,');
+  const start = source.indexOf('.pq-curb-selector,');
   const end = source.indexOf('.pq-mycar-remind-grid');
   return source.slice(start, end);
 })();
@@ -27,15 +27,15 @@ function confirmation(
   };
 }
 
-function pageHtml(markup: string) {
+function pageHtml(markup: string, width = 320) {
   return `<!doctype html><html><head><style>
-    body { margin: 0; width: 320px; }
+    body { margin: 0; width: ${width}px; }
     ${css}
   </style></head><body>${markup}</body></html>`;
 }
 
-async function render(page: Page, node: React.ReactElement) {
-  await page.setContent(pageHtml(renderToStaticMarkup(node)));
+async function render(page: Page, node: React.ReactElement, width = 320) {
+  await page.setContent(pageHtml(renderToStaticMarkup(node), width));
 }
 
 async function boxes(page: Page) {
@@ -90,7 +90,7 @@ describe('curb cross-section rendered layout', () => {
           { token: token('2'), cardinal: 'North' })}
         onSelect={() => {}}
         onCancel={() => {}}
-        loading={false}
+        loading={false} allowDiagonalCurbDrawing
       />
     ));
     const laid = await boxes(page);
@@ -121,7 +121,7 @@ describe('curb cross-section rendered layout', () => {
           { token: token('4'), cardinal: 'South' })}
         onSelect={() => {}}
         onCancel={() => {}}
-        loading={false}
+        loading={false} allowDiagonalCurbDrawing
       />
     ));
     const laid = await boxes(page);
@@ -137,7 +137,7 @@ describe('curb cross-section rendered layout', () => {
           { token: token('6'), cardinal: 'West' })}
         onSelect={() => {}}
         onCancel={() => {}}
-        loading={false}
+        loading={false} allowDiagonalCurbDrawing
       />
     ));
     const laid = await boxes(page);
@@ -159,7 +159,7 @@ describe('curb cross-section rendered layout', () => {
           { token: token('8'), cardinal: 'East' })}
         onSelect={() => {}}
         onCancel={() => {}}
-        loading={false}
+        loading={false} allowDiagonalCurbDrawing
       />
     ));
     const laid = await boxes(page);
@@ -175,11 +175,98 @@ describe('curb cross-section rendered layout', () => {
           { token: token('2'), cardinal: 'East' })}
         onSelect={() => {}}
         onCancel={() => {}}
-        loading={false}
+        loading={false} allowDiagonalCurbDrawing
       />
     ));
     const laid = await boxes(page);
     expect(laid.choices).toBe(0);
     expect(laid.road).toBeNull();
+  });
+
+  it('keeps a near-vertical oblique pair inside a 320px screen', async () => {
+    const oblique: SideConfirmation = {
+      streetName: 'Diagonal Avenue',
+      orientation: { north: 'up', axis: 'oblique', bearingDegrees: 21 },
+      curbs: [
+        { token: token('w'), cardinal: 'West' },
+        { token: token('e'), cardinal: 'East' },
+      ],
+    };
+    await render(page, (
+      <CurbSideCrossSection confirmation={oblique} onSelect={() => {}} onCancel={() => {}} loading={false} allowDiagonalCurbDrawing />
+    ));
+    const laid = await boxes(page);
+    expect(laid.northMark!.y).toBeLessThan(laid.road!.y);
+    expect(laid.west!.x + laid.west!.width / 2).toBeLessThan(laid.east!.x + laid.east!.width / 2);
+    expect(laid.west!.x).toBeGreaterThanOrEqual(-1);
+    expect(laid.east!.right).toBeLessThanOrEqual(laid.viewport + 1);
+    expect(laid.scrollWidth).toBeLessThanOrEqual(laid.viewport + 1);
+    expect(laid.west!.height).toBeGreaterThanOrEqual(48);
+    const html = await page.content();
+    expect(html).not.toContain(token('w'));
+    expect(html).not.toContain('reserved');
+  });
+
+  it('keeps one-way Left and Right apart on a Samsung portrait and landscape screen', async () => {
+    const oneWay: SideConfirmation = {
+      streetName: 'Maran Place',
+      orientation: { north: 'up', axis: 'oblique', bearingDegrees: 321 },
+      curbs: [
+        { token: token('sw'), cardinal: 'Southwest', drivingSide: 'left' },
+        { token: token('ne'), cardinal: 'Northeast', drivingSide: 'right' },
+      ],
+    };
+    const node = (
+      <CurbSideCrossSection confirmation={oneWay} onSelect={() => {}} onCancel={() => {}} loading={false} allowDiagonalCurbDrawing />
+    );
+    for (const viewport of [
+      { width: 360, height: 800, label: 'portrait' },
+      { width: 800, height: 360, label: 'landscape' },
+    ]) {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await render(page, node, viewport.width);
+      const laid = await page.evaluate(() => {
+        const rect = (selector: string) => {
+          const element = document.querySelector(selector);
+          if (!element) return null;
+          const box = element.getBoundingClientRect();
+          return {
+            x: box.x, y: box.y, right: box.right, bottom: box.bottom,
+            width: box.width, height: box.height,
+            gridArea: getComputedStyle(element).gridArea,
+          };
+        };
+        return {
+          left: rect('[data-driving-side="left"]'),
+          right: rect('[data-driving-side="right"]'),
+          cancel: rect('.pq-curb-side-cancel'),
+          road: rect('.pq-curb-side-road'),
+          north: rect('.pq-curb-side-north'),
+          compassChoices: document.querySelectorAll('.pq-curb-side-choice').length,
+          viewport: document.documentElement.clientWidth,
+          scrollWidth: document.documentElement.scrollWidth,
+        };
+      });
+      expect(laid.left, viewport.label).not.toBeNull();
+      expect(laid.right, viewport.label).not.toBeNull();
+      expect(laid.cancel, viewport.label).not.toBeNull();
+      expect(laid.compassChoices, viewport.label).toBe(0);
+      expect(laid.road, viewport.label).toBeNull();
+      expect(laid.north, viewport.label).toBeNull();
+      expect(laid.left!.right, viewport.label).toBeLessThanOrEqual(laid.right!.x);
+      expect(Math.abs(laid.left!.width - laid.right!.width), viewport.label).toBeLessThan(2);
+      expect(laid.left!.width, viewport.label).toBeGreaterThanOrEqual(44);
+      expect(laid.right!.width, viewport.label).toBeGreaterThanOrEqual(44);
+      expect(laid.left!.height, viewport.label).toBeGreaterThanOrEqual(44);
+      expect(laid.right!.height, viewport.label).toBeGreaterThanOrEqual(44);
+      expect(laid.left!.gridArea, viewport.label).not.toContain('west');
+      expect(laid.right!.gridArea, viewport.label).not.toContain('east');
+      expect(laid.cancel!.y, viewport.label).toBeGreaterThanOrEqual(laid.left!.bottom - 1);
+      expect(laid.cancel!.y, viewport.label).toBeGreaterThanOrEqual(laid.right!.bottom - 1);
+      expect(laid.scrollWidth, viewport.label).toBeLessThanOrEqual(laid.viewport + 1);
+      const html = await page.content();
+      expect(html, viewport.label).toContain('Facing the direction of traffic');
+      expect(html, viewport.label).not.toContain('Maran Place');
+    }
   });
 });
