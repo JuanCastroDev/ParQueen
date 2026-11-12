@@ -1,0 +1,1292 @@
+// ============================================================================
+// NONDEPLOYABLE — INTERIM LEGACY-HARDENED CANDIDATE (t680u). DO NOT DEPLOY.
+// ----------------------------------------------------------------------------
+// Local emulator proof only. No firebase.json target, deploy script or CI job
+// references this file. Publishing it needs separate founder authorization.
+// Base: verified deployed production snapshot
+//   test-fixtures/production-baseline/deployed-firestore-134a97cf.rules
+//   sha256 134a97cf8e25f2f8848ff4d2c0ff65ff5dd83434f1690901b4ba7dffe403810b
+// It is NOT main's firestore.rules. Main removed the legacy direct claim and
+// claimer-cancel arms; this candidate keeps them for eligible active users.
+// Every change versus the snapshot is marked "t680u".
+// ============================================================================
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // isAdmin() (token-only `request.auth.token.role == 'admin'`) has been
+    // removed entirely. Firestore Rules cannot re-verify current server-side
+    // Auth state, so a token-only admin check can never safely reject a
+    // demoted/deleted/disabled administrator's still-valid ID token — Rules
+    // is structurally the wrong layer for that authorization. Every
+    // admin-only read/write in this file is now either genuinely public
+    // (`true`) or routed through a requireCurrentAdmin-gated Cloud Function
+    // callable (functions/adminAuth.js), which re-derives authorization from
+    // live Auth state on every call. Do not reintroduce a token-only admin
+    // check here — add a callable instead.
+
+    // t680u: fail-closed account state for the legacy Ping write paths.
+    // Denies when the caller's users/{uid} profile is missing (deleted user
+    // whose ID token is still valid; a Ping participant always has a profile
+    // because create and claim already read it), when status is Suspended,
+    // when productAccessBlocked is present with any value other than boolean
+    // false (same contract as main's userRecordDenies), or when the
+    // server-written deletion fence accountLifecycle/{uid} exists (any value).
+    // Two document lookups: users/{uid} (the same document the identity
+    // helpers already read) and accountLifecycle/{uid}.
+    function legacyAccountWriteEligible() {
+      let profilePath = /databases/$(database)/documents/users/$(request.auth.uid);
+      return request.auth != null
+        && exists(profilePath)
+        && get(profilePath).data.get('status', '') != 'Suspended'
+        && get(profilePath).data.get('productAccessBlocked', false) == false
+        && !exists(/databases/$(database)/documents/accountLifecycle/$(request.auth.uid));
+    }
+
+    // t680u: generation safety for legacy direct writes. A claim minted by the
+    // parking callables carries claimGenerationId. The Oct 16 client neither
+    // writes nor clears it, so a direct claim must not inherit a leftover
+    // generation, and a direct claimer cancel must not strand one. Such Pings
+    // are released through cancelClaim / finderCancelSpot or the server.
+    function noClaimGeneration() {
+      return resource.data.get('claimGenerationId', null) == null;
+    }
+
+    // ── Spot update helpers ───────────────────────────────────────────────────
+    function isFinder() {
+      return resource.data.finderId == request.auth.uid;
+    }
+
+    function isClaimer() {
+      return resource.data.interestedUserId == request.auth.uid;
+    }
+
+    function isHoldClaimer() {
+      return resource.data.claimedBy == request.auth.uid;
+    }
+
+    function isAvailableForClaim() {
+      return resource.data.status == 'available'
+        && resource.data.get('interestedUserId', null) == null
+        && resource.data.get('holdRequestedBy', null) == null;
+    }
+
+    // S-SPOT-1: a claimer cancel (Arms 3/3b) must leave EVERY claimer field
+    // null in the result. The shipped client (cancelClaimTransaction.ts)
+    // writes explicit nulls, and absent fields read as null via get(), so
+    // both "set to null" and "never present" pass; any retained value fails.
+    // Without this, {status:'available'} alone kept interestedUserId and
+    // froze the Ping (isAvailableForClaim() refuses every other claimer).
+    function claimerMetadataClearedAfter() {
+      // MapDiff against an all-null map: changedKeys() = claimer fields that
+      // are PRESENT in the result with a non-null value. Fields that are
+      // absent are removedKeys(), which is fine. Single diff keeps this arm
+      // well under the 1000-expression evaluation limit of the spot update
+      // OR-chain (16 separate get() checks exceeded it).
+      return request.resource.data.diff({
+        'interestedUserId': null, 'interestedUserName': null,
+        'interestedUserVehicleColor': null, 'interestedUserVehicleType': null,
+        'interestedUserVehicleBrand': null, 'interestedUserTitle': null,
+        'claimState': null, 'claimStartedAt': null, 'etaMinutes': null,
+        'interestExpiresAt': null, 'ownerLeavingNow': null, 'ownerLeavingNowAt': null,
+        'claimReminderAt': null, 'claimReminderSentAt': null,
+        'claimAutoReleaseAt': null, 'claimAutoReleasedAt': null
+      }).changedKeys().size() == 0;
+    }
+
+    // One active incoming claim per user. The lock lives at
+    // users/{uid}/activeIncomingClaims/current and must be written in the
+    // same commit as the Ping claim. get()/exists() see pre-commit state;
+    // getAfter()/existsAfter() see this transaction. The 15-minute stale
+    // repair TTL is enforced by the cleanup sweeper, not here — a lock whose
+    // Ping is already released can be overwritten on the next claim.
+    function activeIncomingClaimPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid)/activeIncomingClaims/current;
+    }
+
+    function claimStillActive(spotId) {
+      let path = /databases/$(database)/documents/spots/$(spotId);
+      return spotId is string
+        && exists(path)
+        && get(path).data.status == 'interested'
+        && get(path).data.interestedUserId == request.auth.uid;
+    }
+
+    function claimStillActiveAfter(spotId) {
+      let path = /databases/$(database)/documents/spots/$(spotId);
+      return spotId is string
+        && existsAfter(path)
+        && getAfter(path).data.status == 'interested'
+        && getAfter(path).data.interestedUserId == request.auth.uid;
+    }
+
+    function activeIncomingClaimLockAcquired(spotId) {
+      let path = activeIncomingClaimPath();
+      let lock = getAfter(path).data;
+      return existsAfter(path)
+        && lock.spotId == spotId
+        && lock.claimStartedAt == request.resource.data.claimStartedAt
+        && lock.claimState == request.resource.data.claimState
+        && lock.claimState in ['committed', 'heading']
+        && request.resource.data.claimStartedAt is timestamp
+        && lock.updatedAt is timestamp
+        && lock.updatedAt >= request.time - duration.value(2, 'm')
+        && lock.updatedAt <= request.time + duration.value(1, 'm');
+    }
+
+    // Single getAfter of the Ping so a claim commit stays under the 10-lookup cap.
+    function lockAgreesWithSpotAfter(data) {
+      let path = /databases/$(database)/documents/spots/$(data.spotId);
+      let spot = getAfter(path).data;
+      return existsAfter(path)
+        && spot.status == 'interested'
+        && spot.interestedUserId == request.auth.uid
+        && spot.claimStartedAt == data.claimStartedAt
+        && spot.claimState == data.claimState;
+    }
+
+    // Cancel / arrival must drop a lock that names this Ping. A missing lock
+    // (legacy claim) or a lock naming a different Ping does not block release.
+    function matchingActiveClaimLockReleased(spotId) {
+      let path = activeIncomingClaimPath();
+      return !exists(path)
+        || get(path).data.get('spotId', '') != spotId
+        || !existsAfter(path);
+    }
+
+    // B1 arrival shape. status stays occupied; the durable phase is claimState.
+    // arrivedAt is stamped once, inside a short window of request.time, so a
+    // client cannot backdate it. Coordinates are intentionally not read —
+    // proximity is a client confidence signal, not a Rules allow.
+    function durableClaimerArrival() {
+      return request.resource.data.status == 'occupied'
+        && request.resource.data.claimState == 'arrived_pending_outcome'
+        && request.resource.data.arrivedAt is timestamp
+        && request.resource.data.arrivedAt >= request.time - duration.value(2, 'm')
+        && request.resource.data.arrivedAt <= request.time + duration.value(1, 'm');
+    }
+
+    // Same deterministic id as spotFeedbackDocId. exists() is false when the
+    // doc is missing; it does not require the client to read feedback.
+    function claimerTerminalFeedbackExists(spotId) {
+      return exists(/databases/$(database)/documents/spotFeedback/$(spotId + '_' + request.auth.uid));
+    }
+
+    // HO-003 rollout gate. Arm 1 stays fail-closed until reconciliation has
+    // written activeIncomingClaimRollout/status with enforced == true and
+    // zero lockless / duplicate counts. A missing doc denies the claim
+    // (get fails). Clients cannot write this doc. New claims still acquire
+    // the per-user lock in the same commit.
+    function activeIncomingClaimInvariantEnforced() {
+      let status = get(/databases/$(database)/documents/activeIncomingClaimRollout/status).data;
+      return status.enforced == true
+        && status.locklessCount == 0
+        && status.duplicateUserCount == 0
+        && status.duplicatePingCount == 0;
+    }
+
+    // A6 / HO-008 (APPROVED Decision 4): legacy hold is quarantined.
+    // Clients cannot start a hold or mutate hold state. Existing documents
+    // stay readable. cleanupExpiredHolds (Admin SDK, bypasses these rules)
+    // still releases accepted holds, and clears expired/stale pending
+    // hold-request fields so holdRequestedBy cannot block claims. Do not flip
+    // this on — reopening hold is a later product decision, not a Rules tweak.
+    function legacyHoldClientWriteAllowed() {
+      return false;
+    }
+
+    function isAvailableForHold() {
+      return legacyHoldClientWriteAllowed()
+        && resource.data.status == 'available'
+        && resource.data.get('interestedUserId', null) == null
+        && resource.data.get('holdRequestedBy', null) == null;
+    }
+
+    function onlyChanges(keys) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys);
+    }
+
+    // Spot identity-display authority: finderName/finderTitle/finderVehicle*
+    // (and the interestedUser/holdRequestedBy equivalents) are cached copies
+    // of the caller's own profile, written directly by the client at
+    // create/claim/hold-request time with no live re-fetch on render — unlike
+    // chats/{chatId}'s (now-removed) participantNames, nothing corrects a
+    // forged value later. These helpers require every such field to exactly
+    // match the caller's own CURRENT profile at write time, closing the
+    // forgery/impersonation gap while keeping every legitimate write
+    // (which already derives these values from the live profile) unaffected.
+    // See docs/SPOT_METADATA_HARDENING.md.
+    function expectedDisplayName(profile) {
+      return profile.get('username', null) != null
+        ? profile.username
+        : (profile.get('fullName', null) != null ? profile.fullName : 'Anonymous');
+    }
+
+    // Mirrors utils/crowns.ts's TITLE_THRESHOLDS/getTitleForCrowns exactly —
+    // keep in sync if those thresholds ever change.
+    function titleForCrowns(crowns) {
+      return crowns >= 3000 ? 'Urban Legend'
+        : crowns >= 1500 ? 'Parking Veteran'
+        : crowns >= 750 ? 'Block Captain'
+        : crowns >= 400 ? 'Parking Expert'
+        : crowns >= 150 ? 'Neighborhood Guide'
+        : crowns >= 50 ? 'Street Scout'
+        : crowns >= 10 ? 'Trusted Driver'
+        : 'Newcomer';
+    }
+
+    // finderTitle/finderVehicle* (and their interestedUser/holdRequestedBy
+    // equivalents below) are OPTIONAL create/update fields — a legitimate
+    // write may omit any of them entirely (e.g. a user with no vehicle set
+    // sends no finderVehicleColor key at all, not a null value). Each check
+    // is therefore "if present, must match the live profile" rather than
+    // "must always be present" — required fields (finderName etc.) are
+    // required by the surrounding hasAll()/onlyChanges() checks already,
+    // not by these helpers.
+    function matchesFinderIdentity(data) {
+      let profile = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return (!('finderName' in data) || data.finderName == expectedDisplayName(profile))
+        && (!('finderTitle' in data) || data.finderTitle == titleForCrowns(profile.get('crowns', 0)))
+        && (!('finderVehicleColor' in data) || data.finderVehicleColor == profile.get('vehicleColor', null))
+        && (!('finderVehicleType' in data) || data.finderVehicleType == profile.get('vehicleType', null))
+        && (!('finderVehicleBrand' in data) || data.finderVehicleBrand == profile.get('vehicleBrand', null));
+    }
+
+    function matchesInterestedUserIdentity(data) {
+      let profile = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return (!('interestedUserName' in data) || data.interestedUserName == expectedDisplayName(profile))
+        && (!('interestedUserTitle' in data) || data.interestedUserTitle == titleForCrowns(profile.get('crowns', 0)))
+        && (!('interestedUserVehicleColor' in data) || data.interestedUserVehicleColor == profile.get('vehicleColor', null))
+        && (!('interestedUserVehicleType' in data) || data.interestedUserVehicleType == profile.get('vehicleType', null))
+        && (!('interestedUserVehicleBrand' in data) || data.interestedUserVehicleBrand == profile.get('vehicleBrand', null));
+    }
+
+    function matchesHoldRequesterIdentity(data) {
+      let profile = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return !('holdRequestedByName' in data) || data.holdRequestedByName == expectedDisplayName(profile);
+    }
+
+    function chatParticipant(chatData) {
+      return signedIn()
+        && request.auth.uid in chatData.participants;
+    }
+
+    // Owner-only read on users/{uid}/private/social does not apply to
+    // rules get()/exists(). A missing doc, or a non-list blockedUsers
+    // value, is an empty block list. A block in either direction is mutual.
+    function blockedUsersOf(uid) {
+      let socialPath = /databases/$(database)/documents/users/$(uid)/private/social;
+      let raw = exists(socialPath) ? get(socialPath).data.get('blockedUsers', []) : [];
+      return raw is list ? raw : [];
+    }
+
+    function directChatIsBlocked(participants) {
+      let a = participants[0];
+      let b = participants[1];
+      return a in blockedUsersOf(b) || b in blockedUsersOf(a);
+    }
+
+    // A5 / SEC-002 create-rate and origin-chain. Rules cannot count a query,
+    // so the Ping and its quota record are written in one transaction.
+    // users/{uid}/pingCreateRate/current keeps the spot ids created in the
+    // rolling hour (max 5). originRePings/{originSpotId} is create-once, so a
+    // completed handoff can be re-pinged once. functions/rateLimiter.js is a
+    // fixed window and would allow a boundary burst of 10; it is not the
+    // authority for this cap.
+    function freshCreateStamp(t) {
+      return t is timestamp
+        && t >= request.time - duration.value(2, 'm')
+        && t <= request.time + duration.value(1, 'm');
+    }
+
+    function pingRatePath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid)/pingCreateRate/current;
+    }
+
+    function inPingCreateWindow(t) {
+      return t is timestamp
+        && t >= request.time - duration.value(1, 'h')
+        && t <= request.time + duration.value(1, 'm');
+    }
+
+    function pingRateSlotOk(ids, ats, i) {
+      return ids[i] is string
+        && ids[i].size() > 0
+        && ids[i].size() <= 200
+        && ats[i] is timestamp;
+    }
+
+    function pingRateSlotsWellFormed(ids, ats) {
+      return ids is list
+        && ats is list
+        && ids.size() == ats.size()
+        && ids.size() >= 1
+        && ids.size() <= 5
+        && (ids.size() < 1 || pingRateSlotOk(ids, ats, 0))
+        && (ids.size() < 2 || pingRateSlotOk(ids, ats, 1))
+        && (ids.size() < 3 || pingRateSlotOk(ids, ats, 2))
+        && (ids.size() < 4 || pingRateSlotOk(ids, ats, 3))
+        && (ids.size() < 5 || pingRateSlotOk(ids, ats, 4));
+    }
+
+    function pingRateStartIndex(ats) {
+      return ats.size() == 0 ? 0
+        : (inPingCreateWindow(ats[0]) ? 0
+          : (ats.size() == 1 ? 1
+            : (inPingCreateWindow(ats[1]) ? 1
+              : (ats.size() == 2 ? 2
+                : (inPingCreateWindow(ats[2]) ? 2
+                  : (ats.size() == 3 ? 3
+                    : (inPingCreateWindow(ats[3]) ? 3
+                      : (ats.size() == 4 ? 4
+                        : (inPingCreateWindow(ats[4]) ? 4 : 5)))))))));
+    }
+
+    function pingRateCarrySlot(oldIds, oldAts, newIds, newAts, start, index) {
+      return newIds[index] == oldIds[start + index]
+        && newAts[index] == oldAts[start + index];
+    }
+
+    function pingRateCarryOk(oldIds, oldAts, newIds, newAts) {
+      let start = pingRateStartIndex(oldAts);
+      let kept = oldIds.size() - start;
+      return newIds.size() == kept + 1
+        && (kept < 1 || pingRateCarrySlot(oldIds, oldAts, newIds, newAts, start, 0))
+        && (kept < 2 || pingRateCarrySlot(oldIds, oldAts, newIds, newAts, start, 1))
+        && (kept < 3 || pingRateCarrySlot(oldIds, oldAts, newIds, newAts, start, 2))
+        && (kept < 4 || pingRateCarrySlot(oldIds, oldAts, newIds, newAts, start, 3))
+        && (kept < 5 || pingRateCarrySlot(oldIds, oldAts, newIds, newAts, start, 4));
+    }
+
+    function pingSpotCreatedInCommit(spotId) {
+      let path = /databases/$(database)/documents/spots/$(spotId);
+      return spotId is string
+        && !exists(path)
+        && existsAfter(path)
+        && getAfter(path).data.finderId == request.auth.uid;
+    }
+
+    function pingRateShape(data) {
+      return data.keys().hasOnly(['spotIds', 'createdAts'])
+        && pingRateSlotsWellFormed(data.spotIds, data.createdAts)
+        && freshCreateStamp(data.createdAts[data.spotIds.size() - 1])
+        && pingSpotCreatedInCommit(data.spotIds[data.spotIds.size() - 1]);
+    }
+
+    // Size may shrink when the expired prefix is dropped, so this is the same
+    // carry check as the quota update — not a blind +1.
+    function priorPingRateAllows(afterIds, afterAts) {
+      let prior = get(pingRatePath()).data;
+      return prior.spotIds is list
+        && prior.createdAts is list
+        && pingRateCarryOk(prior.spotIds, prior.createdAts, afterIds, afterAts);
+    }
+
+    function pingCreateRateRecorded(spotId) {
+      let path = pingRatePath();
+      let after = getAfter(path).data;
+      let n = after.spotIds.size();
+      return existsAfter(path)
+        && after.keys().hasOnly(['spotIds', 'createdAts'])
+        && pingRateSlotsWellFormed(after.spotIds, after.createdAts)
+        && after.spotIds[n - 1] == spotId
+        && freshCreateStamp(after.createdAts[n - 1])
+        && (!exists(path) || priorPingRateAllows(after.spotIds, after.createdAts));
+    }
+
+    function originMarkerCreatedFor(originId, spotId) {
+      let path = /databases/$(database)/documents/originRePings/$(originId);
+      let marker = getAfter(path).data;
+      return originId is string
+        && !exists(path)
+        && existsAfter(path)
+        && marker.rePingSpotId == spotId
+        && marker.finderId == request.auth.uid;
+    }
+
+    function originLinkRecorded(spotId) {
+      let originId = request.resource.data.get('originSpotId', null);
+      return originId == null
+        || (originId is string
+            && originId.size() > 0
+            && originId.size() <= 200
+            && originId != spotId
+            && originMarkerCreatedFor(originId, spotId));
+    }
+
+    function originHandoffEligible(originSpotId) {
+      let path = /databases/$(database)/documents/spots/$(originSpotId);
+      let spot = get(path).data;
+      return exists(path)
+        && spot.status == 'occupied'
+        && spot.get('interestedUserId', null) == request.auth.uid;
+    }
+
+    function rePingPointsAtOrigin(rePingSpotId, originSpotId) {
+      let path = /databases/$(database)/documents/spots/$(rePingSpotId);
+      let spot = getAfter(path).data;
+      return existsAfter(path)
+        && spot.get('originSpotId', null) == originSpotId
+        && spot.finderId == request.auth.uid
+        && spot.status == 'available';
+    }
+
+    match /users/{userId} {
+      // isAdmin() removed from this OR-chain: it was redundant, not
+      // protective — signedIn() alone already grants read access to every
+      // signed-in user regardless of role (pre-existing, unrelated to admin
+      // session hardening; not a capability change). The Admin Dashboard's
+      // bulk/cross-user consumption of this collection (UsersPage.tsx) now
+      // goes through the requireCurrentAdmin-gated adminReadView callable
+      // instead, which is a genuine hardening improvement over the previous
+      // any-signed-in-user-capable direct query.
+      // Phase A: stop client directory enumeration. Keep signed-in get-by-id
+      // (MessagesView). Deny list/query. Admin bulk reads use Admin SDK.
+      // Approach B (narrow peer projection) is a separate follow-up.
+      allow get: if signedIn();
+      allow list: if false;
+      // Direct client CREATE disabled — claimUsername (functions/index.js) is
+      // now the sole authoritative writer of the initial users/{uid} doc
+      // (including its private/social and private/preferences siblings),
+      // atomically with the username reservation. No client path creates
+      // this document directly anymore (confirmed by repo-wide audit — the
+      // former saveUserProfile() create path has been retired). See
+      // docs/PROFILE_IDENTITY_HARDENING.md.
+      allow create: if false;
+      // Direct admin writes removed: no admin client code ever exercised this
+      // branch (all admin mutations of user state go through callables —
+      // setStaffRole, adminSuspendUser/adminUnsuspendUser), and Rules cannot
+      // re-verify current server-side Auth state the way requireCurrentAdmin
+      // does, so an unrestricted isAdmin() write here would let a stale
+      // admin token mutate any field (including crowns/title) directly.
+      //
+      // username/fullName are authoritative via claimUsername and
+      // updateDisplayName; all avatar metadata is authoritative via
+      // moderateAvatarUpload (Admin SDK bypasses these client Rules).
+      // Owners may still edit vehicle fields, but cannot set, overwrite, or
+      // delete moderation-owned avatar fields, even in a mixed update.
+      allow update: if signedIn() && request.auth.uid == userId
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['vehicleType', 'vehicleBrand', 'vehicleColor']);
+      allow delete: if false;
+
+      match /processedTrustEvents/{eventId} {
+        allow read, write: if false;
+      }
+
+      // private/avatar — client writes pendingUploadId before each upload attempt.
+      // Server clears the record on successful publication. Strict field schema.
+      match /private/avatar {
+        allow read: if signedIn() && request.auth.uid == userId;
+        allow write: if signedIn() && request.auth.uid == userId
+          && request.resource.data.keys().hasOnly(['pendingUploadId', 'requestedAt'])
+          && request.resource.data.pendingUploadId is string
+          && request.resource.data.pendingUploadId.size() >= 1
+          && request.resource.data.pendingUploadId.size() <= 64
+          && request.resource.data.requestedAt is timestamp;
+        allow delete: if false;
+      }
+
+      // private/account — server-written only (moderationStatus, reportCount, emailVerified)
+      match /private/account {
+        allow read: if signedIn() && request.auth.uid == userId;
+        // Direct admin read removed: no Admin Dashboard component ever read
+        // this document — confirmed via full-repo search. Confidential
+        // moderation data must not remain directly readable by a stale
+        // admin token merely because nothing currently exercises it.
+        allow write: if false;
+      }
+
+      // private/preferences — owner read/write; strict field schema
+      match /private/preferences {
+        allow read: if signedIn() && request.auth.uid == userId;
+        allow write: if signedIn() && request.auth.uid == userId
+          && request.resource.data.keys().hasOnly([
+               'notificationRadius', 'notificationsEnabled', 'sharePreciseLocation',
+               'lang', 'fcmToken', 'analyticsConsent'])
+          && (!('notificationRadius' in request.resource.data)
+               || (request.resource.data.notificationRadius is number
+                   && request.resource.data.notificationRadius >= 0.1
+                   && request.resource.data.notificationRadius <= 50))
+          && (!('notificationsEnabled' in request.resource.data)
+               || request.resource.data.notificationsEnabled is bool)
+          && (!('sharePreciseLocation' in request.resource.data)
+               || request.resource.data.sharePreciseLocation is bool)
+          && (!('lang' in request.resource.data)
+               || request.resource.data.lang in ['en', 'es'])
+          && (!('analyticsConsent' in request.resource.data)
+              || request.resource.data.analyticsConsent is bool)
+          && (!('fcmToken' in request.resource.data)
+               || (request.resource.data.fcmToken is string
+                   && request.resource.data.fcmToken.size() <= 4096));
+      }
+
+      // private/social — owner read/write; bounded blockedUsers list
+      match /private/social {
+        allow read: if signedIn() && request.auth.uid == userId;
+        allow write: if signedIn() && request.auth.uid == userId
+          && request.resource.data.keys().hasOnly(['blockedUsers'])
+          && request.resource.data.blockedUsers is list
+          && request.resource.data.blockedUsers.size() <= 500;
+      }
+
+      // private/carLocation — one approximate personal bookmark.
+      // Owner get/write only. The schema cannot carry a curb, a blockface,
+      // a certification flag, or a public spot.
+      match /private/carLocation {
+        allow get: if signedIn() && request.auth.uid == userId;
+        allow list: if false;
+        allow create, update: if signedIn() && request.auth.uid == userId
+          && request.resource.data.keys().hasOnly([
+               'verification', 'approximate', 'lat', 'lng', 'accuracyMeters', 'savedAt'])
+          && request.resource.data.verification == 'UNVERIFIED'
+          && request.resource.data.approximate == true
+          && request.resource.data.lat is number
+          && request.resource.data.lat >= -90
+          && request.resource.data.lat <= 90
+          && request.resource.data.lng is number
+          && request.resource.data.lng >= -180
+          && request.resource.data.lng <= 180
+          && (request.resource.data.accuracyMeters == null
+              || (request.resource.data.accuracyMeters is number
+                  && request.resource.data.accuracyMeters >= 0
+                  && request.resource.data.accuracyMeters <= 100000))
+          && request.resource.data.savedAt is timestamp
+          && request.resource.data.savedAt >= request.time - duration.value(5, 'm')
+          && request.resource.data.savedAt <= request.time + duration.value(1, 'm');
+        allow delete: if signedIn() && request.auth.uid == userId;
+      }
+
+      // private/profile — owner-only demographic data (dob, gender, homeArea, etc.)
+      match /private/profile {
+        allow read, write: if signedIn() && request.auth.uid == userId;
+        // Direct admin read removed: no Admin Dashboard component ever read
+        // this document — confirmed via full-repo search. Private
+        // demographic data must not remain directly readable by a stale
+        // admin token merely because nothing currently exercises it.
+      }
+
+      // One active incoming claim. Not under private/*, so a collection-group
+      // sweep of this collection id cannot touch avatar, account, preferences,
+      // social, or profile. deleteAccount recursiveDelete(users/{uid}) removes it.
+      // Only the doc id "current" is writable — extra docs cannot bypass the lock.
+      match /activeIncomingClaims/{claimId} {
+        allow get: if signedIn() && request.auth.uid == userId && claimId == 'current';
+        allow list: if false;
+
+        allow create, update: if signedIn()
+          && legacyAccountWriteEligible() // t680u
+          && request.auth.uid == userId
+          && claimId == 'current'
+          && request.resource.data.keys().hasOnly(['spotId', 'claimStartedAt', 'claimState', 'updatedAt'])
+          && request.resource.data.spotId is string
+          && request.resource.data.spotId.size() > 0
+          && request.resource.data.spotId.size() <= 200
+          && request.resource.data.claimState in ['committed', 'heading']
+          && request.resource.data.claimStartedAt is timestamp
+          && request.resource.data.updatedAt is timestamp
+          && request.resource.data.updatedAt >= request.time - duration.value(2, 'm')
+          && request.resource.data.updatedAt <= request.time + duration.value(1, 'm')
+          && lockAgreesWithSpotAfter(request.resource.data)
+          && (
+            !exists(/databases/$(database)/documents/users/$(userId)/activeIncomingClaims/current)
+            || resource.data.spotId == request.resource.data.spotId
+            || !claimStillActive(resource.data.spotId)
+          );
+
+        // Owner may delete only once this Ping is no longer an active claim
+        // after the same commit (cancel, arrival, or an already-released Ping).
+        allow delete: if signedIn()
+          && legacyAccountWriteEligible() // t680u
+          && request.auth.uid == userId
+          && claimId == 'current'
+          && resource.data.spotId is string
+          && !claimStillActiveAfter(resource.data.spotId);
+      }
+
+      // Rolling Ping-create quota. Clients cannot delete it to reset the hour,
+      // and only the doc id "current" counts — extra docs are not a bypass.
+      match /pingCreateRate/{rateId} {
+        allow get: if signedIn() && request.auth.uid == userId && rateId == 'current';
+        allow list: if false;
+        allow delete: if false;
+        allow create: if signedIn()
+          && legacyAccountWriteEligible() // t680u
+          && request.auth.uid == userId
+          && rateId == 'current'
+          && pingRateShape(request.resource.data)
+          && request.resource.data.spotIds.size() == 1;
+        allow update: if signedIn()
+          && legacyAccountWriteEligible() // t680u
+          && request.auth.uid == userId
+          && rateId == 'current'
+          && resource.data.keys().hasOnly(['spotIds', 'createdAts'])
+          && resource.data.spotIds is list
+          && resource.data.createdAts is list
+          && resource.data.spotIds.size() == resource.data.createdAts.size()
+          && resource.data.spotIds.size() <= 5
+          && pingRateShape(request.resource.data)
+          && pingRateCarryOk(
+               resource.data.spotIds,
+               resource.data.createdAts,
+               request.resource.data.spotIds,
+               request.resource.data.createdAts);
+      }
+    }
+
+    match /userLocations/{userId} {
+      allow read: if signedIn() && request.auth.uid == userId;
+      allow write: if signedIn() && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly(['lastGeohash', 'lastGeohashUpdatedAt'])
+        && request.resource.data.lastGeohash is string
+        && request.resource.data.lastGeohash.size() >= 1
+        && request.resource.data.lastGeohash.size() <= 12
+        && request.resource.data.lastGeohashUpdatedAt is timestamp
+        && request.resource.data.lastGeohashUpdatedAt >= request.time - duration.value(5, 'm')
+        && request.resource.data.lastGeohashUpdatedAt <= request.time + duration.value(1, 'm');
+    }
+
+    match /spots/{spotId} {
+      // Public-ish: available/interested spots are readable by any signed-in user (live Ping feed).
+      // Occupied/history spots are private: only the finder or active claimer may read them directly.
+      // isAdmin() removed: it granted a genuine admin-specific escalation
+      // (reading any other user's private occupied/history spot), consumed
+      // only by PingsPage.tsx's "all pings" view — now the requireCurrentAdmin
+      // -gated adminReadView('pingsList') callable, so a stale admin token no
+      // longer retains this capability directly.
+      allow read: if signedIn() && (
+        resource.data.status == 'available'
+        || resource.data.status == 'interested'
+        || resource.data.finderId == request.auth.uid
+        || resource.data.get('interestedUserId', null) == request.auth.uid
+        || resource.data.get('claimedBy', null) == request.auth.uid
+      );
+      allow create: if signedIn()
+        && legacyAccountWriteEligible() // t680u
+        && request.resource.data.keys().hasAll([
+             'lat', 'lng', 'type', 'status', 'finderId', 'finderName',
+             'pingMode', 'reportedAt', 'expiresAt', 'geohash', 'address'])
+        && request.resource.data.keys().hasOnly([
+             'lat', 'lng', 'type', 'status', 'finderId', 'finderName',
+             'finderTitle', 'finderVehicleColor', 'finderVehicleType', 'finderVehicleBrand',
+             'pingMode', 'reportedAt', 'expiresAt', 'geohash', 'address', 'originSpotId', 'source'])
+        && request.resource.data.finderId == request.auth.uid
+        && request.resource.data.status == 'available'
+        && request.resource.data.type == 'free'
+        && request.resource.data.finderName is string
+        && request.resource.data.finderName.size() > 0
+        && request.resource.data.finderName.size() <= 100
+        && request.resource.data.address is string
+        && request.resource.data.address.size() <= 500
+        && request.resource.data.pingMode in ['now', 'later']
+        && request.resource.data.lat is number
+        && request.resource.data.lat >= -90 && request.resource.data.lat <= 90
+        && request.resource.data.lng is number
+        && request.resource.data.lng >= -180 && request.resource.data.lng <= 180
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.time
+        // A5 / SEC-002. Locked product caps (deny, never clamp):
+        //   expiresAt is at most 30 minutes after reportedAt (PING_LIVE_TTL_MS)
+        //   and, once reportedAt is in the past, at most 30 minutes after
+        //   request.time. reportedAt may be at most 12 hours ahead.
+        // Scheduled "later" pings stay live for 30 minutes after departure,
+        // so expiresAt may sit further than 30 minutes past request.time
+        // only while reportedAt itself is still in the future.
+        && request.resource.data.reportedAt is timestamp
+        && request.resource.data.reportedAt <= request.time + duration.value(12, 'h')
+        && request.resource.data.expiresAt <= request.resource.data.reportedAt + duration.value(30, 'm')
+        && (request.resource.data.reportedAt > request.time
+            || request.resource.data.expiresAt <= request.time + duration.value(30, 'm'))
+        // 'source' is also written server-side (adminDeleteSpot sets 'admin'
+        // via the Admin SDK, bypassing rules entirely) to drive
+        // updateTrustOnSpotDelete's cancellation-penalty exemption — a client
+        // create may NEVER set anything but the literal 'my_car' tag used for
+        // handleMyCarPing's own orphan-cleanup filter, so this can't be used
+        // to spoof the admin exemption.
+        && (!('source' in request.resource.data) || request.resource.data.source == 'my_car')
+        && matchesFinderIdentity(request.resource.data)
+        && pingCreateRateRecorded(spotId)
+        && originLinkRecorded(spotId);
+      // t680u: the finder may still delete their own Ping in any state
+      // (legacy finder cancel), but only while account-eligible.
+      allow delete: if signedIn() && legacyAccountWriteEligible()
+        && resource.data.finderId == request.auth.uid;
+      // t680u: every update arm requires an eligible account.
+      allow update: if signedIn() && legacyAccountWriteEligible() && (
+
+        // Arm 1: Claim an available spot (immediate or scheduled).
+        // The rollout gate must already be clean, and the same commit must
+        // point this user's lock at this Ping.
+        // HO-004: the finder cannot claim their own Ping. Client canClaim
+        // already hides the button; this is the server denial.
+        (isAvailableForClaim()
+          && noClaimGeneration() // t680u
+          && request.auth.uid != resource.data.finderId
+          && activeIncomingClaimInvariantEnforced()
+          && request.resource.data.interestedUserId == request.auth.uid
+          && request.resource.data.status == 'interested'
+          && matchesInterestedUserIdentity(request.resource.data)
+          && activeIncomingClaimLockAcquired(spotId)
+          && onlyChanges(['status', 'claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
+                          'interestedUserId', 'interestedUserName',
+                          'interestedUserVehicleColor', 'interestedUserVehicleType',
+                          'interestedUserVehicleBrand', 'interestedUserTitle',
+                          'etaMinutes', 'interestExpiresAt', 'claimStartedAt',
+                          'claimReminderAt', 'claimReminderSentAt',
+                          'claimAutoReleaseAt', 'claimAutoReleasedAt']))
+
+        // Arm 2: Claimer updates ETA
+        || (isClaimer() && onlyChanges(['etaMinutes']))
+
+        // Arm 2b: Claimer commits to heading (scheduled → active).
+        // The result claimState is heading. arrived_pending_outcome is Arm 4 only.
+        || (isClaimer()
+          && request.resource.data.status == 'interested'
+          && request.resource.data.claimState == 'heading'
+          && resource.data.get('claimState', null) != 'arrived_pending_outcome'
+          && onlyChanges(['claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
+                          'etaMinutes', 'interestExpiresAt',
+                          'claimReminderAt', 'claimReminderSentAt', 'claimAutoReleaseAt']))
+
+        // Arm 3: Claimer cancels — clears all claimer metadata, Ping reopens.
+        // Only valid while the Ping itself hasn't expired yet (an expired Ping
+        // must never be reopened to 'available' — see Arm 3b for that case).
+        // Once the claimer has arrived, cancel must not reopen the Ping.
+        || (isClaimer()
+          && noClaimGeneration() // t680u
+          && resource.data.status == 'interested'
+          && resource.data.get('claimState', null) != 'arrived_pending_outcome'
+          && request.resource.data.status == 'available'
+          && request.resource.data.get('claimState', null) != 'arrived_pending_outcome'
+          && (resource.data.get('expiresAt', null) == null
+              || resource.data.expiresAt > request.time)
+          && matchingActiveClaimLockReleased(spotId)
+          && claimerMetadataClearedAfter()
+          && onlyChanges(['status', 'claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
+                          'interestedUserId', 'interestedUserName',
+                          'interestedUserVehicleColor', 'interestedUserVehicleType',
+                          'interestedUserVehicleBrand', 'interestedUserTitle',
+                          'etaMinutes', 'interestExpiresAt', 'claimStartedAt',
+                          'claimReminderAt', 'claimReminderSentAt',
+                          'claimAutoReleaseAt', 'claimAutoReleasedAt']))
+
+        // Arm 3b: Claimer cancels a claim on an already-expired Ping — clears
+        // claimer metadata but leaves status untouched (never reopens it).
+        // Occupied / arrived_pending_outcome stays put.
+        || (isClaimer()
+          && noClaimGeneration() // t680u
+          && resource.data.status == 'interested'
+          && resource.data.get('claimState', null) != 'arrived_pending_outcome'
+          && request.resource.data.get('claimState', null) != 'arrived_pending_outcome'
+          && resource.data.get('expiresAt', null) != null
+          && resource.data.expiresAt <= request.time
+          && matchingActiveClaimLockReleased(spotId)
+          && claimerMetadataClearedAfter()
+          && onlyChanges(['claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
+                          'interestedUserId', 'interestedUserName',
+                          'interestedUserVehicleColor', 'interestedUserVehicleType',
+                          'interestedUserVehicleBrand', 'interestedUserTitle',
+                          'etaMinutes', 'interestExpiresAt', 'claimStartedAt',
+                          'claimReminderAt', 'claimReminderSentAt',
+                          'claimAutoReleaseAt', 'claimAutoReleasedAt']))
+
+        // Arm 4: Claimer marks arrived. The same commit must set status
+        // occupied, claimState arrived_pending_outcome, and arrivedAt, and
+        // must delete a lock that names this Ping. A missing lock (legacy
+        // claim) still allows arrival. A second write is allowed only when
+        // those three fields are unchanged, so arrivedAt is not rewritten
+        // and a terminal handoff is not reopened. GPS is not required.
+        || (isClaimer()
+          && matchingActiveClaimLockReleased(spotId)
+          && onlyChanges(['status', 'claimState', 'arrivedAt'])
+          && (
+            (resource.data.status == 'interested'
+              && resource.data.get('claimState', null) != 'arrived_pending_outcome'
+              && !claimerTerminalFeedbackExists(spotId)
+              && durableClaimerArrival())
+            || (resource.data.status == 'occupied'
+              && resource.data.claimState == 'arrived_pending_outcome'
+              && request.resource.data.status == resource.data.status
+              && request.resource.data.claimState == resource.data.claimState
+              && request.resource.data.arrivedAt == resource.data.arrivedAt)
+          ))
+
+        // Arm 5: Finder confirms arrival
+        || (isFinder()
+          && request.resource.data.status == 'occupied'
+          && onlyChanges(['status']))
+
+        // Arm 6: Finder extends claim expiry
+        || (isFinder() && onlyChanges(['interestExpiresAt']))
+
+        // Arm 6b: Finder signals they are leaving now (scheduled handoff)
+        || (isFinder() && onlyChanges(['ownerLeavingNow', 'ownerLeavingNowAt', 'claimAutoReleaseAt']))
+
+      );
+    }
+
+    match /listings/{listingId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /stats/{docId} {
+      // Direct admin read removed: never read by any client — confirmed via
+      // full-repo search.
+      allow read: if false;
+      allow write: if false;
+    }
+
+    match /avatarModeration/{userId} {
+      allow read: if signedIn() && request.auth.uid == userId;
+      allow write: if false;
+    }
+
+    match /emailVerificationCodes/{userId} {
+      allow read, write: if false;
+    }
+
+    match /usernames/{usernameId} {
+      // F8: exact-doc get only. Clients check availability with
+      // getDoc(usernames/{normalized}) (NameEntryView, EditProfileView);
+      // nothing lists or queries this registry. Denying list stops a
+      // signed-in client from enumerating every username -> uid pair.
+      // claimUsername (Admin SDK) remains the sole writer.
+      allow get: if signedIn();
+      allow list: if false;
+      allow write: if false;
+    }
+
+    match /moderationLog/{logId} {
+      allow read, write: if false;
+    }
+
+    match /reports/{reportId} {
+      allow create: if signedIn()
+        && request.resource.data.keys().hasAll(
+             ['reporterId', 'reportedUserId', 'type', 'reason', 'status', 'createdAt'])
+        && request.resource.data.keys().hasOnly(
+             ['reporterId', 'reportedUserId', 'type', 'reason', 'status',
+              'conversationId', 'createdAt'])
+        && request.resource.data.reporterId == request.auth.uid
+        && request.resource.data.reportedUserId is string
+        && request.resource.data.reportedUserId != request.auth.uid
+        && request.resource.data.type in ['behavior', 'spam', 'inappropriate', 'other']
+        && request.resource.data.reason is string
+        && request.resource.data.reason.size() > 0
+        && request.resource.data.reason.size() <= 1000
+        && request.resource.data.status == 'pending'
+        && request.resource.data.createdAt is timestamp;
+      // Direct admin read removed: the Admin Dashboard now reads reports
+      // exclusively via the requireCurrentAdmin-gated adminReadView
+      // ('reportsList'/'userDetail') callable — moderation data (reporter/
+      // reported UIDs, free-text reasons) must not remain directly readable
+      // by a stale admin token.
+      allow read: if false;
+      // Direct admin writes removed: the Admin Dashboard mutates reports
+      // exclusively via the adminUpdateReport callable (requireCurrentAdmin).
+      // No client code ever exercised this branch.
+      allow update: if false;
+    }
+
+    match /spotNotifications/{notifId} {
+      allow read: if signedIn()
+        && (resource.data.targetUserId == request.auth.uid
+          || (resource.data.senderId == request.auth.uid
+            && resource.data.type == 'handoff_success'));
+      allow create: if signedIn()
+        && legacyAccountWriteEligible() // t680u
+        && request.resource.data.keys().hasAll(
+             ['spotId', 'senderId', 'targetUserId', 'type', 'message', 'createdAt'])
+        && request.resource.data.keys().hasOnly(
+             ['spotId', 'senderId', 'targetUserId', 'type', 'message', 'createdAt'])
+        && request.resource.data.senderId == request.auth.uid
+        && request.resource.data.type in [
+             'cancelled', 'claimer_cancelled', 'delayed',
+             'handoff_success', 'owner_leaving_now']
+        && request.resource.data.message is string
+        && request.resource.data.message.size() > 0
+        && request.resource.data.message.size() <= 500
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.createdAt <= request.time
+        && request.resource.data.createdAt >= request.time - duration.value(5, 'm')
+        && exists(/databases/$(database)/documents/spots/$(request.resource.data.spotId))
+        && (
+          (get(/databases/$(database)/documents/spots/$(request.resource.data.spotId)).data.finderId
+               == request.auth.uid
+            && get(/databases/$(database)/documents/spots/$(request.resource.data.spotId)).data
+                 .get('interestedUserId', null) == request.resource.data.targetUserId)
+          || (get(/databases/$(database)/documents/spots/$(request.resource.data.spotId)).data
+                 .get('interestedUserId', null) == request.auth.uid
+            && get(/databases/$(database)/documents/spots/$(request.resource.data.spotId)).data.finderId
+                 == request.resource.data.targetUserId)
+        );
+      allow delete: if signedIn() && resource.data.targetUserId == request.auth.uid;
+    }
+
+    // Design A attestations. outcome is participant_success, not success:
+    // today's resume reader treats success and failed as terminal, and a
+    // one-sided attestation must leave Finish-your-handoff pending.
+    // Crowns, trust, unconfirmed, and completed_success are server-only.
+    function participantSuccessShape(data) {
+      return data.keys().hasAll(
+          ['spotId', 'userId', 'finderId', 'outcome', 'address', 'createdAt', 'role'])
+        && data.keys().hasOnly(
+          ['spotId', 'userId', 'finderId', 'outcome', 'failureReason',
+           'address', 'createdAt', 'role'])
+        && data.spotId is string
+        && data.spotId.size() > 0
+        && data.userId is string
+        && data.userId.size() > 0
+        && data.finderId is string
+        && data.finderId.size() > 0
+        && data.userId != data.finderId
+        && data.outcome == 'participant_success'
+        && data.get('failureReason', null) == null
+        && data.address is string
+        && data.address.size() <= 500
+        && data.createdAt is timestamp
+        && data.createdAt <= request.time
+        && data.createdAt >= request.time - duration.value(5, 'm');
+    }
+
+    function durableArrivedFor(spotId) {
+      let path = /databases/$(database)/documents/spots/$(spotId);
+      let spot = getAfter(path).data;
+      return exists(path)
+        && spot.status == 'occupied'
+        && spot.claimState == 'arrived_pending_outcome'
+        && spot.arrivedAt is timestamp;
+    }
+
+    function claimerFailureCreate(feedbackId) {
+      let data = request.resource.data;
+      let path = /databases/$(database)/documents/spots/$(data.spotId);
+      let spot = getAfter(path).data;
+      return signedIn()
+        && data.keys().hasAll(
+             ['spotId', 'userId', 'finderId', 'outcome', 'address', 'createdAt'])
+        && data.keys().hasOnly(
+             ['spotId', 'userId', 'finderId', 'outcome', 'failureReason',
+              'address', 'createdAt'])
+        && data.spotId is string
+        && data.userId is string
+        && data.finderId is string
+        && data.outcome == 'failed'
+        && ('failureReason' in data)
+        && (
+          // Temporary rollout bridge: pre-#90 cached clients create an
+          // explicit null; #90 clients create the final reason initially.
+          // Feedback stays immutable. Remove after legacy clients retire
+          // or a minimum-version/forced-refresh mechanism exists.
+          data.failureReason == null
+          || data.failureReason in [
+            'Someone else got it',
+            "Finder hadn't left yet",
+            "Couldn't find the location",
+            'Other'
+          ]
+        )
+        && data.address is string
+        && data.address.size() <= 500
+        && data.createdAt is timestamp
+        && data.createdAt <= request.time
+        && data.createdAt >= request.time - duration.value(5, 'm')
+        && request.auth.uid == data.userId
+        && feedbackId == data.spotId + '_' + data.userId
+        && exists(path)
+        && spot.status == 'occupied'
+        && spot.get('interestedUserId', null) == request.auth.uid
+        && spot.finderId == data.finderId;
+    }
+
+    function claimerSuccessAttestation(feedbackId) {
+      let data = request.resource.data;
+      let path = /databases/$(database)/documents/spots/$(data.spotId);
+      let spot = getAfter(path).data;
+      return signedIn()
+        && participantSuccessShape(data)
+        && data.role == 'claimer'
+        && request.auth.uid == data.userId
+        && feedbackId == data.spotId + '_' + data.userId
+        && durableArrivedFor(data.spotId)
+        && spot.get('interestedUserId', null) == request.auth.uid
+        && spot.finderId == data.finderId;
+    }
+
+    function finderSuccessAttestation(feedbackId) {
+      let data = request.resource.data;
+      let path = /databases/$(database)/documents/spots/$(data.spotId);
+      let spot = getAfter(path).data;
+      return signedIn()
+        && participantSuccessShape(data)
+        && data.role == 'finder'
+        && request.auth.uid == data.finderId
+        && feedbackId == data.spotId + '_' + data.userId + '_finder'
+        && durableArrivedFor(data.spotId)
+        && spot.finderId == request.auth.uid
+        && spot.get('interestedUserId', null) == data.userId;
+    }
+
+    match /spotFeedback/{feedbackId} {
+      allow create: if legacyAccountWriteEligible() // t680u
+        && (claimerFailureCreate(feedbackId)
+          || claimerSuccessAttestation(feedbackId)
+          || finderSuccessAttestation(feedbackId));
+      // Direct admin read removed: never read by any Admin Dashboard
+      // component — confirmed via full-repo search. Reads stay participant-only
+      // so either side can safely reconcile its deterministic retry.
+      // Finder success lives on its own doc; confirmedByFinder remains the
+      // legacy read for finder-authored success docs already in the wild.
+      allow read: if signedIn()
+        && (resource.data.userId == request.auth.uid
+          || (resource.data.finderId == request.auth.uid
+            && resource.data.get('confirmedByFinder', false) == true)
+          || (resource.data.finderId == request.auth.uid
+            && resource.data.outcome == 'participant_success'
+            && resource.data.role == 'finder'
+            && feedbackId == resource.data.spotId + '_' + resource.data.userId + '_finder'));
+      allow update, delete: if false;
+    }
+
+    match /accountDeletionJobs/{userId} {
+      allow read: if signedIn() && request.auth.uid == userId;
+      allow write: if false;
+    }
+
+    match /rateLimits/{docId} {
+      allow read, write: if false;
+    }
+
+    // One departure re-ping per completed handoff. Create-once; the spot id
+    // of the occupied handoff is the document id, so a second link cannot
+    // invent another doc for the same origin.
+    match /originRePings/{originSpotId} {
+      allow get: if signedIn() && (
+        resource == null || resource.data.finderId == request.auth.uid
+      );
+      allow list: if false;
+      allow update, delete: if false;
+      allow create: if signedIn()
+        && legacyAccountWriteEligible() // t680u
+        && originSpotId.size() > 0
+        && originSpotId.size() <= 200
+        && request.resource.data.keys().hasOnly(['rePingSpotId', 'finderId', 'createdAt'])
+        && request.resource.data.finderId == request.auth.uid
+        && request.resource.data.rePingSpotId is string
+        && request.resource.data.rePingSpotId.size() > 0
+        && request.resource.data.rePingSpotId.size() <= 200
+        && request.resource.data.rePingSpotId != originSpotId
+        && freshCreateStamp(request.resource.data.createdAt)
+        && originHandoffEligible(originSpotId)
+        && rePingPointsAtOrigin(request.resource.data.rePingSpotId, originSpotId);
+    }
+
+    // Marketing waitlist: written only by joinWaitlist/confirmWaitlist via the
+    // Admin SDK. Holds email addresses and token hashes, so no client access at
+    // all. See docs/WAITLIST.md.
+    match /waitlist/{docId} {
+      allow read, write: if false;
+    }
+
+    // Unsubscribe-token hashes for waitlist emails. No client SDK access, even
+    // with an admin claim; the Functions use the Admin SDK, which bypasses Rules.
+    match /waitlistUnsubscribeTokens/{tokenHash} {
+      allow read, write: if false;
+    }
+
+    match /adminBootstrap/{docId} {
+      // Direct admin read removed: never read by any client — confirmed via
+      // full-repo search. Admin identity/singleton-ownership data must not
+      // remain directly readable by a stale admin token. bootstrapAdmin's own
+      // transaction reads this via the Admin SDK, which bypasses Rules.
+      allow read: if false;
+      allow write: if false;
+    }
+
+    match /maintenanceJobs/{jobId} {
+      allow read, write: if false;
+    }
+
+    match /adminAuditLog/{logId} {
+      // Direct admin read removed: the Admin Dashboard now reads audit
+      // history exclusively via the requireCurrentAdmin-gated adminReadView
+      // ('auditLogList'/'userDetail') callable — a stale former admin must
+      // not retain read access to privileged audit history.
+      allow read: if false;
+      allow write: if false;
+    }
+
+    match /parkingSessions/{userId} {
+      // Direct admin read removed: it granted a genuine admin-specific
+      // escalation (reading any other user's parking location/timing data),
+      // consumed only by UsersPage.tsx's per-user detail view and
+      // DashboardPage.tsx's active-session count — both now go through the
+      // requireCurrentAdmin-gated adminReadView callable. Owner self-read
+      // preserved.
+      allow read: if signedIn() && request.auth.uid == userId;
+      allow write: if signedIn() && request.auth.uid == userId;
+    }
+
+    match /parseFailures/{failureId} {
+      // Direct admin read removed: the Admin Dashboard now reads parse
+      // failures exclusively via the requireCurrentAdmin-gated adminReadView
+      // ('parseFailuresList') callable. resolvedBy carries an admin's UID —
+      // exposing admin identity via a stale token is exactly the class of
+      // exposure this task closes.
+      allow read: if false;
+      // Signed-in users may create new failure docs or increment count on existing ones
+      allow create: if signedIn();
+      // Direct admin writes removed: adminResolveParseFailure/
+      // adminReopenParseFailure (requireCurrentAdmin) are the only admin
+      // mutation paths in the dashboard. No client code ever exercised the
+      // isAdmin() branch here.
+      allow update: if signedIn()
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['count', 'lastSeenAt', 'location']);
+      allow delete: if false;
+    }
+
+    // Canonical curb identities contain official GIS identifiers and resolver
+    // evidence. They are Admin SDK/server-only; no client role can read or write.
+    match /curbIdentities/{curbKey} {
+      allow read, write: if false;
+    }
+
+    // All streetSegments/streetRules mutations are admin-callable-only
+    // (adminAddSegment, adminUpdateSegmentStatus, adminAddCleaningRule,
+    // adminSupersedeRule, adminBackfillStreetIntelligence — all
+    // requireCurrentAdmin-gated). Direct client writes were previously
+    // authorized here by token-only isAdmin(), which let a stale admin
+    // token (demoted/deleted/disabled after the token was minted) keep
+    // writing directly via utils/backfill.ts until the token expired,
+    // regardless of how hardened the callables were. Firestore Rules
+    // cannot re-verify current server-side Auth state, so the only fix is
+    // removing direct client mutation capability entirely.
+    match /streetSegments/{segmentId} {
+      allow read: if true;
+      allow create, update, delete: if false;
+
+      match /streetRules/{ruleId} {
+        allow read: if true;
+        allow create, update, delete: if false;
+      }
+    }
+
+    // Collection group rule required for collectionGroup('streetRules') queries.
+    // Nested subcollection rules only cover path-based access, not cross-collection queries.
+    match /{path=**}/streetRules/{ruleId} {
+      allow read: if true;
+      allow create, update, delete: if false;
+    }
+
+    match /suspensions/{suspensionId} {
+      allow read: if true;
+      // Direct admin writes removed: adminAddSuspension/adminArchiveSuspension
+      // (requireCurrentAdmin) are the only mutation paths in the dashboard.
+      allow write: if false;
+    }
+
+    match /chats/{chatId} {
+      allow read: if chatParticipant(resource.data);
+      // lastMessage/lastMessageTimestamp/lastSenderId: authoritative-server-
+      // owned via sendMessage (Admin SDK writes bypass these Rules).
+      //
+      // participantNames: REMOVED from the schema entirely. It was a
+      // forgeable cache of the other participant's display name; the client
+      // already does a live, always-overriding lookup of users/{uid}.
+      // fullName (itself authoritative — see updateDisplayName) for every
+      // conversation, so the cache was pure redundant attack surface with
+      // no remaining purpose. See docs/CHAT_SHELL_METADATA_HARDENING.md.
+      //
+      // relatedSpotTitle: CREATE-ONCE. Legitimate app-generated context
+      // (e.g. "Spot pinged by X") set once by the participant who starts
+      // the conversation; no live source exists to re-derive it from later
+      // (the originating spot may since have expired/been deleted), so it
+      // is client-supplied at creation but immutable thereafter — never a
+      // participant-editable field.
+      //
+      // Net effect: no field on an existing chats/{chatId} doc is directly
+      // client-updatable at all anymore. initChat() (MessagesView.tsx) only
+      // writes on first creation; re-navigating to an existing conversation
+      // performs no write.
+      //
+      // Create also refuses a pair when either participant's
+      // private/social.blockedUsers contains the other. That is the
+      // trusted boundary for new direct conversations; message sends are
+      // refused separately in sendMessage.
+      allow create: if signedIn()
+        && request.resource.data.keys().hasAll(['id', 'participants'])
+        && request.resource.data.keys().hasOnly(
+             ['id', 'participants', 'relatedSpotTitle'])
+        && request.resource.data.id == chatId
+        && request.resource.data.participants is list
+        && request.resource.data.participants.size() == 2
+        && request.resource.data.participants[0] is string
+        && request.resource.data.participants[1] is string
+        && request.auth.uid in request.resource.data.participants
+        // X-1: the ID must be the canonical sorted '_' join of two DISTINCT
+        // participants (utils/chatShell.ts chatIdForPair). Without this a
+        // third user could pre-create chats/A_B holding [M, A] and intercept
+        // A's messages meant for B while locking B out (create-once).
+        // Participants may be stored in either order.
+        && request.resource.data.participants[0] != request.resource.data.participants[1]
+        && chatId == (request.resource.data.participants[0] < request.resource.data.participants[1]
+             ? request.resource.data.participants[0] + '_' + request.resource.data.participants[1]
+             : request.resource.data.participants[1] + '_' + request.resource.data.participants[0])
+        && !directChatIsBlocked(request.resource.data.participants);
+      allow update: if false;
+      // Direct client deletion disabled — deleteChat (functions/index.js) is
+      // now the sole authoritative delete path: it re-verifies participant
+      // membership, marks the chat `deleting` before any recursive removal
+      // begins (closing the send/delete race), and recursively removes the
+      // chat and its messages subcollection together via the Admin SDK,
+      // which these Rules cannot see or gate. Allowing a direct client
+      // delete here previously let a participant delete only the parent
+      // chat doc without also deleting its messages, orphaning the
+      // subcollection (Firestore does not cascade-delete subcollections).
+      // See docs/CHAT_DELETE_HARDENING.md.
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if chatParticipant(
+          get(/databases/$(database)/documents/chats/$(chatId)).data
+        );
+        // Direct client create disabled — sendMessage (functions/index.js)
+        // is now the sole authoritative write path: it re-verifies
+        // membership and runs server-side moderation before writing via the
+        // Admin SDK, which these Rules cannot see or gate. A client-side-
+        // only check (the old rule below, and the still-present UX-only
+        // moderateMessage()) is not a security boundary. See
+        // docs/CHAT_MESSAGE_HARDENING.md.
+        allow create: if false;
+        allow update: if false;
+        // Direct client deletion disabled — previously any chat participant
+        // could delete an arbitrary individual message, including one sent
+        // by the OTHER participant (this rule only checked chat membership,
+        // never senderId). Deletion is now exclusively server-mediated via
+        // deleteChat, alongside the whole conversation. See
+        // docs/CHAT_DELETE_HARDENING.md.
+        allow delete: if false;
+      }
+    }
+
+    // Award idempotency markers. Admin SDK only.
+    match /functionEvents/{eventId} {
+      allow read, write: if false;
+    }
+
+    // Server-only rollout gate and duplicate-claim conflict reports.
+    // Clients must not open the one-active-claim invariant themselves.
+    match /activeIncomingClaimRollout/{docId} {
+      allow read, write: if false;
+    }
+
+    match /activeIncomingClaimConflicts/{uid} {
+      allow read, write: if false;
+    }
+  }
+}
