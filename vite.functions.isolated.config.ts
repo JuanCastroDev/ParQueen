@@ -13,6 +13,8 @@ export default defineConfig({
       'functions/s7MixedVersion.deployedBaseline.emulator.integration.test.js',
       'functions/s7T2LegacyRecovery.emulator.integration.test.js',
       'functions/s7T2OrphanRecoveryRace.emulator.integration.test.js',
+      // S7 t684u: lock-writer invariant F1 behavior tests.
+      'functions/s7T2LockWriterF1.emulator.integration.test.js',
     ],
     testTimeout: 120000,
     hookTimeout: 120000,
