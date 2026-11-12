@@ -106,11 +106,23 @@ function isRetryable(error) {
     || code === 'deadline-exceeded' || code === 'aborted' || code === 'unavailable';
 }
 
+// S7 T2-G3 (t682u). recoverLeftoverGeneration: true is an explicit opt-in.
+// Without it a claimable Ping that still stores a claimGenerationId is
+// refused_stale_generation, as before. With it, claimSpot may claim that Ping
+// with a freshly minted generation (never the leftover one) only when the
+// same transaction proves the orphan conditions of clearOrphanGeneration:
+// status available, no claimant, no claimState, and no activeIncomingClaims
+// lock anywhere that names this Ping. Any other state is still refused.
+// prepareClaimIntent and revokeClaimIntent accept the key and ignore it.
+const RECOVERY_KEY = 'recoverLeftoverGeneration';
+
 function parseInput(data) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     throw new HttpsError('invalid-argument', INVALID);
   }
-  const keys = Object.keys(data);
+  const recover = Object.prototype.hasOwnProperty.call(data, RECOVERY_KEY);
+  if (recover && data[RECOVERY_KEY] !== true) throw new HttpsError('invalid-argument', INVALID);
+  const keys = Object.keys(data).filter((key) => key !== RECOVERY_KEY);
   const mode = data.mode;
   const allowed = mode === 'scheduled'
     ? ['spotId', 'attemptId', 'mode']
@@ -138,7 +150,13 @@ function parseInput(data) {
       throw new HttpsError('invalid-argument', INVALID);
     }
   }
-  return { spotId, attemptId, mode, etaMinutes };
+  return { spotId, attemptId, mode, etaMinutes, recoverLeftoverGeneration: recover };
+}
+
+function leftoverIsRecoverableShape(spot) {
+  return !!spot && spot.status === 'available'
+    && (spot.interestedUserId === undefined || spot.interestedUserId === null)
+    && (spot.claimState === undefined || spot.claimState === null);
 }
 
 function publicResult(record) {
@@ -536,17 +554,27 @@ async function claimSpot(request, deps = {}) {
         return publicResult({ ...record, outcome: 'stale_precondition', claimGenerationId: null });
       }
 
+      let leftoverRecoverable = false;
+      if (input.recoverLeftoverGeneration && spotIsClaimable(spot, uid)
+        && hasLeftoverGenerationId(spot.claimGenerationId) && leftoverIsRecoverableShape(spot)) {
+        const namingLocks = await tx.get(
+          db.collectionGroup('activeIncomingClaims').where('spotId', '==', input.spotId).limit(1),
+        );
+        leftoverRecoverable = namingLocks.empty;
+      }
+
       let outcome;
       let generationId = null;
       if (holdsLiveClaim(spot, uid)) {
         outcome = 'already_held';
         generationId = null;
       } else if (!spotIsClaimable(spot, uid)) outcome = 'unavailable';
-      else if (hasLeftoverGenerationId(spot.claimGenerationId)) outcome = 'refused_stale_generation';
+      else if (hasLeftoverGenerationId(spot.claimGenerationId) && !leftoverRecoverable) outcome = 'refused_stale_generation';
       else if (otherSpot && pingHoldsActiveClaim(otherSpot, uid)) outcome = 'already_claimed';
       else {
         outcome = 'claimed';
         generationId = mintClaimGenerationId(randomBytes);
+        if (generationId === spot.claimGenerationId) throw new HttpsError('internal', FAILURE);
         const patch = claimPatch(input, spot, { uid, profile }, generationId, createdAt);
         tx.update(spotRef, patch);
         tx.set(lockRef, {

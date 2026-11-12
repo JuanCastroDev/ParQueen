@@ -11,6 +11,7 @@ export default defineConfig({
       'functions/s7MixedVersion.legacyClaims.emulator.integration.test.js',
       'functions/s7MixedVersion.candidateDeletion.emulator.integration.test.js',
       'functions/s7MixedVersion.deployedBaseline.emulator.integration.test.js',
+      'functions/s7T2LegacyRecovery.emulator.integration.test.js',
     ],
     testTimeout: 120000,
     hookTimeout: 120000,
