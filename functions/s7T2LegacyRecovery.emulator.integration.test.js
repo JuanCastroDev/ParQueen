@@ -369,6 +369,15 @@ describe('T2 legacy recovery: generations, replacements and takeover', () => {
     expect(await cancelClaim({ auth: { uid: row.a }, data: { spotId: row.s1, claimGenerationId: G2, reason: 'traffic' } }, deps()))
       .toEqual({ outcome: 'cancelled' });
     expect((await spotData(row.s1)).claimGenerationId).toBeNull();
+    // Lockless variant: the stored generation alone must refuse the legacy shape
+    // (no reliance on the lock-conflict check as a second barrier).
+    const lockless = `${row.s1}_lockless`;
+    await db.collection('spots').doc(lockless).set(legacyClaimed(row.finder, row.a, { claimGenerationId: G2 }));
+    const locklessBefore = await spotData(lockless);
+    expect(await legacyCancel(row.a, lockless, T1)).toEqual({ outcome: 'stale_claim' });
+    expect(await finderLegacy(row.finder, lockless, row.a, T1)).toEqual({ outcome: 'stale' });
+    expect(await spotData(lockless)).toEqual(locklessBefore);
+    expect(await notices(lockless)).toHaveLength(0);
   });
 
   it('SECURITY T2R-S5: another user cannot release or finder-cancel someone else\'s legacy claim', async () => {
