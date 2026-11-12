@@ -736,3 +736,63 @@ withEnv('t680u INTERIM candidate: carLocation, onboarding and unrelated access a
         await assertFails(updateDoc(doc(db, 'users', CLAIMER), { status: 'Active' }));
     });
 });
+
+// Residual self-scoped / low-impact paths that the interim candidate leaves
+// ungated (same as the deployed snapshot; main gates most of them with
+// actorMayUseProduct). They cannot touch a Ping, a claim, a lock, a notice,
+// feedback or another user's data. Recorded as CHARACTERIZATION, not a
+// contract: a follow-up may gate them without breaking a legacy flow.
+type Residual = { id: string; write: () => Promise<unknown>; needsProfile?: boolean };
+const RESIDUAL_PATHS: Residual[] = [
+    {
+        id: 'PREFERENCES',
+        write: () => setDoc(doc(testEnv.authenticatedContext(CLAIMER).firestore(), 'users', CLAIMER, 'private', 'preferences'), { lang: 'es' }),
+    },
+    {
+        id: 'USER-LOCATION',
+        write: () => setDoc(doc(testEnv.authenticatedContext(CLAIMER).firestore(), 'userLocations', CLAIMER), { lastGeohash: 'dr5re', lastGeohashUpdatedAt: Timestamp.now() }),
+    },
+    {
+        id: 'PARKING-SESSION',
+        write: () => setDoc(doc(testEnv.authenticatedContext(CLAIMER).firestore(), 'parkingSessions', CLAIMER), { active: true }),
+    },
+    {
+        id: 'CAR-LOCATION',
+        write: () => setDoc(carLocation(CLAIMER), CAR()),
+    },
+    {
+        id: 'VEHICLE-UPDATE', needsProfile: true,
+        write: () => updateDoc(doc(testEnv.authenticatedContext(CLAIMER).firestore(), 'users', CLAIMER), { vehicleColor: 'blue' }),
+    },
+    {
+        id: 'PARSE-FAILURE',
+        write: () => setDoc(doc(testEnv.authenticatedContext(CLAIMER).firestore(), 'parseFailures', 'pf-1'), { count: 1 }),
+    },
+    {
+        id: 'REPORT-CREATE',
+        write: () => addDoc(collection(testEnv.authenticatedContext(CLAIMER).firestore(), 'reports'), {
+            reporterId: CLAIMER, reportedUserId: FINDER, type: 'other', reason: 'r', status: 'pending', createdAt: Timestamp.now(),
+        }),
+    },
+    {
+        id: 'CHAT-CREATE',
+        write: () => setDoc(doc(testEnv.authenticatedContext(CLAIMER).firestore(), 'chats', `${CLAIMER}_${FINDER}`), {
+            // chatIdForPair: sorted '_' join ('mv-claimer…' < 'mv-finder…').
+            id: `${CLAIMER}_${FINDER}`, participants: [CLAIMER, FINDER],
+        }),
+    },
+];
+
+withEnv('t680u INTERIM candidate: residual ungated self-scoped paths (characterization, not a contract)', readCandidateRules, () => {
+    for (const r of RESIDUAL_PATHS) {
+        for (const v of VARIANTS) {
+            const denied = v.profile === null && r.needsProfile === true;
+            it(`CHARACTERIZATION RESIDUAL-I-${r.id}-${v.key}: candidate ${denied ? 'denies (no profile to update)' : 'still ALLOWS'} ${r.id} for a ${v.label}`, async () => {
+                await seedBase({});
+                await applyActor(CLAIMER, v);
+                if (denied) await assertFails(r.write());
+                else await assertSucceeds(r.write());
+            });
+        }
+    }
+});
