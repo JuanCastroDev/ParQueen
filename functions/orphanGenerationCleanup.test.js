@@ -408,7 +408,20 @@ describe('orphan sweep wiring', () => {
     expect(holds.match(/claimGenerationId: null/g)).toHaveLength(2);
     const cancel = fs.readFileSync(path.join(__dirname, 'cancelClaim.js'), 'utf8');
     expect(cancel).toContain('claimGenerationId');
-    expect(cancel).not.toContain('fingerprint');
+    // Founder-approved 29G amendment (t683u). This line was
+    // expect(cancel).not.toContain('fingerprint'). The approved legacy-only
+    // exception releases a generationless claim by the exact stored
+    // claimStartedAt (a claim-cycle fingerprint), so the word check can no
+    // longer separate that path from a regression. It is replaced by behavior
+    // assertions in cancelClaim.legacyContract.test.js (29G-A..F): the
+    // generation path stays generation-only, no timestamp authorizes a
+    // generation-bearing claim, the identity modes are exclusive, a missing
+    // generation is never a wildcard, stale retries and other users are
+    // refused, and the legacy path fails closed on its own checks.
+    const contract = fs.readFileSync(path.join(__dirname, 'cancelClaim.legacyContract.test.js'), 'utf8');
+    for (const id of ['29G-A1', '29G-A2', '29G-B1', '29G-B2', '29G-C1', '29G-C2', '29G-C3', '29G-D1', '29G-E1', '29G-E2', '29G-E3', '29G-F1', '29G-F2', '29G-F3', '29G-F4', '29G-F5']) {
+      expect(contract).toContain(`it('${id}:`);
+    }
     const rules = fs.readFileSync(path.join(__dirname, '..', 'firestore.rules'), 'utf8');
     const notification = rules.slice(rules.indexOf('match /spotNotifications/'), rules.indexOf('// Design A attestations'));
     expect(notification).toContain('request.resource.data.createdAt <= request.time');

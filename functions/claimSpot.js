@@ -114,6 +114,18 @@ function isRetryable(error) {
 // status available, no claimant, no claimState, and no activeIncomingClaims
 // lock anywhere that names this Ping. Any other state is still refused.
 // prepareClaimIntent and revokeClaimIntent accept the key and ignore it.
+//
+// Race argument (t683u). The empty lock query is not the proof on its own.
+// Every writer of a lock that names a Ping commits only when the same commit
+// sees that Ping interested by the lock owner: Rules lockAgreesWithSpotAfter
+// for clients (deployed 134a97cf, interim candidate and head), and claimSpot
+// and reconcileUserClaims, which read the Ping in their own transaction. This
+// transaction read the Ping as available and writes it, so a competing lock
+// for this Ping cannot commit between that read and this commit without a
+// write to the Ping document, which conflicts with this transaction. The
+// prepared spotUpdateTime precondition also refuses any Ping write made after
+// prepareClaimIntent. A writer that bypasses those preconditions (console,
+// new server code) is outside this argument.
 const RECOVERY_KEY = 'recoverLeftoverGeneration';
 
 function parseInput(data) {
@@ -330,7 +342,7 @@ function requireUid(request) {
 }
 
 function openDeps(deps) {
-  if ((deps.afterReads || deps.afterLifecycleRead) && deps.allowTestHooks !== true) {
+  if ((deps.afterReads || deps.afterLifecycleRead || deps.afterRecoveryQuery) && deps.allowTestHooks !== true) {
     throw new HttpsError('internal', FAILURE);
   }
   const hook = (name) => (deps.allowTestHooks === true && typeof deps[name] === 'function' ? deps[name] : null);
@@ -341,6 +353,8 @@ function openDeps(deps) {
     randomBytes: deps.randomBytes || ((size) => require('crypto').randomBytes(size)),
     afterReads: hook('afterReads'),
     afterLifecycleRead: hook('afterLifecycleRead'),
+    // t683u: test-only pause after the T2-G3 lock query, for the phantom-lock race proof.
+    afterRecoveryQuery: hook('afterRecoveryQuery'),
   };
 }
 
@@ -490,7 +504,7 @@ async function prepareClaimIntent(request, deps = {}) {
 async function claimSpot(request, deps = {}) {
   const uid = requireUid(request);
   const input = parseInput(request.data);
-  const { db, limit, now, randomBytes, afterReads, afterLifecycleRead } = openDeps(deps);
+  const { db, limit, now, randomBytes, afterReads, afterLifecycleRead, afterRecoveryQuery } = openDeps(deps);
   if (await deletionFencePresent(uid, db)) {
     throw new HttpsError('permission-denied', PRODUCT_ACCESS_DENIED);
   }
@@ -561,6 +575,7 @@ async function claimSpot(request, deps = {}) {
           db.collectionGroup('activeIncomingClaims').where('spotId', '==', input.spotId).limit(1),
         );
         leftoverRecoverable = namingLocks.empty;
+        if (afterRecoveryQuery) await afterRecoveryQuery(namingLocks.empty);
       }
 
       let outcome;
