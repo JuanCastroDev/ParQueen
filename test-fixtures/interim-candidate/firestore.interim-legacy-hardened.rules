@@ -9,6 +9,10 @@
 // It is NOT main's firestore.rules. Main removed the legacy direct claim and
 // claimer-cancel arms; this candidate keeps them for eligible active users.
 // Every change versus the snapshot is marked "t680u".
+// t684u (local only): the spot update arms are evaluated through
+// spotUpdateArmAllows(changed), each behind a conditional on its role/state
+// test, so a denied update no longer reaches the 1,000-expression limit.
+// No check was removed. Changes are marked "t684u".
 // ============================================================================
 rules_version = '2';
 service cloud.firestore {
@@ -61,11 +65,11 @@ service cloud.firestore {
     }
 
     function isClaimer() {
-      return resource.data.interestedUserId == request.auth.uid;
+      return resource.data.get('interestedUserId', null) == request.auth.uid; // t684u: missing field is false, not an error
     }
 
     function isHoldClaimer() {
-      return resource.data.claimedBy == request.auth.uid;
+      return resource.data.get('claimedBy', null) == request.auth.uid; // t684u
     }
 
     function isAvailableForClaim() {
@@ -715,49 +719,65 @@ service cloud.firestore {
       allow delete: if signedIn() && legacyAccountWriteEligible()
         && resource.data.finderId == request.auth.uid;
       // t680u: every update arm requires an eligible account.
-      allow update: if signedIn() && legacyAccountWriteEligible() && (
+      // t684u: the changed-key set is computed once and passed to the arms
+      // (each arm used to recompute request.resource.data.diff(resource.data)).
+      // t684u: each arm is guarded by a conditional on its role/state test.
+      allow update: if signedIn() && legacyAccountWriteEligible()
+        && spotUpdateArmAllows(request.resource.data.diff(resource.data).affectedKeys());
+
+      // t684u: the arms below are unchanged except onlyChanges(k) -> changed.hasOnly(k).
+      function spotUpdateArmAllows(changed) {
+        return (
 
         // Arm 1: Claim an available spot (immediate or scheduled).
         // The rollout gate must already be clean, and the same commit must
         // point this user's lock at this Ping.
         // HO-004: the finder cannot claim their own Ping. Client canClaim
         // already hides the button; this is the server denial.
-        (isAvailableForClaim()
-          && noClaimGeneration() // t680u
-          && request.auth.uid != resource.data.finderId
+        // t684u: guard first as a conditional; the arm body is unchanged.
+        // t680u: noClaimGeneration() is part of the guard.
+        ((isAvailableForClaim() && noClaimGeneration()) ? (
+          request.auth.uid != resource.data.finderId
           && activeIncomingClaimInvariantEnforced()
           && request.resource.data.interestedUserId == request.auth.uid
           && request.resource.data.status == 'interested'
           && matchesInterestedUserIdentity(request.resource.data)
           && activeIncomingClaimLockAcquired(spotId)
-          && onlyChanges(['status', 'claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
+          && changed.hasOnly(['status', 'claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
                           'interestedUserId', 'interestedUserName',
                           'interestedUserVehicleColor', 'interestedUserVehicleType',
                           'interestedUserVehicleBrand', 'interestedUserTitle',
                           'etaMinutes', 'interestExpiresAt', 'claimStartedAt',
                           'claimReminderAt', 'claimReminderSentAt',
-                          'claimAutoReleaseAt', 'claimAutoReleasedAt']))
+                          'claimAutoReleaseAt', 'claimAutoReleasedAt'])
+          ) : false)
 
         // Arm 2: Claimer updates ETA
-        || (isClaimer() && onlyChanges(['etaMinutes']))
+        // t684u: guard first as a conditional; the arm body is unchanged.
+        || (isClaimer() ? (
+          changed.hasOnly(['etaMinutes'])
+          ) : false)
 
         // Arm 2b: Claimer commits to heading (scheduled → active).
         // The result claimState is heading. arrived_pending_outcome is Arm 4 only.
-        || (isClaimer()
-          && request.resource.data.status == 'interested'
+        // t684u: guard first as a conditional; the arm body is unchanged.
+        || (isClaimer() ? (
+          request.resource.data.status == 'interested'
           && request.resource.data.claimState == 'heading'
           && resource.data.get('claimState', null) != 'arrived_pending_outcome'
-          && onlyChanges(['claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
+          && changed.hasOnly(['claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
                           'etaMinutes', 'interestExpiresAt',
-                          'claimReminderAt', 'claimReminderSentAt', 'claimAutoReleaseAt']))
+                          'claimReminderAt', 'claimReminderSentAt', 'claimAutoReleaseAt'])
+          ) : false)
 
         // Arm 3: Claimer cancels — clears all claimer metadata, Ping reopens.
         // Only valid while the Ping itself hasn't expired yet (an expired Ping
         // must never be reopened to 'available' — see Arm 3b for that case).
         // Once the claimer has arrived, cancel must not reopen the Ping.
-        || (isClaimer()
-          && noClaimGeneration() // t680u
-          && resource.data.status == 'interested'
+        // t684u: guard first as a conditional; the arm body is unchanged.
+        // t680u: noClaimGeneration() is part of the guard.
+        || ((isClaimer() && noClaimGeneration()) ? (
+          resource.data.status == 'interested'
           && resource.data.get('claimState', null) != 'arrived_pending_outcome'
           && request.resource.data.status == 'available'
           && request.resource.data.get('claimState', null) != 'arrived_pending_outcome'
@@ -765,33 +785,36 @@ service cloud.firestore {
               || resource.data.expiresAt > request.time)
           && matchingActiveClaimLockReleased(spotId)
           && claimerMetadataClearedAfter()
-          && onlyChanges(['status', 'claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
+          && changed.hasOnly(['status', 'claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
                           'interestedUserId', 'interestedUserName',
                           'interestedUserVehicleColor', 'interestedUserVehicleType',
                           'interestedUserVehicleBrand', 'interestedUserTitle',
                           'etaMinutes', 'interestExpiresAt', 'claimStartedAt',
                           'claimReminderAt', 'claimReminderSentAt',
-                          'claimAutoReleaseAt', 'claimAutoReleasedAt']))
+                          'claimAutoReleaseAt', 'claimAutoReleasedAt'])
+          ) : false)
 
         // Arm 3b: Claimer cancels a claim on an already-expired Ping — clears
         // claimer metadata but leaves status untouched (never reopens it).
         // Occupied / arrived_pending_outcome stays put.
-        || (isClaimer()
-          && noClaimGeneration() // t680u
-          && resource.data.status == 'interested'
+        // t684u: guard first as a conditional; the arm body is unchanged.
+        // t680u: noClaimGeneration() is part of the guard.
+        || ((isClaimer() && noClaimGeneration()) ? (
+          resource.data.status == 'interested'
           && resource.data.get('claimState', null) != 'arrived_pending_outcome'
           && request.resource.data.get('claimState', null) != 'arrived_pending_outcome'
           && resource.data.get('expiresAt', null) != null
           && resource.data.expiresAt <= request.time
           && matchingActiveClaimLockReleased(spotId)
           && claimerMetadataClearedAfter()
-          && onlyChanges(['claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
+          && changed.hasOnly(['claimState', 'ownerLeavingNow', 'ownerLeavingNowAt',
                           'interestedUserId', 'interestedUserName',
                           'interestedUserVehicleColor', 'interestedUserVehicleType',
                           'interestedUserVehicleBrand', 'interestedUserTitle',
                           'etaMinutes', 'interestExpiresAt', 'claimStartedAt',
                           'claimReminderAt', 'claimReminderSentAt',
-                          'claimAutoReleaseAt', 'claimAutoReleasedAt']))
+                          'claimAutoReleaseAt', 'claimAutoReleasedAt'])
+          ) : false)
 
         // Arm 4: Claimer marks arrived. The same commit must set status
         // occupied, claimState arrived_pending_outcome, and arrivedAt, and
@@ -799,9 +822,10 @@ service cloud.firestore {
         // claim) still allows arrival. A second write is allowed only when
         // those three fields are unchanged, so arrivedAt is not rewritten
         // and a terminal handoff is not reopened. GPS is not required.
-        || (isClaimer()
-          && matchingActiveClaimLockReleased(spotId)
-          && onlyChanges(['status', 'claimState', 'arrivedAt'])
+        // t684u: guard first as a conditional; the arm body is unchanged.
+        || (isClaimer() ? (
+          matchingActiveClaimLockReleased(spotId)
+          && changed.hasOnly(['status', 'claimState', 'arrivedAt'])
           && (
             (resource.data.status == 'interested'
               && resource.data.get('claimState', null) != 'arrived_pending_outcome'
@@ -812,20 +836,29 @@ service cloud.firestore {
               && request.resource.data.status == resource.data.status
               && request.resource.data.claimState == resource.data.claimState
               && request.resource.data.arrivedAt == resource.data.arrivedAt)
-          ))
+          )
+          ) : false)
 
         // Arm 5: Finder confirms arrival
-        || (isFinder()
-          && request.resource.data.status == 'occupied'
-          && onlyChanges(['status']))
+        // t684u: guard first as a conditional; the arm body is unchanged.
+        || (isFinder() ? (
+          request.resource.data.status == 'occupied'
+          && changed.hasOnly(['status'])
+          ) : false)
 
         // Arm 6: Finder extends claim expiry
-        || (isFinder() && onlyChanges(['interestExpiresAt']))
+        // t684u: guard first as a conditional; the arm body is unchanged.
+        || (isFinder() ? (
+          changed.hasOnly(['interestExpiresAt'])
+          ) : false)
 
         // Arm 6b: Finder signals they are leaving now (scheduled handoff)
-        || (isFinder() && onlyChanges(['ownerLeavingNow', 'ownerLeavingNowAt', 'claimAutoReleaseAt']))
-
-      );
+        // t684u: guard first as a conditional; the arm body is unchanged.
+        || (isFinder() ? (
+          changed.hasOnly(['ownerLeavingNow', 'ownerLeavingNowAt', 'claimAutoReleaseAt'])
+          ) : false)
+        );
+      }
     }
 
     match /listings/{listingId} {

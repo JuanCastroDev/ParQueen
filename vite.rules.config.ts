@@ -20,6 +20,8 @@ export default defineConfig({
             'firestore.rules.test.mixed-version-deployed.ts',
             // S7 interim (t680u): NONDEPLOYABLE legacy-hardened candidate proof.
             'firestore.rules.test.interim-legacy-hardened.ts',
+            // S7 interim (t685u): expression-budget and document-access regression for that candidate.
+            'firestore.rules.test.interim-expression-budget.ts',
             // Offline index-baseline guard; runs whenever firestore.indexes.json changes.
             'firestore.indexes.production-baseline.test.ts',
           ],
