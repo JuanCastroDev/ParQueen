@@ -85,6 +85,32 @@ function readRules(set) {
   return { text: bytes.toString('utf8'), digest };
 }
 
+// t684u: a denial that comes from the 1,000-expression evaluation limit is not
+// a clean rules decision and must not count as one. The #332 interim candidate
+// (daf120c6) was reproduced in t684u to reach the limit on every denied spot
+// update, so for that exact file the reason check is carried by the BLOCKER
+// REASON-1 test below instead of the SECURITY tests.
+const LIMIT_BLOCKED_SHA256 = new Set([
+  'daf120c65921852785414c3baa570dd175ac98dc0861f0ac0e8336eb1ba71469',
+]);
+
+function denialReason(message) {
+  if (/maximum of \d+ expressions to evaluate has been reached/i.test(message)) return 'evaluation-limit';
+  if (/evaluation error at L\d+/i.test(message)) return 'evaluation-error';
+  if (/false for '[a-z]+' @ L\d+/.test(message)) return 'clean-false';
+  return 'other';
+}
+
+function limitBlocked(key) {
+  const set = RULESETS.find((candidate) => candidate.key === key);
+  return Boolean(set && set.sha256 && LIMIT_BLOCKED_SHA256.has(set.sha256));
+}
+
+function expectNotLimit(key, result) {
+  if (result.ok || limitBlocked(key)) return;
+  expect(denialReason(result.message || '')).not.toBe('evaluation-limit');
+}
+
 const G1 = '6e'.repeat(32);
 let mint = 0;
 let sequence = 0;
@@ -264,11 +290,13 @@ describe.each(RULESETS.map((set) => [set.key]))('T2-G3 orphan recovery race unde
     const standalone = await settle(clientLockOnly(env, row.b, row.s));
     expect(standalone.ok).toBe(false);
     expect(standalone.code).toBe('permission-denied');
+    expectNotLimit(key, standalone);
 
     await prepare(env, row.a, row.s, row.attemptA);
     const race = await raceAfterEmptyQuery(env, row, () => clientLockOnly(env, row.b, row.s));
     expect(race.other.ok).toBe(false);
     expect(race.other.code).toBe('permission-denied');
+    expectNotLimit(key, race.other);
     expect(race.a.ok).toBe(true);
     expect(race.a.value.outcome).toBe('claimed');
     const spot = await spotData(env, row.s);
@@ -302,6 +330,8 @@ describe.each(RULESETS.map((set) => [set.key]))('T2-G3 orphan recovery race unde
     log({ case: `RACE-2-${key}-controls`, plain: plain.ok ? plain.value : `${plain.code}:${plain.message}`, leftover: leftover.ok ? leftover.value : `${leftover.code}:${leftover.message}`, leftoverInherited: leftoverAfter.claimGenerationId === G1 && leftoverAfter.interestedUserId === row.b });
     if (env.set.directClaim) expect(plain).toEqual({ ok: true, value: 'claimed' });
     else expect(plain.ok).toBe(false);
+    expectNotLimit(key, plain);
+    expectNotLimit(key, leftover);
     // B must hold no lock before the race (the control used B on another Ping).
     await env.db.collection('users').doc(row.b).collection('activeIncomingClaims').doc('current').delete();
     await env.db.collection('spots').doc(leftoverSpot).delete();
@@ -313,6 +343,7 @@ describe.each(RULESETS.map((set) => [set.key]))('T2-G3 orphan recovery race unde
     const bClaimed = race.other.ok && race.other.value === 'claimed';
     expect(aClaimed && bClaimed).toBe(false);
     expect(locks.length).toBeLessThanOrEqual(1);
+    expectNotLimit(key, race.other);
     if (aClaimed) {
       expect(spot.interestedUserId).toBe(row.a);
       expect(spot.claimGenerationId).not.toBe(G1);
@@ -424,7 +455,7 @@ describe.each(RULESETS.map((set) => [set.key]))('T2 legacy identity is immutable
         [row.s2, { claimStartedAt: client.Timestamp.fromMillis(started.toMillis()), etaMinutes: eta }, 'echoClaimStartedAtWithEta'],
       ]) {
         const result = await settle(client.updateDoc(client.doc(db, 'spots', spotId), patch));
-        attempts.push({ label, what, ok: result.ok, code: result.code || null });
+        attempts.push({ label, what, ok: result.ok, code: result.code || null, message: result.message || '' });
       }
     }
     log({ case: `RULES-1-${key}`, attempts: attempts.map((a) => `${a.label}:${a.what}:${a.ok ? 'ok' : a.code}`) });
@@ -437,6 +468,7 @@ describe.each(RULESETS.map((set) => [set.key]))('T2 legacy identity is immutable
         continue;
       }
       expect(attempt).toMatchObject({ ok: false, code: 'permission-denied' });
+      expectNotLimit(key, attempt);
     }
     const stillGen = await spotData(env, row.s);
     const stillLegacy = await spotData(env, row.s2);
@@ -444,5 +476,44 @@ describe.each(RULESETS.map((set) => [set.key]))('T2 legacy identity is immutable
     expect(stillLegacy.claimGenerationId).toBeUndefined();
     expect(stillLegacy.claimStartedAt.isEqual(started)).toBe(true);
     expect(stillLegacy.etaMinutes).toBe(5);
+  });
+});
+
+describe.each(RULESETS.map((set) => [set.key]))('T2 denial reasons under %s rules (t684u)', (key) => {
+  const blocked = limitBlocked(key);
+  const label = blocked
+    ? `BLOCKER REASON-1-${key}: denials used by RACE-1, RACE-2 and RULES-1 are not expression-limit denials (expected to fail for #332 daf120c6, where every denied spot update reaches the 1,000-expression limit)`
+    : `SECURITY REASON-1-${key}: denials used by RACE-1, RACE-2 and RULES-1 are not expression-limit denials`;
+  (blocked ? it.fails : it)(label, async () => {
+    const env = envs[key];
+    const row = ids(`rr${key}`);
+    const started = Timestamp.fromMillis(Date.now() - 30_000);
+    await seed(env, row, availableSpot(row.finder, { claimGenerationId: G1 }));
+    await env.db.collection('spots').doc(row.s2).set(availableSpot(row.finder, {
+      status: 'interested', interestedUserId: row.a, claimState: 'heading', claimStartedAt: started,
+      claimGenerationId: G1, etaMinutes: 4,
+    }));
+    const claimant = env.rules.authenticatedContext(row.a).firestore();
+    const other = env.rules.authenticatedContext(row.b).firestore();
+    const results = {
+      lockOnly: await settle(clientLockOnly(env, row.b, row.s)),
+      clearGeneration: await settle(client.updateDoc(client.doc(claimant, 'spots', row.s2), { claimGenerationId: null })),
+      otherEta: await settle(client.updateDoc(client.doc(other, 'spots', row.s2), {
+        claimStartedAt: client.Timestamp.fromMillis(started.toMillis()), etaMinutes: 7,
+      })),
+      directClaimLeftover: await settle(directClaim(env, row.b, row.s)),
+    };
+    const reasons = Object.fromEntries(Object.entries(results).map(([name, result]) => [
+      name, result.ok ? 'allowed' : `${result.code}:${denialReason(result.message || '')}`,
+    ]));
+    log({ case: `REASON-1-${key}`, blocked, reasons });
+    for (const name of ['lockOnly', 'clearGeneration', 'otherEta']) {
+      expect(results[name]).toMatchObject({ ok: false, code: 'permission-denied' });
+    }
+    // Deployed rules still allow the leftover-generation direct claim (the known bypass).
+    if (key !== 'deployed') expect(results.directClaimLeftover.ok).toBe(false);
+    for (const result of Object.values(results)) {
+      if (!result.ok) expect(denialReason(result.message || '')).not.toBe('evaluation-limit');
+    }
   });
 });
