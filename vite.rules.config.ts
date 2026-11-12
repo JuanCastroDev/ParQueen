@@ -16,6 +16,8 @@ export default defineConfig({
             'firestore.rules.test.candidate-aware.ts',
             'firestore.rules.finder-notice.31ag.test.ts',
             'firestore.rules.ping-delete.test.ts',
+            // S7 mixed-version (t674u): Oct 16 client writes vs the deployed ruleset snapshot and head.
+            'firestore.rules.test.mixed-version-deployed.ts',
             // Offline index-baseline guard; runs whenever firestore.indexes.json changes.
             'firestore.indexes.production-baseline.test.ts',
           ],
