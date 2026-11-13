@@ -72,7 +72,7 @@ const RULESETS = [
   {
     key: 'interim',
     file: 'test-fixtures/interim-candidate/firestore.interim-legacy-hardened.rules',
-    sha256: 'daf120c65921852785414c3baa570dd175ac98dc0861f0ac0e8336eb1ba71469',
+    sha256: 'c1508fa02a15fff9b3a2d4a965d40254f540c7c69ffe5aed6405c0a6bb090400',
     directClaim: true,
   },
   { key: 'head', file: 'firestore.rules', sha256: null, directClaim: false },

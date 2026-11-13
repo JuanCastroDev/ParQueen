@@ -48,7 +48,7 @@ const { reconcileActiveIncomingClaims } = require('./activeIncomingClaim');
 
 const RULESETS = [
   { key: 'deployed', file: 'test-fixtures/production-baseline/deployed-firestore-134a97cf.rules', sha256: '134a97cf8e25f2f8848ff4d2c0ff65ff5dd83434f1690901b4ba7dffe403810b' },
-  { key: 'interim', file: 'test-fixtures/interim-candidate/firestore.interim-legacy-hardened.rules', sha256: 'daf120c65921852785414c3baa570dd175ac98dc0861f0ac0e8336eb1ba71469' },
+  { key: 'interim', file: 'test-fixtures/interim-candidate/firestore.interim-legacy-hardened.rules', sha256: 'c1508fa02a15fff9b3a2d4a965d40254f540c7c69ffe5aed6405c0a6bb090400' },
   { key: 'head', file: 'firestore.rules', sha256: null },
 ];
 
