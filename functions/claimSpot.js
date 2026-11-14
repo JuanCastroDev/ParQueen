@@ -106,11 +106,35 @@ function isRetryable(error) {
     || code === 'deadline-exceeded' || code === 'aborted' || code === 'unavailable';
 }
 
+// S7 T2-G3 (t682u). recoverLeftoverGeneration: true is an explicit opt-in.
+// Without it a claimable Ping that still stores a claimGenerationId is
+// refused_stale_generation, as before. With it, claimSpot may claim that Ping
+// with a freshly minted generation (never the leftover one) only when the
+// same transaction proves the orphan conditions of clearOrphanGeneration:
+// status available, no claimant, no claimState, and no activeIncomingClaims
+// lock anywhere that names this Ping. Any other state is still refused.
+// prepareClaimIntent and revokeClaimIntent accept the key and ignore it.
+//
+// Race argument (t683u). The empty lock query is not the proof on its own.
+// Every writer of a lock that names a Ping commits only when the same commit
+// sees that Ping interested by the lock owner: Rules lockAgreesWithSpotAfter
+// for clients (deployed 134a97cf, interim candidate and head), and claimSpot
+// and reconcileUserClaims, which read the Ping in their own transaction. This
+// transaction read the Ping as available and writes it, so a competing lock
+// for this Ping cannot commit between that read and this commit without a
+// write to the Ping document, which conflicts with this transaction. The
+// prepared spotUpdateTime precondition also refuses any Ping write made after
+// prepareClaimIntent. A writer that bypasses those preconditions (console,
+// new server code) is outside this argument.
+const RECOVERY_KEY = 'recoverLeftoverGeneration';
+
 function parseInput(data) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     throw new HttpsError('invalid-argument', INVALID);
   }
-  const keys = Object.keys(data);
+  const recover = Object.prototype.hasOwnProperty.call(data, RECOVERY_KEY);
+  if (recover && data[RECOVERY_KEY] !== true) throw new HttpsError('invalid-argument', INVALID);
+  const keys = Object.keys(data).filter((key) => key !== RECOVERY_KEY);
   const mode = data.mode;
   const allowed = mode === 'scheduled'
     ? ['spotId', 'attemptId', 'mode']
@@ -138,7 +162,13 @@ function parseInput(data) {
       throw new HttpsError('invalid-argument', INVALID);
     }
   }
-  return { spotId, attemptId, mode, etaMinutes };
+  return { spotId, attemptId, mode, etaMinutes, recoverLeftoverGeneration: recover };
+}
+
+function leftoverIsRecoverableShape(spot) {
+  return !!spot && spot.status === 'available'
+    && (spot.interestedUserId === undefined || spot.interestedUserId === null)
+    && (spot.claimState === undefined || spot.claimState === null);
 }
 
 function publicResult(record) {
@@ -312,7 +342,7 @@ function requireUid(request) {
 }
 
 function openDeps(deps) {
-  if ((deps.afterReads || deps.afterLifecycleRead) && deps.allowTestHooks !== true) {
+  if ((deps.afterReads || deps.afterLifecycleRead || deps.afterRecoveryQuery) && deps.allowTestHooks !== true) {
     throw new HttpsError('internal', FAILURE);
   }
   const hook = (name) => (deps.allowTestHooks === true && typeof deps[name] === 'function' ? deps[name] : null);
@@ -323,6 +353,8 @@ function openDeps(deps) {
     randomBytes: deps.randomBytes || ((size) => require('crypto').randomBytes(size)),
     afterReads: hook('afterReads'),
     afterLifecycleRead: hook('afterLifecycleRead'),
+    // t683u: test-only pause after the T2-G3 lock query, for the phantom-lock race proof.
+    afterRecoveryQuery: hook('afterRecoveryQuery'),
   };
 }
 
@@ -472,7 +504,7 @@ async function prepareClaimIntent(request, deps = {}) {
 async function claimSpot(request, deps = {}) {
   const uid = requireUid(request);
   const input = parseInput(request.data);
-  const { db, limit, now, randomBytes, afterReads, afterLifecycleRead } = openDeps(deps);
+  const { db, limit, now, randomBytes, afterReads, afterLifecycleRead, afterRecoveryQuery } = openDeps(deps);
   if (await deletionFencePresent(uid, db)) {
     throw new HttpsError('permission-denied', PRODUCT_ACCESS_DENIED);
   }
@@ -536,17 +568,28 @@ async function claimSpot(request, deps = {}) {
         return publicResult({ ...record, outcome: 'stale_precondition', claimGenerationId: null });
       }
 
+      let leftoverRecoverable = false;
+      if (input.recoverLeftoverGeneration && spotIsClaimable(spot, uid)
+        && hasLeftoverGenerationId(spot.claimGenerationId) && leftoverIsRecoverableShape(spot)) {
+        const namingLocks = await tx.get(
+          db.collectionGroup('activeIncomingClaims').where('spotId', '==', input.spotId).limit(1),
+        );
+        leftoverRecoverable = namingLocks.empty;
+        if (afterRecoveryQuery) await afterRecoveryQuery(namingLocks.empty);
+      }
+
       let outcome;
       let generationId = null;
       if (holdsLiveClaim(spot, uid)) {
         outcome = 'already_held';
         generationId = null;
       } else if (!spotIsClaimable(spot, uid)) outcome = 'unavailable';
-      else if (hasLeftoverGenerationId(spot.claimGenerationId)) outcome = 'refused_stale_generation';
+      else if (hasLeftoverGenerationId(spot.claimGenerationId) && !leftoverRecoverable) outcome = 'refused_stale_generation';
       else if (otherSpot && pingHoldsActiveClaim(otherSpot, uid)) outcome = 'already_claimed';
       else {
         outcome = 'claimed';
         generationId = mintClaimGenerationId(randomBytes);
+        if (generationId === spot.claimGenerationId) throw new HttpsError('internal', FAILURE);
         const patch = claimPatch(input, spot, { uid, profile }, generationId, createdAt);
         tx.update(spotRef, patch);
         tx.set(lockRef, {
