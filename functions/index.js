@@ -50,6 +50,7 @@ const {
 } = require('./abandonedArrivalCleanup');
 const { joinMutualSuccess } = require('./mutualSuccessJoin');
 const { releasedInterestPatch } = require('./activeIncomingClaimLogic');
+const { releaseClaimsOfDeletedUser } = require('./deletedUserClaimRelease');
 const { requireCurrentAdmin, requireCurrentAuthenticatedUser } = require('./adminAuth');
 const { assertProductAccess, userRecordDenies } = require('./productAccess');
 const { cancelClaim: cancelClaimHandler } = require('./cancelClaim');
@@ -3575,54 +3576,6 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
         }
 
         // ── True cursor-based paginated update ────────────────────────────────
-        async function releaseClaimsOfDeletedUser(claimerUid) {
-            const identity = {
-                interestedUserId: FieldValue.delete(),
-                interestedUserName: FieldValue.delete(),
-                interestedUserVehicleColor: FieldValue.delete(),
-                interestedUserVehicleType: FieldValue.delete(),
-                interestedUserVehicleBrand: FieldValue.delete(),
-                interestedUserTitle: FieldValue.delete(),
-                claimGenerationId: FieldValue.delete(),
-            };
-            const activeClaimClear = {
-                claimState: null,
-                claimStartedAt: null,
-                etaMinutes: null,
-                interestExpiresAt: null,
-                ownerLeavingNow: null,
-                ownerLeavingNowAt: null,
-                claimReminderAt: null,
-                claimReminderSentAt: null,
-                claimAutoReleaseAt: null,
-                claimAutoReleasedAt: null,
-                claimGenerationId: null,
-            };
-            for (let guard = 0; guard < 1000; guard++) {
-                const snap = await db.collection('spots')
-                    .where('interestedUserId', '==', claimerUid).limit(499).get();
-                if (snap.empty) return;
-                const nowMs = Date.now();
-                const batch = db.batch();
-                for (const d of snap.docs) {
-                    const spot = d.data();
-                    const active = spot.status === 'interested'
-                        && spot.claimState !== 'arrived_pending_outcome';
-                    if (!active) {
-                        batch.update(d.ref, identity);
-                        continue;
-                    }
-                    const expired = spot.expiresAt && typeof spot.expiresAt.toMillis === 'function'
-                        && spot.expiresAt.toMillis() <= nowMs;
-                    batch.update(d.ref, expired
-                        ? { ...identity, ...activeClaimClear }
-                        : { ...identity, ...activeClaimClear, status: 'available' });
-                }
-                await batch.commit();
-            }
-            throw new Error('spotsAsClaimer: release did not converge');
-        }
-
         async function paginatedUpdate(baseQuery, updateData) {
             let cursor = null;
             while (true) {
@@ -3726,8 +3679,12 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
         // every such Ping was flipped back to 'available', briefly
         // re-publishing the finder's private history and breaking the durable
         // handoff state. Updated docs drop out of the query (interestedUserId
-        // deleted), so the loop drains without a cursor; bounded per batch.
-        await step('spotsAsClaimer', () => releaseClaimsOfDeletedUser(uid));
+        // deleted), so the loop drains without a cursor; bounded per page.
+        // Each Ping is re-read in its own transaction and changed only while
+        // it still names this uid: a claim released and then legitimately
+        // taken by another user between the query and the write keeps that
+        // user's claim, generation and lock (deletedUserClaimRelease.js).
+        await step('spotsAsClaimer', () => releaseClaimsOfDeletedUser(db, uid));
 
         // Chats — paginated to avoid loading all IDs into memory. Uses the
         // same markChatDeletingAndRecursiveDelete helper deleteChat uses —

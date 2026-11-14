@@ -94,7 +94,13 @@ function firebaseLaunch() {
   };
 }
 
-const vitestCommand = 'node node_modules/vitest/vitest.mjs run --config vite.functions.isolated.config.ts';
+// The pagination pass runs last so the onCreate trigger backlog of its large
+// seeds cannot overlap the timing-sensitive suites. && keeps a main-pass
+// failure fatal.
+const vitestCommand = [
+  'node node_modules/vitest/vitest.mjs run --config vite.functions.isolated.config.ts',
+  'node node_modules/vitest/vitest.mjs run --config vite.functions.isolated.pagination.config.ts',
+].join(' && ');
 const script = process.platform === 'win32'
   ? vitestCommand
   : `sh -c 'echo FUNCTIONS_ISOLATED_VITEST_START; ${vitestCommand}'`;

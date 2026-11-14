@@ -191,7 +191,11 @@ describe('claimSpot generation identity', () => {
     expect(phantom).toContain('claimGenerationId: null');
     const cleanup = indexSrc.slice(indexSrc.indexOf('exports.cleanupExpiredInterests'), indexSrc.indexOf('exports.cleanupExpiredHolds'));
     expect(cleanup).toContain('releasedInterestPatch');
-    const deleted = indexSrc.slice(indexSrc.indexOf('function releaseClaimsOfDeletedUser'), indexSrc.indexOf('async function paginatedUpdate'));
+    // S4 t695u: deleted-claimer release moved to deletedUserClaimRelease.js.
+    expect(indexSrc).toContain("require('./deletedUserClaimRelease')");
+    expect(indexSrc).toContain("step('spotsAsClaimer', () => releaseClaimsOfDeletedUser(db, uid))");
+    expect(indexSrc.includes('function releaseClaimsOfDeletedUser')).toBe(false);
+    const deleted = fs.readFileSync(path.join(__dirname, 'deletedUserClaimRelease.js'), 'utf8');
     expect(deleted).toContain('claimGenerationId: FieldValue.delete()');
     expect(deleted).toContain('claimGenerationId: null');
     const holds = indexSrc.slice(indexSrc.indexOf('exports.cleanupExpiredHolds'), indexSrc.indexOf('exports.cleanupAbandonedArrivedHandoffs'));
