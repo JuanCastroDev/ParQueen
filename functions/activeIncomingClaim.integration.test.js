@@ -52,7 +52,28 @@ async function captureErrors(fn) {
   return calls;
 }
 
+async function removeRunFixtures() {
+  const [spotRefs, userRefs, conflictRefs] = await Promise.all([
+    db.collection('spots').listDocuments(),
+    db.collection('users').listDocuments(),
+    db.collection('activeIncomingClaimConflicts').listDocuments(),
+  ]);
+  const ownedSpots = spotRefs.filter(ref => ref.id.includes(RUN));
+  const ownedUsers = userRefs.filter(ref => ref.id.includes(RUN));
+  const ownedConflicts = conflictRefs.filter(ref => ref.id.includes(RUN));
+  await Promise.all([
+    ...ownedSpots.map(ref => ref.delete()),
+    ...ownedUsers.flatMap(ref => [
+      ref.collection('activeIncomingClaims').doc('current').delete(),
+      ref.delete(),
+    ]),
+    ...ownedConflicts.map(ref => ref.delete()),
+  ]);
+}
+
 describe('active incoming claim — release paths and 15-minute repair', () => {
+  afterEach(removeRunFixtures);
+
   it('clears the matching lock when an expired interest is released, and leaves claimStartedAt cleared', async () => {
     const spotId = nextId('expire');
     const uid = nextId('claimer');
