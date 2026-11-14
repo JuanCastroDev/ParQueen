@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { AppView } from '../types';
 import { MapPin, Check, Locate, X, Bell, Clock, ChevronRight, ChevronLeft, Users, Car, Navigation, CheckCircle2 } from 'lucide-react';
 import { db } from '../firebase';
-import { collection, Timestamp, doc, deleteDoc, updateDoc, getDocs, getDoc, setDoc, where, query, orderBy, startAt, endAt, serverTimestamp, limit } from 'firebase/firestore';
+import { collection, Timestamp, doc, deleteDoc, getDocs, getDoc, getDocFromServer, setDoc, where, query, orderBy, startAt, endAt, serverTimestamp, limit } from 'firebase/firestore';
 import { auth } from '../firebaseConfig';
 import { detectParkingSide } from '../utils/streetIntelligence';
 import { detectCardinalSide } from '../utils/sweepnyc';
@@ -15,6 +15,8 @@ import * as geofire from 'geofire-common';
 import { NYC_CENTER, createMarkerElement, createStackMarkerElement, clearRoute, drawRoute, getDistance } from './street-parking/utils';
 import { getMapboxToken } from '../utils/browserCredentials';
 import { t, useLang } from '../i18n';
+import { ONBOARDING_V2_ENABLED } from '../utils/onboardingFlags';
+import { markVehicleHintShown, readPingsShared, shouldOfferVehicleHint } from '../utils/vehicleHint';
 import { VehicleIcon } from '../utils/vehicleIcon';
 import { getTitleForCrowns } from '../utils/crowns';
 import { createUserLocationGeohashPersister } from '../utils/userLocationGeohash';
@@ -200,6 +202,9 @@ export const MapView: React.FC<MapViewProps> = ({
     showPrimaryNavigation = true,
     unreadMessagesCount = 0,
     onPendingUpdatesCountChange,
+    onboardingIntent = null,
+    onOnboardingIntentHandled,
+    suppressAutoTour = false,
 }) => {
     useLang(); // re-render on language change
     // MapView remains mounted while Messages overlays it. Count actual returns
@@ -303,12 +308,26 @@ export const MapView: React.FC<MapViewProps> = ({
 
     // Show first-run tutorial once map is ready and user is authenticated
     useEffect(() => {
+        if (suppressAutoTour) return;
         if (!mapReady || !user?.id) return;
         if (localStorage.getItem(TOUR_KEY)) return;
         if (selectedItem || stackGroup) return;
         const t = setTimeout(() => setShowTour(true), 400);
         return () => clearTimeout(t);
-    }, [mapReady, user?.id, selectedItem, stackGroup]);
+    }, [mapReady, user?.id, selectedItem, stackGroup, suppressAutoTour]);
+
+    // Onboarding 2.0 intention: applied once, after the map is ready and nothing else is open.
+    // It only opens existing UI; it never creates or publishes a Ping.
+    const [exploreChipVisible, setExploreChipVisible] = useState(false);
+    // Onboarding 2.0 (D22): optional car-details suggestion after the first published Ping.
+    const [vehicleHintVisible, setVehicleHintVisible] = useState(false);
+    useEffect(() => {
+        if (!onboardingIntent || !mapReady || !user?.id) return;
+        if (selectedItem || stackGroup || isSpotModalOpen) return;
+        if (onboardingIntent === 'leave') handlePrimaryMapAction();
+        else if (onboardingIntent === 'explore') setExploreChipVisible(true);
+        onOnboardingIntentHandled?.();
+    }, [onboardingIntent, mapReady, user?.id, selectedItem, stackGroup]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // --- Custom hooks ---
 
@@ -1885,6 +1904,12 @@ export const MapView: React.FC<MapViewProps> = ({
         recordParkingAnalyticsEvent('ping_creation_started');
         setSpotModalOpen(false);
 
+        // D22: authoritative pre-publish read of the Ping counter (server only; offline means no suggestion).
+        const isNewPublication = !selectedItem;
+        const pingsSharedBefore: Promise<number | null> = ONBOARDING_V2_ENABLED && isNewPublication
+            ? getDocFromServer(doc(db, 'users', user.id)).then(s => (s.exists() ? readPingsShared(s.data()) : null)).catch(() => null)
+            : Promise.resolve(null);
+
         const now = Date.now();
         const reportedAt = departureTime ? Timestamp.fromDate(departureTime) : Timestamp.fromMillis(now);
         const expiresAt = Timestamp.fromMillis(getPingExpiresAtMs(reportedAt));
@@ -1898,6 +1923,14 @@ export const MapView: React.FC<MapViewProps> = ({
             if (isDepartureFlowRef.current) {
                 isDepartureFlowRef.current = false;
                 endSession();
+            }
+            if (ONBOARDING_V2_ENABLED && isNewPublication) {
+                void pingsSharedBefore.then(before => {
+                    if (shouldOfferVehicleHint({ newPublication: true, user, pingsSharedBefore: before })) {
+                        markVehicleHintShown();
+                        setVehicleHintVisible(true);
+                    }
+                });
             }
         };
 
@@ -3421,6 +3454,57 @@ export const MapView: React.FC<MapViewProps> = ({
                 </div>
             </div>
 
+            {vehicleHintVisible && mapPrimaryNavigationVisible && (
+                <div
+                    className="fixed left-0 right-0 z-30 flex justify-center pointer-events-none px-4"
+                    style={{ top: 'calc(env(safe-area-inset-top, 0px) + 76px)' }}
+                    data-testid="vehicle-hint"
+                >
+                    <div role="status" aria-live="polite" className="pointer-events-auto w-full max-w-sm rounded-2xl bg-[var(--color-glass)] backdrop-blur-xl border border-[var(--color-border)] shadow-lg p-4">
+                        <div className="flex items-start gap-3">
+                            <Car size={20} className="text-[var(--color-info)] shrink-0 mt-0.5" aria-hidden="true" />
+                            <div className="flex-1 min-w-0">
+                                <p className="text-sm font-semibold text-[var(--color-text)]">{t('map.vehicle_hint_title')}</p>
+                                <p className="text-[13px] text-[var(--color-text-secondary)] mt-1">{t('map.vehicle_hint_body')}</p>
+                            </div>
+                        </div>
+                        <div className="flex justify-end gap-2 mt-3">
+                            <button type="button" onClick={() => setVehicleHintVisible(false)} className="min-h-[44px] px-3 text-sm font-semibold text-[var(--color-text-secondary)]">
+                                {t('map.vehicle_hint_dismiss')}
+                            </button>
+                            <button type="button" onClick={() => { setVehicleHintVisible(false); setView(AppView.EDIT_VEHICLE); }} className="min-h-[44px] px-4 rounded-full text-sm font-semibold text-white bg-[#1e75ff]">
+                                {t('map.vehicle_hint_add')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {exploreChipVisible && !showTour && !vehicleHintVisible && mapPrimaryNavigationVisible && (
+                <div
+                    className="fixed left-0 right-0 z-30 flex justify-center pointer-events-none px-4"
+                    style={{ top: 'calc(env(safe-area-inset-top, 0px) + 76px)' }}
+                    data-testid="explore-chip"
+                >
+                    <div className="pointer-events-auto flex items-center gap-1 rounded-full bg-[var(--color-glass)] backdrop-blur-xl border border-[#1e75ff]/30 shadow-lg">
+                        <button
+                            type="button"
+                            onClick={() => { setExploreChipVisible(false); setShowTour(true); }}
+                            className="min-h-[44px] pl-4 pr-2 flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]"
+                        >
+                            <Navigation size={14} className="text-[var(--color-info)]" aria-hidden="true" />
+                            {t('map.explore_chip')}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setExploreChipVisible(false)}
+                            aria-label={t('map.explore_chip_dismiss')}
+                            className="w-11 h-11 flex items-center justify-center text-[var(--color-text-secondary)]"
+                        >
+                            <X size={16} aria-hidden="true" />
+                        </button>
+                    </div>
+                </div>
+            )}
             {showTour && <AppTour onDone={() => setShowTour(false)} />}
 
             {/* ?debugStreet=1 — Street Intelligence debug panel. Never shown to normal users. */}

@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { RecaptchaVerifier } from 'firebase/auth';
 import { t, useLang } from '../i18n';
-import { Shield, Loader2 } from 'lucide-react';
+import { Shield, Loader2, ChevronLeft } from 'lucide-react';
 import { SignupProgress } from '../components/SignupProgress';
+import { ONBOARDING_V2_ENABLED } from '../utils/onboardingFlags';
 import { CountrySelector } from '../components/CountrySelector';
 import {
     parseNationalToE164,
@@ -24,6 +25,8 @@ import { iosPhoneAuthUiTone, reportIosPhoneAuthFailure } from '../utils/phoneAut
 interface CreateAccountViewProps {
     onContinue: (phoneE164: string, confirmationResult: PhoneVerificationSession) => void;
     onOpenLegal?: (document: PublicLegalDocument) => void;
+    /** Onboarding 2.0: return to the intention choices (only passed when Create account was reached from them). */
+    onBack?: () => void;
 }
 
 const NANP_PLACEHOLDERS: Partial<Record<string, string>> = {
@@ -44,7 +47,7 @@ function formatNANP(digits: string): string {
     return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
 }
 
-export const CreateAccountView: React.FC<CreateAccountViewProps> = ({ onContinue, onOpenLegal }) => {
+export const CreateAccountView: React.FC<CreateAccountViewProps> = ({ onContinue, onOpenLegal, onBack }) => {
     useLang();
     const [selectedCountry, setSelectedCountry] = useState<CountryCode>('US');
     const [nationalInput, setNationalInput] = useState('');
@@ -145,15 +148,26 @@ export const CreateAccountView: React.FC<CreateAccountViewProps> = ({ onContinue
             {/* Top nav row — no visible Back on Step 1 */}
             <div className="flex items-center justify-between mb-3 shrink-0">
                 {/* Left spacer keeps "Step 1 of 4" right-aligned without visual shift */}
-                <div className="w-11 h-11" aria-hidden="true" />
+                {onBack ? (
+                    <button
+                        type="button"
+                        onClick={onBack}
+                        aria-label={t('onboarding_v2.back')}
+                        className="w-11 h-11 -ml-2 flex items-center justify-center rounded-full text-[var(--color-text)]"
+                    >
+                        <ChevronLeft size={24} aria-hidden="true" />
+                    </button>
+                ) : (
+                    <div className="w-11 h-11" aria-hidden="true" />
+                )}
                 <span className="text-[12px] font-semibold text-[var(--color-text-secondary)] tracking-wide">
-                    {t('create_account.step')}
+                    {ONBOARDING_V2_ENABLED ? t('onboarding_v2.signup_step', { n: 1 }) : t('create_account.step')}
                 </span>
             </div>
 
             {/* 4-segment progress */}
             <div className="shrink-0">
-                <SignupProgress step={1} />
+                <SignupProgress step={1} total={ONBOARDING_V2_ENABLED ? 3 : 4} />
             </div>
 
             {/* Content block — entrance animation. shrink-0 so the keyboard

@@ -2,6 +2,7 @@ import { auth, db } from './firebaseConfig';
 import { signOut, sendPasswordResetEmail as _sendPasswordResetEmail } from 'firebase/auth';
 import { doc, updateDoc, deleteField } from "firebase/firestore";
 import { getFunctions, httpsCallable } from 'firebase/functions';
+import { ONBOARDING_V2_ENABLED } from './utils/onboardingFlags';
 
 // Account creation (username + base doc) and display-name changes are now
 // authoritative-server-owned via the claimUsername/updateDisplayName
@@ -15,8 +16,14 @@ export const logoutUser = async () => {
   // transition and rotates the browser registration before associating it.
   const theme = localStorage.getItem('theme');
   const fcmOwnerUid = localStorage.getItem('parqueen_fcm_owner_uid');
+  // Onboarding 2.0 (Blueprint D13/D14): a signed-out device keeps its language and skips the story.
+  // The pending onboarding intention is account-scoped and is cleared with everything else.
+  const lang = ONBOARDING_V2_ENABLED ? localStorage.getItem('parqueen_lang') : null;
+  const seenOnboarding = ONBOARDING_V2_ENABLED ? localStorage.getItem('hasSeenOnboarding') : null;
   localStorage.clear();
   if (theme !== null) localStorage.setItem('theme', theme);
+  if (lang !== null) localStorage.setItem('parqueen_lang', lang);
+  if (seenOnboarding !== null) localStorage.setItem('hasSeenOnboarding', seenOnboarding);
 
   const uid = auth.currentUser?.uid;
   if (uid) {

@@ -4,6 +4,11 @@ import { observePendingAnalyticsOptOut, reconcilePendingAnalyticsOptOut } from '
 import { LoadingScreen } from './components/LoadingScreen';
 import { AuthStartupRecovery } from './components/AuthStartupRecovery';
 import { OnboardingView } from './views/OnboardingView';
+import { ONBOARDING_V2_ENABLED } from './utils/onboardingFlags';
+import { bindPendingIntent, clearPendingIntent, savePendingIntent, takePendingIntent, type OnboardingIntent } from './utils/onboardingIntent';
+import type { OnboardingV2AndroidBackHandle } from './views/onboarding-v2/OnboardingV2View';
+// Onboarding 2.0 is only fetched when its build flag is on; the legacy OnboardingView stays the rollback.
+const OnboardingV2View = lazy(() => import('./views/onboarding-v2/OnboardingV2View').then(m => ({ default: m.OnboardingV2View })));
 const LocationPromptView = lazy(() => import('./views/LocationPromptView').then(m => ({ default: m.LocationPromptView })));
 const AppCheckQaPanel = import.meta.env.VITE_PARQUEEN_APPCHECK_QA === 'true'
   ? lazy(() => import('./utils/AppCheckQaPanel'))
@@ -68,7 +73,8 @@ import { ConfirmationResult, RecaptchaVerifier, signOut } from 'firebase/auth';
 import { useInAppLegalNavigation } from './hooks/useInAppLegalNavigation';
 import { applyAndroidBackAction, useAndroidSystemBack } from './hooks/useAndroidSystemBack';
 import { dispatchAndroidSystemBack, resolveAndroidBack } from './utils/androidBackNavigation';
-import { dismissTopAndroidBackOverlay } from './utils/androidBackOverlay';
+import { androidBackOverlayCount, dismissTopAndroidBackOverlay } from './utils/androidBackOverlay';
+import { OBV2_DIAG, diag } from './utils/obv2Diag';
 import type { MessagesAndroidBackHandle } from './views/MessagesView';
 import type { OnboardingAndroidBackHandle } from './views/OnboardingView';
 import type { AssistantAndroidBackHandle } from './views/AssistantView';
@@ -125,6 +131,9 @@ export default function App() {
   const [locationServicesEnabled, setLocationServicesEnabled] = useState<boolean | null>(null);
   const [pendingSpotId, setPendingSpotId] = useState<string | null>(null);
   const [pendingMyCarOpen, setPendingMyCarOpen] = useState(false);
+  // Onboarding 2.0: whether Back on Create account returns to the choices, and the one-shot map intention.
+  const [onboardingReturn, setOnboardingReturn] = useState<'choose' | null>(null);
+  const [mapOnboardingIntent, setMapOnboardingIntent] = useState<OnboardingIntent | null>(null);
   const [user, setUser] = useState(null);
   const unreadMessagesCount = useUnreadMessages(user?.id);
   const [pendingUpdatesCount, setPendingUpdatesCount] = useState(() => {
@@ -145,31 +154,43 @@ export default function App() {
   };
   const { setViewWithLegalReturn, closeLegal } = useInAppLegalNavigation(currentView, setCurrentView);
   const messagesAndroidBackRef = useRef<MessagesAndroidBackHandle | null>(null);
-  const onboardingAndroidBackRef = useRef<OnboardingAndroidBackHandle | null>(null);
+  const onboardingAndroidBackRef = useRef<OnboardingAndroidBackHandle | OnboardingV2AndroidBackHandle | null>(null);
   const assistantAndroidBackRef = useRef<AssistantAndroidBackHandle | null>(null);
   const androidBackStateRef = useRef({
     currentView,
     vehicleOnboarding,
     locationAccess,
     closeLegal,
+    onboardingReturn,
   });
   androidBackStateRef.current = {
     currentView,
     vehicleOnboarding,
     locationAccess,
     closeLegal,
+    onboardingReturn,
   };
 
   useAndroidSystemBack({
     handleBack: () => {
       const state = androidBackStateRef.current;
+      diag('back:press', { view: state.currentView, onboardingReturn: state.onboardingReturn, overlays: androidBackOverlayCount(), visibility: typeof document !== 'undefined' ? document.visibilityState : null });
       dispatchAndroidSystemBack(
-        dismissTopAndroidBackOverlay,
-        () => resolveAndroidBack({
-          currentView: state.currentView,
-          vehicleOnboarding: state.vehicleOnboarding,
-          locationAccess: state.locationAccess,
-        }),
+        () => {
+          const consumed = dismissTopAndroidBackOverlay();
+          if (consumed) diag('back:overlay-dismissed', { view: state.currentView });
+          return consumed;
+        },
+        () => {
+          const action = resolveAndroidBack({
+            currentView: state.currentView,
+            vehicleOnboarding: state.vehicleOnboarding,
+            locationAccess: state.locationAccess,
+            returnToOnboarding: ONBOARDING_V2_ENABLED && state.onboardingReturn === 'choose',
+          });
+          diag('back:resolved', { view: state.currentView, action: action.type, to: action.type === 'navigate' ? action.view : null });
+          return action;
+        },
         (action) => applyAndroidBackAction(action, {
           currentView: state.currentView,
           navigate: (view) => setCurrentView(view),
@@ -179,6 +200,7 @@ export default function App() {
           },
           delegateOnboarding: () => {
             const result = onboardingAndroidBackRef.current?.handleAndroidBack();
+            diag('back:onboarding-delegate', { result: result ?? 'no-handler' });
             if (result !== 'handled') {
               void CapacitorApp.minimizeApp();
             }
@@ -190,6 +212,7 @@ export default function App() {
             }
           },
           minimize: () => {
+            diag('back:minimize', { view: state.currentView });
             void CapacitorApp.minimizeApp();
           },
           clearVehicleOnboarding: () => setVehicleOnboarding(false),
@@ -197,6 +220,18 @@ export default function App() {
       );
     },
   });
+  // QA diagnostics (VITE_OBV2_DIAG=1 builds only): view changes and app lifecycle, no user data
+  useEffect(() => { diag('view', { view: currentView, onboardingReturn }); }, [currentView, onboardingReturn]);
+  useEffect(() => {
+    if (!OBV2_DIAG) return;
+    const onVis = () => diag('lifecycle:visibility', { state: document.visibilityState });
+    document.addEventListener('visibilitychange', onVis);
+    const handles: Array<{ remove: () => Promise<void> }> = [];
+    void CapacitorApp.addListener('appStateChange', s => diag('lifecycle:appState', { active: s.isActive })).then(h => handles.push(h)).catch(() => {});
+    void CapacitorApp.addListener('pause', () => diag('lifecycle:pause')).then(h => handles.push(h)).catch(() => {});
+    void CapacitorApp.addListener('resume', () => diag('lifecycle:resume')).then(h => handles.push(h)).catch(() => {});
+    return () => { document.removeEventListener('visibilitychange', onVis); handles.forEach(h => void h.remove()); };
+  }, []);
   const pushToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [notificationRuntime, setNotificationRuntime] = useState<NotificationRuntimeState | null>(null);
   const [notificationBusy, setNotificationBusy] = useState(false);
@@ -581,15 +616,45 @@ export default function App() {
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, []);
 
+  // Onboarding 2.0 intention: local navigation context only, never an authorization claim.
+  // Bound to the first account that signs in on this device, consumed once on the map, expires after 24 h.
+  useEffect(() => {
+    if (!ONBOARDING_V2_ENABLED) return;
+    const uid = user?.id;
+    if (!uid) {
+      setMapOnboardingIntent(null);
+      return;
+    }
+    setOnboardingReturn(null);
+    bindPendingIntent(uid);
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!ONBOARDING_V2_ENABLED) return;
+    const uid = user?.id;
+    if (!uid || currentView !== AppView.MAP) return;
+    if (pendingSpotId || pendingMyCarOpen) {
+      clearPendingIntent();
+      return;
+    }
+    const intent = takePendingIntent(uid);
+    if (intent) setMapOnboardingIntent(intent);
+  }, [user?.id, currentView, pendingSpotId, pendingMyCarOpen]);
+
   useEffect(() => {
     const queue = createNotificationIntentQueue(intent => {
       executeNotificationIntent(intent, {
         openPing: spotId => {
+          // A valid actionable deep link wins over a pending onboarding intention (Blueprint D16).
+          clearPendingIntent();
+          setMapOnboardingIntent(null);
           setPendingMyCarOpen(false);
           setPendingSpotId(spotId);
           setCurrentView(AppView.MAP);
         },
         openMyCar: () => {
+          clearPendingIntent();
+          setMapOnboardingIntent(null);
           setPendingSpotId(null);
           setPendingMyCarOpen(true);
           setCurrentView(AppView.MAP);
@@ -727,8 +792,13 @@ export default function App() {
     try {
       const functions = getFunctions(getApp(), 'us-central1');
       await httpsCallable(functions, 'claimUsername')({ username });
-      setVehicleOnboarding(true);
-      setCurrentView(AppView.EDIT_VEHICLE);
+      if (ONBOARDING_V2_ENABLED) {
+        // Vehicle details are optional and offered later in context, not as a signup step.
+        setCurrentView(shouldShowPrimer(locationAccess) ? AppView.LOCATION_PROMPT : AppView.MAP);
+      } else {
+        setVehicleOnboarding(true);
+        setCurrentView(AppView.EDIT_VEHICLE);
+      }
     } catch (error: any) {
       console.error("Failed to save profile: ", error);
       alert(error.message || "Failed to save profile.");
@@ -1017,6 +1087,9 @@ export default function App() {
               showPrimaryNavigation={currentView === AppView.MAP}
               unreadMessagesCount={unreadMessagesCount}
               onPendingUpdatesCountChange={setPendingUpdatesCount}
+              onboardingIntent={ONBOARDING_V2_ENABLED && !pendingSpotId && !pendingMyCarOpen ? mapOnboardingIntent : null}
+              onOnboardingIntentHandled={() => setMapOnboardingIntent(null)}
+              suppressAutoTour={ONBOARDING_V2_ENABLED}
             />
           </div>
           {currentView === AppView.MESSAGES && (
@@ -1042,6 +1115,24 @@ export default function App() {
 
     switch (currentView) {
       case AppView.ONBOARDING:
+        if (ONBOARDING_V2_ENABLED) {
+          return <OnboardingV2View
+            initialState={onboardingReturn === 'choose' ? 'choose' : 'welcome'}
+            onChooseIntent={intent => {
+              savePendingIntent(intent);
+              localStorage.setItem('hasSeenOnboarding', '1');
+              setOnboardingReturn('choose');
+              setCurrentView(AppView.CREATE_ACCOUNT);
+            }}
+            onAccount={() => {
+              clearPendingIntent();
+              localStorage.setItem('hasSeenOnboarding', '1');
+              setOnboardingReturn(null);
+              setCurrentView(AppView.CREATE_ACCOUNT);
+            }}
+            androidBackRef={onboardingAndroidBackRef as React.MutableRefObject<OnboardingV2AndroidBackHandle | null>}
+          />;
+        }
         return <OnboardingView
           onComplete={() => { localStorage.setItem('hasSeenOnboarding', '1'); setCurrentView(AppView.CREATE_ACCOUNT); }}
           androidBackRef={onboardingAndroidBackRef}
@@ -1049,6 +1140,7 @@ export default function App() {
       case AppView.CREATE_ACCOUNT:
         return <CreateAccountView
           onContinue={handleCreateAccount}
+          onBack={ONBOARDING_V2_ENABLED && onboardingReturn === 'choose' ? () => setCurrentView(AppView.ONBOARDING) : undefined}
           onOpenLegal={document => setViewWithLegalReturn(legalViewFor(document))}
         />;
       case AppView.VERIFY_PHONE:
