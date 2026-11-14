@@ -4802,14 +4802,16 @@ describe('A1 — one active incoming claim', () => {
         await seedClaimer(OTHER_UID, 'bob');
         const spotId = 'a1-15-30p-feedback-only';
         const arrivedAt = Timestamp.fromMillis(Date.now() - 60_000);
+        const startedAt = Timestamp.now();
         await seed('spots', spotId, {
             ...interestedSpot,
             status: 'occupied',
             claimState: 'arrived_pending_outcome',
             arrivedAt,
             address: 'A1 terminal',
+            claimStartedAt: startedAt,
         });
-        await seedLock(OTHER_UID, spotId);
+        await seedLock(OTHER_UID, spotId, startedAt);
         const db = otherDb();
         const feedbackId = `${spotId}_${OTHER_UID}`;
         let denied: unknown = null;
@@ -4857,14 +4859,16 @@ describe('A1 — one active incoming claim', () => {
         await seedClaimer(OTHER_UID, 'bob');
         const spotId = 'a1-15-30p-lock-delete-only';
         const arrivedAt = Timestamp.fromMillis(Date.now() - 60_000);
+        const startedAt = Timestamp.now();
         await seed('spots', spotId, {
             ...interestedSpot,
             status: 'occupied',
             claimState: 'arrived_pending_outcome',
             arrivedAt,
             address: 'A1 terminal',
+            claimStartedAt: startedAt,
         });
-        await seedLock(OTHER_UID, spotId);
+        await seedLock(OTHER_UID, spotId, startedAt);
         const db = otherDb();
         const feedbackId = `${spotId}_${OTHER_UID}`;
         let denied: unknown = null;

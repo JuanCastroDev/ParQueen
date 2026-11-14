@@ -12,6 +12,11 @@ const {
   sameFingerprint,
   legacyToken,
 } = require('./legacyClaimIdentity');
+const {
+  LOCK_MATCH,
+  classifyLockSnapshot,
+  lockConflict,
+} = require('./claimLockIdentity');
 
 // Outcome adjustment from the 29G contract:
 // stale_claim is returned only when the authenticated caller is still the
@@ -262,7 +267,22 @@ async function cancelClaim(request, deps = {}) {
       const spotSnap = await tx.get(spotRef);
       const lockSnap = await tx.get(lockRef);
       let decision = classify(uid, input, spotSnap);
-      if (decision.legacy && legacyLockConflicts(lockSnap, input.spotId, decision.fingerprint)) {
+      const spot = spotSnap.exists ? (spotSnap.data() || {}) : null;
+      const expectedClaim = decision.action === 'cancel'
+        ? (decision.legacy
+          ? { kind: 'legacy', spotId: input.spotId, claimStartedAt: decision.fingerprint }
+          : { kind: 'generation', spotId: input.spotId, claimGenerationId: spot.claimGenerationId })
+        : null;
+      const lockClassification = expectedClaim
+        ? classifyLockSnapshot(lockSnap, expectedClaim)
+        : LOCK_MATCH.MISSING;
+      if ((decision.legacy && legacyLockConflicts(lockSnap, input.spotId, decision.fingerprint))
+        || lockConflict(lockClassification)) {
+        console.error('claimLockRepairRequired', {
+          operation: 'cancel_claim',
+          classification: lockClassification,
+          claimKind: expectedClaim && expectedClaim.kind,
+        });
         decision = { action: 'return', outcome: 'stale_claim' };
       }
       let notifRef = null;
@@ -287,12 +307,18 @@ async function cancelClaim(request, deps = {}) {
       if (decision.action !== 'cancel') return { outcome: decision.outcome };
 
       const serverNow = now();
-      const spot = spotSnap.data() || {};
       const patch = { ...CLEAR_FIELDS };
       if (!isExpired(spot, serverNow)) patch.status = 'available';
       tx.update(spotRef, patch);
-      if (lockSnap.exists && lockSnap.data() && lockSnap.data().spotId === input.spotId) {
+      if (lockClassification === LOCK_MATCH.EXACT) {
         tx.delete(lockRef);
+      }
+      if (lockClassification === LOCK_MATCH.MISSING || lockClassification === LOCK_MATCH.UNRELATED_SPOT) {
+        console.warn('claimLockReconciliationNeeded', {
+          operation: 'cancel_claim',
+          classification: lockClassification,
+          claimKind: expectedClaim.kind,
+        });
       }
       if (notifRef) {
         tx.create(notifRef, {

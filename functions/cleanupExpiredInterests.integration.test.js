@@ -44,6 +44,9 @@ function headingSpot(overrides = {}) {
         reportedAt: PAST,
         expiresAt: FUTURE, // Ping itself still valid unless overridden
         interestExpiresAt: PAST, // claim expired
+        // Generationless fixtures represent the historical legacy contract;
+        // the exact timestamp is the approved claim-cycle discriminator.
+        claimStartedAt: PAST,
         ...overrides,
     };
 }

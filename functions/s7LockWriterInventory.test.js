@@ -147,9 +147,14 @@ describe('S7 lock-writer inventory (t684u)', () => {
       expect(block).toContain("claimId == 'current'");
       expect(block).toContain('request.auth.uid == userId');
       const fn = between(rules, 'function lockAgreesWithSpotAfter(data) {', '\n    }\n');
-      for (const clause of ['existsAfter(path)', "spot.status == 'interested'", 'spot.interestedUserId == request.auth.uid', 'spot.claimStartedAt == data.claimStartedAt']) {
+      for (const clause of ['existsAfter(path)', "spot.status == 'interested'", 'spot.interestedUserId == request.auth.uid']) {
         expect({ file, clause, present: fn.includes(clause) }).toEqual({ file, clause, present: true });
       }
+      const identityClause = file === 'firestore.rules'
+        ? 'lockMatchesSpotClaim(data, spot)'
+        : 'spot.claimStartedAt == data.claimStartedAt';
+      expect({ file, identityClause, present: fn.includes(identityClause) })
+        .toEqual({ file, identityClause, present: true });
     }
   });
 });

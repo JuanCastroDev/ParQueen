@@ -11,6 +11,11 @@ const {
   hasLeftoverGenerationId,
   mintClaimGenerationId,
 } = require('./claimGeneration');
+const {
+  LOCK_MATCH,
+  classifyLockSnapshot,
+  lockConflict,
+} = require('./claimLockIdentity');
 
 // One durable document per logical acquisition attempt. The id is a
 // client-generated UUID. It is not a claimGenerationId and it does not
@@ -696,10 +701,31 @@ async function revokeClaimIntent(request, deps = {}) {
         const liveOther = spot && holdsLiveClaim(spot, spot.interestedUserId) && isClaimGenerationId(spot.claimGenerationId);
         return revokeView(liveOther ? 'generation_unchanged' : 'already_resolved', input);
       }
+      const expectedClaim = {
+        kind: 'generation',
+        spotId: input.spotId,
+        claimGenerationId: generationId,
+      };
+      const lockClassification = classifyLockSnapshot(lockSnap, expectedClaim);
+      if (lockConflict(lockClassification)) {
+        console.error('claimLockRepairRequired', {
+          operation: 'revoke_claim_intent',
+          classification: lockClassification,
+          claimKind: 'generation',
+        });
+        return revokeView('generation_unchanged', input);
+      }
       const patch = { ...CLEAR_FIELDS };
       if (!(millisOf(spot.expiresAt) != null && millisOf(spot.expiresAt) <= nowMs)) patch.status = 'available';
       tx.update(spotRef, patch);
-      if (lockSnap.exists && lockSnap.data() && lockSnap.data().spotId === input.spotId) tx.delete(lockRef);
+      if (lockClassification === LOCK_MATCH.EXACT) tx.delete(lockRef);
+      if (lockClassification === LOCK_MATCH.MISSING || lockClassification === LOCK_MATCH.UNRELATED_SPOT) {
+        console.warn('claimLockReconciliationNeeded', {
+          operation: 'revoke_claim_intent',
+          classification: lockClassification,
+          claimKind: 'generation',
+        });
+      }
       if (!notifSnap.exists && typeof spot.finderId === 'string' && spot.finderId && spot.finderId !== uid) {
         tx.create(notifRef, {
           spotId: input.spotId,

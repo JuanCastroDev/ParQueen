@@ -104,7 +104,12 @@ async function seedClaim(uid, spotExtra = {}) {
     etaMinutes: 4,
     ...spotExtra,
   });
-  await db.doc(`users/${uid}/activeIncomingClaims/current`).set({ spotId, claimStartedAt, claimState: 'heading' });
+  await db.doc(`users/${uid}/activeIncomingClaims/current`).set({
+    spotId,
+    claimStartedAt,
+    claimState: 'heading',
+    claimGenerationId: 'a1'.repeat(32),
+  });
   return { spotId, finderId };
 }
 

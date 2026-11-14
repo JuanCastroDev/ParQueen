@@ -50,6 +50,12 @@ const {
 } = require('./abandonedArrivalCleanup');
 const { joinMutualSuccess } = require('./mutualSuccessJoin');
 const { releasedInterestPatch } = require('./activeIncomingClaimLogic');
+const {
+  LOCK_MATCH,
+  expectedClaimFromSpot,
+  classifyLockSnapshot,
+  lockConflict,
+} = require('./claimLockIdentity');
 const { requireCurrentAdmin, requireCurrentAuthenticatedUser } = require('./adminAuth');
 const { assertProductAccess, userRecordDenies } = require('./productAccess');
 const { cancelClaim: cancelClaimHandler } = require('./cancelClaim');
@@ -418,8 +424,29 @@ async function sweepPhantomClaims(firestoreDb, now) {
           const lockSnap = typeof holder === 'string' && holder.length > 0 && !holder.includes('/')
             ? await readActiveIncomingClaim(tx, firestoreDb, holder)
             : null;
+          const expectedClaim = expectedClaimFromSpot(d.id, fresh.data());
+          const lockClassification = expectedClaim
+            ? classifyLockSnapshot(lockSnap, expectedClaim)
+            : LOCK_MATCH.MALFORMED;
+          if (!expectedClaim || lockConflict(lockClassification)) {
+            console.error('claimLockRepairRequired', {
+              operation: 'phantom_claim_sweep',
+              classification: lockClassification,
+              claimKind: expectedClaim && expectedClaim.kind,
+            });
+            return false;
+          }
+          if (lockClassification === LOCK_MATCH.MISSING || lockClassification === LOCK_MATCH.UNRELATED_SPOT) {
+            console.warn('claimLockReconciliationNeeded', {
+              operation: 'phantom_claim_sweep',
+              classification: lockClassification,
+              claimKind: expectedClaim.kind,
+            });
+          }
           tx.update(d.ref, { ...PHANTOM_CLAIM_CLEAR_FIELDS });
-          if (lockSnap) deleteMatchingActiveIncomingClaim(tx, lockSnap, d.id);
+          if (lockClassification === LOCK_MATCH.EXACT) {
+            deleteMatchingActiveIncomingClaim(tx, lockSnap, expectedClaim);
+          }
           return true;
         });
         if (didClear) cleared++;
@@ -481,6 +508,25 @@ exports.cleanupExpiredInterests = onSchedule(
           ) return false;
 
           const lockSnap = await readActiveIncomingClaim(tx, db, spot.interestedUserId);
+          const expectedClaim = expectedClaimFromSpot(d.id, spot);
+          const lockClassification = expectedClaim
+            ? classifyLockSnapshot(lockSnap, expectedClaim)
+            : LOCK_MATCH.MALFORMED;
+          if (!expectedClaim || lockConflict(lockClassification)) {
+            console.error('claimLockRepairRequired', {
+              operation: 'expired_interest_cleanup',
+              classification: lockClassification,
+              claimKind: expectedClaim && expectedClaim.kind,
+            });
+            return false;
+          }
+          if (lockClassification === LOCK_MATCH.MISSING || lockClassification === LOCK_MATCH.UNRELATED_SPOT) {
+            console.warn('claimLockReconciliationNeeded', {
+              operation: 'expired_interest_cleanup',
+              classification: lockClassification,
+              claimKind: expectedClaim.kind,
+            });
+          }
 
           // Never reopen an already-expired Ping — only clear the stale claim.
           // Once cleared, interestExpiresAt is null, which Firestore's range
@@ -493,7 +539,9 @@ exports.cleanupExpiredInterests = onSchedule(
             ? spot.expiresAt.toMillis()
             : Number.NaN;
           tx.update(d.ref, releasedInterestPatch(expiresAtMs, now.toMillis()));
-          deleteMatchingActiveIncomingClaim(tx, lockSnap, d.id);
+          if (lockClassification === LOCK_MATCH.EXACT) {
+            deleteMatchingActiveIncomingClaim(tx, lockSnap, expectedClaim);
+          }
           return true;
         });
         if (didRelease) released++; else skipped++;
@@ -797,6 +845,25 @@ exports.processScheduledClaims = onSchedule(
           // records when this scheduler released the claim. A heading claim
           // fails the claimState == 'committed' re-check above and is left intact.
           const lockSnap = await readActiveIncomingClaim(tx, db, spot.interestedUserId);
+          const expectedClaim = expectedClaimFromSpot(d.id, spot);
+          const lockClassification = expectedClaim
+            ? classifyLockSnapshot(lockSnap, expectedClaim)
+            : LOCK_MATCH.MALFORMED;
+          if (!expectedClaim || lockConflict(lockClassification)) {
+            console.error('claimLockRepairRequired', {
+              operation: 'scheduled_claim_release',
+              classification: lockClassification,
+              claimKind: expectedClaim && expectedClaim.kind,
+            });
+            return;
+          }
+          if (lockClassification === LOCK_MATCH.MISSING || lockClassification === LOCK_MATCH.UNRELATED_SPOT) {
+            console.warn('claimLockReconciliationNeeded', {
+              operation: 'scheduled_claim_release',
+              classification: lockClassification,
+              claimKind: expectedClaim.kind,
+            });
+          }
 
           const spotExpired = spot.expiresAt && spot.expiresAt.toMillis() <= now.toMillis();
           const expiresAtMs = spot.expiresAt && typeof spot.expiresAt.toMillis === 'function'
@@ -810,7 +877,9 @@ exports.processScheduledClaims = onSchedule(
           const claimId = `claim_${stableId(d.id, snapshotGeneration(fresh), spot.interestedUserId)}`;
 
           tx.update(d.ref, clearFields);
-          deleteMatchingActiveIncomingClaim(tx, lockSnap, d.id);
+          if (lockClassification === LOCK_MATCH.EXACT) {
+            deleteMatchingActiveIncomingClaim(tx, lockSnap, expectedClaim);
+          }
 
           if (spot.interestedUserId !== spot.finderId) {
             tx.set(db.doc(`spotNotifications/released_claimer_${claimId}`), {
@@ -3995,7 +4064,24 @@ exports.updateTrustOnSpotDelete = onDocumentDeleted(
     // skipped (admin delete, natural expiry, non-interested status). A lock
     // that already points at a newer claim is left alone.
     if (typeof data.interestedUserId === 'string' && data.interestedUserId) {
-      await clearMatchingActiveIncomingClaim(db, data.interestedUserId, event.params.spotId);
+      const expectedClaim = expectedClaimFromSpot(event.params.spotId, data);
+      if (expectedClaim) {
+        const lockClassification = await clearMatchingActiveIncomingClaim(
+          db,
+          data.interestedUserId,
+          expectedClaim,
+        );
+        // A same-Ping identity conflict is not a verified finder-cancel cycle.
+        // Preserve the lock and suppress every receipt-driven trust side effect.
+        if (lockConflict(lockClassification)) return;
+      } else {
+        console.error('claimLockRepairRequired', {
+          operation: 'spot_delete',
+          classification: LOCK_MATCH.MALFORMED,
+          claimKind: null,
+        });
+        return;
+      }
     }
 
     if (data.status !== 'interested' || !data.finderId) return;
