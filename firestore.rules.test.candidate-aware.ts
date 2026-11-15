@@ -4694,7 +4694,7 @@ describe('A1 — one active incoming claim', () => {
             finderId: OWNER_UID,
             fingerprint,
             message: 'Changed my mind',
-        })).rejects.toMatchObject({ code: 'permission-denied' });
+        })).rejects.toThrow(/identity conflict/);
         expect((await readSpot('a1-cancel')).data().status).toBe('interested');
         expect((await readSpot('a1-cancel')).data().interestedUserId).toBe(OTHER_UID);
         expect((await readLock(OTHER_UID)).data().spotId).toBe('a1-cancel');
@@ -4815,14 +4815,16 @@ describe('A1 — one active incoming claim', () => {
     it('A1-15: driver terminal completion clears a leftover lock that still names the Ping', async () => {
         await seedClaimer(OTHER_UID, 'bob');
         const spotId = 'a1-terminal';
+        const startedAt = Timestamp.now();
         await seed('spots', spotId, {
             ...interestedSpot,
             status: 'occupied',
             claimState: 'arrived_pending_outcome',
             arrivedAt: Timestamp.fromMillis(Date.now() - 60_000),
             address: 'A1 terminal',
+            claimStartedAt: startedAt,
         });
-        await seedLock(OTHER_UID, spotId);
+        await seedLock(OTHER_UID, spotId, startedAt);
         const db = otherDb();
         const feedbackId = `${spotId}_${OTHER_UID}`;
         await assertSucceeds(runTransaction(db, async (tx) => {
@@ -4847,14 +4849,16 @@ describe('A1 — one active incoming claim', () => {
         await seedClaimer(OTHER_UID, 'bob');
         const spotId = 'a1-15-30p-feedback-only';
         const arrivedAt = Timestamp.fromMillis(Date.now() - 60_000);
+        const startedAt = Timestamp.now();
         await seed('spots', spotId, {
             ...interestedSpot,
             status: 'occupied',
             claimState: 'arrived_pending_outcome',
             arrivedAt,
             address: 'A1 terminal',
+            claimStartedAt: startedAt,
         });
-        await seedLock(OTHER_UID, spotId);
+        await seedLock(OTHER_UID, spotId, startedAt);
         const db = otherDb();
         const feedbackId = `${spotId}_${OTHER_UID}`;
         let denied: unknown = null;
@@ -4902,14 +4906,16 @@ describe('A1 — one active incoming claim', () => {
         await seedClaimer(OTHER_UID, 'bob');
         const spotId = 'a1-15-30p-lock-delete-only';
         const arrivedAt = Timestamp.fromMillis(Date.now() - 60_000);
+        const startedAt = Timestamp.now();
         await seed('spots', spotId, {
             ...interestedSpot,
             status: 'occupied',
             claimState: 'arrived_pending_outcome',
             arrivedAt,
             address: 'A1 terminal',
+            claimStartedAt: startedAt,
         });
-        await seedLock(OTHER_UID, spotId);
+        await seedLock(OTHER_UID, spotId, startedAt);
         const db = otherDb();
         const feedbackId = `${spotId}_${OTHER_UID}`;
         let denied: unknown = null;
@@ -4941,6 +4947,33 @@ describe('A1 — one active incoming claim', () => {
         expect(spot.data().claimState).toBe('arrived_pending_outcome');
         expect(spot.data().arrivedAt.isEqual(arrivedAt)).toBe(true);
         expect(spot.data().interestedUserId).toBe(OTHER_UID);
+    });
+
+    it('A1-F1: Rules deny deletion of a same-Ping lock from another modern generation', async () => {
+        const spotId = 'a1-f1-modern-conflict';
+        const spotGeneration = 'a'.repeat(64);
+        const lockGeneration = 'b'.repeat(64);
+        const startedAt = Timestamp.now();
+        await seed('spots', spotId, {
+            ...interestedSpot,
+            status: 'occupied',
+            claimState: 'arrived_pending_outcome',
+            claimGenerationId: spotGeneration,
+            claimStartedAt: startedAt,
+            arrivedAt: startedAt,
+        });
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            await setDoc(activeIncomingClaimRef(ctx.firestore(), OTHER_UID), {
+                spotId,
+                claimGenerationId: lockGeneration,
+                claimStartedAt: startedAt,
+                claimState: 'heading',
+                updatedAt: startedAt,
+            });
+        });
+
+        await assertFails(deleteDoc(activeIncomingClaimRef(otherDb(), OTHER_UID)));
+        expect((await readLock(OTHER_UID)).data().claimGenerationId).toBe(lockGeneration);
     });
 
     async function seedLegacyInterest(id: string, uid: string, claimStartedAt: Timestamp) {
@@ -5061,6 +5094,21 @@ describe('A1 — one active incoming claim', () => {
             keptSpotId: 'forged',
             releasedSpotIds: [],
         }));
+    });
+
+    it('F1-GATE-DORMANT: the complete dormant rollout predicate requires an explicit integer zero malformed count', () => {
+        const rules = readFileSync('firestore.rules', 'utf8');
+        const start = rules.indexOf('function activeIncomingClaimInvariantEnforced() {');
+        const end = rules.indexOf('\n    }', start);
+        expect(start).toBeGreaterThan(-1);
+        expect(end).toBeGreaterThan(start);
+        const predicate = rules.slice(start, end);
+        expect(predicate).toContain("status.get('malformedInterestedCount', null) is int");
+        expect(predicate).toContain("status.get('malformedInterestedCount', null) == 0");
+        expect(predicate).toContain('status.enforced == true');
+        expect(predicate).toContain('status.locklessCount == 0');
+        expect(predicate).toContain('status.duplicateUserCount == 0');
+        expect(predicate).toContain('status.duplicatePingCount == 0');
     });
 });
 
@@ -5414,9 +5462,12 @@ describe('B1 — durable arrived_pending_outcome', () => {
     }
 
     async function seedLock(spotId: string) {
-        const started = Timestamp.now();
         await testEnv.withSecurityRulesDisabled(async (ctx) => {
-            await setDoc(activeIncomingClaimRef(ctx.firestore(), OTHER_UID), {
+            const admin = ctx.firestore();
+            const spot = await getDoc(doc(admin, 'spots', spotId));
+            const started = spot.data()?.claimStartedAt;
+            if (!(started instanceof Timestamp)) throw new Error('seedLock requires claimStartedAt');
+            await setDoc(activeIncomingClaimRef(admin, OTHER_UID), {
                 spotId,
                 claimStartedAt: started,
                 claimState: 'heading',
