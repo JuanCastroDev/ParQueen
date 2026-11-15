@@ -63,7 +63,7 @@ async function seedLive(uid, spotId, extra = {}) {
     ...extra,
   });
   await db.collection('users').doc(uid).collection('activeIncomingClaims').doc('current').set({
-    spotId, claimStartedAt, claimState: 'heading',
+    spotId, claimStartedAt, claimState: 'heading', claimGenerationId: GEN,
   });
 }
 
@@ -194,6 +194,9 @@ describe('cancelClaim Admin SDK transaction', () => {
     expect(spot.claimGenerationId).toBe(OTHER);
     const note = await db.collection('spotNotifications').doc(`claimer_cancelled_${spotId}_${GEN}`).get();
     expect(note.exists).toBe(false);
+    await db.collection('users').doc(uid).collection('activeIncomingClaims').doc('current').update({
+      claimGenerationId: OTHER,
+    });
     await expect(invoke(uid, spotId, { claimGenerationId: OTHER })).resolves.toMatchObject({ outcome: 'cancelled' });
     expect((await db.collection('spots').doc(spotId).get()).data().claimGenerationId).toBeNull();
   });
@@ -239,6 +242,23 @@ describe('cancelClaim Admin SDK transaction', () => {
     await db.collection('users').doc(uid).collection('activeIncomingClaims').doc('current').delete();
     await expect(invoke(uid, spotId)).resolves.toMatchObject({ outcome: 'cancelled' });
     expect((await db.collection('spots').doc(spotId).get()).data().status).toBe('available');
+  });
+
+  it('F1-09: revalidates an external lock replacement before the retry commits', async () => {
+    const { uid, spotId } = ids();
+    await db.collection('users').doc(uid).set({ status: 'Active', productAccessBlocked: false });
+    await seedLive(uid, spotId);
+    const observed = { firstPlan: null };
+    const result = await invokeSecondAttempt(uid, spotId, observed, async () => {
+      await db.collection('users').doc(uid).collection('activeIncomingClaims').doc('current').update({
+        claimGenerationId: OTHER,
+      });
+    });
+    expect(observed.firstPlan).toEqual({ outcome: 'cancelled' });
+    expect(result).toEqual({ outcome: 'stale_claim' });
+    expect((await db.collection('spots').doc(spotId).get()).data().claimGenerationId).toBe(GEN);
+    expect((await db.collection('users').doc(uid).collection('activeIncomingClaims').doc('current').get()).data().claimGenerationId).toBe(OTHER);
+    expect((await db.collection('spotNotifications').where('spotId', '==', spotId).get()).empty).toBe(true);
   });
 
   it('aborts every write when the deterministic notification already exists', async () => {

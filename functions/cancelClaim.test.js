@@ -364,7 +364,7 @@ describe('cancelClaim handler', () => {
     seeded.interestedUserId = UID;
     const { run, db } = harness({
       [`spots/${SPOT}`]: { ...liveSpot(), ...seeded },
-      [`users/${UID}/activeIncomingClaims/current`]: { spotId: SPOT },
+      [`users/${UID}/activeIncomingClaims/current`]: { spotId: SPOT, claimGenerationId: GEN },
     });
     await expect(run(input())).resolves.toEqual({ outcome: 'cancelled' });
     const spot = db.docs.get(`spots/${SPOT}`);
@@ -390,6 +390,36 @@ describe('cancelClaim handler', () => {
     expect(db.docs.get(`users/other-user/activeIncomingClaims/current`).spotId).toBe(SPOT);
   });
 
+  it('F1-02/F1-03: fails closed for a same-Ping mismatched or legacy lock', async () => {
+    for (const lock of [
+      { spotId: SPOT, claimGenerationId: OTHER },
+      { spotId: SPOT, claimStartedAt: ts(FINGERPRINT) },
+    ]) {
+      const { run, db } = harness({
+        [`spots/${SPOT}`]: liveSpot(),
+        [`users/${UID}/activeIncomingClaims/current`]: lock,
+      });
+      await expect(run(input())).resolves.toEqual({ outcome: 'stale_claim' });
+      expect(db.docs.get(`spots/${SPOT}`).interestedUserId).toBe(UID);
+      expect(db.docs.get(`users/${UID}/activeIncomingClaims/current`)).toEqual(lock);
+      expect([...db.docs.keys()].some((key) => key.startsWith('spotNotifications/'))).toBe(false);
+    }
+  });
+
+  it('F1-06/F1-07: releases the verified Ping with a missing or unrelated lock without creating or deleting a lock', async () => {
+    const missing = harness({ [`spots/${SPOT}`]: liveSpot() });
+    await expect(missing.run(input())).resolves.toEqual({ outcome: 'cancelled' });
+    expect(missing.db.docs.has(`users/${UID}/activeIncomingClaims/current`)).toBe(false);
+
+    const unrelated = { spotId: 'other-spot', claimGenerationId: OTHER };
+    const other = harness({
+      [`spots/${SPOT}`]: liveSpot(),
+      [`users/${UID}/activeIncomingClaims/current`]: unrelated,
+    });
+    await expect(other.run(input())).resolves.toEqual({ outcome: 'cancelled' });
+    expect(other.db.docs.get(`users/${UID}/activeIncomingClaims/current`)).toEqual(unrelated);
+  });
+
   it('accepts a missing lock and fails closed when the notification already exists', async () => {
     const open = harness({ [`spots/${SPOT}`]: liveSpot() });
     await expect(open.run(input())).resolves.toEqual({ outcome: 'cancelled' });
@@ -398,7 +428,7 @@ describe('cancelClaim handler', () => {
     const conflict = harness({
       [`spots/${SPOT}`]: liveSpot(),
       [`spotNotifications/${id}`]: { spotId: SPOT, type: 'claimer_cancelled' },
-      [`users/${UID}/activeIncomingClaims/current`]: { spotId: SPOT },
+      [`users/${UID}/activeIncomingClaims/current`]: { spotId: SPOT, claimGenerationId: GEN },
     });
     await expect(conflict.run(input())).rejects.toMatchObject({ code: 'failed-precondition' });
     expect(conflict.db.docs.get(`spots/${SPOT}`).status).toBe('interested');

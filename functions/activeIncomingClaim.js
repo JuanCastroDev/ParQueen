@@ -12,13 +12,20 @@ const {
   CANONICAL_ACTIVE_CLAIM_RULE,
   pingHoldsActiveClaim,
   shouldGarbageCollectLock,
-  lockNamesSpot,
   planUserReconciliation,
   auditActiveClaimGroups,
   invariantMayBeEnforced,
   releasedInterestPatch,
 } = require('./activeIncomingClaimLogic');
 const { isClaimGenerationId } = require('./claimGeneration');
+const {
+  LOCK_MATCH,
+  expectedClaimFromSpot,
+  classifyLockForExpectedClaim,
+  deleteExactClaimLock,
+  lockConflict,
+} = require('./claimLockIdentity');
+const { timestampFingerprint, sameFingerprint } = require('./legacyClaimIdentity');
 
 const INTERESTED_CLAIM_PAGE_SIZE = 200;
 const MAX_INTERESTED_CLAIM_SCAN = 2000;
@@ -36,37 +43,65 @@ function readActiveIncomingClaim(tx, db, uid) {
   return tx.get(activeIncomingClaimRef(db, uid));
 }
 
-/** Admin SDK snapshots: `exists` is a boolean. No-op unless the lock names this Ping. */
-function deleteMatchingActiveIncomingClaim(tx, lockSnap, spotId) {
-  if (!lockSnap || !lockSnap.exists) return false;
-  const data = lockSnap.data() || {};
-  if (!lockNamesSpot(data, spotId)) return false;
-  tx.delete(lockSnap.ref);
-  return true;
+/** Delete only a lock proven to name the exact claim cycle being released. */
+function deleteMatchingActiveIncomingClaim(tx, lockSnap, expectedClaim) {
+  return deleteExactClaimLock(tx, lockSnap, expectedClaim);
 }
 
 /**
  * Standalone clear used by spot-delete handling (not inside another transaction).
  * Deletes the lock only when it still names the deleted Ping.
  */
-async function clearMatchingActiveIncomingClaim(db, uid, spotId) {
-  if (typeof uid !== 'string' || uid.length === 0) return false;
-  if (typeof spotId !== 'string' || spotId.length === 0) return false;
+async function clearMatchingActiveIncomingClaim(db, uid, expectedClaim) {
+  if (typeof uid !== 'string' || uid.length === 0) return LOCK_MATCH.MALFORMED;
+  if (!expectedClaim || typeof expectedClaim.spotId !== 'string' || !expectedClaim.spotId) {
+    return LOCK_MATCH.MALFORMED;
+  }
   const ref = activeIncomingClaimRef(db, uid);
   return db.runTransaction(async (tx) => {
     const lockSnap = await tx.get(ref);
-    return deleteMatchingActiveIncomingClaim(tx, lockSnap, spotId);
+    const result = deleteMatchingActiveIncomingClaim(tx, lockSnap, expectedClaim);
+    if (lockConflict(result)) {
+      console.error('activeClaimLockRepairRequired', {
+        operation: 'spot_delete',
+        classification: result,
+        claimKind: expectedClaim.kind,
+      });
+    } else if (result === LOCK_MATCH.MISSING || result === LOCK_MATCH.UNRELATED_SPOT) {
+      console.warn('activeClaimLockReconciliationNeeded', {
+        operation: 'spot_delete',
+        classification: result,
+        claimKind: expectedClaim.kind,
+      });
+    }
+    return result;
   });
 }
 
 function claimStateForLock(spot) {
-  return spot && spot.claimState === 'committed' ? 'committed' : 'heading';
+  if (!spot || (spot.claimState !== 'committed' && spot.claimState !== 'heading')) return null;
+  return spot.claimState;
 }
 
-function claimStartedAtForLock(spot, now) {
+function claimStartedAtForLock(spot) {
   const started = spot && spot.claimStartedAt;
-  if (started && typeof started.toMillis === 'function') return started;
-  return now;
+  return timestampFingerprint(started) ? started : null;
+}
+
+/** Reconciliation requires a canonical lock shape, not merely release identity. */
+function classifyCanonicalLock(lock, spotId, spot) {
+  const canonicalClaimState = claimStateForLock(spot);
+  const expectedClaim = expectedClaimFromSpot(spotId, spot);
+  const spotStartedAt = timestampFingerprint(spot && spot.claimStartedAt);
+  if (!canonicalClaimState || !expectedClaim || !spotStartedAt) return LOCK_MATCH.MALFORMED;
+  const identityResult = classifyLockForExpectedClaim(lock, expectedClaim);
+  if (identityResult !== LOCK_MATCH.EXACT) return identityResult;
+  const lockStartedAt = timestampFingerprint(lock && lock.claimStartedAt);
+  if (!lockStartedAt) return LOCK_MATCH.MALFORMED;
+  if (!sameFingerprint(lockStartedAt, spotStartedAt)) return LOCK_MATCH.SAME_SPOT_CONFLICT;
+  return lock.claimState === canonicalClaimState
+    ? LOCK_MATCH.EXACT
+    : LOCK_MATCH.SAME_SPOT_CONFLICT;
 }
 
 /**
@@ -156,14 +191,13 @@ async function loadInterestedSpotDocs(db) {
   return { docs, complete: false };
 }
 
-async function readLockSpotIds(db, uids) {
+async function readActiveLocks(db, uids) {
   const locks = new Map();
   for (let i = 0; i < uids.length; i += 100) {
     const chunk = uids.slice(i, i + 100);
     const snaps = await db.getAll(...chunk.map((uid) => activeIncomingClaimRef(db, uid)));
     snaps.forEach((snap, idx) => {
-      const spotId = snap.exists ? (snap.data() || {}).spotId : null;
-      locks.set(chunk[idx], typeof spotId === 'string' ? spotId : null);
+      locks.set(chunk[idx], snap.exists ? (snap.data() || {}) : null);
     });
   }
   return locks;
@@ -173,33 +207,53 @@ async function scanInterestedClaims(db) {
   const loaded = await loadInterestedSpotDocs(db);
   if (!loaded.complete) return { scanComplete: false, groups: [], audit: null };
   const byUser = new Map();
+  let malformedInterestedCount = 0;
   for (const spotDoc of loaded.docs) {
     const data = spotDoc.data() || {};
     const uid = data.interestedUserId;
-    if (typeof uid !== 'string' || uid.length === 0 || uid.includes('/')) continue;
+    if (typeof uid !== 'string' || uid.length === 0 || uid.includes('/')) {
+      malformedInterestedCount++;
+      continue;
+    }
+    if (!claimStateForLock(data)
+      || !expectedClaimFromSpot(spotDoc.id, data)
+      || !timestampFingerprint(data.claimStartedAt)) {
+      malformedInterestedCount++;
+    }
     if (!byUser.has(uid)) byUser.set(uid, []);
     byUser.get(uid).push({
       spotId: spotDoc.id,
       ref: spotDoc.ref,
       claimStartedAtMs: millisOf(data.claimStartedAt),
       expiresAtMs: millisOf(data.expiresAt),
+      spot: data,
     });
   }
   const uids = [...byUser.keys()];
-  const locks = await readLockSpotIds(db, uids);
+  if (malformedInterestedCount > 0) {
+    console.error('activeIncomingClaims: malformed interested Ping records', {
+      operation: 'active_claim_scan',
+      classification: LOCK_MATCH.MALFORMED,
+      count: malformedInterestedCount,
+    });
+  }
+  const locks = await readActiveLocks(db, uids);
   const groups = uids.map((uid) => {
     const claims = byUser.get(uid);
+    const lock = locks.has(uid) ? locks.get(uid) : null;
     return {
       uid,
       claims,
       spotIds: claims.map((claim) => claim.spotId),
-      lockSpotId: locks.has(uid) ? locks.get(uid) : null,
+      canonicalSpotIds: claims
+        .filter((claim) => classifyCanonicalLock(lock, claim.spotId, claim.spot) === LOCK_MATCH.EXACT)
+        .map((claim) => claim.spotId),
     };
   });
   return {
     scanComplete: true,
     groups,
-    audit: auditActiveClaimGroups(groups),
+    audit: auditActiveClaimGroups(groups, malformedInterestedCount),
   };
 }
 
@@ -209,13 +263,7 @@ function generationForLock(spot) {
 }
 
 function lockAlreadyCanonical(existing, keep) {
-  if (!existing || existing.spotId !== keep.spotId) return false;
-  if (existing.claimState !== claimStateForLock(keep.spot)) return false;
-  const lockGeneration = isClaimGenerationId(existing.claimGenerationId) ? existing.claimGenerationId : null;
-  if (lockGeneration !== generationForLock(keep.spot)) return false;
-  const pingStarted = millisOf(keep.spot && keep.spot.claimStartedAt);
-  if (Number.isFinite(pingStarted)) return millisOf(existing.claimStartedAt) === pingStarted;
-  return Number.isFinite(millisOf(existing.claimStartedAt));
+  return classifyCanonicalLock(existing, keep.spotId, keep.spot) === LOCK_MATCH.EXACT;
 }
 
 async function reconcileUserClaims(db, uid, claims, now) {
@@ -227,18 +275,37 @@ async function reconcileUserClaims(db, uid, claims, now) {
       if (!snap.exists) continue;
       const spot = snap.data() || {};
       if (!pingHoldsActiveClaim(spot, uid)) continue;
+      const expectedClaim = expectedClaimFromSpot(snap.id, spot);
+      const claimStartedAt = claimStartedAtForLock(spot);
+      const claimState = claimStateForLock(spot);
+      if (!expectedClaim || !claimStartedAt || !claimState) {
+        console.error('activeClaimReconciliationBlocked', {
+          operation: 'active_claim_reconciliation',
+          classification: LOCK_MATCH.MALFORMED,
+          claimKind: expectedClaim && expectedClaim.kind,
+        });
+        return {
+          locksEstablished: 0,
+          duplicatesReleased: 0,
+          conflictsReported: 0,
+          reconcileErrors: 1,
+        };
+      }
       live.push({
         spotId: snap.id,
         ref: snap.ref,
         claimStartedAtMs: millisOf(spot.claimStartedAt),
         expiresAtMs: millisOf(spot.expiresAt),
         spot,
+        expectedClaim,
+        claimStartedAt,
+        claimState,
       });
     }
     const lockRef = activeIncomingClaimRef(db, uid);
     const lockSnap = await tx.get(lockRef);
     if (live.length === 0) {
-      return { locksEstablished: 0, duplicatesReleased: 0, conflictsReported: 0 };
+      return { locksEstablished: 0, duplicatesReleased: 0, conflictsReported: 0, reconcileErrors: 0 };
     }
     const plan = planUserReconciliation(live);
     const keep = plan.keep;
@@ -251,8 +318,8 @@ async function reconcileUserClaims(db, uid, claims, now) {
       const keptGeneration = generationForLock(keep.spot);
       tx.set(lockRef, {
         spotId: keep.spotId,
-        claimStartedAt: claimStartedAtForLock(keep.spot, now),
-        claimState: claimStateForLock(keep.spot),
+        claimStartedAt: keep.claimStartedAt,
+        claimState: keep.claimState,
         updatedAt: now,
         ...(keptGeneration ? { claimGenerationId: keptGeneration } : {}),
       });
@@ -273,6 +340,7 @@ async function reconcileUserClaims(db, uid, claims, now) {
       locksEstablished,
       duplicatesReleased: plan.release.length,
       conflictsReported,
+      reconcileErrors: 0,
     };
   });
 }
@@ -284,6 +352,7 @@ async function writeRolloutStatus(db, audit, extra, now) {
     duplicateUserCount: audit.duplicateUserCount,
     duplicatePingCount: audit.duplicatePingCount,
     interestedWithClaimerCount: audit.interestedWithClaimerCount,
+    malformedInterestedCount: audit.malformedInterestedCount,
     canonicalRule: CANONICAL_ACTIVE_CLAIM_RULE,
     reconciledAt: now,
     locksEstablished: extra.locksEstablished || 0,
@@ -292,6 +361,20 @@ async function writeRolloutStatus(db, audit, extra, now) {
     reconcileErrors: extra.reconcileErrors || 0,
     phase: extra.phase,
   });
+}
+
+async function writeIncompleteRolloutStatus(db, now, phase, reconcileErrors = 1) {
+  await writeRolloutStatus(db, {
+    locklessCount: null,
+    duplicateUserCount: null,
+    duplicatePingCount: null,
+    interestedWithClaimerCount: null,
+    malformedInterestedCount: null,
+  }, {
+    enforced: false,
+    phase,
+    reconcileErrors,
+  }, now);
 }
 
 /**
@@ -311,18 +394,20 @@ async function writeRolloutStatus(db, audit, extra, now) {
 async function reconcileActiveIncomingClaims(db, now) {
   const pre = await scanInterestedClaims(db);
   if (!pre.scanComplete) {
-    console.error('activeIncomingClaims: interested scan incomplete; rollout gate unchanged');
+    console.error('activeIncomingClaims: interested scan incomplete; rollout gate closed');
+    await writeIncompleteRolloutStatus(db, now, 'incomplete_pre_scan');
     return {
       scanComplete: false,
-      enforced: null,
+      enforced: false,
       locklessCount: null,
       duplicateUserCount: null,
       duplicatePingCount: null,
       interestedWithClaimerCount: null,
+      malformedInterestedCount: null,
       locksEstablished: 0,
       duplicatesReleased: 0,
       conflictsReported: 0,
-      reconcileErrors: 0,
+      reconcileErrors: 1,
     };
   }
 
@@ -358,6 +443,7 @@ async function reconcileActiveIncomingClaims(db, now) {
       locksEstablished += result.locksEstablished;
       duplicatesReleased += result.duplicatesReleased;
       conflictsReported += result.conflictsReported;
+      reconcileErrors += result.reconcileErrors || 0;
     } catch (e) {
       reconcileErrors++;
       console.error(
@@ -371,6 +457,7 @@ async function reconcileActiveIncomingClaims(db, now) {
   const post = await scanInterestedClaims(db);
   if (!post.scanComplete) {
     console.error('activeIncomingClaims: post-repair scan incomplete; rollout gate left closed');
+    await writeIncompleteRolloutStatus(db, now, 'incomplete_post_scan', reconcileErrors + 1);
     return {
       scanComplete: false,
       enforced: false,
@@ -378,10 +465,11 @@ async function reconcileActiveIncomingClaims(db, now) {
       duplicateUserCount: null,
       duplicatePingCount: null,
       interestedWithClaimerCount: null,
+      malformedInterestedCount: null,
       locksEstablished,
       duplicatesReleased,
       conflictsReported,
-      reconcileErrors,
+      reconcileErrors: reconcileErrors + 1,
     };
   }
 
@@ -414,6 +502,7 @@ async function auditActiveIncomingClaims(db) {
       duplicateUserCount: null,
       duplicatePingCount: null,
       interestedWithClaimerCount: null,
+      malformedInterestedCount: null,
     };
   }
   return { scanComplete: true, ...scan.audit };

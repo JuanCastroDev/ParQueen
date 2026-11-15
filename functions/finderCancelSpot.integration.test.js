@@ -98,6 +98,20 @@ describe('finderCancelSpot emulator transactions', () => {
     expect((await lockOf('claimer-1')).claimGenerationId).toBe(G2);
   });
 
+  it('F1-02: preserves a same-Ping lock from a different generation without a receipt', async () => {
+    const spotId = ids();
+    await seed(spotId);
+    await db.collection('users').doc('claimer-1').collection('activeIncomingClaims').doc('current').update({
+      claimGenerationId: G2,
+    });
+
+    expect(await invoke(spotId)).toEqual({ outcome: 'unproven_identity' });
+    expect((await spotOf(spotId)).claimGenerationId).toBe(G1);
+    expect((await lockOf('claimer-1')).claimGenerationId).toBe(G2);
+    expect((await db.collection('finderCancelReceipts').where('spotId', '==', spotId).get()).empty).toBe(true);
+    expect((await db.collection('spotNotifications').where('spotId', '==', spotId).get()).empty).toBe(true);
+  });
+
   it('overlaps two real cancellation transactions without deleting twice', async () => {
     const spotId = ids();
     await seed(spotId);
