@@ -332,29 +332,33 @@ describe('T5 suspension and in-flight races vs head callables', () => {
       expect(await noticeCount(row.s2)).toBe(0);
     });
 
-    it(`CHARACTERIZATION T5-C1-${label}: revokeClaimIntent releases a live callable claim and notifies the finder`, async () => {
+    // S7 D5a (t721u): the founder approved denying restricted callers' revoke.
+    // T5-C1/T5-C2 characterized the pre-D5a behavior (t674u: release with a
+    // finder notice; revoked tombstone for an absent attempt). They now
+    // characterize the approved behavior: the same denial, with no write.
+    it(`CHARACTERIZATION T5-C1-${label}: revokeClaimIntent of a live callable claim is denied with no release and no notice (D5a)`, async () => {
       const row = ids(`t5c1${label}`);
       await seedUsers(row);
       await db.collection('spots').doc(row.s1).set(available(row.finder));
       const claimed = await claimThroughCallables(row.a, row.s1, row.attempt);
       expect(claimed.outcome).toBe('claimed');
       await db.collection('users').doc(row.a).set(profile(patch));
-      const result = await revokeClaimIntent(claimReq(row.a, row.s1, row.attempt), deps());
-      expect(result.outcome).toBe('released');
-      expect((await spotData(row.s1)).status).toBe('available');
-      expect(await noticeCount(row.s1)).toBe(1);
+      await expect(revokeClaimIntent(claimReq(row.a, row.s1, row.attempt), deps())).rejects.toMatchObject({ code: 'permission-denied' });
+      expect((await spotData(row.s1)).interestedUserId).toBe(row.a);
+      expect(await noticeCount(row.s1)).toBe(0);
     });
 
-    it(`CHARACTERIZATION T5-C2-${label}: revokeClaimIntent writes a revoked tombstone for an absent attempt`, async () => {
+    it(`CHARACTERIZATION T5-C2-${label}: revokeClaimIntent writes no tombstone for an absent attempt (D5a)`, async () => {
       const row = ids(`t5c2${label}`);
       await seedUsers(row, profile(patch));
       await db.collection('spots').doc(row.s1).set(available(row.finder));
-      const result = await revokeClaimIntent(claimReq(row.a, row.s1, row.attempt), deps());
-      expect(result.outcome).toBe('revoked');
-      expect((await db.collection(ATTEMPT_COLLECTION).doc(row.attempt).get()).data().state).toBe('revoked');
+      await expect(revokeClaimIntent(claimReq(row.a, row.s1, row.attempt), deps())).rejects.toMatchObject({ code: 'permission-denied' });
+      expect((await db.collection(ATTEMPT_COLLECTION).doc(row.attempt).get()).exists).toBe(false);
     });
 
-    itExpectedUnsafe(`GAP[T5-G1-${label}] revokeClaimIntent applies the same suspension denial as cancelClaim (founder policy decision pending)`, async () => {
+    // Closed by S7 D5a (t721u). Per this file's protocol the it.fails became a
+    // plain it; the title and the assertion are unchanged.
+    it(`GAP[T5-G1-${label}] revokeClaimIntent applies the same suspension denial as cancelClaim (founder policy decision pending)`, async () => {
       const row = ids(`t5g1${label}`);
       await seedUsers(row);
       await db.collection('spots').doc(row.s1).set(available(row.finder));

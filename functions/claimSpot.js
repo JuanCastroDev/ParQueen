@@ -648,6 +648,10 @@ async function revokeClaimIntent(request, deps = {}) {
       const lockRef = userRef.collection('activeIncomingClaims').doc('current');
       const attemptSnap = await tx.get(attemptRef);
       const counterSnap = await tx.get(counterRef);
+      // S7 D5a (t721u): the profile is read inside the transaction, before
+      // the lifecycle read, so a suspension that commits after this read is
+      // serialized like cancelClaim (retry rereads it and denies).
+      const userSnap = await tx.get(userRef);
       const createdAt = now();
       const nowMs = millisOf(createdAt);
       if (nowMs == null) throw new HttpsError('internal', FAILURE);
@@ -662,6 +666,12 @@ async function revokeClaimIntent(request, deps = {}) {
         await afterLifecycleRead(revokeLife);
       }
       throwIfDeleting(revokeLife);
+      // S7 D5a (t721u): a suspended or product-blocked caller is denied every
+      // revoke outcome with no write (no tombstone, release, lock or notice),
+      // the same boundary as cancelClaim. Expiry cleanup releases their claims.
+      if (userSnap.exists && userRecordDenies(userSnap.data())) {
+        throw new HttpsError('permission-denied', PRODUCT_ACCESS_DENIED);
+      }
 
       if (!attemptSnap.exists) {
         const record = attemptRecord(input, uid, 'revoked', null, createdAt);
