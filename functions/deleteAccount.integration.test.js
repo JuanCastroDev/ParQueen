@@ -366,6 +366,19 @@ describe('deleteAccount — Functions emulator integration', () => {
             interestedUserVehicleBrand: 'Honda',
             interestedUserTitle: 'Newcomer',
             status: 'interested',
+            // Rules require a timestamp expiresAt on every Ping; a live claim
+            // on an unexpired Ping is reopened (S4 t695u).
+            expiresAt: Timestamp.fromMillis(Date.now() + 30 * 60_000),
+        });
+
+        // Malformed legacy row with no readable expiresAt: identity removed,
+        // claim cleared, but never reopened (fail closed, S4 t695u).
+        const claimNoExpiryRef = db.collection('spots').doc();
+        await claimNoExpiryRef.set({
+            interestedUserId: uid,
+            interestedUserName: 'Test',
+            status: 'interested',
+            claimState: 'heading',
         });
 
         const chatRef = db.collection('chats').doc();
@@ -406,6 +419,16 @@ describe('deleteAccount — Functions emulator integration', () => {
         expect(claim?.interestedUserId).toBeUndefined();
         expect(claim?.interestedUserName).toBeUndefined();
         expect(claim?.status).toBe('available');
+
+        const claimNoExpiry = (await claimNoExpiryRef.get()).data();
+        expect(claimNoExpiry?.interestedUserId).toBeUndefined();
+        expect(claimNoExpiry?.interestedUserName).toBeUndefined();
+        expect(claimNoExpiry?.claimState).toBeNull();
+        expect(claimNoExpiry?.status).toBe('interested');
+        // Policy N (t699u): expiry normalized to the commit's server time with audit markers.
+        expect(claimNoExpiry?.expiresAt).toBeInstanceOf(Timestamp);
+        expect(claimNoExpiry?.expiresAt.isEqual(claimNoExpiry?.expiryRepairedAt)).toBe(true);
+        expect(claimNoExpiry?.expiryRepairReason).toBe('deleted_claimer_malformed_expiry');
 
         const report = (await reportRef.get()).data();
         expect(report?.reporterId).toBe('[deleted]');
