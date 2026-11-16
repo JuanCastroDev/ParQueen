@@ -44,6 +44,30 @@ describe('rollback flag', () => {
   });
 });
 
+describe('authenticated Android-only founder preview', () => {
+  it('requires both an explicit build flag and the native Android runtime', () => {
+    const preview = read('utils/onboardingPreview.ts');
+    expect(preview).toContain("import.meta.env.VITE_OBV2_PREVIEW === '1'");
+    expect(preview).toContain('Capacitor.isNativePlatform()');
+    expect(preview).toContain("Capacitor.getPlatform() === 'android'");
+    expect(preview).toContain('export const ONBOARDING_V2_ANDROID_PREVIEW_ENABLED: boolean =');
+    expect(preview).toContain('ONBOARDING_V2_ENABLED &&');
+    expect(app).toContain('onPreviewOnboarding={ONBOARDING_V2_ANDROID_PREVIEW_ENABLED && user?.id ? () => setPreviewOnboarding(true) : undefined}');
+    const settings = read('views/SettingsView.tsx');
+    expect(settings).toContain('{onPreviewOnboarding && (');
+    expect(settings).toContain('data-testid="settings-preview-onboarding"');
+  });
+
+  it('exits instead of calling signup, saving an intention, or publishing a Ping', () => {
+    const preview = between(app, 'if (previewOnboarding && ONBOARDING_V2_ANDROID_PREVIEW_ENABLED', '// MAP and MESSAGES share the same MapView');
+    expect(preview).toContain('onChooseIntent={() => setPreviewOnboarding(false)}');
+    expect(preview).toContain('onAccount={() => setPreviewOnboarding(false)}');
+    expect(preview).toContain("onClick={() => setPreviewOnboarding(false)}");
+    expect(preview).not.toMatch(/savePendingIntent|localStorage|setCurrentView|addDoc|setDoc|httpsCallable|publish/i);
+    expect(app).toContain('if (state.previewOnboarding && state.currentView === AppView.SETTINGS)');
+  });
+});
+
 describe('signup with Onboarding 2.0', () => {
   it('skips the mandatory vehicle step and keeps username ownership on the server', () => {
     const nameComplete = between(app, 'const handleNameComplete', 'const handleSaveProfile');

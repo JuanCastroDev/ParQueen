@@ -22,6 +22,7 @@ interface SettingsViewProps {
     onBack: () => void;
     onLogout: () => void;
     onDeleteAccount: () => void;
+    onPreviewOnboarding?: () => void;
     theme: string;
     toggleTheme: () => void;
     permissionState?: LocationPermissionState;
@@ -55,7 +56,7 @@ const RowBody = ({ icon, title, detail, trailing, tone = 'primary' }: {
 
 const Chevron = () => <ChevronRight size={17} className="pq-row-chevron shrink-0" aria-hidden="true" />;
 
-export const SettingsView: React.FC<SettingsViewProps> = ({ user, setView, onBack, onLogout, onDeleteAccount, theme, toggleTheme, permissionState, notificationRuntime }) => {
+export const SettingsView: React.FC<SettingsViewProps> = ({ user, setView, onBack, onLogout, onDeleteAccount, onPreviewOnboarding, theme, toggleTheme, permissionState, notificationRuntime }) => {
     useLang();
     const [emailStep, setEmailStep] = useState<'view' | 'input' | 'otp'>('view');
     const [emailDraft, setEmailDraft] = useState(user?.email || '');
@@ -336,6 +337,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user, setView, onBac
                         >
                             <RowBody tone="quiet" icon={<Play size={16} />} title={t('tour.replay_label')} detail={t('tour.replay_subtitle')} trailing={<Chevron />} />
                         </button>
+                        {onPreviewOnboarding && (
+                            <button type="button" data-testid="settings-preview-onboarding" onClick={onPreviewOnboarding} className={`${rowClass} px-1`}>
+                                <RowBody tone="quiet" icon={<Play size={16} />} title={t('settings.onboarding_preview')} detail={t('settings.onboarding_preview_subtitle')} trailing={<Chevron />} />
+                            </button>
+                        )}
                         <button onClick={handleShare} className={`${rowClass} px-1`}>
                             <RowBody tone="quiet" icon={<Share2 size={16} />} title={t('settings.share_parqueen')} detail={t('settings.share_subtitle')} />
                         </button>
