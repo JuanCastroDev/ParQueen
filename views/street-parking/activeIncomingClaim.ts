@@ -1,4 +1,5 @@
 import { doc, runTransaction, Timestamp } from 'firebase/firestore';
+import { isClaimGenerationId } from './claimIdentity';
 
 type Firestore = any;
 
@@ -11,15 +12,74 @@ export function activeIncomingClaimRef(db: Firestore, uid: string) {
     return doc(db, 'users', uid, ACTIVE_INCOMING_CLAIM_COLLECTION, ACTIVE_INCOMING_CLAIM_DOC_ID);
 }
 
+export type ClaimLockIdentityOutcome = 'exact' | 'missing' | 'unrelated' | 'conflict' | 'malformed';
+
+function timestampParts(value: unknown): { seconds: number; nanoseconds: number } | null {
+    if (!value || typeof value !== 'object') return null;
+    const stamp = value as Timestamp & { constructor?: { name?: string } };
+    const hasSdkContract = stamp.constructor?.name === 'Timestamp'
+        && typeof stamp.toDate === 'function'
+        && typeof stamp.toMillis === 'function'
+        && typeof stamp.isEqual === 'function'
+        && typeof stamp.valueOf === 'function';
+    if (!(value instanceof Timestamp) && !hasSdkContract) return null;
+    if (!Number.isSafeInteger(stamp.seconds)
+        || !Number.isInteger(stamp.nanoseconds)
+        || stamp.nanoseconds < 0
+        || stamp.nanoseconds > 999_999_999) return null;
+    return { seconds: stamp.seconds, nanoseconds: stamp.nanoseconds };
+}
+
+/** Classifies a lock only against identity read from its authoritative Ping. */
+export function classifyClaimLockIdentity(
+    lockSnap: { exists: () => boolean; data: () => any },
+    spotId: string,
+    spot: Record<string, any>,
+): ClaimLockIdentityOutcome {
+    if (!lockSnap.exists()) return 'missing';
+    const lock = lockSnap.data();
+    if (!lock || typeof lock !== 'object') return 'malformed';
+    if (typeof lock.spotId !== 'string' || lock.spotId.length === 0) return 'malformed';
+    if (lock.spotId !== spotId) return 'unrelated';
+
+    const spotGeneration = spot.claimGenerationId;
+    const lockGeneration = lock.claimGenerationId;
+    if (spotGeneration != null) {
+        if (!isClaimGenerationId(spotGeneration) || !isClaimGenerationId(lockGeneration)) {
+            return 'malformed';
+        }
+        return lockGeneration === spotGeneration ? 'exact' : 'conflict';
+    }
+    if (lockGeneration != null) {
+        return isClaimGenerationId(lockGeneration) ? 'conflict' : 'malformed';
+    }
+
+    const spotStartedAt = timestampParts(spot.claimStartedAt);
+    const lockStartedAt = timestampParts(lock.claimStartedAt);
+    if (!spotStartedAt || !lockStartedAt) return 'malformed';
+    return spotStartedAt.seconds === lockStartedAt.seconds
+        && spotStartedAt.nanoseconds === lockStartedAt.nanoseconds
+        ? 'exact'
+        : 'conflict';
+}
+
 export function deleteLockIfNamesSpot(
     tx: { delete: (ref: any) => void },
     lockSnap: { exists: () => boolean; data: () => any },
     lockRef: any,
     spotId: string,
+    spot?: Record<string, any>,
 ) {
-    if (lockSnap.exists() && lockSnap.data()?.spotId === spotId) {
-        tx.delete(lockRef);
+    // A caller without the authoritative Ping identity cannot prove deletion.
+    // This keeps the dormant pre-callable cancellation path fail-closed.
+    const outcome = spot
+        ? classifyClaimLockIdentity(lockSnap, spotId, spot)
+        : (lockSnap.exists() && lockSnap.data()?.spotId === spotId ? 'malformed' : 'unrelated');
+    if (outcome === 'conflict' || outcome === 'malformed') {
+        throw new Error('Claim lock identity conflict');
     }
+    if (outcome === 'exact') tx.delete(lockRef);
+    return outcome;
 }
 
 export interface AcquireActiveIncomingClaimParams {
@@ -69,6 +129,9 @@ export async function acquireActiveIncomingClaim(
             // Same client timestamp as the fingerprint. Rules bound it to a
             // short window around request.time so a lock cannot hide from GC.
             updatedAt: claimStartedAt,
+            ...(isClaimGenerationId(fields.claimGenerationId)
+                ? { claimGenerationId: fields.claimGenerationId }
+                : {}),
         });
         return 'claimed';
     });
@@ -98,7 +161,7 @@ export async function markClaimArrived(db: Firestore, spotId: string, uid: strin
         const alreadyArrived = spot.status === 'occupied'
             && spot.claimState === 'arrived_pending_outcome';
         if (alreadyArrived) {
-            deleteLockIfNamesSpot(tx, lockSnap, lockRef, spotId);
+            deleteLockIfNamesSpot(tx, lockSnap, lockRef, spotId, spot);
             return;
         }
 
@@ -108,12 +171,12 @@ export async function markClaimArrived(db: Firestore, spotId: string, uid: strin
                 claimState: 'arrived_pending_outcome',
                 arrivedAt: Timestamp.now(),
             });
-            deleteLockIfNamesSpot(tx, lockSnap, lockRef, spotId);
+            deleteLockIfNamesSpot(tx, lockSnap, lockRef, spotId, spot);
             return;
         }
 
         if (spot.status === 'occupied') {
-            deleteLockIfNamesSpot(tx, lockSnap, lockRef, spotId);
+            deleteLockIfNamesSpot(tx, lockSnap, lockRef, spotId, spot);
             return;
         }
 

@@ -128,15 +128,16 @@ describe('active incoming claim lock logic', () => {
 
   it('counts lockless interested Pings and duplicate uids separately', () => {
     const audit = auditActiveClaimGroups([
-      { spotIds: ['only'], lockSpotId: null },
-      { spotIds: ['kept', 'extra'], lockSpotId: 'kept' },
-      { spotIds: ['ready'], lockSpotId: 'ready' },
-    ]);
+      { spotIds: ['only'], canonicalSpotIds: [] },
+      { spotIds: ['kept', 'extra'], canonicalSpotIds: ['kept'] },
+      { spotIds: ['ready'], canonicalSpotIds: ['ready'] },
+    ], 0);
     expect(audit).toEqual({
       locklessCount: 2,
       duplicateUserCount: 1,
       duplicatePingCount: 1,
       interestedWithClaimerCount: 4,
+      malformedInterestedCount: 0,
     });
     expect(invariantMayBeEnforced({ scanComplete: true, ...audit })).toBe(false);
     expect(invariantMayBeEnforced({
@@ -144,6 +145,7 @@ describe('active incoming claim lock logic', () => {
       locklessCount: 0,
       duplicateUserCount: 0,
       duplicatePingCount: 0,
+      malformedInterestedCount: 0,
     })).toBe(true);
     expect(invariantMayBeEnforced({
       scanComplete: false,
@@ -151,6 +153,36 @@ describe('active incoming claim lock logic', () => {
       duplicateUserCount: 0,
       duplicatePingCount: 0,
     })).toBe(false);
+  });
+
+  it('F1-MAL: malformed evidence is required and prevents rollout enforcement', () => {
+    expect(invariantMayBeEnforced({
+      scanComplete: true,
+      locklessCount: 0,
+      duplicateUserCount: 0,
+      duplicatePingCount: 0,
+    })).toBe(false);
+    expect(invariantMayBeEnforced({
+      scanComplete: true,
+      locklessCount: 0,
+      duplicateUserCount: 0,
+      duplicatePingCount: 0,
+      malformedInterestedCount: 1,
+    })).toBe(false);
+  });
+
+  it('F1-REC-01: a same-Ping lock is not canonical unless the exact claim identity was verified', () => {
+    const audit = auditActiveClaimGroups([
+      { spotIds: ['spot-a'], canonicalSpotIds: [] },
+    ], 0);
+    expect(audit.locklessCount).toBe(1);
+    expect(invariantMayBeEnforced({ scanComplete: true, ...audit })).toBe(false);
+  });
+
+  it('fails closed when canonical identity results are missing from an audit group', () => {
+    const audit = auditActiveClaimGroups([{ spotIds: ['spot-a'] }], 0);
+    expect(audit.locklessCount).toBe(1);
+    expect(invariantMayBeEnforced({ scanComplete: true, ...audit })).toBe(false);
   });
 
   it('releases a duplicate without reopening an already-expired Ping', () => {

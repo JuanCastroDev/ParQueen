@@ -24,11 +24,21 @@
 
 const { FieldValue, Timestamp } = require('firebase-admin/firestore');
 const { readActiveIncomingClaim, deleteMatchingActiveIncomingClaim } = require('./activeIncomingClaim');
+const {
+  LOCK_MATCH,
+  expectedClaimFromSpot,
+  classifyLockSnapshot,
+  lockConflict,
+} = require('./claimLockIdentity');
+const { isClaimGenerationId } = require('./claimGeneration');
+const { timestampFingerprint } = require('./legacyClaimIdentity');
 
 const RELEASE_PAGE_SIZE = 200;
 const RELEASE_CONCURRENCY = 10;
 const MAX_RELEASE_PAGES = 1000;
 const EXPIRY_REPAIR_REASON = 'deleted_claimer_malformed_expiry';
+const DELETION_JOB_LEASE_MS = 10 * 60 * 1000;
+const H1_ACTIVE_STATES = new Set([undefined, null, 'heading', 'committed', 'en_route']);
 
 const ACTIVE_CLAIM_CLEAR = Object.freeze({
   claimState: null,
@@ -70,6 +80,75 @@ function validUid(uid) {
   return typeof uid === 'string' && uid.length > 0 && !uid.includes('/');
 }
 
+function reportLockClassification(level, classification, claimKind) {
+  const event = level === 'error'
+    ? 'activeClaimLockRepairRequired'
+    : 'activeClaimLockReconciliationNeeded';
+  console[level](event, {
+    operation: 'deleted_user_claim_release',
+    classification,
+    claimKind: claimKind || 'unprovable',
+  });
+}
+
+function lockIdentityError(classification) {
+  const error = new Error(`spotsAsClaimer: claim-lock ${classification}`);
+  error.code = 'claim-lock-conflict';
+  return error;
+}
+
+function historicalIdentityAbsent(spot) {
+  if (!spot || (spot.claimGenerationId !== undefined && spot.claimGenerationId !== null)) return false;
+  return spot.claimStartedAt === undefined || spot.claimStartedAt === null;
+}
+
+function h1StateEligible(spot) {
+  if (!spot || typeof spot !== 'object') return false;
+  if (spot.status === 'interested' && H1_ACTIVE_STATES.has(spot.claimState)) return true;
+  if (spot.status === 'interested' && spot.claimState === 'arrived_pending_outcome') return true;
+  if (spot.status === 'occupied'
+    && ['arrived_pending_outcome', 'unconfirmed', 'completed_success'].includes(spot.claimState)) return true;
+  if (spot.status === 'completed' && spot.claimState === 'completed') return true;
+  return spot.status === 'expired'
+    && (spot.claimState === undefined || spot.claimState === null);
+}
+
+function classifyHistoricalLock(lockSnap, spotId) {
+  if (!lockSnap || !lockSnap.exists) return LOCK_MATCH.MISSING;
+  const lock = lockSnap.data() || {};
+  if (typeof lock.spotId !== 'string' || !lock.spotId) return LOCK_MATCH.MALFORMED;
+  if (lock.spotId === spotId) return LOCK_MATCH.SAME_SPOT_CONFLICT;
+  if (isClaimGenerationId(lock.claimGenerationId)) return LOCK_MATCH.UNRELATED_SPOT;
+  if (lock.claimGenerationId !== undefined && lock.claimGenerationId !== null) {
+    return LOCK_MATCH.MALFORMED;
+  }
+  return timestampFingerprint(lock.claimStartedAt)
+    ? LOCK_MATCH.UNRELATED_SPOT
+    : LOCK_MATCH.MALFORMED;
+}
+
+function validDeletionContext(lifecycleSnap, jobSnap, nowMs) {
+  if (!lifecycleSnap || !lifecycleSnap.exists || !jobSnap || !jobSnap.exists) return false;
+  const lifecycle = lifecycleSnap.data() || {};
+  const job = jobSnap.data() || {};
+  const leaseMs = job.leaseAt && typeof job.leaseAt.toMillis === 'function'
+    ? job.leaseAt.toMillis()
+    : Number.NaN;
+  return lifecycle.decision === 'delete'
+    && lifecycle.source === 'deleteAccount'
+    && lifecycle.fenceGeneration === 1
+    && lifecycle.fencedAt
+    && typeof lifecycle.fencedAt.toMillis === 'function'
+    && job.state === 'running'
+    && job.currentStep === 'spotsAsClaimer'
+    && !!job.steps
+    && job.steps.userDoc === 'done'
+    && Number.isFinite(nowMs)
+    && Number.isFinite(leaseMs)
+    && nowMs - leaseMs >= 0
+    && nowMs - leaseMs < DELETION_JOB_LEASE_MS;
+}
+
 /**
  * Pure decision for one freshly read Ping.
  * - skip: the Ping no longer names the deleting user (released, replaced,
@@ -105,11 +184,44 @@ async function releaseOneDeletedClaim(db, spotRef, claimerUid, nowFn) {
     const spotSnap = await tx.get(spotRef);
     const lockSnap = await readActiveIncomingClaim(tx, db, claimerUid);
     if (!spotSnap.exists) return 'gone';
-    const plan = planDeletedClaimerPatch(spotSnap.data(), claimerUid, nowFn());
+    const spot = spotSnap.data();
+    const plan = planDeletedClaimerPatch(spot, claimerUid, nowFn());
     if (plan.action === 'skip') return 'skip';
+    const expectedClaim = expectedClaimFromSpot(spotRef.id, spot);
+    if (!expectedClaim) {
+      if (!historicalIdentityAbsent(spot) || !h1StateEligible(spot)) {
+        reportLockClassification('error', LOCK_MATCH.MALFORMED, null);
+        throw lockIdentityError(LOCK_MATCH.MALFORMED);
+      }
+      const lifecycleSnap = await tx.get(db.doc(`accountLifecycle/${claimerUid}`));
+      const jobSnap = await tx.get(db.doc(`accountDeletionJobs/${claimerUid}`));
+      if (!validDeletionContext(lifecycleSnap, jobSnap, nowFn())) {
+        reportLockClassification('error', LOCK_MATCH.MALFORMED, 'historical_absent');
+        throw lockIdentityError('deletion_context_unverified');
+      }
+      const historicalLock = classifyHistoricalLock(lockSnap, spotRef.id);
+      if (historicalLock !== LOCK_MATCH.MISSING
+        && historicalLock !== LOCK_MATCH.UNRELATED_SPOT) {
+        reportLockClassification('error', historicalLock, 'historical_absent');
+        throw lockIdentityError(historicalLock);
+      }
+      reportLockClassification('warn', historicalLock, 'historical_absent');
+      tx.update(spotRef, plan.patch);
+      return plan.action;
+    }
+    const lockClassification = classifyLockSnapshot(lockSnap, expectedClaim);
+    if (lockConflict(lockClassification)) {
+      reportLockClassification('error', lockClassification, expectedClaim.kind);
+      throw lockIdentityError(lockClassification);
+    }
+    if (lockClassification === LOCK_MATCH.MISSING
+      || lockClassification === LOCK_MATCH.UNRELATED_SPOT) {
+      reportLockClassification('warn', lockClassification, expectedClaim.kind);
+    }
     tx.update(spotRef, plan.patch);
-    // Deleted only when it names this Ping; another Ping's lock is kept.
-    deleteMatchingActiveIncomingClaim(tx, lockSnap, spotRef.id);
+    if (lockClassification === LOCK_MATCH.EXACT) {
+      deleteMatchingActiveIncomingClaim(tx, lockSnap, expectedClaim);
+    }
     return plan.action;
   });
 }

@@ -118,9 +118,9 @@ async function commitTerminalHandoff(
         throw new Error('Handoff terminal state changed');
       }
 
+      if (lockSnap) deleteLockIfNamesSpot(tx, lockSnap, lockRef, params.spotId, spot);
       tx.set(feedbackRef, feedback);
       if (notification) tx.set(notificationRef, notification);
-      if (lockSnap) deleteLockIfNamesSpot(tx, lockSnap, lockRef, params.spotId);
     });
     return 'created';
   } catch (error: any) {

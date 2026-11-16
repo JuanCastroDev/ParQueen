@@ -17,9 +17,12 @@ export default defineConfig({
       'functions/s7T2LockWriterF1.emulator.integration.test.js',
       // S4 t695u/t699u: deleted-user claim release race and fence regressions.
       'functions/deletedUserClaimRelease.emulator.integration.test.js',
+      'functions/deletedUserClaimRelease.identity.emulator.integration.test.js',
       'functions/deleteAccountClaimReleaseRace.emulator.integration.test.js',
       // S4 t699u: approved malformed-expiry policy N.
       'functions/deletedUserClaimRelease.expiryRepair.emulator.integration.test.js',
+      // H1: real HTTP account-deletion flow is selected separately by name.
+      'functions/deleteAccount.integration.test.js',
     ],
     testTimeout: 120000,
     hookTimeout: 120000,

@@ -18,6 +18,7 @@ const { releasedInterestPatch } = require('./activeIncomingClaimLogic');
 
 const UID = 'claimer-1';
 const OTHER_UID = 'claimer-2';
+const OTHER_GENERATION = 'b2'.repeat(32);
 const FINDER = 'finder-1';
 const SPOT = 'spot-1';
 const OTHER_SPOT = 'spot-2';
@@ -584,6 +585,30 @@ describe('claim intent protocol', () => {
     expect(kept).toEqual(expired);
   });
 
+  it('maps only the Firestore transaction lock-timeout INTERNAL signature to unavailable', async () => {
+    const invokeWith = async (message) => {
+      const box = harness({
+        [`users/${UID}`]: profile(),
+        [`spots/${SPOT}`]: availableSpot(),
+      });
+      await box.runPrepare(immediate(ATTEMPT_A));
+      const db = {
+        ...box.db,
+        async runTransaction() {
+          const error = new Error(message);
+          error.code = 13;
+          throw error;
+        },
+      };
+      return claimSpot(request(immediate(ATTEMPT_A)), box.intentDeps({ db }));
+    };
+
+    await expect(invokeWith('13 INTERNAL: Transaction lock timeout.'))
+      .rejects.toMatchObject({ code: 'unavailable' });
+    await expect(invokeWith('13 INTERNAL: unrelated backend invariant failure'))
+      .rejects.toMatchObject({ code: 'internal' });
+  });
+
   it('keeps a revocation tombstone ahead of prepare and redeem', async () => {
     const box = harness({
       [`users/${UID}`]: profile(),
@@ -639,6 +664,26 @@ describe('claim intent protocol', () => {
     await expect(box.runCancel(g1.claimGenerationId)).resolves.toEqual({ outcome: 'stale_claim' });
     expect([...box.db.docs.keys()].filter((key) => key.startsWith('spotNotifications/'))).toHaveLength(before);
     expect(box.db.docs.get(`spots/${SPOT}`).claimGenerationId).toBe(g2.claimGenerationId);
+  });
+
+  it('F1-02: revoke preserves a same-Ping lock from a different generation and makes no notification', async () => {
+    const box = harness({
+      [`users/${UID}`]: profile(),
+      [`spots/${SPOT}`]: availableSpot(),
+    });
+    const claimed = await box.runClaim(immediate(ATTEMPT_A));
+    const lockPath = `users/${UID}/activeIncomingClaims/current`;
+    box.db.docs.set(lockPath, {
+      ...box.db.docs.get(lockPath),
+      claimGenerationId: OTHER_GENERATION,
+    });
+
+    const result = await box.runRevoke(immediate(ATTEMPT_A));
+    expect(result.outcome).toBe('generation_unchanged');
+    expect(box.db.docs.get(`spots/${SPOT}`).claimGenerationId).toBe(claimed.claimGenerationId);
+    expect(box.db.docs.get(lockPath).claimGenerationId).toBe(OTHER_GENERATION);
+    expect(box.db.docs.get(`${ATTEMPT_COLLECTION}/${ATTEMPT_A}`).state).toBe('claimed');
+    expect([...box.db.docs.keys()].filter((key) => key.startsWith('spotNotifications/'))).toHaveLength(0);
   });
 
   it('returns a released replay without the stored generation and does not touch G2', async () => {

@@ -6,6 +6,12 @@ const { checkRateLimit } = require('./rateLimiter');
 const { sanitizeError } = require('./redactForLog');
 const { isClaimGenerationId } = require('./claimGeneration');
 const { readActiveIncomingClaim, deleteMatchingActiveIncomingClaim } = require('./activeIncomingClaim');
+const {
+  LOCK_MATCH,
+  expectedClaimFromSpot,
+  classifyLockSnapshot,
+  lockConflict,
+} = require('./claimLockIdentity');
 const { NOTICE_MESSAGE, noticeId, isNoticeCandidate } = require('./finderCancelNotice');
 const { RECEIPT_COLLECTION, receiptDocumentId, receiptBody } = require('./finderCancelReceipt');
 const {
@@ -307,13 +313,31 @@ async function finderCancelSpot(request, deps = {}) {
         if (fresh.kind === 'generation_present') return { outcome: 'stale' };
         if (fresh.kind !== 'legacy' || !legacyNoticeRef) return { outcome: 'unproven_identity' };
         if (!sameLegacyIdentity(fresh, confirmed)) return { outcome: 'stale' };
-        if (legacyLockConflicts(lockSnap, input.spotId, fresh.claimStartedAt)) return { outcome: 'unproven_identity' };
+        const expectedClaim = expectedClaimFromSpot(input.spotId, spotSnap.data());
+        const lockClassification = classifyLockSnapshot(lockSnap, expectedClaim);
+        if (legacyLockConflicts(lockSnap, input.spotId, fresh.claimStartedAt) || lockConflict(lockClassification)) {
+          console.error('claimLockRepairRequired', {
+            operation: 'finder_cancel_legacy',
+            classification: lockClassification,
+            claimKind: 'legacy',
+          });
+          return { outcome: 'unproven_identity' };
+        }
+        if (lockClassification === LOCK_MATCH.MISSING || lockClassification === LOCK_MATCH.UNRELATED_SPOT) {
+          console.warn('claimLockReconciliationNeeded', {
+            operation: 'finder_cancel_legacy',
+            classification: lockClassification,
+            claimKind: 'legacy',
+          });
+        }
         const legacyReceiptId = receiptDocumentId(input.spotId, fresh);
         if (!legacyReceiptId) return { outcome: 'unproven_identity' };
         const nowTs = now();
         tx.set(db.collection(RECEIPT_COLLECTION).doc(legacyReceiptId), receiptBody(input.spotId, fresh));
         tx.delete(spotRef);
-        if (lockSnap) deleteMatchingActiveIncomingClaim(tx, lockSnap, input.spotId);
+        if (lockClassification === LOCK_MATCH.EXACT) {
+          deleteMatchingActiveIncomingClaim(tx, lockSnap, expectedClaim);
+        }
         if (!legacyNoticeSnap.exists && fresh.interestedUserId !== uid && !spotExpired(spotSnap.data(), nowTs.toMillis())) {
           tx.set(legacyNoticeRef, {
             spotId: input.spotId,
@@ -330,11 +354,35 @@ async function finderCancelSpot(request, deps = {}) {
       if (fresh.kind === 'unproven' || !sameIdentity(fresh, confirmed)) {
         return { outcome: fresh.kind === 'unproven' ? 'unproven_identity' : 'stale' };
       }
+      const expectedClaim = fresh.kind === 'generation'
+        ? { kind: 'generation', spotId: input.spotId, claimGenerationId: fresh.claimGenerationId }
+        : null;
+      const lockClassification = expectedClaim
+        ? classifyLockSnapshot(lockSnap, expectedClaim)
+        : LOCK_MATCH.MISSING;
+      if (expectedClaim && lockConflict(lockClassification)) {
+        console.error('claimLockRepairRequired', {
+          operation: 'finder_cancel',
+          classification: lockClassification,
+          claimKind: fresh.kind,
+        });
+        return { outcome: 'unproven_identity' };
+      }
+      if (expectedClaim && (lockClassification === LOCK_MATCH.MISSING
+        || lockClassification === LOCK_MATCH.UNRELATED_SPOT)) {
+        console.warn('claimLockReconciliationNeeded', {
+          operation: 'finder_cancel',
+          classification: lockClassification,
+          claimKind: fresh.kind,
+        });
+      }
       const receiptId = receiptDocumentId(input.spotId, fresh);
       if (!receiptId) return { outcome: 'unproven_identity' };
       tx.set(db.collection(RECEIPT_COLLECTION).doc(receiptId), receiptBody(input.spotId, fresh));
       tx.delete(spotRef);
-      if (lockSnap) deleteMatchingActiveIncomingClaim(tx, lockSnap, input.spotId);
+      if (expectedClaim && lockClassification === LOCK_MATCH.EXACT) {
+        deleteMatchingActiveIncomingClaim(tx, lockSnap, expectedClaim);
+      }
       if (generationNoticeRef && !generationNoticeSnap.exists && fresh.interestedUserId !== uid) {
         const nowTs = now();
         if (isNoticeCandidate(spotSnap.data(), nowTs.toMillis())) {

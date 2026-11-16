@@ -50,7 +50,11 @@ try {
 const { requireEmulatorProjectId } = require('./emulatorProjectId');
 const PROJECT_ID = requireEmulatorProjectId();
 const REGION = 'us-central1';
-const FUNCTIONS_BASE = `http://localhost:5001/${PROJECT_ID}/${REGION}`;
+const FUNCTIONS_HOST = process.env.FIREBASE_FUNCTIONS_EMULATOR_HOST || '';
+if (!/^(127\.0\.0\.1|localhost):\d+$/.test(FUNCTIONS_HOST) || FUNCTIONS_HOST.endsWith(':5001')) {
+    throw new Error('deleteAccount integration requires an explicit isolated Functions emulator host');
+}
+const FUNCTIONS_BASE = `http://${FUNCTIONS_HOST}/${PROJECT_ID}/${REGION}`;
 const AUTH_EMULATOR = process.env.FIREBASE_AUTH_EMULATOR_HOST
     ? `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`
     : 'http://localhost:9099';
@@ -446,6 +450,8 @@ describe('deleteAccount — Functions emulator integration', () => {
         const job = (await db.doc(`accountDeletionJobs/${uid}`).get()).data();
         expect(job?.state).toBe('completed');
         expect(job?.completedAt).toBeDefined();
+        expect(job?.steps?.spotsAsClaimer).toBe('done');
+        expect((await db.doc(`users/${uid}/activeIncomingClaims/current`).get()).exists).toBe(false);
     }, 60000);
 
     it('FN-09: completes without error when all optional singletons are absent', async () => {
@@ -500,6 +506,12 @@ describe('deleteAccount — Functions emulator integration', () => {
 
         const other = (await otherClaimer.get()).data();
         expect(other.interestedUserId).toBe('someone_else'); expect(other.status).toBe('interested');
+
+        const job = (await db.doc(`accountDeletionJobs/${uid}`).get()).data();
+        expect(job?.state).toBe('completed');
+        expect(job?.steps?.spotsAsClaimer).toBe('done');
+        expect((await db.doc(`users/${uid}/activeIncomingClaims/current`).get()).exists).toBe(false);
+        expect(await adminAuth.getUser(uid).catch(() => null)).toBeNull();
 
         await Promise.all([active, activeExpired, arrived, occupied, expiredHist, otherClaimer].map(r => r.delete()));
     }, 60000);
