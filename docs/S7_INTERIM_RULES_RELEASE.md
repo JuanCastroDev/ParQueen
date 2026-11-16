@@ -25,25 +25,76 @@ and carLocation parity. The candidate's behavior is proven by
   functions, hosting or storage, so it cannot deploy anything else.
 - No temporary swap of `firestore.rules` is used.
 
+## Approved provisional deployment order (t721u)
+Each step needs its own separate founder GO. Nothing here authorizes a step.
+1. R1 index.
+2. S4 `deleteAccount`.
+3. Interim rules (this artifact).
+4. S7 callables, including PR-A.
+5. PR-B client.
+6. Old-client cutoff.
+7. Final head rules (`firestore.rules`, with carLocation).
+8. Receipt-gated trigger.
+9. Legacy interface retirement.
+
+## Deployment safeguards
+**This section documents safeguards. It does not authorize running any
+deployment command.**
+
+1. **Every production step needs a separate founder GO.** That covers each
+   numbered step above and any rollback. A GO for one step does not extend to
+   another.
+2. **Interim rules are selected only through `firebase.interim-rules.json`.**
+   Use `--config firebase.interim-rules.json`. Never copy, rename, symlink or
+   otherwise swap `firestore.interim.rules` into `firestore.rules`, and never
+   use an untracked or locally edited rules file.
+3. **While the interim rules are active (from step 3 until step 7), these are
+   prohibited:**
+   - a generic `firebase deploy` (no `--only`);
+   - `firebase deploy --only firestore`;
+   - `firebase deploy --only firestore:rules` with the default `firebase.json`;
+   - any other command that targets the default `firestore.rules`.
+
+   With the default `firebase.json`, each of these would publish the final
+   head `firestore.rules` early. Head rules drop the legacy arms the Oct 16
+   client still needs before the cutoff.
+4. **Functions deploys** (step 4 and any later functions step) must name only
+   the separately authorized functions:
+   `firebase deploy --only functions:<name>[,functions:<name>...] --project <project>`.
+5. **Index deploys** must select indexes explicitly, as
+   `firebase deploy --only firestore:indexes --project <project>`, and need
+   their own authorization. Never combine an index deploy with a rules target.
+6. **The final rules (step 7) must not be published before the approved
+   old-client cutoff (step 6)** is complete and confirmed. Step 7 is the only
+   step that publishes `firestore.rules` through the default `firebase.json`,
+   and it needs its own founder GO.
+7. **Rollback needs the real production ruleset identifier recorded before
+   publication.** Record the live ruleset name and createTime from an
+   authorized production read. Do not guess, derive or invent the identifier.
+   Until it is recorded the value is `<LIVE_RULESET_NAME: not yet recorded>`
+   and `<LIVE_RULESET_CREATE_TIME: not yet recorded>`. With the placeholder
+   still in place, the interim rules must not be published.
+
 ## Publication command (documented only; do not run without founder GO)
-From a clean checkout of the reviewed commit:
+This is step 3. Run it from a clean checkout of the reviewed commit:
 
 ```
 firebase deploy --config firebase.interim-rules.json --only firestore:rules --project parkqueen-46475363-ccf36
 ```
 
 Before running it, all of these must hold:
-1. Founder GO for this step, in the order approved in t721u (after R1 index and
-   the S4 `deleteAccount` deploy; before the S7 parking callables).
-2. The live ruleset name and createTime are recorded (the rollback target),
-   and the live content still matches the 134a97cf snapshot.
+1. A separate founder GO for step 3, after steps 1 (R1 index) and 2 (S4
+   `deleteAccount`) are complete.
+2. The live ruleset name and createTime are recorded as the rollback target
+   (safeguard 7), and the live content still matches the 134a97cf snapshot.
 3. The production `activeIncomingClaimRollout/status` value has been read with
    authorization.
 4. The checkout's `firestore.interim.rules` digest equals the value above.
 5. Rules are published only from reviewed repository sources (F1 control 4).
 
-Rollback: republish the recorded live ruleset by name. Without that recorded
-name there is no rollback.
+Rollback: with a separate founder GO, republish the recorded live ruleset
+(`<LIVE_RULESET_NAME: not yet recorded>`) by name. Without that recorded name
+there is no rollback.
 
 ## Not changed
 `firebase.json`, `package.json` scripts, CI workflows and `scripts/ci/` are not
