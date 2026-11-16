@@ -135,6 +135,7 @@ export default function App() {
   // Onboarding 2.0: whether Back on Create account returns to the choices, and the one-shot map intention.
   const [onboardingReturn, setOnboardingReturn] = useState<'choose' | null>(null);
   const [previewOnboarding, setPreviewOnboarding] = useState(false);
+  const [previewLocation, setPreviewLocation] = useState(false);
   const [mapOnboardingIntent, setMapOnboardingIntent] = useState<OnboardingIntent | null>(null);
   const [user, setUser] = useState(null);
   const unreadMessagesCount = useUnreadMessages(user?.id);
@@ -165,6 +166,7 @@ export default function App() {
     closeLegal,
     onboardingReturn,
     previewOnboarding,
+    previewLocation,
   });
   androidBackStateRef.current = {
     currentView,
@@ -173,11 +175,16 @@ export default function App() {
     closeLegal,
     onboardingReturn,
     previewOnboarding,
+    previewLocation,
   };
 
   useAndroidSystemBack({
     handleBack: () => {
       const state = androidBackStateRef.current;
+      if (state.previewLocation && state.currentView === AppView.SETTINGS) {
+        setPreviewLocation(false);
+        return;
+      }
       if (state.previewOnboarding && state.currentView === AppView.SETTINGS) {
         setPreviewOnboarding(false);
         return;
@@ -1084,6 +1091,24 @@ export default function App() {
       );
     }
 
+    // Visual-only location QA. OS permission cannot be requested or changed in preview mode.
+    if (previewLocation && ONBOARDING_V2_ANDROID_PREVIEW_ENABLED && currentView === AppView.SETTINGS && user?.id) {
+      return (
+        <>
+          <LocationPromptView previewMode onComplete={() => setPreviewLocation(false)} />
+          <button
+            type="button"
+            aria-label={t('settings.location_preview_exit')}
+            title={t('settings.location_preview_exit')}
+            onClick={() => setPreviewLocation(false)}
+            className="fixed z-[220] right-3 top-[calc(env(safe-area-inset-top,0px)+58px)] h-10 w-10 rounded-full border border-white/30 bg-[#050d1c]/85 text-white flex items-center justify-center shadow-lg focus-visible:ring-2 focus-visible:ring-cyan-300"
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </>
+      );
+    }
+
     // MAP and MESSAGES share the same MapView instance so selectedItem survives the transition.
     // While Messages is the full-screen overlay, the map stays mounted but is inert so its
     // still-open Ping BottomSheet cannot reclaim keyboard focus (Android adjustResize).
@@ -1213,7 +1238,7 @@ export default function App() {
       case AppView.PROFILE:
         return <ProfileView user={user} setView={navigatePrimary} onBack={() => setCurrentView(AppView.MAP)} unreadMessagesCount={unreadMessagesCount} pendingUpdatesCount={pendingUpdatesCount} />;
       case AppView.SETTINGS:
-        return <SettingsView user={user} setView={setViewWithLegalReturn} onBack={() => setCurrentView(AppView.PROFILE)} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} onPreviewOnboarding={ONBOARDING_V2_ANDROID_PREVIEW_ENABLED && user?.id ? () => setPreviewOnboarding(true) : undefined} theme={theme} toggleTheme={toggleTheme} permissionState={nearbyPermissionState(locationAccess, { locationServicesEnabled })} notificationRuntime={notificationRuntime} />;
+        return <SettingsView user={user} setView={setViewWithLegalReturn} onBack={() => setCurrentView(AppView.PROFILE)} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} onPreviewOnboarding={ONBOARDING_V2_ANDROID_PREVIEW_ENABLED && user?.id ? () => setPreviewOnboarding(true) : undefined} onPreviewLocation={ONBOARDING_V2_ANDROID_PREVIEW_ENABLED && user?.id ? () => setPreviewLocation(true) : undefined} theme={theme} toggleTheme={toggleTheme} permissionState={nearbyPermissionState(locationAccess, { locationServicesEnabled })} notificationRuntime={notificationRuntime} />;
       case AppView.NOTIFICATIONS_SETTINGS:
         return <NotificationsSettingsView user={user} onBack={() => setCurrentView(AppView.SETTINGS)} notificationRuntime={notificationRuntime} notificationBusy={notificationBusy} onEnableNotifications={handleEnableNotifications} onRecheckNotifications={handleRecheckNotifications} />;
       case AppView.LOCATION_SETTINGS:
