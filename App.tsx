@@ -5,7 +5,7 @@ import { LoadingScreen } from './components/LoadingScreen';
 import { AuthStartupRecovery } from './components/AuthStartupRecovery';
 import { OnboardingView } from './views/OnboardingView';
 import { ONBOARDING_V2_ENABLED } from './utils/onboardingFlags';
-import { Capacitor } from '@capacitor/core';
+import { ONBOARDING_V2_ANDROID_PREVIEW_ENABLED } from './utils/onboardingPreview';
 import { bindPendingIntent, clearPendingIntent, savePendingIntent, takePendingIntent, type OnboardingIntent } from './utils/onboardingIntent';
 import type { OnboardingV2AndroidBackHandle } from './views/onboarding-v2/OnboardingV2View';
 // Onboarding 2.0 is only fetched when its build flag is on; the legacy OnboardingView stays the rollback.
@@ -109,13 +109,6 @@ import { ForegroundNotificationToast } from './components/ForegroundNotification
 import { AccessibleModal } from './components/AccessibleModal';
 import { useUnreadMessages } from './views/street-parking/useUnreadMessages';
 import { parsePersistedCount } from './utils/persistedCount';
-
-// Founder-only QA entry: enabled solely in explicitly flagged Android builds.
-// The preview cannot invoke the real onboarding-to-signup or intention handoffs.
-const ONBOARDING_V2_ANDROID_PREVIEW_ENABLED = ONBOARDING_V2_ENABLED
-  && import.meta.env.VITE_OBV2_PREVIEW === '1'
-  && Capacitor.isNativePlatform()
-  && Capacitor.getPlatform() === 'android';
 
 // Clears all account-scoped browser state after account deletion.
 // Preserves device-scoped preferences (theme, language) so they survive account transitions.

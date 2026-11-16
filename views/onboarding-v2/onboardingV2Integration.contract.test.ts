@@ -46,10 +46,12 @@ describe('rollback flag', () => {
 
 describe('authenticated Android-only founder preview', () => {
   it('requires both an explicit build flag and the native Android runtime', () => {
-    expect(app).toContain("import.meta.env.VITE_OBV2_PREVIEW === '1'");
-    expect(app).toContain('Capacitor.isNativePlatform()');
-    expect(app).toContain("Capacitor.getPlatform() === 'android'");
-    expect(app).toContain('ONBOARDING_V2_ANDROID_PREVIEW_ENABLED = ONBOARDING_V2_ENABLED');
+    const preview = read('utils/onboardingPreview.ts');
+    expect(preview).toContain("import.meta.env.VITE_OBV2_PREVIEW === '1'");
+    expect(preview).toContain('Capacitor.isNativePlatform()');
+    expect(preview).toContain("Capacitor.getPlatform() === 'android'");
+    expect(preview).toContain('export const ONBOARDING_V2_ANDROID_PREVIEW_ENABLED: boolean =');
+    expect(preview).toContain('ONBOARDING_V2_ENABLED &&');
     expect(app).toContain('onPreviewOnboarding={ONBOARDING_V2_ANDROID_PREVIEW_ENABLED && user?.id ? () => setPreviewOnboarding(true) : undefined}');
     const settings = read('views/SettingsView.tsx');
     expect(settings).toContain('{onPreviewOnboarding && (');
