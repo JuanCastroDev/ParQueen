@@ -392,7 +392,26 @@ async function writeIncompleteRolloutStatus(db, now, phase, reconcileErrors = 1)
  * to activeIncomingClaimConflicts/{uid}.
  */
 async function reconcileActiveIncomingClaims(db, now) {
-  const pre = await scanInterestedClaims(db);
+  let pre;
+  try {
+    pre = await scanInterestedClaims(db);
+  } catch (e) {
+    console.error('activeIncomingClaims: interested scan failed; rollout gate closed', sanitizeError(e));
+    await writeIncompleteRolloutStatus(db, now, 'failed_pre_scan');
+    return {
+      scanComplete: false,
+      enforced: false,
+      locklessCount: null,
+      duplicateUserCount: null,
+      duplicatePingCount: null,
+      interestedWithClaimerCount: null,
+      malformedInterestedCount: null,
+      locksEstablished: 0,
+      duplicatesReleased: 0,
+      conflictsReported: 0,
+      reconcileErrors: 1,
+    };
+  }
   if (!pre.scanComplete) {
     console.error('activeIncomingClaims: interested scan incomplete; rollout gate closed');
     await writeIncompleteRolloutStatus(db, now, 'incomplete_pre_scan');
@@ -454,7 +473,26 @@ async function reconcileActiveIncomingClaims(db, now) {
     }
   }
 
-  const post = await scanInterestedClaims(db);
+  let post;
+  try {
+    post = await scanInterestedClaims(db);
+  } catch (e) {
+    console.error('activeIncomingClaims: post-repair scan failed; rollout gate left closed', sanitizeError(e));
+    await writeIncompleteRolloutStatus(db, now, 'failed_post_scan', reconcileErrors + 1);
+    return {
+      scanComplete: false,
+      enforced: false,
+      locklessCount: null,
+      duplicateUserCount: null,
+      duplicatePingCount: null,
+      interestedWithClaimerCount: null,
+      malformedInterestedCount: null,
+      locksEstablished,
+      duplicatesReleased,
+      conflictsReported,
+      reconcileErrors: reconcileErrors + 1,
+    };
+  }
   if (!post.scanComplete) {
     console.error('activeIncomingClaims: post-repair scan incomplete; rollout gate left closed');
     await writeIncompleteRolloutStatus(db, now, 'incomplete_post_scan', reconcileErrors + 1);

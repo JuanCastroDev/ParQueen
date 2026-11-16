@@ -4779,6 +4779,36 @@ describe('A1 — one active incoming claim', () => {
         expect((await readLock(OTHER_UID)).data().spotId).toBe('a1-keep-lock');
     });
 
+    it.each([
+        ['missing', {}],
+        ['non-string', { spotId: 42 }],
+    ])('A1-F1-MAL-SPOT: arrival is denied when the existing lock spotId is %s', async (_label, malformed) => {
+        await seedClaimer(OTHER_UID, 'bob');
+        const spotId = `a1-malformed-lock-${_label}`;
+        const startedAt = Timestamp.now();
+        await seed('spots', spotId, {
+            ...availablePing(`A1 malformed ${_label}`),
+            ...claimPayload(OTHER_UID, 'bob', 'heading', startedAt),
+        });
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            await setDoc(activeIncomingClaimRef(ctx.firestore(), OTHER_UID), {
+                claimStartedAt: startedAt,
+                claimState: 'heading',
+                updatedAt: startedAt,
+                ...malformed,
+            });
+        });
+
+        const db = otherDb();
+        await assertFails(updateDoc(doc(db, 'spots', spotId), {
+            status: 'occupied',
+            claimState: 'arrived_pending_outcome',
+            arrivedAt: Timestamp.now(),
+        }));
+        expect((await readSpot(spotId)).data().status).toBe('interested');
+        expect((await readLock(OTHER_UID)).exists()).toBe(true);
+    });
+
     it('A1-13: another user cannot read the lock, and a non-current doc id cannot be created', async () => {
         await seedClaimer(OTHER_UID, 'bob');
         await seed('spots', 'a1-private', availablePing('A1 private'));
@@ -5532,6 +5562,22 @@ describe('B1 — durable arrived_pending_outcome', () => {
         expect(spot.arrivedAt).toBeTruthy();
         expect(spot.lat).toBe(40.71);
         expect(spot.lng).toBe(-74.01);
+        expect((await readLock()).exists()).toBe(false);
+    });
+
+    it('B1-LEGACY-MISSING-LOCK: first arrival remains allowed when the legacy lock is absent', async () => {
+        const spotId = 'b1-legacy-missing-lock';
+        await seed('spots', spotId, headingPing(spotId));
+
+        await assertSucceeds(updateDoc(doc(otherDb(), 'spots', spotId), {
+            status: 'occupied',
+            claimState: 'arrived_pending_outcome',
+            arrivedAt: Timestamp.now(),
+        }));
+
+        const spot = (await readSpot(spotId)).data();
+        expect(spot.status).toBe('occupied');
+        expect(spot.claimState).toBe('arrived_pending_outcome');
         expect((await readLock()).exists()).toBe(false);
     });
 

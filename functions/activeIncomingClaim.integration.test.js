@@ -457,6 +457,91 @@ describe('active incoming claim — release paths and 15-minute repair', () => {
     });
   });
 
+  it('F1-REC-08: an initial scan exception actively closes a previously open gate', async () => {
+    const statusWrites = [];
+    const query = {
+      where: () => query,
+      orderBy: () => query,
+      limit: () => query,
+      get: async () => { throw new Error('injected scan failure'); },
+    };
+    const failingDb = {
+      collection: (name) => {
+        if (name !== 'spots') throw new Error(`unexpected collection ${name}`);
+        return query;
+      },
+      doc: (path) => ({
+        path,
+        set: async (data) => { statusWrites.push(data); },
+      }),
+    };
+
+    const errors = await captureErrors(async () => {
+      const result = await activeClaimModule.reconcileActiveIncomingClaims(failingDb, Timestamp.now());
+      expect(result).toMatchObject({ scanComplete: false, enforced: false, reconcileErrors: 1 });
+    });
+    expect(errors.some(([message]) => message === 'activeIncomingClaims: interested scan failed; rollout gate closed')).toBe(true);
+    expect(statusWrites).toHaveLength(1);
+    expect(statusWrites[0]).toMatchObject({
+      enforced: false,
+      phase: 'failed_pre_scan',
+      reconcileErrors: 1,
+    });
+  });
+
+  it('F1-REC-08: a post-repair scan exception leaves the rollout gate explicitly closed', async () => {
+    const statusWrites = [];
+    const started = Timestamp.now();
+    const spotData = {
+      status: 'interested', claimState: 'heading', interestedUserId: 'scan_throw_user',
+      claimStartedAt: started, claimGenerationId: TRUST_GENERATION, expiresAt: FUTURE,
+    };
+    const spotRef = { path: 'spots/scan-throw-spot' };
+    const spotDoc = { id: 'scan-throw-spot', ref: spotRef, data: () => spotData };
+    let scanCount = 0;
+    const query = {
+      where: () => query,
+      orderBy: () => query,
+      limit: () => query,
+      get: async () => {
+        scanCount++;
+        if (scanCount === 1) return { empty: false, size: 1, docs: [spotDoc] };
+        throw new Error('injected post scan failure');
+      },
+    };
+    const lockRef = { path: 'users/scan_throw_user/activeIncomingClaims/current' };
+    const failingDb = {
+      collection: (name) => {
+        if (name !== 'spots') throw new Error(`unexpected collection ${name}`);
+        return query;
+      },
+      doc: (path) => path === lockRef.path
+        ? lockRef
+        : { path, set: async (data) => { statusWrites.push(data); } },
+      getAll: async () => [{ exists: false, data: () => undefined }],
+      runTransaction: async (callback) => callback({
+        get: async (ref) => ref === spotRef
+          ? { exists: true, ref: spotRef, data: () => spotData }
+          : { exists: false, ref: lockRef, data: () => undefined },
+        set: () => {},
+        update: () => {},
+      }),
+    };
+
+    let result;
+    const errors = await captureErrors(async () => {
+      result = await activeClaimModule.reconcileActiveIncomingClaims(failingDb, Timestamp.now());
+    });
+    expect(result).toMatchObject({ scanComplete: false, enforced: false });
+    expect(result.reconcileErrors).toBeGreaterThanOrEqual(1);
+    expect(errors.some(([message]) => message === 'activeIncomingClaims: post-repair scan failed; rollout gate left closed')).toBe(true);
+    expect(statusWrites.at(-1)).toMatchObject({
+      enforced: false,
+      phase: 'failed_post_scan',
+      reconcileErrors: result.reconcileErrors,
+    });
+  });
+
   it.each([
     ['missing', undefined],
     ['null', null],

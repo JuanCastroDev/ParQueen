@@ -89,6 +89,22 @@ describe('markClaimArrived', () => {
     expect(writes.some((write) => write.op === 'delete' && write.path === lockPath)).toBe(true);
   });
 
+  it('preserves legacy missing-lock compatibility on first arrival', async () => {
+    const { docs, writes } = installStore({
+      'spots/spot-1': {
+        status: 'interested', claimState: 'heading', interestedUserId: 'user-1',
+        claimStartedAt,
+      },
+    });
+
+    await expect(markClaimArrived({}, 'spot-1', 'user-1')).resolves.toBeUndefined();
+    expect(docs.get('spots/spot-1')).toMatchObject({
+      status: 'occupied',
+      claimState: 'arrived_pending_outcome',
+    });
+    expect(writes.filter((write) => write.op === 'delete')).toHaveLength(0);
+  });
+
   it('a second arrive is a no-op and does not rewrite arrivedAt', async () => {
     const original = { toMillis: () => 50 };
     const { docs, writes } = installStore({
@@ -147,6 +163,24 @@ describe('markClaimArrived', () => {
 
     expect(docs.get('spots/spot-1').claimState).toBe('arrived_pending_outcome');
     expect(docs.get(lockPath).spotId).toBe('other-spot');
+  });
+
+  it.each([
+    ['missing', { claimState: 'heading', claimGenerationId: generation }],
+    ['non-string', { spotId: 42, claimState: 'heading', claimGenerationId: generation }],
+  ])('rejects a %s lock spotId before any arrival write', async (_label, malformedLock) => {
+    const { docs, writes } = installStore({
+      'spots/spot-1': {
+        status: 'interested', claimState: 'heading', interestedUserId: 'user-1',
+        claimGenerationId: generation, claimStartedAt,
+      },
+      [lockPath]: malformedLock,
+    });
+
+    await expect(markClaimArrived({}, 'spot-1', 'user-1')).rejects.toThrow(/identity conflict/);
+    expect(writes).toHaveLength(0);
+    expect(docs.get('spots/spot-1').status).toBe('interested');
+    expect(docs.has(lockPath)).toBe(true);
   });
 
   it('rejects a conflicting modern same-Ping lock before any write', async () => {

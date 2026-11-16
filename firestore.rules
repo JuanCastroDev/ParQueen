@@ -152,8 +152,11 @@ service cloud.firestore {
     function matchingActiveClaimLockReleased(spotId) {
       let path = activeIncomingClaimPath();
       return !exists(path)
-        || get(path).data.get('spotId', '') != spotId
-        || (lockMatchesSpotClaim(get(path).data, resource.data)
+        || (get(path).data.get('spotId', null) is string
+          && get(path).data.get('spotId', '').size() > 0
+          && get(path).data.get('spotId', '') != spotId)
+        || (get(path).data.get('spotId', null) == spotId
+          && lockMatchesSpotClaim(get(path).data, resource.data)
           && !existsAfter(path));
     }
 

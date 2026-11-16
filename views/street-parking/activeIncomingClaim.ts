@@ -39,6 +39,7 @@ export function classifyClaimLockIdentity(
     if (!lockSnap.exists()) return 'missing';
     const lock = lockSnap.data();
     if (!lock || typeof lock !== 'object') return 'malformed';
+    if (typeof lock.spotId !== 'string' || lock.spotId.length === 0) return 'malformed';
     if (lock.spotId !== spotId) return 'unrelated';
 
     const spotGeneration = spot.claimGenerationId;
