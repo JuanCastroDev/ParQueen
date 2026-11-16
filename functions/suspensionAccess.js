@@ -586,11 +586,19 @@ async function adminSuspendUser(request) {
   if (userId === request.auth.uid) throw new HttpsError('failed-precondition', 'You cannot suspend your own account.');
 
   if (!(await userRef(userId).get()).exists) throw new HttpsError('not-found', 'User not found.');
+  let targetUser;
   try {
-    await getAuth().getUser(userId);
+    targetUser = await getAuth().getUser(userId);
   } catch (err) {
     console.error('adminSuspendUser: auth step failed', { step: 'lookup', code: err && err.code ? String(err.code) : 'unknown' });
     throw mapSuspensionAuthError(err);
+  }
+  // S7 Q8 (t721u): one admin cannot suspend another. The target's current
+  // Auth role claim (the same claim requireCurrentAdmin checks) is read before
+  // any lock, intent, profile, audit or Auth write; remove the admin role
+  // through setStaffRole first. Unsuspend is not restricted.
+  if (targetUser && targetUser.customClaims && targetUser.customClaims.role === 'admin') {
+    throw new HttpsError('permission-denied', 'An administrator account cannot be suspended. Remove the admin role first.');
   }
 
   await rejectIfLockedByOther(userId);

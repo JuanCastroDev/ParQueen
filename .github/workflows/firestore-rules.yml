@@ -9,6 +9,14 @@ on:
       - firestore.rules.test.original-suite.ts
       - firestore.rules.finder-notice.31ag.test.ts
       - firestore.rules.ping-delete.test.ts
+      - firestore.interim.rules
+      - firebase.interim-rules.json
+      - firestore.rules.test.mixed-version-deployed.ts
+      - firestore.rules.test.interim-legacy-hardened.ts
+      - firestore.rules.test.interim-expression-budget.ts
+      - firestore.rules.test.interim-release.ts
+      - test-fixtures/interim-candidate/**
+      - test-fixtures/production-baseline/**
       - firestore.indexes.json
       - firebase.json
       - .firebaserc
@@ -24,6 +32,14 @@ on:
       - firestore.rules.test.original-suite.ts
       - firestore.rules.finder-notice.31ag.test.ts
       - firestore.rules.ping-delete.test.ts
+      - firestore.interim.rules
+      - firebase.interim-rules.json
+      - firestore.rules.test.mixed-version-deployed.ts
+      - firestore.rules.test.interim-legacy-hardened.ts
+      - firestore.rules.test.interim-expression-budget.ts
+      - firestore.rules.test.interim-release.ts
+      - test-fixtures/interim-candidate/**
+      - test-fixtures/production-baseline/**
       - firestore.indexes.json
       - firebase.json
       - .firebaserc
