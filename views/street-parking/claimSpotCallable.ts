@@ -137,17 +137,25 @@ function resultOf(
  * Acquisition through the us-central1 claimSpot callable.
  * The payload is the spot, the attempt id, the mode, and an immediate ETA.
  * claimGenerationId is never sent.
+ * recoverLeftoverGeneration (S7 T2-G3) is sent only as the literal true, and
+ * only when the caller opts in. It asks the server to claim an available Ping
+ * that still stores a leftover generation, which the server allows only after
+ * proving the orphan in its own transaction. It never names a generation.
  */
 export async function claimSpotCallable(input: {
   spotId: string;
   attemptId: string;
   mode: ClaimSpotMode;
   etaMinutes?: number;
+  recoverLeftoverGeneration?: true;
 }): Promise<ClaimSpotResult> {
-  const request = claimRequest(input);
+  const base = claimRequest(input);
+  const request = input.recoverLeftoverGeneration === true
+    ? { ...base, recoverLeftoverGeneration: true as const }
+    : base;
   const functions = getFunctions(getApp(), 'us-central1');
   const callable = httpsCallable<typeof request, ClaimSpotResult>(functions, 'claimSpot');
-  return resultOf(await callable(request), request);
+  return resultOf(await callable(request), base);
 }
 
 function intentIdentity(data: {

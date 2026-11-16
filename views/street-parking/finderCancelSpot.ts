@@ -1,7 +1,7 @@
 import { getApp } from 'firebase/app';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { deleteDoc, doc, getDocFromServer, type Firestore } from 'firebase/firestore';
-import { isClaimGenerationId } from './claimIdentity';
+import { isClaimGenerationId, legacyClaimStartedAt, type LegacyClaimStartedAt } from './claimIdentity';
 
 type FirestoreDb = Firestore;
 
@@ -36,7 +36,50 @@ type StoredValueIdentity = {
   claimGenerationId: string;
 };
 
-export type CancellationIdentity = GenerationIdentity | UnclaimedIdentity | StoredValueIdentity | { kind: 'unproven' };
+// S7 T2-G2: a generationless claim made by a pre-callable client. Sent with
+// claimGenerationId null and the exact stored claimStartedAt. The server
+// compares it with the reread spot and never with a generation.
+type LegacyIdentity = {
+  kind: 'legacy';
+  finderId: string;
+  status: 'interested';
+  interestedUserId: string;
+  claimState: 'committed' | 'heading' | null;
+  legacyClaimStartedAt: LegacyClaimStartedAt;
+};
+
+export type CancellationIdentity =
+  | GenerationIdentity
+  | UnclaimedIdentity
+  | StoredValueIdentity
+  | LegacyIdentity
+  | { kind: 'unproven' };
+
+const LEGACY_LIVE_CLAIM_STATES: readonly LegacyIdentity['claimState'][] = [null, 'committed', 'heading'];
+
+function legacyIdentity(
+  spot: Record<string, unknown>,
+  finderId: string,
+  status: string,
+  claimant: string,
+  claimState: string | null,
+): CancellationIdentity {
+  if (spot.claimGenerationId !== undefined && spot.claimGenerationId !== null) return { kind: 'unproven' };
+  if (status !== 'interested') return { kind: 'unproven' };
+  const liveState = LEGACY_LIVE_CLAIM_STATES.find((state) => state === claimState);
+  if (liveState === undefined) return { kind: 'unproven' };
+  if (claimant.length > 128 || claimant.includes('/') || claimant === '.' || claimant === '..') return { kind: 'unproven' };
+  const fingerprint = legacyClaimStartedAt(spot.claimStartedAt);
+  if (!fingerprint) return { kind: 'unproven' };
+  return {
+    kind: 'legacy',
+    finderId,
+    status: 'interested',
+    interestedUserId: claimant,
+    claimState: liveState,
+    legacyClaimStartedAt: fingerprint,
+  };
+}
 
 function textOrNull(value: unknown): string | null {
   if (typeof value !== 'string' || value.length === 0) return null;
@@ -53,7 +96,7 @@ export function cancellationIdentity(spot: Record<string, unknown> | undefined):
   const claimState = textOrNull(spot.claimState);
   const claimant = textOrNull(spot.interestedUserId);
   if (claimant) {
-    if (!isClaimGenerationId(spot.claimGenerationId)) return { kind: 'unproven' };
+    if (!isClaimGenerationId(spot.claimGenerationId)) return legacyIdentity(spot, finderId, status, claimant, claimState);
     return {
       kind: 'generation',
       finderId,
@@ -92,6 +135,16 @@ const OUTCOMES: readonly FinderCancelOutcome[] = [
 ];
 
 function requestFor(spotId: string, confirmed: Exclude<CancellationIdentity, { kind: 'unproven' }>) {
+  if (confirmed.kind === 'legacy') {
+    return {
+      spotId,
+      status: confirmed.status,
+      interestedUserId: confirmed.interestedUserId,
+      claimState: confirmed.claimState,
+      claimGenerationId: null,
+      legacyClaimStartedAt: confirmed.legacyClaimStartedAt,
+    };
+  }
   return {
     spotId,
     status: confirmed.status,
