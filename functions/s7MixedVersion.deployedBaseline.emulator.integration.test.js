@@ -397,7 +397,10 @@ describe('T4 finder cancel (head finderCancelSpot) with the DEPLOYED updateTrust
     };
   }
 
-  it('CHARACTERIZATION T4-C1: generation claim — callable deletes once, deployed trigger penalizes once across retries, clears the lock, writes no notice', async () => {
+  // S7 DR-2 (t721u): finderCancelSpot now writes the claimant notice in its
+  // deleting transaction. T4-C1 recorded "writes no notice" (t674u); it now
+  // records exactly the one callable notice, with the deployed trigger adding none.
+  it('CHARACTERIZATION T4-C1: generation claim — callable deletes once and writes the one claimant notice; deployed trigger penalizes once across retries, clears the lock, adds no notice', async () => {
     const row = ids('gen');
     const before = claimedBy(row.finder, row.a, G1);
     await seedT4(row, before);
@@ -420,7 +423,9 @@ describe('T4 finder cancel (head finderCancelSpot) with the DEPLOYED updateTrust
     expect(t4.gen.first).toBe('deleted');
     expect(t4.gen.again).toBe('already_deleted');
     expect(t4.gen.receipts).toBe(1);
-    expect(t4.gen.notices).toEqual([]);
+    expect(t4.gen.notices).toEqual([
+      { id: `finder_cancelled_${row.s1}_${row.a}_${G1}`, type: 'cancelled', target: row.a },
+    ]);
   });
 
   it('SECURITY T4-S1: no duplicated trust penalty across callable retry and trigger redelivery', () => {
@@ -435,7 +440,9 @@ describe('T4 finder cancel (head finderCancelSpot) with the DEPLOYED updateTrust
     expect(t4.gen.notices.length).toBeLessThanOrEqual(1);
   });
 
-  itExpectedUnsafe('GAP[T4-G1] the claimant receives exactly one finder-cancel notice when a new client cancels through finderCancelSpot under the deployed trigger', () => {
+  // Closed by S7 DR-2 (t721u). Per this file's protocol the it.fails became a
+  // plain it; the title and the assertion are unchanged.
+  it('GAP[T4-G1] the claimant receives exactly one finder-cancel notice when a new client cancels through finderCancelSpot under the deployed trigger', () => {
     expect(t4.gen.notices.filter((n) => n.target === t4.gen.claimant).length).toBe(1);
   });
 

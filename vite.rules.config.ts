@@ -16,6 +16,14 @@ export default defineConfig({
             'firestore.rules.test.candidate-aware.ts',
             'firestore.rules.finder-notice.31ag.test.ts',
             'firestore.rules.ping-delete.test.ts',
+            // S7 mixed-version (t674u): Oct 16 client writes vs the deployed ruleset snapshot and head.
+            'firestore.rules.test.mixed-version-deployed.ts',
+            // S7 interim (t680u): NONDEPLOYABLE legacy-hardened candidate proof.
+            'firestore.rules.test.interim-legacy-hardened.ts',
+            // S7 interim (t685u): expression-budget and document-access regression for that candidate.
+            'firestore.rules.test.interim-expression-budget.ts',
+            // S7 interim release artifact (t721u): source identity, selection config, carLocation parity.
+            'firestore.rules.test.interim-release.ts',
             // Offline index-baseline guard; runs whenever firestore.indexes.json changes.
             'firestore.indexes.production-baseline.test.ts',
           ],

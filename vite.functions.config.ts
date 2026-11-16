@@ -50,6 +50,8 @@ export default defineConfig({
       'functions/waitlist.integration.test.js',
       'functions/scheduleCleaningReminders.integration.test.js',
       'functions/parkingCallableDeletionFence.test.js',
+      // S7 PR-A (t721u): D5a revoke suspension, DR-2 finder-cancel notice, Q8 admin guard.
+      'functions/s7PrAServerSecurity.integration.test.js',
     ],
     testTimeout: 120000,
     hookTimeout: 120000,

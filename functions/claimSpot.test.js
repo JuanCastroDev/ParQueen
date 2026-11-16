@@ -771,7 +771,10 @@ describe('claim intent protocol', () => {
     expect(MAX_PREPARED).toBe(3);
   });
 
-  it('lets a suspended owner release an already committed generation', async () => {
+  // S7 D5a (t721u) replaced the earlier contract ("lets a suspended owner
+  // release an already committed generation"): revoke now applies the same
+  // suspension denial as cancelClaim, with no write. Expiry cleanup releases.
+  it('denies a suspended owner revoking an already committed generation (D5a)', async () => {
     const box = harness({
       [`users/${UID}`]: profile(),
       [`spots/${SPOT}`]: availableSpot(),
@@ -783,9 +786,12 @@ describe('claim intent protocol', () => {
       message: 'Product access is not available.',
     });
     expect(box.calls.mints).toBe(1);
-    const released = await box.runRevoke(immediate(ATTEMPT_A));
-    expect(released.outcome).toBe('released');
-    expect(box.db.docs.get(`spots/${SPOT}`).claimGenerationId).toBeNull();
+    await expect(box.runRevoke(immediate(ATTEMPT_A))).rejects.toMatchObject({
+      code: 'permission-denied',
+      message: 'Product access is not available.',
+    });
+    expect(box.db.docs.get(`spots/${SPOT}`).claimGenerationId).toBe(claimed.claimGenerationId);
+    expect(box.db.docs.get(`${ATTEMPT_COLLECTION}/${ATTEMPT_A}`).state).toBe('claimed');
     await expect(box.runCancel(claimed.claimGenerationId)).rejects.toMatchObject({
       code: 'permission-denied',
       message: 'Product access is not available.',

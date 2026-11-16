@@ -5,7 +5,7 @@ import { MapItem } from './types';
 import { getDistance, drawRoute, clearRoute, NYC_CENTER } from './utils';
 import { getPingExpiresAtMs } from '../../utils/pingLifecycle';
 import { commitPingCreate, PING_SCHEDULE_HORIZON_MS, PingCreateRejected } from './pingCreateBounds';
-import { cancelClaimCallable } from './cancelClaimCallable';
+import { cancelClaimCallable, cancelLegacyClaimCallable } from './cancelClaimCallable';
 import {
     claimSpotCallable,
     prepareClaimIntentCallable,
@@ -15,7 +15,13 @@ import {
     type ClaimSpotResult,
     type RevokeOutcome,
 } from './claimSpotCallable';
-import { createClaimAttemptId, isClaimGenerationId } from './claimIdentity';
+import {
+    createClaimAttemptId,
+    isClaimGenerationId,
+    isGenerationless,
+    legacyClaimStartedAt,
+    type LegacyClaimStartedAt,
+} from './claimIdentity';
 import {
     recoverableClaim,
     readRecoverableClaims,
@@ -77,6 +83,30 @@ const MAX_CLAIM_MINUTES = 15;
 const ETA_OPTIONS = [2, 5, 8, 10];
 const kmToEstMinutes = (km: number) => Math.ceil((km / 25) * 60);
 
+type CancelAttempt =
+    | { spotId: string; claimGenerationId: string }
+    | { spotId: string; legacyClaimStartedAt: LegacyClaimStartedAt };
+
+// S7 T2-G1: a generationless claim held by this user (made by a pre-callable
+// client). Only the exact stored claimStartedAt is echoed; the server rereads
+// the claim and decides. A stored generation of any value is never legacy.
+function legacyClaimFingerprint(data: Record<string, unknown> | undefined, uid: string): LegacyClaimStartedAt | null {
+    if (!data || !isGenerationless(data) || data.interestedUserId !== uid) return null;
+    return legacyClaimStartedAt(data.claimStartedAt);
+}
+
+// S7 T2-G3: the Ping looks available but still stores a leftover generation.
+// Only then does claimSpot opt in to recovery; the server proves the orphan.
+function showsLeftoverGeneration(spot: Record<string, any> | null | undefined): boolean {
+    if (!spot) return false;
+    const generation = spot.claimGenerationId ?? spot.rawSpot?.claimGenerationId;
+    return spot.status === 'available'
+        && spot.interestedUserId == null
+        && spot.claimState == null
+        && generation !== undefined
+        && generation !== null;
+}
+
 export function useInterestFlow({
     selectedItem, setSelectedItem, user, freeSpots, userLocation, mapRef, activeRouteDestinationRef
 }: UseInterestFlowOptions) {
@@ -92,7 +122,7 @@ export function useInterestFlow({
     // In-memory only. A retry of this attempt keeps the spot and generation
     // captured at confirmation. A listener refresh must not replace them.
     // Sheet dismiss and dismissCancelAttempt drop the pair. It is not stored.
-    const cancelAttemptRef = useRef<{ spotId: string; claimGenerationId: string } | null>(null);
+    const cancelAttemptRef = useRef<CancelAttempt | null>(null);
     // In-memory only. A lost claimSpot response retries this attempt id.
     // A completed response, a spot change, and sheet dismiss drop it.
     const claimAttemptRef = useRef<{
@@ -567,7 +597,7 @@ export function useInterestFlow({
     };
 
     const acquirePreparedClaim = async (
-        spot: { id: string; lat: number; lng: number },
+        spot: { id: string; lat: number; lng: number; [key: string]: any },
         mode: ClaimSpotMode,
         etaMinutes: number | null,
         fallback: string,
@@ -597,6 +627,7 @@ export function useInterestFlow({
             attemptId,
             mode,
             ...(etaMinutes == null ? {} : { etaMinutes }),
+            ...(showsLeftoverGeneration(spot) ? { recoverLeftoverGeneration: true as const } : {}),
         });
         if (abandonedAttemptsRef.current.has(attemptId) || !responseStillCurrent(spot.id, attemptId)) return;
         await finishReconciledClaim(spot, attemptId, claimResult, fallback, drawNavigation);
@@ -644,6 +675,7 @@ export function useInterestFlow({
             interestedUserId: selectedItem.interestedUserId ?? null,
             claimState: selectedItem.claimState ?? null,
             claimGenerationId: selectedItem.claimGenerationId ?? selectedItem.rawSpot?.claimGenerationId ?? null,
+            claimStartedAt: selectedItem.claimStartedAt ?? selectedItem.rawSpot?.claimStartedAt ?? null,
         };
         try {
             const outcome = await finderCancelSpot({
@@ -957,30 +989,40 @@ export function useInterestFlow({
         setInterestError(null);
 
         try {
-            let spotId: string;
-            let claimGenerationId: string;
+            let attempt: CancelAttempt;
             if (openAttempt) {
-                spotId = openAttempt.spotId;
-                claimGenerationId = openAttempt.claimGenerationId;
+                attempt = openAttempt;
             } else {
                 const currentId = selectedItem?.id;
                 if (!currentId) return;
-                spotId = currentId;
-                const snap = await getDoc(doc(db, 'spots', spotId));
-                const stored = snap.exists() ? (snap.data() as { claimGenerationId?: unknown }).claimGenerationId : undefined;
-                if (!isClaimGenerationId(stored)) {
-                    setInterestError(t('claim_flow.cancel_error'));
-                    return;
+                const snap = await getDoc(doc(db, 'spots', currentId));
+                const data = snap.exists() ? (snap.data() as Record<string, unknown>) : undefined;
+                const stored = data?.claimGenerationId;
+                if (isClaimGenerationId(stored)) {
+                    attempt = { spotId: currentId, claimGenerationId: stored };
+                } else {
+                    const legacy = legacyClaimFingerprint(data, user.id);
+                    if (!legacy) {
+                        setInterestError(t('claim_flow.cancel_error'));
+                        return;
+                    }
+                    attempt = { spotId: currentId, legacyClaimStartedAt: legacy };
                 }
-                claimGenerationId = stored;
-                cancelAttemptRef.current = { spotId, claimGenerationId };
+                cancelAttemptRef.current = attempt;
             }
+            const spotId = attempt.spotId;
 
-            const outcome = await cancelClaimCallable({
-                spotId,
-                claimGenerationId,
-                reason,
-            });
+            const outcome = 'claimGenerationId' in attempt
+                ? await cancelClaimCallable({
+                    spotId,
+                    claimGenerationId: attempt.claimGenerationId,
+                    reason,
+                })
+                : await cancelLegacyClaimCallable({
+                    spotId,
+                    legacyClaimStartedAt: attempt.legacyClaimStartedAt,
+                    reason,
+                });
             if (outcome !== 'cancelled' && outcome !== 'already_resolved' && outcome !== 'stale_claim') {
                 throw new Error('Invalid cancellation response.');
             }

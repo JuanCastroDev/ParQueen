@@ -552,6 +552,33 @@ service cloud.firestore {
           && request.resource.data.blockedUsers.size() <= 500;
       }
 
+      // private/carLocation — one approximate personal bookmark.
+      // Owner get/write only. The schema cannot carry a curb, a blockface,
+      // a certification flag, or a public spot.
+      match /private/carLocation {
+        allow get: if signedIn() && request.auth.uid == userId;
+        allow list: if false;
+        allow create, update: if signedIn() && request.auth.uid == userId
+          && request.resource.data.keys().hasOnly([
+               'verification', 'approximate', 'lat', 'lng', 'accuracyMeters', 'savedAt'])
+          && request.resource.data.verification == 'UNVERIFIED'
+          && request.resource.data.approximate == true
+          && request.resource.data.lat is number
+          && request.resource.data.lat >= -90
+          && request.resource.data.lat <= 90
+          && request.resource.data.lng is number
+          && request.resource.data.lng >= -180
+          && request.resource.data.lng <= 180
+          && (request.resource.data.accuracyMeters == null
+              || (request.resource.data.accuracyMeters is number
+                  && request.resource.data.accuracyMeters >= 0
+                  && request.resource.data.accuracyMeters <= 100000))
+          && request.resource.data.savedAt is timestamp
+          && request.resource.data.savedAt >= request.time - duration.value(5, 'm')
+          && request.resource.data.savedAt <= request.time + duration.value(1, 'm');
+        allow delete: if signedIn() && request.auth.uid == userId;
+      }
+
       // private/profile — owner-only demographic data (dob, gender, homeArea, etc.)
       match /private/profile {
         allow read, write: if actorMayUseProduct() && request.auth.uid == userId;

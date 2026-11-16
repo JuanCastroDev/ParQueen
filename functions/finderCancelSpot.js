@@ -12,7 +12,7 @@ const {
   classifyLockSnapshot,
   lockConflict,
 } = require('./claimLockIdentity');
-const { NOTICE_MESSAGE } = require('./finderCancelNotice');
+const { NOTICE_MESSAGE, noticeId, isNoticeCandidate } = require('./finderCancelNotice');
 const { RECEIPT_COLLECTION, receiptDocumentId, receiptBody } = require('./finderCancelReceipt');
 const {
   isGenerationless,
@@ -44,6 +44,16 @@ const {
 // attribution, and the claimant notice is written here, in the same
 // transaction, because the delete trigger writes notices only for
 // generations. Requests without the sixth key keep the existing contract.
+//
+// S7 DR-2 (t721u): on the generation path the claimant notice is also written
+// here, in the deleting transaction, so a mixed deployment whose delete
+// trigger writes no notice still tells the claimant. It uses the trigger's
+// document id (finderCancelNotice.noticeId: spot, claimant, generation), body
+// and candidate test (isNoticeCandidate: interested, not admin, not expired at
+// the delete time). The id is read before any write and set only when absent,
+// so a callable retry, an overlapping call, or the head trigger's later
+// writeFinderCancelNotice (already_recorded) cannot add a second notice. The
+// receipt, the delete, the lock clear and the trust penalty are unchanged.
 
 const SPOT_ID_MAX = 200;
 const TEXT_MAX = 128;
@@ -281,6 +291,11 @@ async function finderCancelSpot(request, deps = {}) {
         ? db.collection('spotNotifications').doc(legacyNoticeId(input.spotId, fresh))
         : null;
       const legacyNoticeSnap = legacyNoticeRef ? await tx.get(legacyNoticeRef) : null;
+      const generationNoticeId = fresh.kind === 'generation'
+        ? noticeId(input.spotId, fresh.interestedUserId, fresh.claimGenerationId)
+        : null;
+      const generationNoticeRef = generationNoticeId ? db.collection('spotNotifications').doc(generationNoticeId) : null;
+      const generationNoticeSnap = generationNoticeRef ? await tx.get(generationNoticeRef) : null;
       if (afterReads && !hookUsed) {
         hookUsed = true;
         await afterReads();
@@ -367,6 +382,19 @@ async function finderCancelSpot(request, deps = {}) {
       tx.delete(spotRef);
       if (expectedClaim && lockClassification === LOCK_MATCH.EXACT) {
         deleteMatchingActiveIncomingClaim(tx, lockSnap, expectedClaim);
+      }
+      if (generationNoticeRef && !generationNoticeSnap.exists && fresh.interestedUserId !== uid) {
+        const nowTs = now();
+        if (isNoticeCandidate(spotSnap.data(), nowTs.toMillis())) {
+          tx.set(generationNoticeRef, {
+            spotId: input.spotId,
+            senderId: uid,
+            targetUserId: fresh.interestedUserId,
+            type: 'cancelled',
+            message: NOTICE_MESSAGE,
+            createdAt: nowTs,
+          });
+        }
       }
       return { outcome: 'deleted' };
     });
