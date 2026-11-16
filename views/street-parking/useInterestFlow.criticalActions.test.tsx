@@ -252,8 +252,15 @@ describe('useInterestFlow — critical-action failure reporting', () => {
   });
 
   it('handleHandoffOutcome reports terminal_handoff and stays on the outcome step when the write fails', async () => {
+    let transactionRead = 0;
     runTransaction.mockImplementationOnce(async (_db, cb) => cb({
-      get: async () => ({ exists: () => true, data: () => ({ status: 'interested', interestedUserId: 'u1', finderId: 'finder1' }) }),
+      get: async () => {
+        transactionRead += 1;
+        if (transactionRead === 1) {
+          return { exists: () => true, data: () => ({ status: 'interested', interestedUserId: 'u1', finderId: 'finder1' }) };
+        }
+        return { exists: () => false, data: () => undefined };
+      },
       update: vi.fn(),
       delete: vi.fn(),
     }));
@@ -264,6 +271,7 @@ describe('useInterestFlow — critical-action failure reporting', () => {
     setDoc.mockRejectedValueOnce(txError);
 
     await act(async () => { await getFlow().handleHandoffOutcome('success'); });
+    expect(setDoc).toHaveBeenCalledTimes(1);
     expect(reportCriticalActionFailure).toHaveBeenCalledTimes(1);
     expect(reportCriticalActionFailure).toHaveBeenCalledWith('terminal_handoff', txError);
     expect(getFlow().handoffStep).toBe('outcome');
