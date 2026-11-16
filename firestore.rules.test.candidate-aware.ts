@@ -47,7 +47,7 @@ import {
 } from './views/street-parking/activeIncomingClaim';
 import { getTitleForCrowns } from './utils/crowns';
 import { timestampToMillis } from './utils/pingLifecycle';
-import { advancePingRate, PingCreateRejected } from './views/street-parking/pingCreateBounds';
+import { advancePingRate, commitPingCreate, PingCreateRejected } from './views/street-parking/pingCreateBounds';
 import {
     completeTerminalHandoff,
 } from './views/street-parking/completeTerminalHandoff';
@@ -6729,4 +6729,433 @@ describe('t743u — final rules: document-access headroom', () => {
             expect(headroom).toBeGreaterThanOrEqual(MIN_HEADROOM);
         }, 240_000);
     }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// t745u — Ping create quota under the 1000-expression request limit.
+// The deployed a7d53cc8 client (StreetParkingView.tsx) sends finderTitle and the
+// three finderVehicle* fields. With those fields the 5th Ping of a rolling hour
+// used to exceed 1000 expressions because pingCreateRateRecorded() re-ran the
+// quota doc's own shape and carry checks. pingCreateRateRecorded() now only binds
+// the same-commit quota write to the new spot; the quota doc's create/update
+// rule stays the single authority for shape, the 5-entry cap and the carry.
+// Every denial below must name the intended rule ("false for ... @ L<line>"),
+// never an expression-limit or evaluation error.
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('t745u — Ping create quota under the 1000-expression limit', () => {
+    const FIN = 't745-finder';
+    const CLM = 't745-claimer';
+    // Worst-case identity path for the shipped client: crowns 0 walks every
+    // titleForCrowns branch, and all three vehicle fields are compared.
+    const PROFILE = {
+        username: 'finder745', fullName: 'Finder Five', crowns: 0, status: 'Active', productAccessBlocked: false,
+        vehicleColor: 'Red', vehicleType: 'Sedan', vehicleBrand: 'Toyota',
+    };
+    const RULES_TEXT = readFileSync('firestore.rules', 'utf8');
+    const RULE_LINES = RULES_TEXT.split('\n');
+    function lineOf(needle: string, after = 0) {
+        const i = RULE_LINES.findIndex((l, idx) => idx >= after && l.includes(needle));
+        if (i < 0) throw new Error(`rule line not found: ${needle}`);
+        return i + 1;
+    }
+    const RATE_MATCH = lineOf('match /pingCreateRate/{rateId}');
+    const RATE_CREATE = lineOf('allow create: if actorMayWritePings()', RATE_MATCH);
+    const RATE_UPDATE = lineOf('allow update: if actorMayWritePings()', RATE_MATCH);
+    const SPOT_CREATE = lineOf('allow create: if actorMayWritePings()', lineOf('match /spots/{spotId}'));
+    const ORIGIN_MATCH = lineOf('match /originRePings/{originSpotId}');
+    const ORIGIN_UPDATE = lineOf('allow update, delete: if false;', ORIGIN_MATCH);
+
+    function db(uid = FIN) { return testEnv.authenticatedContext(uid).firestore(); }
+    function rateRef(d: ReturnType<typeof db>, uid = FIN) { return doc(d, 'users', uid, 'pingCreateRate', 'current'); }
+    function minutesAgo(m: number) { return Timestamp.fromMillis(Date.now() - m * 60_000); }
+
+    // Exact StreetParkingView.tsx (a7d53cc8) create payload for this profile.
+    function clientPing(i: number | string, extra: Record<string, unknown> = {}) {
+        const reportedAt = Timestamp.now();
+        return {
+            lat: 40.7 + Number(String(i).replace(/\D/g, '') || 0) * 0.001,
+            lng: -73.99,
+            type: 'free',
+            status: 'available',
+            finderId: FIN,
+            finderName: PROFILE.username,
+            finderTitle: getTitleForCrowns(PROFILE.crowns),
+            finderVehicleColor: PROFILE.vehicleColor,
+            finderVehicleType: PROFILE.vehicleType,
+            finderVehicleBrand: PROFILE.vehicleBrand,
+            pingMode: 'now',
+            reportedAt,
+            expiresAt: Timestamp.fromMillis(reportedAt.toMillis() + 30 * 60_000),
+            geohash: 'dr5rsq',
+            address: `${i} Quota Street, New York, NY 10001`,
+            ...extra,
+        };
+    }
+
+    async function seedRate(ids: string[], ats: Timestamp[]) {
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            await setDoc(rateRef(ctx.firestore()), { spotIds: ids, createdAts: ats });
+        });
+    }
+    async function adminRead(path: string[]) {
+        let data: any = null;
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            const snap = await getDoc(doc(ctx.firestore(), path[0], ...path.slice(1)));
+            data = snap.exists() ? snap.data() : null;
+        });
+        return data;
+    }
+    async function finderSpotCount() {
+        let n = 0;
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            n = (await getDocs(query(collection(ctx.firestore(), 'spots'), where('finderId', '==', FIN)))).size;
+        });
+        return n;
+    }
+
+    // A real rules decision: the message must carry "false for '<op>' @ L<line>"
+    // for the intended rule, and nothing that indicates the evaluator gave up.
+    // The emulator also lists diagnostic "evaluation error at L<n>:<col>" entries
+    // for the create/update statements it probes for each write (they appear on
+    // every denial, including a plain spot-only create); the decision is the
+    // "false for" entry, so those are not treated as the denial reason.
+    const EVALUATOR_FAILURE = /maximum of \d+ expressions|expressions to evaluate|too complex|exceeded|too many/i;
+    async function ruleDenied(p: Promise<unknown>, op: string, line: number, alt?: [string, number]) {
+        const err = await assertFails(p) as { message?: string };
+        const msg = String(err?.message ?? '');
+        console.log(JSON.stringify({ t745u: 'denial', op, line, msg: msg.replace(/\s+/g, ' ').slice(0, 400) }));
+        expect(msg).not.toMatch(EVALUATOR_FAILURE);
+        const wanted = [`false for '${op}' @ L${line}`, ...(alt ? [`false for '${alt[0]}' @ L${alt[1]}`] : [])];
+        expect(wanted.some((w) => msg.includes(w)), `${wanted.join(' | ')} in ${msg}`).toBe(true);
+        return msg;
+    }
+    async function allowed(p: Promise<unknown>) {
+        try {
+            await p;
+        } catch (e: any) {
+            throw new Error(`expected success, got ${e?.code ?? e?.name}: ${String(e?.message ?? '').replace(/\s+/g, ' ').slice(0, 400)}`);
+        }
+    }
+
+    // A client that skips advancePingRate entirely and writes the quota doc as given.
+    function forcedCreate(d: ReturnType<typeof db>, spotId: string, data: object, rate: { spotIds: string[]; createdAts: Timestamp[] } | null, extraWrites?: (b: ReturnType<typeof writeBatch>) => void) {
+        const b = writeBatch(d);
+        b.set(doc(d, 'spots', spotId), data);
+        if (rate) b.set(rateRef(d), rate);
+        extraWrites?.(b);
+        return b.commit();
+    }
+
+    beforeEach(async () => {
+        await seed('users', FIN, PROFILE);
+    });
+
+    it('T745-Q1: Pings 1-5 in one rolling hour succeed through the a7d53cc8 commitPingCreate with the full client shape', async () => {
+        const d = db();
+        for (let i = 1; i <= 5; i += 1) {
+            await allowed(commitPingCreate(d, { uid: FIN, spotRef: doc(collection(d, 'spots')), data: clientPing(i) }));
+        }
+        const rate = await adminRead(['users', FIN, 'pingCreateRate', 'current']);
+        expect(rate.spotIds).toHaveLength(5);
+        expect(await finderSpotCount()).toBe(5);
+        // The shipped client refuses a 6th before writing anything.
+        await expect(commitPingCreate(d, { uid: FIN, spotRef: doc(collection(d, 'spots')), data: clientPing(6) }))
+            .rejects.toMatchObject({ name: 'PingCreateRejected', reason: 'rate' });
+    });
+
+    it('T745-Q2: a forced 6th Ping (client rate check bypassed, honest 6-entry quota) is denied by the quota update rule', async () => {
+        const ids = ['q1', 'q2', 'q3', 'q4', 'q5'];
+        const ats = [50, 40, 30, 20, 10].map(minutesAgo);
+        await seedRate(ids, ats);
+        await ruleDenied(forcedCreate(db(), 'q6', clientPing(6), { spotIds: [...ids, 'q6'], createdAts: [...ats, Timestamp.now()] }), 'update', RATE_UPDATE);
+        expect(await adminRead(['spots', 'q6'])).toBeNull();
+        expect((await adminRead(['users', FIN, 'pingCreateRate', 'current'])).spotIds).toEqual(ids);
+    });
+
+    it('T745-Q2b: a forced 6th Ping after five real creates is denied by the quota rule, through the commitBoundedPing bypass helper', async () => {
+        const d = db();
+        for (let i = 1; i <= 5; i += 1) {
+            await allowed(commitPingCreate(d, { uid: FIN, spotRef: doc(collection(d, 'spots')), data: clientPing(i) }));
+        }
+        await ruleDenied(commitBoundedPing(d, FIN, 'forced-6', clientPing(6)), 'update', RATE_UPDATE);
+        expect(await finderSpotCount()).toBe(5);
+    });
+
+    it('T745-Q2c: a forced 6th that drops the oldest in-window entry to stay at 5 is denied', async () => {
+        const ids = ['q1', 'q2', 'q3', 'q4', 'q5'];
+        const ats = [50, 40, 30, 20, 10].map(minutesAgo);
+        await seedRate(ids, ats);
+        await ruleDenied(forcedCreate(db(), 'q6', clientPing(6), { spotIds: [...ids.slice(1), 'q6'], createdAts: [...ats.slice(1), Timestamp.now()] }), 'update', RATE_UPDATE);
+    });
+
+    it('T745-Q3: after the oldest entry leaves the rolling hour, a new Ping succeeds and the expired prefix is dropped', async () => {
+        const ids = ['old', 'q2', 'q3', 'q4', 'q5'];
+        await seedRate(ids, [61, 50, 40, 30, 20].map(minutesAgo));
+        const d = db();
+        const spotRef = doc(collection(d, 'spots'));
+        await allowed(commitPingCreate(d, { uid: FIN, spotRef, data: clientPing(7) }));
+        const rate = await adminRead(['users', FIN, 'pingCreateRate', 'current']);
+        expect(rate.spotIds).toEqual(['q2', 'q3', 'q4', 'q5', spotRef.id]);
+    });
+
+    it('T745-Q3b: keeping the expired entry (6 entries) is still denied', async () => {
+        const ids = ['old', 'q2', 'q3', 'q4', 'q5'];
+        const ats = [61, 50, 40, 30, 20].map(minutesAgo);
+        await seedRate(ids, ats);
+        await ruleDenied(forcedCreate(db(), 'q6', clientPing(6), { spotIds: [...ids, 'q6'], createdAts: [...ats, Timestamp.now()] }), 'update', RATE_UPDATE);
+    });
+
+    describe('forged or mismatched quota writes (four in-window entries)', () => {
+        const ids = ['q1', 'q2', 'q3', 'q4'];
+        const ats = [40, 30, 20, 10].map(minutesAgo);
+        beforeEach(async () => { await seedRate(ids, ats); });
+
+        it('T745-F1: a quota doc with an extra field is denied', async () => {
+            await ruleDenied(forcedCreate(db(), 'f1', clientPing(1), { spotIds: [...ids, 'f1'], createdAts: [...ats, Timestamp.now()], reset: true } as any), 'update', RATE_UPDATE);
+        });
+        it('T745-F2: replacing the list with only the new spot (forged reset) is denied', async () => {
+            await ruleDenied(forcedCreate(db(), 'f2', clientPing(2), { spotIds: ['f2'], createdAts: [Timestamp.now()] }), 'update', RATE_UPDATE);
+        });
+        it('T745-F3: dropping an unexpired entry is denied', async () => {
+            await ruleDenied(forcedCreate(db(), 'f3', clientPing(3), { spotIds: ['q1', 'q3', 'q4', 'f3'], createdAts: [ats[0], ats[2], ats[3], Timestamp.now()] }), 'update', RATE_UPDATE);
+        });
+        it('T745-F4: back-dating a carried timestamp so it looks expired is denied', async () => {
+            await ruleDenied(forcedCreate(db(), 'f4', clientPing(4), { spotIds: [...ids, 'f4'], createdAts: [minutesAgo(120), ats[1], ats[2], ats[3], Timestamp.now()] }), 'update', RATE_UPDATE);
+        });
+        it('T745-F5: a stale timestamp on the new entry is denied', async () => {
+            await ruleDenied(forcedCreate(db(), 'f5', clientPing(5), { spotIds: [...ids, 'f5'], createdAts: [...ats, minutesAgo(5)] }), 'update', RATE_UPDATE);
+        });
+        it('T745-F6: a quota entry naming another spot id is denied', async () => {
+            // Both rules reject this (the quota's last id is not a spot created
+            // in this commit; the spot is not the quota's last id). The emulator
+            // reports whichever write it evaluates first.
+            await ruleDenied(forcedCreate(db(), 'f6', clientPing(6), { spotIds: [...ids, 'someone-else'], createdAts: [...ats, Timestamp.now()] }), 'update', RATE_UPDATE, ['create', SPOT_CREATE]);
+        });
+        it('T745-F7: a carried spot id rewritten in place is denied', async () => {
+            await ruleDenied(forcedCreate(db(), 'f7', clientPing(7), { spotIds: ['qX', 'q2', 'q3', 'q4', 'f7'], createdAts: [...ats, Timestamp.now()] }), 'update', RATE_UPDATE);
+        });
+        it('T745-F8: a Ping create with no quota write is denied', async () => {
+            await ruleDenied(forcedCreate(db(), 'f8', clientPing(8), null), 'create', SPOT_CREATE);
+        });
+        it('T745-F9: two Pings in one commit with one quota entry are denied', async () => {
+            const d = db();
+            await ruleDenied(forcedCreate(d, 'f9a', clientPing(9), { spotIds: [...ids, 'f9a'], createdAts: [...ats, Timestamp.now()] },
+                (b) => b.set(doc(d, 'spots', 'f9b'), clientPing(10))), 'create', SPOT_CREATE);
+            expect(await adminRead(['spots', 'f9a'])).toBeNull();
+        });
+        it('T745-F10: delete-and-recreate of the last recorded spot id without a new quota entry is denied', async () => {
+            const d = db();
+            await allowed(commitPingCreate(d, { uid: FIN, spotRef: doc(d, 'spots', 'f10'), data: clientPing(10) }));
+            await allowed(deleteDoc(doc(d, 'spots', 'f10')));
+            // The quota doc still ends with f10 and its stamp is fresh; reusing it must not count as a new quota write.
+            await ruleDenied(forcedCreate(d, 'f10', clientPing(10), null), 'create', SPOT_CREATE);
+            expect(await adminRead(['spots', 'f10'])).toBeNull();
+        });
+        it('T745-F11: a quota doc created for another user is denied', async () => {
+            const d = db();
+            const b = writeBatch(d);
+            b.set(doc(d, 'spots', 'f11'), clientPing(11));
+            b.set(rateRef(d), { spotIds: [...ids, 'f11'], createdAts: [...ats, Timestamp.now()] });
+            b.set(doc(d, 'users', CLM, 'pingCreateRate', 'current'), { spotIds: ['f11'], createdAts: [Timestamp.now()] });
+            await assertFails(b.commit());
+        });
+    });
+
+    describe('departure re-Ping (originSpotId)', () => {
+        async function seedHandoff(id: string) {
+            await seed('spots', id, {
+                ...clientPing(id), finderId: CLM, finderName: 'claimer745', status: 'occupied', interestedUserId: FIN,
+            });
+        }
+        // Exact useInterestFlow.ts handleDeparturePing (a7d53cc8) payload.
+        function rePing(originId: string, minutesAhead = 30) {
+            const reportedAt = Timestamp.fromMillis(Date.now() + minutesAhead * 60_000);
+            return {
+                lat: 40.71, lng: -73.99, type: 'free', status: 'available', finderId: FIN, finderName: PROFILE.username,
+                pingMode: 'later', reportedAt, expiresAt: Timestamp.fromMillis(reportedAt.toMillis() + 30 * 60_000),
+                geohash: 'dr5rsq', address: `${originId} departure`, originSpotId: originId,
+            };
+        }
+
+        it('T745-O1: with four in-window entries the re-Ping is the 5th create and succeeds; the quota and marker are written', async () => {
+            await seed('users', CLM, { username: 'claimer745', crowns: 0, status: 'Active', productAccessBlocked: false });
+            await seedHandoff('o1');
+            await seedRate(['q1', 'q2', 'q3', 'q4'], [40, 30, 20, 10].map(minutesAgo));
+            const d = db();
+            const spotRef = doc(collection(d, 'spots'));
+            await allowed(commitPingCreate(d, { uid: FIN, spotRef, originSpotId: 'o1', data: rePing('o1') }));
+            expect((await adminRead(['users', FIN, 'pingCreateRate', 'current'])).spotIds).toHaveLength(5);
+            expect((await adminRead(['originRePings', 'o1'])).rePingSpotId).toBe(spotRef.id);
+        });
+
+        it('T745-O2: a second re-Ping of the same origin is denied by the create-once marker (quota still has room)', async () => {
+            await seedHandoff('o2');
+            await seedRate(['q1', 'q2'], [30, 20].map(minutesAgo));
+            const d = db();
+            await allowed(commitPingCreate(d, { uid: FIN, spotRef: doc(d, 'spots', 'o2-r1'), originSpotId: 'o2', data: rePing('o2') }));
+            // The shipped client refuses on the existing marker; a bypassing client still hits Rules.
+            await expect(commitPingCreate(d, { uid: FIN, spotRef: doc(collection(d, 'spots')), originSpotId: 'o2', data: rePing('o2', 40) }))
+                .rejects.toMatchObject({ name: 'PingCreateRejected', reason: 'origin' });
+            const msg = await ruleDenied(commitBoundedPing(d, FIN, 'o2-r2', rePing('o2', 40), 'o2'), 'update', ORIGIN_UPDATE);
+            expect(msg).not.toMatch(EVALUATOR_FAILURE);
+            expect(await adminRead(['spots', 'o2-r2'])).toBeNull();
+            expect((await adminRead(['users', FIN, 'pingCreateRate', 'current'])).spotIds).toHaveLength(3);
+        });
+
+        it('T745-O3: a re-Ping with five in-window entries is denied by the quota rule', async () => {
+            await seedHandoff('o3');
+            const ids = ['q1', 'q2', 'q3', 'q4', 'q5'];
+            await seedRate(ids, [50, 40, 30, 20, 10].map(minutesAgo));
+            await ruleDenied(commitBoundedPing(db(), FIN, 'o3-r1', rePing('o3'), 'o3'), 'update', RATE_UPDATE);
+            expect(await adminRead(['originRePings', 'o3'])).toBeNull();
+        });
+    });
+
+    it('T745-R1: the 5th create that also replaces the selected own Ping (StreetParkingView deleteRefs path) succeeds', async () => {
+        await seed('spots', 'old-own', clientPing('old-own'));
+        await seedRate(['q1', 'q2', 'q3', 'q4'], [40, 30, 20, 10].map(minutesAgo));
+        const d = db();
+        await allowed(commitPingCreate(d, { uid: FIN, spotRef: doc(collection(d, 'spots')), data: clientPing(5), deleteRefs: [doc(d, 'spots', 'old-own')] }));
+        expect(await adminRead(['spots', 'old-own'])).toBeNull();
+    });
+
+    it('T745-C1: concurrent 5th-Ping batches built from the same 4-entry snapshot commit at most one', async () => {
+        const ids = ['q1', 'q2', 'q3', 'q4'];
+        const ats = [40, 30, 20, 10].map(minutesAgo);
+        await seedRate(ids, ats);
+        const results = await Promise.allSettled([1, 2, 3].map((k) => {
+            const d = db();
+            return forcedCreate(d, `c5-${k}`, clientPing(k), { spotIds: [...ids, `c5-${k}`], createdAts: [...ats, Timestamp.now()] });
+        }));
+        const ok = results.filter((r) => r.status === 'fulfilled').length;
+        for (const r of results) if (r.status === 'rejected') expect(String((r.reason as any)?.message ?? '')).not.toMatch(EVALUATOR_FAILURE);
+        console.log(JSON.stringify({ t745u: 'concurrency-5th', fulfilled: ok, rejected: results.length - ok }));
+        expect(ok).toBe(1);
+        expect(await finderSpotCount()).toBe(1);
+        expect((await adminRead(['users', FIN, 'pingCreateRate', 'current'])).spotIds).toHaveLength(5);
+    });
+
+    it('T745-C2: concurrent forced 6th and 7th batches against a full hour commit nothing', async () => {
+        const ids = ['q1', 'q2', 'q3', 'q4', 'q5'];
+        const ats = [50, 40, 30, 20, 10].map(minutesAgo);
+        await seedRate(ids, ats);
+        const results = await Promise.allSettled([6, 7].map((k) => {
+            const d = db();
+            return Promise.all([
+                forcedCreate(d, `c-${k}a`, clientPing(k), { spotIds: [...ids, `c-${k}a`], createdAts: [...ats, Timestamp.now()] }),
+                forcedCreate(d, `c-${k}b`, clientPing(k), { spotIds: [...ids.slice(1), `c-${k}b`], createdAts: [...ats.slice(1), Timestamp.now()] }),
+            ]);
+        }));
+        expect(results.every((r) => r.status === 'rejected')).toBe(true);
+        expect(await finderSpotCount()).toBe(0);
+        expect((await adminRead(['users', FIN, 'pingCreateRate', 'current'])).spotIds).toEqual(ids);
+    });
+});
+
+// t745u — expression headroom. The request limit is 1000 evaluated expressions.
+// Padding: a helper t745uPad(i) evaluating ten "request.time != null" terms is
+// defined next to pingCreateRateRecorded() and called K times (distinct literal
+// argument per call) inside the spots create rule. Calibration: the same helper
+// on a one-line rule gives the per-call expression cost as 1000 / (Kcal + 1).
+// Headroom for a case ~= Kmax_case * per-call cost (approximate, ± one call).
+describe('t745u — 5th Ping expression headroom', () => {
+    const FIN = 't745h-finder';
+    const PROFILE = {
+        username: 'finder745h', fullName: 'H', crowns: 0, status: 'Active', productAccessBlocked: false,
+        vehicleColor: 'Red', vehicleType: 'Sedan', vehicleBrand: 'Toyota',
+    };
+    const RULES_TEXT = readFileSync('firestore.rules', 'utf8');
+    const CREATE_ANCHOR = '&& pingCreateRateRecorded(spotId)\n        && originLinkRecorded(spotId);';
+    const FN_ANCHOR = '    function pingCreateRateRecorded(spotId) {';
+    const PAD_FN = `    function t745uPad(i) {\n      return i != null${' && request.time != null'.repeat(10)};\n    }\n\n`;
+    const MIN_HEADROOM_EXPRESSIONS = 100;
+    let padEnv: RulesTestEnvironment | undefined;
+    async function useRules(text: string) {
+        if (padEnv) { await padEnv.cleanup(); padEnv = undefined; }
+        padEnv = await initializeTestEnvironment({ projectId: PROJECT_ID, firestore: { rules: text, host: rulesEmulator.host, port: rulesEmulator.port } });
+    }
+    afterAll(async () => {
+        await useRules(RULES_TEXT);
+        if (padEnv) await padEnv.cleanup();
+    });
+    function calls(k: number) { return Array.from({ length: k }, (_, i) => ` && t745uPad(${i})`).join(''); }
+    function unique(text: string, anchor: string) {
+        const at = text.indexOf(anchor);
+        if (at < 0 || text.indexOf(anchor, at + 1) >= 0) throw new Error(`pad anchor not unique: ${anchor.slice(0, 40)}`);
+        return at;
+    }
+    function padded(k: number) {
+        let text = RULES_TEXT;
+        const c = unique(text, CREATE_ANCHOR);
+        text = text.slice(0, c) + CREATE_ANCHOR.slice(0, -1) + calls(k) + ';' + text.slice(c + CREATE_ANCHOR.length);
+        const f = unique(text, FN_ANCHOR);
+        return text.slice(0, f) + PAD_FN + text.slice(f);
+    }
+    function ping(i: number | string) {
+        const reportedAt = Timestamp.now();
+        return {
+            lat: 40.7, lng: -73.99, type: 'free', status: 'available', finderId: FIN, finderName: PROFILE.username,
+            finderTitle: getTitleForCrowns(0), finderVehicleColor: 'Red', finderVehicleType: 'Sedan', finderVehicleBrand: 'Toyota',
+            pingMode: 'now', reportedAt, expiresAt: Timestamp.fromMillis(reportedAt.toMillis() + 30 * 60_000),
+            geohash: 'dr5rsq', address: `${i} Headroom Avenue, New York, NY 10001`,
+        };
+    }
+    async function seedFourth(withOwn: boolean) {
+        await testEnv.clearFirestore();
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            const fs = ctx.firestore();
+            await setDoc(doc(fs, 'users', FIN), PROFILE);
+            await setDoc(doc(fs, 'users', FIN, 'pingCreateRate', 'current'), {
+                spotIds: ['q1', 'q2', 'q3', 'q4'], createdAts: [40, 30, 20, 10].map((m) => Timestamp.fromMillis(Date.now() - m * 60_000)),
+            });
+            if (withOwn) await setDoc(doc(fs, 'spots', 'own'), ping('own'));
+        });
+    }
+    async function maxK(tryK: (k: number) => Promise<boolean>, hi: number) {
+        if (!(await tryK(0))) return -1;
+        let lo = 0;
+        while (lo < hi) {
+            const mid = Math.ceil((lo + hi) / 2);
+            if (await tryK(mid)) lo = mid; else hi = mid - 1;
+        }
+        return lo;
+    }
+
+    it('T745-H: the heaviest valid 5th-Ping requests keep at least 100 expressions of headroom', async () => {
+        const calText = (k: number) => `rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n${PAD_FN}    match /cal/{d} {\n      allow write: if request.auth != null${calls(k)};\n    }\n  }\n}\n`;
+        let calErr = '';
+        const calK = await maxK(async (k) => {
+            try {
+                await useRules(calText(k));
+                await setDoc(doc(padEnv!.authenticatedContext(FIN).firestore(), 'cal', 'x'), { a: 1 });
+                return true;
+            } catch (e: any) { calErr = String(e?.message ?? ''); return false; }
+        }, 200);
+        expect(calK).toBeGreaterThan(0);
+        expect(calK).toBeLessThan(200);
+        expect(calErr).toMatch(/maximum of 1000 expressions/);
+        const perCall = 1000 / (calK + 1);
+        const cases: { id: string; own: boolean; run: (d: any) => Promise<unknown> }[] = [
+            { id: '5th Ping, full client shape', own: false,
+                run: (d) => commitPingCreate(d, { uid: FIN, spotRef: doc(d, 'spots', 'p5'), data: ping(5) }) },
+            { id: '5th Ping replacing own Ping (deleteRefs)', own: true,
+                run: (d) => commitPingCreate(d, { uid: FIN, spotRef: doc(d, 'spots', 'p5r'), data: ping(5), deleteRefs: [doc(d, 'spots', 'own')] }) },
+        ];
+        for (const c of cases) {
+            let lastErr = '';
+            const k = await maxK(async (kk) => {
+                try {
+                    await useRules(padded(kk));
+                    await seedFourth(c.own);
+                    await c.run(padEnv!.authenticatedContext(FIN).firestore());
+                    return true;
+                } catch (e: any) { lastErr = String(e?.message ?? ''); return false; }
+            }, 150);
+            const headroom = Math.round(k * perCall);
+            console.log(JSON.stringify({ t745u: 'expr-headroom', id: c.id, calibrationCalls: calK, perCallExpressions: Number(perCall.toFixed(2)), maxPadCalls: k, approxHeadroomExpressions: headroom, failureAtNext: lastErr.replace(/\s+/g, ' ').slice(0, 200) }));
+            expect(k).toBeGreaterThanOrEqual(0);
+            expect(lastErr).toMatch(/maximum of 1000 expressions/);
+            expect(headroom).toBeGreaterThanOrEqual(MIN_HEADROOM_EXPRESSIONS);
+        }
+    }, 600_000);
 });
