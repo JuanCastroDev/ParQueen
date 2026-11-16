@@ -60,14 +60,17 @@ const en: Record<string, string> = {
     'onboarding.location.skip': 'Maybe later',
 
     // Location permission primer (standalone screen, Step 5 of new-user flow)
-    'location_prompt.eyebrow': 'LOCATION ACCESS',
-    'location_prompt.headline': 'See parking near you',
-    'location_prompt.body': 'Allow location to see nearby Pings, save where you parked, and get directions back to your car.',
+    'location_prompt.eyebrow': 'YOUR CITY, IN FOCUS',
+    'location_prompt.headline': 'Find parking',
+    'location_prompt.headline_accent': 'around you.',
+    'location_prompt.body': 'Enable location to center your map on your neighborhood and see nearby Pings.',
+    'location_prompt.you_label': 'Your position',
+    'location_prompt.pings_label': 'Example Pings',
     'location_prompt.enable': 'Enable location',
     'location_prompt.requesting': 'Requesting access…',
     'location_prompt.skip': 'Not now',
-    'location_prompt.reassurance': 'You can enable location later in your device settings.',
-    'location_prompt.map_desc': 'Map preview showing nearby parking spots',
+    'location_prompt.reassurance': 'You can change this anytime in your device settings.',
+    'location_prompt.map_desc': 'Illustrated city street with an example location dot and Pings',
     'location_prompt.services_off': 'Location services are turned off. Turn them on in your device settings, then try again.',
     'location_prompt.try_again': 'Couldn’t get a location fix yet. Location was not blocked — try again.',
 

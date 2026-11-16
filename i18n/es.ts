@@ -60,14 +60,17 @@ const es: Record<string, string> = {
     'onboarding.location.skip': 'Quizás después',
 
     // Location permission primer (standalone screen, Step 5 of new-user flow)
-    'location_prompt.eyebrow': 'ACCESO A TU UBICACIÓN',
-    'location_prompt.headline': 'Encuentra dónde estacionar cerca de ti',
-    'location_prompt.body': 'Permite el acceso a tu ubicación para ver Pings cercanos, guardar dónde estacionaste y obtener indicaciones para volver a tu carro.',
+    'location_prompt.eyebrow': 'TU CIUDAD, MÁS CERCA',
+    'location_prompt.headline': 'Encuentra estacionamiento',
+    'location_prompt.headline_accent': 'cerca de ti.',
+    'location_prompt.body': 'Activa la ubicación para centrar el mapa en tu zona y ver Pings cercanos.',
+    'location_prompt.you_label': 'Tu posición',
+    'location_prompt.pings_label': 'Pings de ejemplo',
     'location_prompt.enable': 'Activar ubicación',
     'location_prompt.requesting': 'Solicitando acceso…',
     'location_prompt.skip': 'Ahora no',
-    'location_prompt.reassurance': 'Puedes activar tu ubicación más tarde desde la configuración de tu dispositivo.',
-    'location_prompt.map_desc': 'Vista previa del mapa con estacionamientos cercanos',
+    'location_prompt.reassurance': 'Puedes cambiar esto cuando quieras en los ajustes de tu dispositivo.',
+    'location_prompt.map_desc': 'Calle ilustrada con un punto de ubicación y Pings de ejemplo',
     'location_prompt.services_off': 'Los servicios de ubicación están desactivados. Actívalos en la configuración del dispositivo e inténtalo de nuevo.',
     'location_prompt.try_again': 'Aún no se pudo obtener la ubicación. El acceso no fue bloqueado — inténtalo de nuevo.',
 
