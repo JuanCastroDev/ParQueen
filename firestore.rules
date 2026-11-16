@@ -19,8 +19,29 @@ service cloud.firestore {
       return exists(profile) && userRecordDenies(get(profile).data);
     }
 
+    // t743u: server-written deletion fence. Any accountLifecycle/{uid}
+    // document denies (same contract as the interim rules and the server
+    // deletionFencePresent). Clients cannot read or write that collection.
+    function accountDeletionFenced() {
+      return exists(/databases/$(database)/documents/accountLifecycle/$(request.auth.uid));
+    }
+
+    // Product access: Suspended, productAccessBlocked and the deletion fence
+    // deny. A missing profile does not deny here, because first-time
+    // onboarding (profile listener, username check, preferences) runs before
+    // claimUsername creates users/{uid}.
     function actorMayUseProduct() {
-      return request.auth != null && !productAccessDenied();
+      return request.auth != null && !productAccessDenied() && !accountDeletionFenced();
+    }
+
+    // t743u: Ping-domain writes (Pings, claim lock, Ping-create quota,
+    // notices, feedback, origin re-pings) also require users/{uid} to exist,
+    // as the interim rules do. A deleted account whose ID token is still
+    // valid has no profile. Same document productAccessDenied() already
+    // reads, so no extra document access.
+    function actorMayWritePings() {
+      return actorMayUseProduct()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
     // isAdmin() (token-only `request.auth.token.role == 'admin'`) has been
@@ -599,7 +620,7 @@ service cloud.firestore {
         allow get: if actorMayUseProduct() && request.auth.uid == userId && claimId == 'current';
         allow list: if false;
 
-        allow create, update: if actorMayUseProduct()
+        allow create, update: if actorMayWritePings()
           && request.auth.uid == userId
           && claimId == 'current'
           && request.resource.data.keys().hasOnly(['spotId', 'claimStartedAt', 'claimState', 'updatedAt', 'claimGenerationId'])
@@ -622,7 +643,7 @@ service cloud.firestore {
 
         // Owner may delete only once this Ping is no longer an active claim
         // after the same commit (cancel, arrival, or an already-released Ping).
-        allow delete: if actorMayUseProduct()
+        allow delete: if actorMayWritePings()
           && request.auth.uid == userId
           && claimId == 'current'
           && resource.data.spotId is string
@@ -636,12 +657,12 @@ service cloud.firestore {
         allow get: if actorMayUseProduct() && request.auth.uid == userId && rateId == 'current';
         allow list: if false;
         allow delete: if false;
-        allow create: if actorMayUseProduct()
+        allow create: if actorMayWritePings()
           && request.auth.uid == userId
           && rateId == 'current'
           && pingRateShape(request.resource.data)
           && request.resource.data.spotIds.size() == 1;
-        allow update: if actorMayUseProduct()
+        allow update: if actorMayWritePings()
           && request.auth.uid == userId
           && rateId == 'current'
           && resource.data.keys().hasOnly(['spotIds', 'createdAts'])
@@ -676,7 +697,7 @@ service cloud.firestore {
     // Rules cannot see an unclaimed-to-unclaimed cycle, so that case is not
     // distinguished here.
     function clientMayDeleteUnclaimedSpot() {
-      return actorMayUseProduct()
+      return actorMayWritePings()
         && resource.data.finderId == request.auth.uid
         && resource.data.status == 'available'
         && (resource.data.get('interestedUserId', null) == null
@@ -701,7 +722,7 @@ service cloud.firestore {
         || resource.data.get('interestedUserId', null) == request.auth.uid
         || resource.data.get('claimedBy', null) == request.auth.uid
       );
-      allow create: if actorMayUseProduct()
+      allow create: if actorMayWritePings()
         && request.resource.data.keys().hasAll([
              'lat', 'lng', 'type', 'status', 'finderId', 'finderName',
              'pingMode', 'reportedAt', 'expiresAt', 'geohash', 'address'])
@@ -750,7 +771,7 @@ service cloud.firestore {
       // 31V candidate: Arms 1, 3, and 3b are removed. Arm 2 is the first
       // remaining disjunct. No new predicate was added. The allow is still
       // the OR of every remaining arm.
-      allow update: if actorMayUseProduct() && (
+      allow update: if actorMayWritePings() && (
 
         // Arm 2: Claimer updates ETA
         (isClaimer() && onlyChanges(['etaMinutes']))
@@ -926,7 +947,7 @@ service cloud.firestore {
         && (resource.data.targetUserId == request.auth.uid
           || (resource.data.senderId == request.auth.uid
             && resource.data.type == 'handoff_success'));
-      allow create: if actorMayUseProduct()
+      allow create: if actorMayWritePings()
         && request.resource.data.keys().hasAll(
              ['spotId', 'senderId', 'targetUserId', 'type', 'message', 'createdAt'])
         && request.resource.data.keys().hasOnly(
@@ -996,7 +1017,7 @@ service cloud.firestore {
       let data = request.resource.data;
       let path = /databases/$(database)/documents/spots/$(data.spotId);
       let spot = getAfter(path).data;
-      return actorMayUseProduct()
+      return actorMayWritePings()
         && data.keys().hasAll(
              ['spotId', 'userId', 'finderId', 'outcome', 'address', 'createdAt'])
         && data.keys().hasOnly(
@@ -1037,7 +1058,7 @@ service cloud.firestore {
       let data = request.resource.data;
       let path = /databases/$(database)/documents/spots/$(data.spotId);
       let spot = getAfter(path).data;
-      return actorMayUseProduct()
+      return actorMayWritePings()
         && participantSuccessShape(data)
         && data.role == 'claimer'
         && request.auth.uid == data.userId
@@ -1051,7 +1072,7 @@ service cloud.firestore {
       let data = request.resource.data;
       let path = /databases/$(database)/documents/spots/$(data.spotId);
       let spot = getAfter(path).data;
-      return actorMayUseProduct()
+      return actorMayWritePings()
         && participantSuccessShape(data)
         && data.role == 'finder'
         && request.auth.uid == data.finderId
@@ -1099,7 +1120,7 @@ service cloud.firestore {
       );
       allow list: if false;
       allow update, delete: if false;
-      allow create: if actorMayUseProduct()
+      allow create: if actorMayWritePings()
         && originSpotId.size() > 0
         && originSpotId.size() <= 200
         && request.resource.data.keys().hasOnly(['rePingSpotId', 'finderId', 'createdAt'])
