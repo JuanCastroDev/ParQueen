@@ -409,25 +409,20 @@ service cloud.firestore {
         && pingSpotCreatedInCommit(data.spotIds[data.spotIds.size() - 1]);
     }
 
-    // Size may shrink when the expired prefix is dropped, so this is the same
-    // carry check as the quota update — not a blind +1.
-    function priorPingRateAllows(afterIds, afterAts) {
-      let prior = get(pingRatePath()).data;
-      return prior.spotIds is list
-        && prior.createdAts is list
-        && pingRateCarryOk(prior.spotIds, prior.createdAts, afterIds, afterAts);
-    }
-
+    // t745u: the quota doc is written in this same commit, so its own
+    // create/update rule (pingRateShape + pingRateCarryOk) already enforces
+    // shape, the 5-entry cap and the carry. Re-checking them here doubled the
+    // cost and pushed a full-shape 5th Ping past the 1000-expression limit.
+    // This only binds the quota write to this spot: new last entry, fresh,
+    // and not already recorded, so an unchanged quota doc cannot be reused.
     function pingCreateRateRecorded(spotId) {
       let path = pingRatePath();
       let after = getAfter(path).data;
       let n = after.spotIds.size();
       return existsAfter(path)
-        && after.keys().hasOnly(['spotIds', 'createdAts'])
-        && pingRateSlotsWellFormed(after.spotIds, after.createdAts)
         && after.spotIds[n - 1] == spotId
         && freshCreateStamp(after.createdAts[n - 1])
-        && (!exists(path) || priorPingRateAllows(after.spotIds, after.createdAts));
+        && (!exists(path) || !(spotId in get(path).data.spotIds));
     }
 
     function originMarkerCreatedFor(originId, spotId) {
