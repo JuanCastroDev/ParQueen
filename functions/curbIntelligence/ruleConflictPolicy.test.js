@@ -38,26 +38,24 @@ describe('selectRuleSet', () => {
     expect(selected.timeLimits).toEqual([timeLimit]);
     expect(selected.meter).toBe(meter);
     expect(selected.rules.filter(rule => rule.category === 'cleaning')).toHaveLength(1);
-    expect(selected.conflicts).toEqual([{
-      category: 'cleaning',
-      sources: ['dot', 'sweepNyc'],
-      outcome: 'dot_selected',
-    }]);
+    expect(selected.conflicts).toEqual([]);
+    expect(selected.rules.some(rule => rule.source === 'sweepNyc')).toBe(false);
   });
 
-  it('uses exact-curb SweepNYC only for DOT technical failure, not complete no-cleaning', () => {
+  it('does not use SweepNYC when DOT is unavailable or reports no cleaning', () => {
     const sweepRule = cleaning('sweepNyc');
-    const fallback = selectRuleSet({
+    const unavailable = selectRuleSet({
       dot: { state: 'unavailable', reason: 'source_unavailable', rules: [] },
       sweepNyc: { state: 'exact', rules: [sweepRule] },
     });
-    const noFallback = selectRuleSet({
+    const noCleaning = selectRuleSet({
       dot: { state: 'complete', rules: [restriction] },
       sweepNyc: { state: 'exact', rules: [sweepRule] },
     });
 
-    expect(fallback.cleaning).toBe(sweepRule);
-    expect(noFallback.cleaning).toBeNull();
+    expect(unavailable.cleaning).toBeNull();
+    expect(noCleaning.cleaning).toBeNull();
+    expect(unavailable.rules.some(rule => rule.source === 'sweepNyc')).toBe(false);
   });
 
   it('omits only an unresolved authoritative dimension and preserves unaffected rules', () => {

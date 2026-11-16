@@ -1,10 +1,22 @@
 'use strict';
 
 const { HttpsError } = require('firebase-functions/v2/https');
-const { userRecordDenies, PRODUCT_ACCESS_DENIED } = require('./productAccess');
+const { userRecordDenies, deletionFencePresent, throwIfDeleting, PRODUCT_ACCESS_DENIED } = require('./productAccess');
 const { checkRateLimit } = require('./rateLimiter');
 const { sanitizeError } = require('./redactForLog');
 const { isClaimGenerationId } = require('./claimGeneration');
+const {
+  isGenerationless,
+  parseLegacyFingerprint,
+  timestampFingerprint,
+  sameFingerprint,
+  legacyToken,
+} = require('./legacyClaimIdentity');
+const {
+  LOCK_MATCH,
+  classifyLockSnapshot,
+  lockConflict,
+} = require('./claimLockIdentity');
 
 // Outcome adjustment from the 29G contract:
 // stale_claim is returned only when the authenticated caller is still the
@@ -21,6 +33,19 @@ const { isClaimGenerationId } = require('./claimGeneration');
 //
 // Direct-write cancellation does not use this compare. Until Arms 1, 3, and
 // 3b are removed together, a client can still release a claim without an id.
+//
+// S7 T2-G1 legacy release (t682u). A second request shape,
+// { spotId, legacyClaimStartedAt: { seconds, nanoseconds }, reason }, releases
+// a generationless legacy claim. It is not a fallback of the generation
+// shape: a request carries exactly one of claimGenerationId or
+// legacyClaimStartedAt, and a missing claimGenerationId is still invalid.
+// The write happens only when the transaction rereads a live claim whose
+// interestedUserId is the caller, whose claimGenerationId is absent or null,
+// and whose claimStartedAt equals the echoed value exactly. A stored
+// generation of any value (valid or malformed) returns stale_claim with no
+// write. A lock that names this Ping but carries a generation, or a different
+// claimStartedAt, is conflicting state and also returns stale_claim. The
+// fence, suspension, rate-limit and notice rules are the generation path's.
 
 const REASONS = Object.freeze({
   found_elsewhere: 'The driver found parking elsewhere — your spot is available again.',
@@ -71,6 +96,7 @@ function parseInput(data) {
     throw new HttpsError('invalid-argument', INVALID);
   }
   const keys = Object.keys(data);
+  if (keys.length === 3 && keys.includes('legacyClaimStartedAt')) return parseLegacyInput(data, keys);
   if (keys.length !== 3 || keys.some((key) => key !== 'spotId' && key !== 'claimGenerationId' && key !== 'reason')) {
     throw new HttpsError('invalid-argument', INVALID);
   }
@@ -88,6 +114,25 @@ function parseInput(data) {
     throw new HttpsError('invalid-argument', INVALID);
   }
   return { spotId, claimGenerationId, reason };
+}
+
+function parseLegacyInput(data, keys) {
+  if (keys.some((key) => key !== 'spotId' && key !== 'legacyClaimStartedAt' && key !== 'reason')) {
+    throw new HttpsError('invalid-argument', INVALID);
+  }
+  const { spotId, reason } = data;
+  if (typeof spotId !== 'string' || spotId.length < 1 || spotId.length > SPOT_ID_MAX) {
+    throw new HttpsError('invalid-argument', INVALID);
+  }
+  if (spotId.includes('/') || spotId === '.' || spotId === '..') {
+    throw new HttpsError('invalid-argument', INVALID);
+  }
+  const legacyClaimStartedAt = parseLegacyFingerprint(data.legacyClaimStartedAt);
+  if (!legacyClaimStartedAt) throw new HttpsError('invalid-argument', INVALID);
+  if (!Object.prototype.hasOwnProperty.call(REASONS, reason)) {
+    throw new HttpsError('invalid-argument', INVALID);
+  }
+  return { spotId, legacyClaimStartedAt, reason, legacy: true };
 }
 
 function claimStateOf(spot) {
@@ -113,7 +158,51 @@ function notificationId(spotId, claimGenerationId) {
   return `claimer_cancelled_${spotId}_${claimGenerationId}`;
 }
 
+function legacyNotificationId(spotId, uid, fingerprint) {
+  const token = legacyToken(uid, fingerprint);
+  return token ? `claimer_cancelled_${spotId}_${token}` : null;
+}
+
+function classifyLegacy(uid, input, spotSnap) {
+  if (!spotSnap.exists) return { action: 'return', outcome: 'already_resolved' };
+  const spot = spotSnap.data() || {};
+  if (spot.interestedUserId !== uid) return { action: 'return', outcome: 'already_resolved' };
+  if (!isLiveClaim(spot)) return { action: 'return', outcome: 'already_resolved' };
+  // Never fall back: any stored generation value means this is not a legacy claim.
+  if (!isGenerationless(spot)) return { action: 'return', outcome: 'stale_claim' };
+  const stored = timestampFingerprint(spot.claimStartedAt);
+  if (!stored || !sameFingerprint(stored, input.legacyClaimStartedAt)) {
+    return { action: 'return', outcome: 'stale_claim' };
+  }
+  const id = legacyNotificationId(input.spotId, uid, stored);
+  if (!id) return { action: 'return', outcome: 'stale_claim' };
+  const finderId = typeof spot.finderId === 'string' ? spot.finderId : '';
+  return {
+    action: 'cancel',
+    outcome: 'cancelled',
+    legacy: true,
+    fingerprint: stored,
+    notify: finderId.length > 0 && finderId !== uid,
+    finderId,
+    notificationId: id,
+  };
+}
+
+// A lock that names this Ping must agree with the legacy claim it would
+// release. A generation on the lock, or another claimStartedAt, is conflicting
+// state. A missing lock (pre-lock legacy claim) or a lock naming another Ping
+// does not block the release and is left as is.
+function legacyLockConflicts(lockSnap, spotId, fingerprint) {
+  if (!lockSnap || !lockSnap.exists) return false;
+  const lock = lockSnap.data() || {};
+  if (lock.spotId !== spotId) return false;
+  if (lock.claimGenerationId !== undefined && lock.claimGenerationId !== null) return true;
+  if (lock.claimStartedAt === undefined || lock.claimStartedAt === null) return false;
+  return !sameFingerprint(timestampFingerprint(lock.claimStartedAt), fingerprint);
+}
+
 function classify(uid, input, spotSnap) {
+  if (input.legacy) return classifyLegacy(uid, input, spotSnap);
   if (!spotSnap.exists) return { action: 'return', outcome: 'already_resolved' };
   const spot = spotSnap.data() || {};
   if (spot.interestedUserId !== uid) return { action: 'return', outcome: 'already_resolved' };
@@ -150,7 +239,7 @@ async function cancelClaim(request, deps = {}) {
   if (typeof uid !== 'string' || uid.length === 0) {
     throw new HttpsError('unauthenticated', 'Authentication is required.');
   }
-  if (deps.afterReads && deps.allowTestHooks !== true) {
+  if ((deps.afterReads || deps.afterLifecycleRead) && deps.allowTestHooks !== true) {
     throw new HttpsError('internal', FAILURE);
   }
   const input = parseInput(request.data);
@@ -160,6 +249,12 @@ async function cancelClaim(request, deps = {}) {
   const afterReads = deps.allowTestHooks === true && typeof deps.afterReads === 'function'
     ? deps.afterReads
     : null;
+  const afterLifecycleRead = deps.allowTestHooks === true && typeof deps.afterLifecycleRead === 'function'
+    ? deps.afterLifecycleRead
+    : null;
+  if (await deletionFencePresent(uid, db)) {
+    throw new HttpsError('permission-denied', PRODUCT_ACCESS_DENIED);
+  }
   await limit(uid, 'cancelClaim', RATE_LIMIT);
 
   let hookUsed = false;
@@ -171,7 +266,25 @@ async function cancelClaim(request, deps = {}) {
       const userSnap = await tx.get(userRef);
       const spotSnap = await tx.get(spotRef);
       const lockSnap = await tx.get(lockRef);
-      const decision = classify(uid, input, spotSnap);
+      let decision = classify(uid, input, spotSnap);
+      const spot = spotSnap.exists ? (spotSnap.data() || {}) : null;
+      const expectedClaim = decision.action === 'cancel'
+        ? (decision.legacy
+          ? { kind: 'legacy', spotId: input.spotId, claimStartedAt: decision.fingerprint }
+          : { kind: 'generation', spotId: input.spotId, claimGenerationId: spot.claimGenerationId })
+        : null;
+      const lockClassification = expectedClaim
+        ? classifyLockSnapshot(lockSnap, expectedClaim)
+        : LOCK_MATCH.MISSING;
+      if ((decision.legacy && legacyLockConflicts(lockSnap, input.spotId, decision.fingerprint))
+        || lockConflict(lockClassification)) {
+        console.error('claimLockRepairRequired', {
+          operation: 'cancel_claim',
+          classification: lockClassification,
+          claimKind: expectedClaim && expectedClaim.kind,
+        });
+        decision = { action: 'return', outcome: 'stale_claim' };
+      }
       let notifRef = null;
       let notifExists = false;
       if (decision.action === 'cancel' && decision.notify) {
@@ -182,6 +295,9 @@ async function cancelClaim(request, deps = {}) {
         hookUsed = true;
         await afterReads();
       }
+      const lifeSnap = await tx.get(db.collection('accountLifecycle').doc(uid));
+      if (afterLifecycleRead) await afterLifecycleRead(lifeSnap);
+      throwIfDeleting(lifeSnap);
       if (userSnap.exists && userRecordDenies(userSnap.data())) {
         throw new HttpsError('permission-denied', PRODUCT_ACCESS_DENIED);
       }
@@ -191,12 +307,18 @@ async function cancelClaim(request, deps = {}) {
       if (decision.action !== 'cancel') return { outcome: decision.outcome };
 
       const serverNow = now();
-      const spot = spotSnap.data() || {};
       const patch = { ...CLEAR_FIELDS };
       if (!isExpired(spot, serverNow)) patch.status = 'available';
       tx.update(spotRef, patch);
-      if (lockSnap.exists && lockSnap.data() && lockSnap.data().spotId === input.spotId) {
+      if (lockClassification === LOCK_MATCH.EXACT) {
         tx.delete(lockRef);
+      }
+      if (lockClassification === LOCK_MATCH.MISSING || lockClassification === LOCK_MATCH.UNRELATED_SPOT) {
+        console.warn('claimLockReconciliationNeeded', {
+          operation: 'cancel_claim',
+          classification: lockClassification,
+          claimKind: expectedClaim.kind,
+        });
       }
       if (notifRef) {
         tx.create(notifRef, {

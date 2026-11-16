@@ -104,7 +104,12 @@ async function seedClaim(uid, spotExtra = {}) {
     etaMinutes: 4,
     ...spotExtra,
   });
-  await db.doc(`users/${uid}/activeIncomingClaims/current`).set({ spotId, claimStartedAt, claimState: 'heading' });
+  await db.doc(`users/${uid}/activeIncomingClaims/current`).set({
+    spotId,
+    claimStartedAt,
+    claimState: 'heading',
+    claimGenerationId: 'a1'.repeat(32),
+  });
   return { spotId, finderId };
 }
 
@@ -458,6 +463,7 @@ describe('cancelClaim suspension boundary', () => {
         collection(name) {
           return { doc(id) { return ref(`${path}/${name}/${id}`); } };
         },
+        async get() { return { exists: false, data: () => undefined }; },
       };
     }
     function txFor(docs) {
@@ -478,6 +484,7 @@ describe('cancelClaim suspension boundary', () => {
     let firstOutcome = null;
     let scratchStatus = null;
     const replayDb = {
+      doc(path) { return ref(path); },
       collection(name) {
         return { doc(id) { return ref(`${name}/${id}`); } };
       },

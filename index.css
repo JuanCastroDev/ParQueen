@@ -3955,6 +3955,7 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   line-height: 1.45;
   color: color-mix(in srgb, var(--color-text-secondary) 78%, transparent);
 }
+
 .pq-curb-side,
 .pq-curb-side-fallback {
   padding: 12px;
@@ -4015,10 +4016,58 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
 }
 .pq-curb-side-stage .pq-curb-side-diagram { grid-area: road; }
 .pq-curb-side-stage.is-north-south .pq-curb-side-diagram { height: 168px; }
+.pq-curb-side-reminder { margin: 0 0 10px; font-size: 13px; }
+.pq-curb-side-stage.is-oblique {
+  position: relative;
+  height: 248px;
+}
+.pq-curb-side-diagram.is-oblique { height: 100%; }
+.pq-curb-side-diagram.is-oblique .pq-curb-side-road {
+  left: 50%;
+  top: 50%;
+  width: 62%;
+  height: 28px;
+}
+.pq-curb-side-choice.is-oblique {
+  position: absolute;
+  width: min(46%, calc(2 * min(var(--curb-x), 100 - var(--curb-x)) * 1% - 12px));
+  max-width: 46%;
+  box-sizing: border-box;
+  transform: translate(-50%, -50%);
+}
 .pq-curb-side-choice.is-top { grid-area: north; }
 .pq-curb-side-choice.is-bottom { grid-area: south; }
 .pq-curb-side-choice.is-left { grid-area: west; }
 .pq-curb-side-choice.is-right { grid-area: east; }
+.pq-curb-driving-actions {
+  display: grid;
+  grid-template-columns: minmax(44px, 1fr) minmax(44px, 1fr);
+  gap: 8px;
+  margin-top: 10px;
+}
+.pq-curb-driving-choice {
+  position: static;
+  grid-area: auto;
+  box-sizing: border-box;
+  min-width: 44px;
+  min-height: 48px;
+  padding: 10px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 650;
+}
+.pq-curb-driving-choice:active:not(:disabled) {
+  transform: scale(0.98);
+  background: rgba(77, 148, 255, 0.16);
+}
+.pq-curb-driving-choice[aria-pressed="true"] {
+  border-color: rgba(77, 148, 255, 0.85);
+  background: rgba(77, 148, 255, 0.22);
+}
+.pq-curb-driving-choice:disabled { opacity: 0.48; }
 .pq-curb-side-choice,
 .pq-curb-side-cancel {
   min-height: 48px;

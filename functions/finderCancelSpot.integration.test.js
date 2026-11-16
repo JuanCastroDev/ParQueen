@@ -98,6 +98,20 @@ describe('finderCancelSpot emulator transactions', () => {
     expect((await lockOf('claimer-1')).claimGenerationId).toBe(G2);
   });
 
+  it('F1-02: preserves a same-Ping lock from a different generation without a receipt', async () => {
+    const spotId = ids();
+    await seed(spotId);
+    await db.collection('users').doc('claimer-1').collection('activeIncomingClaims').doc('current').update({
+      claimGenerationId: G2,
+    });
+
+    expect(await invoke(spotId)).toEqual({ outcome: 'unproven_identity' });
+    expect((await spotOf(spotId)).claimGenerationId).toBe(G1);
+    expect((await lockOf('claimer-1')).claimGenerationId).toBe(G2);
+    expect((await db.collection('finderCancelReceipts').where('spotId', '==', spotId).get()).empty).toBe(true);
+    expect((await db.collection('spotNotifications').where('spotId', '==', spotId).get()).empty).toBe(true);
+  });
+
   it('overlaps two real cancellation transactions without deleting twice', async () => {
     const spotId = ids();
     await seed(spotId);
@@ -288,12 +302,12 @@ describe('finderCancelSpot emulator transactions', () => {
 });
 
 describe('finderCancelSpot export contract', () => {
-  it('enforces App Check and does not select a service account', () => {
+  it('enforces App Check and uses the shared cancel identity', () => {
     const src = readFileSync(require('node:path').join(__dirname, 'index.js'), 'utf8');
     const start = src.indexOf('exports.finderCancelSpot = onCall(');
     const end = src.indexOf('exports.awardCrowns', start);
     const slice = src.slice(start, end);
     expect(slice).toContain('enforceAppCheck: true');
-    expect(slice).not.toContain('serviceAccount');
+    expect(slice).toContain("serviceAccount: 'parqueen-cancel@parkqueen-46475363-ccf36.iam.gserviceaccount.com'");
   });
 });

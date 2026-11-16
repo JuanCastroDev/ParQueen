@@ -120,6 +120,7 @@ describe('pinned runtime source artifact', () => {
       active: false,
       ownerApproval: 'PENDING',
     });
+    expect(loadPinnedRuntimeArtifact()).toBe(loadPinnedRuntimeArtifact());
     expect(document.successorRelease).toMatchObject({
       policyVersion: 'successor-release-candidate-1',
       frozenReadinessPolicy: 'ONE_CONSISTENT_RELEASE_OBSERVATION',

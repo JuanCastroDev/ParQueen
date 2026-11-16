@@ -4,26 +4,41 @@ import { getMessaging, isSupported } from 'firebase/messaging';
 import { initializeParQueenAppCheck } from './utils/appCheck';
 import { initializeParQueenAuth } from './utils/authInitialization';
 import { resolveFirebaseApiKey } from './utils/firebaseApiKey';
-import { assertDemoFirebaseAllowed, demoFirebaseAppConfig, DEMO_PROJECT_ID } from './utils/demoFirebase';
+import { assertDemoFirebaseAllowed, assertStreetIntelQaBuildAllowed, demoFirebaseAppConfig, DEMO_PROJECT_ID } from './utils/demoFirebase';
 import { bindDemoEmulators } from './utils/demoFirebaseRuntime';
 
-const productionFirebaseConfig = {
-  apiKey: "AIzaSyCKSqWVd6JqpcrNUG6hei8Ug1njaIkAI7Y",
-  authDomain: "parkqueen-46475363-ccf36.firebaseapp.com",
-  projectId: "parkqueen-46475363-ccf36",
-  storageBucket: "parkqueen-46475363-ccf36.firebasestorage.app",
-  messagingSenderId: "768131391875",
-  appId: "1:768131391875:web:613c5d2a948862333196b6"
-};
+const streetIntelQa = import.meta.env.MODE === 'streetintelqa'
+  && import.meta.env.VITE_PARQUEEN_STREET_INTEL_QA === 'app.parqueen.qa';
+if (streetIntelQa) {
+  assertStreetIntelQaBuildAllowed({
+    MODE: import.meta.env.MODE,
+    VITE_PARQUEEN_STREET_INTEL_QA: import.meta.env.VITE_PARQUEEN_STREET_INTEL_QA,
+  });
+}
 
-productionFirebaseConfig.apiKey = resolveFirebaseApiKey(productionFirebaseConfig.apiKey);
-
-const demoMode = assertDemoFirebaseAllowed({
+const devDemo = assertDemoFirebaseAllowed({
   DEV: import.meta.env.DEV,
   PROD: import.meta.env.PROD,
   VITE_PARQUEEN_DEMO_FIREBASE: import.meta.env.VITE_PARQUEEN_DEMO_FIREBASE,
 });
-const firebaseConfig = demoMode ? demoFirebaseAppConfig() : productionFirebaseConfig;
+if (streetIntelQa && devDemo) {
+  throw new Error('Street Intelligence QA cannot combine with the development demo flag.');
+}
+const demoMode = streetIntelQa || devDemo;
+const firebaseConfig = streetIntelQa || devDemo
+  ? demoFirebaseAppConfig()
+  : (() => {
+      const productionFirebaseConfig = {
+        apiKey: "AIzaSyCKSqWVd6JqpcrNUG6hei8Ug1njaIkAI7Y",
+        authDomain: "parkqueen-46475363-ccf36.firebaseapp.com",
+        projectId: "parkqueen-46475363-ccf36",
+        storageBucket: "parkqueen-46475363-ccf36.firebasestorage.app",
+        messagingSenderId: "768131391875",
+        appId: "1:768131391875:web:613c5d2a948862333196b6"
+      };
+      productionFirebaseConfig.apiKey = resolveFirebaseApiKey(productionFirebaseConfig.apiKey);
+      return productionFirebaseConfig;
+    })();
 
 // ── App Check debug token (DEV only) ─────────────────────────────────────────
 // import.meta.env.DEV → false in production builds (Vite static replacement);

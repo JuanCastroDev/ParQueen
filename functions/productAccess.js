@@ -15,8 +15,37 @@ function userRecordDenies(data) {
   return data.productAccessBlocked !== false;
 }
 
+function lifecycleDoc(firestore, uid) {
+  return firestore.doc(`accountLifecycle/${uid}`);
+}
+
+function throwIfDeleting(lifeSnap) {
+  if (lifeSnap && lifeSnap.exists) {
+    throw new HttpsError('permission-denied', PRODUCT_ACCESS_DENIED);
+  }
+}
+
+// Fail closed. A read error is a denial, not proof that no fence exists.
+// Parking callables and assertProductAccess both use this helper.
+async function deletionFencePresent(uid, db) {
+  if (typeof uid !== 'string' || uid.length === 0) {
+    throw new HttpsError('permission-denied', PRODUCT_ACCESS_DENIED);
+  }
+  const firestore = db || require('firebase-admin/firestore').getFirestore();
+  try {
+    const snap = await lifecycleDoc(firestore, uid).get();
+    return snap.exists;
+  } catch (err) {
+    if (err instanceof HttpsError) throw err;
+    throw new HttpsError('permission-denied', PRODUCT_ACCESS_DENIED);
+  }
+}
+
 async function assertProductAccess(uid, db) {
   if (typeof uid !== 'string' || uid.length === 0) {
+    throw new HttpsError('permission-denied', PRODUCT_ACCESS_DENIED);
+  }
+  if (await deletionFencePresent(uid, db)) {
     throw new HttpsError('permission-denied', PRODUCT_ACCESS_DENIED);
   }
   const firestore = db || require('firebase-admin/firestore').getFirestore();
@@ -27,4 +56,10 @@ async function assertProductAccess(uid, db) {
   }
 }
 
-module.exports = { userRecordDenies, assertProductAccess, PRODUCT_ACCESS_DENIED };
+module.exports = {
+  userRecordDenies,
+  assertProductAccess,
+  deletionFencePresent,
+  throwIfDeleting,
+  PRODUCT_ACCESS_DENIED,
+};

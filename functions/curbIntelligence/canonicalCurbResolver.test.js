@@ -216,6 +216,20 @@ describe('resolveCanonicalCurb', () => {
     expect(incomplete).toMatchObject({ state: 'UNSUPPORTED', reasons: expect.arrayContaining(['authority_attestation_invalid']) });
   });
 
+  it('does not wait for planimetric curb evidence that cannot change the decision', async () => {
+    let called = false;
+    const result = await resolveCanonicalCurb(location(), options([record()], {
+      planimetricStore: {
+        queryCurbs: () => {
+          called = true;
+          return new Promise(() => {});
+        },
+      },
+    }));
+    expect(result.state).toBe('SUPPORTED');
+    expect(called).toBe(false);
+  });
+
   it('does not use uniquely aligned nearby planimetric curb evidence to override crossing-road ambiguity', async () => {
     const maran = record({ coordinates: HORIZONTAL });
     const whitePlains = record({

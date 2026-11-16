@@ -11,8 +11,8 @@ const PROJECT_ID = requireEmulatorProjectId();
 if (PROJECT_ID !== 'demo-parkqueen-functions-test') {
   throw new Error(`Refusing claimSpot integration tests for project ${PROJECT_ID}`);
 }
-if (process.env.FIRESTORE_EMULATOR_HOST !== '127.0.0.1:8080') {
-  throw new Error('FIRESTORE_EMULATOR_HOST must be the local demo emulator');
+if (!/^127\.0\.0\.1:\d+$/.test(process.env.FIRESTORE_EMULATOR_HOST || '')) {
+  throw new Error('FIRESTORE_EMULATOR_HOST must be a loopback Firestore emulator');
 }
 if (getApps().length === 0) initializeApp({ projectId: PROJECT_ID });
 const db = getFirestore();

@@ -9,6 +9,14 @@ on:
       - firestore.rules.test.original-suite.ts
       - firestore.rules.finder-notice.31ag.test.ts
       - firestore.rules.ping-delete.test.ts
+      - firestore.interim.rules
+      - firebase.interim-rules.json
+      - firestore.rules.test.mixed-version-deployed.ts
+      - firestore.rules.test.interim-legacy-hardened.ts
+      - firestore.rules.test.interim-expression-budget.ts
+      - firestore.rules.test.interim-release.ts
+      - test-fixtures/interim-candidate/**
+      - test-fixtures/production-baseline/**
       - firestore.indexes.json
       - firebase.json
       - .firebaserc
@@ -24,6 +32,14 @@ on:
       - firestore.rules.test.original-suite.ts
       - firestore.rules.finder-notice.31ag.test.ts
       - firestore.rules.ping-delete.test.ts
+      - firestore.interim.rules
+      - firebase.interim-rules.json
+      - firestore.rules.test.mixed-version-deployed.ts
+      - firestore.rules.test.interim-legacy-hardened.ts
+      - firestore.rules.test.interim-expression-budget.ts
+      - firestore.rules.test.interim-release.ts
+      - test-fixtures/interim-candidate/**
+      - test-fixtures/production-baseline/**
       - firestore.indexes.json
       - firebase.json
       - .firebaserc
@@ -55,8 +71,8 @@ jobs:
           cache: npm
 
       # TM-16: SHA-pinned. Verify with:
-      #   gh api repos/actions/setup-java/git/ref/tags/v4 --jq .object.sha
-      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+      #   gh api repos/actions/setup-java/git/ref/tags/v6.2.0 --jq .object.sha
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: temurin
           java-version: 21

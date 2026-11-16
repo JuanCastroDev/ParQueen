@@ -4,9 +4,10 @@ import {
   ReCaptchaEnterpriseProvider,
 } from 'firebase/app-check';
 import type { FirebaseApp } from 'firebase/app';
+import type { AppCheck } from 'firebase/app-check';
 import { nativeGetAppCheckToken, type NativeAppCheckToken } from './appCheckNative';
 import { resolveAppCheckPath, type AppCheckPath } from './appCheckPlatform';
-import { localDemoAppCheckOptions } from './demoFirebaseAppCheck';
+import { localDemoAppCheckOptions, streetIntelQaAppCheckOptions } from './demoFirebaseAppCheck';
 
 export const NATIVE_APP_CHECK_FAILURE = 'Native App Check token request failed.';
 
@@ -21,10 +22,14 @@ export interface AppCheckInitDependencies {
 }
 
 let initialized = false;
+let appCheckInstance: AppCheck | null = null;
 
 export const resetParQueenAppCheckInitForTests = (): void => {
   initialized = false;
+  appCheckInstance = null;
 };
+
+export const getParQueenAppCheck = (): AppCheck | null => appCheckInstance;
 
 const sanitizeNativeToken = (result: NativeAppCheckToken | null | undefined): NativeAppCheckToken => {
   const token = typeof result?.token === 'string' ? result.token : '';
@@ -74,10 +79,19 @@ export const initializeParQueenAppCheck = (
   const siteKey = deps.siteKey ?? import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY;
   const warn = deps.warn ?? ((message: string) => console.warn(message));
   const path = resolvePath();
+  const qaAppCheck = streetIntelQaAppCheckOptions({
+    mode: import.meta.env.MODE,
+    packageId: import.meta.env.VITE_PARQUEEN_STREET_INTEL_QA,
+    CustomProvider: Custom,
+  });
+  if (qaAppCheck) {
+    init(app, qaAppCheck);
+    return;
+  }
 
   if (path === 'native-android' || path === 'native-ios') {
     try {
-      init(app, {
+      appCheckInstance = init(app, {
         provider: new Custom({
           getToken: () => fetchNativeAppCheckToken(getNativeToken, warn),
         }),
@@ -96,14 +110,14 @@ export const initializeParQueenAppCheck = (
     CustomProvider: Custom,
   });
   if (demoAppCheck) {
-    init(app, demoAppCheck);
+    appCheckInstance = init(app, demoAppCheck);
     return;
   }
 
   const appCheckSiteKey = siteKey;
   if (appCheckSiteKey) {
     try {
-      init(app, {
+      appCheckInstance = init(app, {
         provider: new Recaptcha(appCheckSiteKey),
         isTokenAutoRefreshEnabled: true,
       });

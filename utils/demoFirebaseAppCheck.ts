@@ -1,5 +1,11 @@
 import type { AppCheckOptions, CustomProvider } from 'firebase/app-check';
-import { DEMO_APP_CHECK_ID, DEMO_PROJECT_ID, PRODUCTION_APP_ID } from './demoFirebase';
+import {
+  DEMO_APP_CHECK_ID,
+  DEMO_PROJECT_ID,
+  PRODUCTION_APP_ID,
+  STREET_INTEL_QA_MODE,
+  STREET_INTEL_QA_PACKAGE,
+} from './demoFirebase';
 
 /**
  * Simulated emulator App Check token.
@@ -33,6 +39,23 @@ export function simulatedDemoAppCheckToken(now = Date.now()): { token: string; e
     'sim',
   ].join('.');
   return { token, expireTimeMillis: now + 60 * 60 * 1000 };
+}
+
+export function streetIntelQaAppCheckOptions(input: {
+  mode?: string;
+  packageId?: string;
+  CustomProvider: new (options: ConstructorParameters<typeof CustomProvider>[0]) => CustomProvider;
+}): AppCheckOptions | null {
+  if (input.packageId == null || input.packageId === '') return null;
+  if (input.mode !== STREET_INTEL_QA_MODE || input.packageId !== STREET_INTEL_QA_PACKAGE) {
+    throw new Error('Simulated Street Intelligence App Check is refused outside the streetintelqa build.');
+  }
+  return {
+    provider: new input.CustomProvider({
+      getToken: () => Promise.resolve(simulatedDemoAppCheckToken()),
+    }),
+    isTokenAutoRefreshEnabled: true,
+  };
 }
 
 export function localDemoAppCheckOptions(input: {

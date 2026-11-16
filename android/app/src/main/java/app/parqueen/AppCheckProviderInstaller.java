@@ -27,6 +27,11 @@ final class AppCheckProviderInstaller {
             Log.w(TAG, "App Check provider not installed; missing context.");
             return;
         }
+        if (BuildConfig.STREET_INTEL_QA) {
+            Log.i(TAG, "Street Intelligence QA does not initialize native Firebase.");
+            installed = true;
+            return;
+        }
         try {
             if (FirebaseApp.getApps(context).isEmpty()) {
                 FirebaseApp.initializeApp(context);

@@ -3,7 +3,7 @@
  *
  * Run via:
  *   npm run test:rules          (starts emulator automatically, then exits)
- *   npm run test:rules:unit     (assumes emulator already on :8080)
+ *   npm run test:rules:unit     (requires FIRESTORE_EMULATOR_HOST)
  *
  * Requires Java 11+ and Firebase CLI with the Firestore emulator installed.
  */
@@ -32,6 +32,7 @@ import {
     runTransaction,
     writeBatch,
 } from 'firebase/firestore';
+import { assertRulesProject, readRulesEmulatorEndpoint } from './firestoreRulesEmulator';
 import { cancelClaimTransaction } from './views/street-parking/cancelClaimTransaction';
 import { commitClaimToHeading } from './views/street-parking/commitToHeading';
 import {
@@ -56,6 +57,8 @@ const OTHER_UID  = 'other-bbb-222';
 const ADMIN_UID  = 'admin-ccc-333';
 const THIRD_UID  = 'third-ddd-444';
 const PROJECT_ID = 'demo-parkqueen-rules-test';
+const rulesEmulator = readRulesEmulatorEndpoint();
+assertRulesProject(PROJECT_ID);
 const requireFromFunctions = createRequire(path.join(process.cwd(), 'functions/package.json'));
 
 let testEnv: RulesTestEnvironment;
@@ -139,9 +142,7 @@ async function closeActiveClaimRollout() {
 }
 
 function rolloutTools() {
-    if (!process.env.FIRESTORE_EMULATOR_HOST) {
-        process.env.FIRESTORE_EMULATOR_HOST = '127.0.0.1:8080';
-    }
+    process.env.FIRESTORE_EMULATOR_HOST = rulesEmulator.endpoint;
     const { initializeApp, getApps } = requireFromFunctions('firebase-admin/app');
     const { getFirestore, Timestamp: AdminTimestamp } = requireFromFunctions('firebase-admin/firestore');
     const { reconcileActiveIncomingClaims } = requireFromFunctions('./activeIncomingClaim.js');
@@ -251,8 +252,8 @@ beforeAll(async () => {
         projectId: PROJECT_ID,
         firestore: {
             rules: readFileSync('firestore.rules', 'utf8'),
-            host:  'localhost',
-            port:  8080,
+            host:  rulesEmulator.host,
+            port:  rulesEmulator.port,
         },
     });
 });
@@ -4801,14 +4802,16 @@ describe('A1 — one active incoming claim', () => {
         await seedClaimer(OTHER_UID, 'bob');
         const spotId = 'a1-15-30p-feedback-only';
         const arrivedAt = Timestamp.fromMillis(Date.now() - 60_000);
+        const startedAt = Timestamp.now();
         await seed('spots', spotId, {
             ...interestedSpot,
             status: 'occupied',
             claimState: 'arrived_pending_outcome',
             arrivedAt,
             address: 'A1 terminal',
+            claimStartedAt: startedAt,
         });
-        await seedLock(OTHER_UID, spotId);
+        await seedLock(OTHER_UID, spotId, startedAt);
         const db = otherDb();
         const feedbackId = `${spotId}_${OTHER_UID}`;
         let denied: unknown = null;
@@ -4856,14 +4859,16 @@ describe('A1 — one active incoming claim', () => {
         await seedClaimer(OTHER_UID, 'bob');
         const spotId = 'a1-15-30p-lock-delete-only';
         const arrivedAt = Timestamp.fromMillis(Date.now() - 60_000);
+        const startedAt = Timestamp.now();
         await seed('spots', spotId, {
             ...interestedSpot,
             status: 'occupied',
             claimState: 'arrived_pending_outcome',
             arrivedAt,
             address: 'A1 terminal',
+            claimStartedAt: startedAt,
         });
-        await seedLock(OTHER_UID, spotId);
+        await seedLock(OTHER_UID, spotId, startedAt);
         const db = otherDb();
         const feedbackId = `${spotId}_${OTHER_UID}`;
         let denied: unknown = null;

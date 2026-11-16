@@ -75,15 +75,19 @@ def parqueenReleaseSigningFailure(errors) {
 
 def configuredReleaseSigning = loadParqueenReleaseSigning()
 
+def streetIntelQa = providers.gradleProperty("parqueen.qa").orNull == "app.parqueen.qa"
+
 android {
     namespace = "app.parqueen"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "app.parqueen"
+        applicationId streetIntelQa ? "app.parqueen.qa" : "app.parqueen"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
-        versionName "1.0"
+        versionName streetIntelQa ? "1.0-qa" : "1.0"
+        buildConfigField "boolean", "STREET_INTEL_QA", streetIntelQa ? "true" : "false"
+        manifestPlaceholders = [appLabel: streetIntelQa ? "ParQueen QA" : "ParQueen"]
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -119,6 +123,9 @@ android {
 // signReleaseBundle and does not always schedule validateSigningRelease.
 // taskGraph.whenReady runs even when those tasks are UP-TO-DATE.
 gradle.taskGraph.whenReady { graph ->
+    if (streetIntelQa && graph.allTasks.any { task -> task.name.toLowerCase().contains("release") }) {
+        throw new GradleException("Street Intelligence QA is debug-only and cannot be packaged as a release.")
+    }
     def releaseSigningRequested = graph.allTasks.any { task ->
         def n = task.name
         n == 'validateSigningRelease' || n == 'signReleaseBundle' || n == 'packageRelease'
@@ -160,11 +167,15 @@ dependencies {
 
 apply from: 'capacitor.build.gradle'
 
-try {
-    def servicesJSON = file('google-services.json')
-    if (servicesJSON.text) {
-        apply plugin: 'com.google.gms.google-services'
+if (streetIntelQa) {
+    logger.lifecycle("Street Intelligence QA skips the Google Services plugin.")
+} else {
+    try {
+        def servicesJSON = file('google-services.json')
+        if (servicesJSON.text) {
+            apply plugin: 'com.google.gms.google-services'
+        }
+    } catch(Exception e) {
+        logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
     }
-} catch(Exception e) {
-    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
 }

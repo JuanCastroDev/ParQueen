@@ -97,7 +97,9 @@ try {
 const { requireEmulatorProjectId } = require('./emulatorProjectId');
 const PROJECT_ID = requireEmulatorProjectId();
 const APP_NAME = '__setStaffRole_intg__';
-const AUTH_EMULATOR = 'http://localhost:9099';
+const AUTH_EMULATOR = process.env.FIREBASE_AUTH_EMULATOR_HOST
+    ? `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`
+    : 'http://localhost:9099';
 
 const testApp =
     getApps().find(a => a.name === APP_NAME) ??
@@ -939,31 +941,64 @@ describe('setStaffRole — emulator behavioral tests', () => {
         await db.doc('adminRoleLock/singleton').delete();
     }, 20000);
 
-    it('SR-42: an operation completes correctly despite starting with a nearly-expired same-owner lease', async () => {
+    it('SR-42: a second invocation cannot enter a live lease by repeating the logical operationId', async () => {
         if (!setStaffRole) return;
         await adminAuth.createUser({ uid: callerUid }).catch(() => {});
         await adminAuth.setCustomUserClaims(callerUid, { role: 'admin' });
         await adminAuth.createUser({ uid: targetUid }).catch(() => {});
+        const claimsBefore = (await adminAuth.getUser(targetUid)).customClaims;
 
         const op = opId('near-expiry');
-        // Pre-seed the lock as already owned by THIS operationId, but with
-        // only a sliver of lease life left — simulating resuming right at
-        // the edge. Both the acquire step (same-owner refresh) and the
-        // pre-mutation renewal must extend it well past this operation's
-        // own execution time for the mutation to land.
         await db.doc('adminRoleLock/singleton').set({
-            ownerOperationId: op,
+            ownerOperationId: `${op}:previous-invocation`,
             acquiredAt: Timestamp.fromMillis(Date.now() - 1000),
-            leaseExpiresAt: Timestamp.fromMillis(Date.now() + 500),
+            leaseExpiresAt: Timestamp.fromMillis(Date.now() + 60000),
         });
 
-        const { result, error } = await call(callerUid, 'admin', { uid: targetUid, role: 'staff', operationId: op });
-        expect(error).toBeUndefined();
-        expect(result.success).toBe(true);
+        const { error } = await call(callerUid, 'admin', { uid: targetUid, role: 'staff', operationId: op });
+        expect(error.code).toBe('aborted');
+        expect((await adminAuth.getUser(targetUid)).customClaims).toEqual(claimsBefore);
+        expect((await db.doc('adminRoleLock/singleton').get()).data().ownerOperationId).toBe(`${op}:previous-invocation`);
+        await db.doc('adminRoleLock/singleton').delete();
+    }, 30000);
 
-        const user = await adminAuth.getUser(targetUid);
-        expect(user.customClaims?.role).toBe('staff');
-    });
+    it('SR-46: a losing retry of the same operationId cannot release the winning invocation', async () => {
+        if (!setStaffRole) return;
+        await adminAuth.createUser({ uid: callerUid }).catch(() => {});
+        await adminAuth.setCustomUserClaims(callerUid, { role: 'admin' });
+        await adminAuth.createUser({ uid: targetUid }).catch(() => {});
+        const op = opId('shared-owner');
+        const defaultAuth = getAuth();
+        const originalGetUser = defaultAuth.getUser.bind(defaultAuth);
+        let release;
+        const hold = new Promise((resolve) => { release = resolve; });
+        let sawOwner;
+        const entered = new Promise((resolve) => { sawOwner = resolve; });
+        let paused = false;
+        defaultAuth.getUser = async (id, ...args) => {
+            if (!paused && id === targetUid) {
+                paused = true;
+                sawOwner();
+                await hold;
+            }
+            return originalGetUser(id, ...args);
+        };
+        const first = call(callerUid, 'admin', { uid: targetUid, role: 'staff', operationId: op });
+        try {
+            await entered;
+            const owner = (await db.doc('adminRoleLock/singleton').get()).data().ownerOperationId;
+            expect(owner.startsWith(`${op}:`)).toBe(true);
+            const second = await call(callerUid, 'admin', { uid: targetUid, role: 'staff', operationId: op });
+            expect(second.error.code).toBe('aborted');
+            expect((await db.doc('adminRoleLock/singleton').get()).data().ownerOperationId).toBe(owner);
+        } finally {
+            release();
+            await first;
+            defaultAuth.getUser = originalGetUser;
+        }
+        expect((await adminAuth.getUser(targetUid)).customClaims?.role).toBe('staff');
+        expect((await db.doc('adminRoleLock/singleton').get()).exists).toBe(false);
+    }, 30000);
 
     it('SR-43: a stale operation cannot reach Auth once ownership has genuinely transferred to a newer operation', async () => {
         if (!setStaffRole) return;

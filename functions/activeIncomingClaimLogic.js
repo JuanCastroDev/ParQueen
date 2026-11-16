@@ -85,20 +85,23 @@ function planUserReconciliation(claims) {
   };
 }
 
-function auditActiveClaimGroups(groups) {
+function auditActiveClaimGroups(groups, malformedInterestedCount) {
   let locklessCount = 0;
   let duplicateUserCount = 0;
   let duplicatePingCount = 0;
   let interestedWithClaimerCount = 0;
   for (const group of groups) {
     const spotIds = Array.isArray(group.spotIds) ? group.spotIds : [];
+    const canonicalSpotIds = Array.isArray(group.canonicalSpotIds)
+      ? new Set(group.canonicalSpotIds)
+      : new Set();
     interestedWithClaimerCount += spotIds.length;
     if (spotIds.length > 1) {
       duplicateUserCount += 1;
       duplicatePingCount += spotIds.length - 1;
     }
     for (const spotId of spotIds) {
-      if (group.lockSpotId !== spotId) locklessCount += 1;
+      if (!canonicalSpotIds.has(spotId)) locklessCount += 1;
     }
   }
   return {
@@ -106,6 +109,10 @@ function auditActiveClaimGroups(groups) {
     duplicateUserCount,
     duplicatePingCount,
     interestedWithClaimerCount,
+    malformedInterestedCount: Number.isInteger(malformedInterestedCount)
+      && malformedInterestedCount >= 0
+      ? malformedInterestedCount
+      : null,
   };
 }
 
@@ -115,7 +122,8 @@ function invariantMayBeEnforced(audit) {
     && audit.scanComplete === true
     && audit.locklessCount === 0
     && audit.duplicateUserCount === 0
-    && audit.duplicatePingCount === 0;
+    && audit.duplicatePingCount === 0
+    && audit.malformedInterestedCount === 0;
 }
 
 /**

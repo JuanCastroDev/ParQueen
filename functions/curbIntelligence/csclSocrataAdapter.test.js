@@ -216,4 +216,103 @@ describe('CSCL Socrata candidate adapter', () => {
     expect(result.completeness.reason).toBe('request_aborted');
     expect(fetchFn).not.toHaveBeenCalled();
   });
+
+  it('uses one authenticated SODA3 read and does not fall back to SODA2', async () => {
+    const { fetchFn, calls } = createFetch();
+    const store = createCsclCandidateStore({
+      fetchFn,
+      getSocrataToken: () => 'private-token',
+      spatialProtocol: 'soda3',
+      candidateLimit: 100,
+    });
+
+    const result = await store.queryCandidates(query);
+
+    expect(result.completeness.state).toBe('COMPLETE');
+    expect(result.candidates).toHaveLength(1);
+    expect(result.stageTiming.spatialProtocol).toBe('soda3');
+    expect(calls.map(call => call.url.includes('/api/views/inkn-q76z') && !call.url.includes('/query.json')
+      ? 'metadata' : 'spatial')).toEqual(['metadata', 'spatial', 'metadata']);
+    const spatial = calls[1];
+    expect(spatial.url).toBe('https://data.cityofnewyork.us/api/v3/views/inkn-q76z/query.json');
+    expect(spatial.options.method).toBe('POST');
+    expect(spatial.options.headers['X-App-Token']).toBe('private-token');
+    expect(spatial.url.includes('private-token')).toBe(false);
+    const body = JSON.parse(spatial.options.body);
+    expect(body.query).toBe(
+      `SELECT * WHERE intersects(the_geom, '${query.canonicalEnvelope.wkt}') ORDER BY globalid LIMIT 101`,
+    );
+    expect(body.page).toEqual({ pageNumber: 1, pageSize: 101 });
+    expect(body.includeSystem).toBe(false);
+    expect(body.includeSynthetic).toBe(false);
+    expect(calls.some(call => call.url.includes('/resource/'))).toBe(false);
+  });
+
+  it('fails closed when SODA3 authentication is refused', async () => {
+    const fetchFn = vi.fn(async (url) => {
+      if (String(url).includes('/query.json')) return response({ code: 'authentication_required' }, 403);
+      return response(metadata);
+    });
+    const result = await createCsclCandidateStore({
+      fetchFn,
+      getSocrataToken: () => 'private-token',
+      spatialProtocol: 'soda3',
+    }).queryCandidates(query);
+
+    expect(result.completeness).toEqual({ state: 'INCOMPLETE', reason: 'source_unavailable' });
+    expect(result.candidates).toEqual([]);
+    expect(fetchFn.mock.calls.filter(call => String(call[0]).includes('/resource/'))).toHaveLength(0);
+  });
+
+  it('fails closed without a token and without calling SODA3', async () => {
+    const fetchFn = vi.fn(async () => response(metadata));
+    const result = await createCsclCandidateStore({
+      fetchFn,
+      getSocrataToken: () => '',
+      spatialProtocol: 'soda3',
+    }).queryCandidates(query);
+
+    expect(result.completeness.reason).toBe('source_unavailable');
+    expect(fetchFn.mock.calls.map(call => String(call[0]))).toEqual([
+      'https://data.cityofnewyork.us/api/views/inkn-q76z',
+      'https://data.cityofnewyork.us/api/views/inkn-q76z',
+    ]);
+  });
+
+  it('rejects a SODA3 payload that is not a row array', async () => {
+    const fetchFn = vi.fn(async (url) => {
+      if (String(url).includes('/query.json')) return response({ rows: [row] });
+      return response(metadata);
+    });
+    const result = await createCsclCandidateStore({
+      fetchFn,
+      getSocrataToken: () => 'private-token',
+      spatialProtocol: 'soda3',
+    }).queryCandidates(query);
+
+    expect(result.completeness.reason).toBe('source_response_malformed');
+  });
+
+  it('keeps SODA2 when SODA3 is requested outside the local demo', async () => {
+    const previous = {
+      FUNCTIONS_EMULATOR: process.env.FUNCTIONS_EMULATOR,
+      GCLOUD_PROJECT: process.env.GCLOUD_PROJECT,
+      CURB_CSCL_SPATIAL: process.env.CURB_CSCL_SPATIAL,
+    };
+    process.env.FUNCTIONS_EMULATOR = 'true';
+    process.env.GCLOUD_PROJECT = 'parkqueen-46475363-ccf36';
+    process.env.CURB_CSCL_SPATIAL = 'soda3';
+    try {
+      const { fetchFn, calls } = createFetch();
+      const result = await createCsclCandidateStore({ fetchFn, getSocrataToken: () => '' }).queryCandidates(query);
+      expect(result.completeness.state).toBe('COMPLETE');
+      expect(result.stageTiming.spatialProtocol).toBe('soda2');
+      expect(calls.some(call => String(call.url).includes('/query.json'))).toBe(false);
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value == null) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
 });

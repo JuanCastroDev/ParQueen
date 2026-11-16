@@ -50,6 +50,13 @@ const {
 } = require('./abandonedArrivalCleanup');
 const { joinMutualSuccess } = require('./mutualSuccessJoin');
 const { releasedInterestPatch } = require('./activeIncomingClaimLogic');
+const { releaseClaimsOfDeletedUser } = require('./deletedUserClaimRelease');
+const {
+  LOCK_MATCH,
+  expectedClaimFromSpot,
+  classifyLockSnapshot,
+  lockConflict,
+} = require('./claimLockIdentity');
 const { requireCurrentAdmin, requireCurrentAuthenticatedUser } = require('./adminAuth');
 const { assertProductAccess, userRecordDenies } = require('./productAccess');
 const { cancelClaim: cancelClaimHandler } = require('./cancelClaim');
@@ -418,8 +425,29 @@ async function sweepPhantomClaims(firestoreDb, now) {
           const lockSnap = typeof holder === 'string' && holder.length > 0 && !holder.includes('/')
             ? await readActiveIncomingClaim(tx, firestoreDb, holder)
             : null;
+          const expectedClaim = expectedClaimFromSpot(d.id, fresh.data());
+          const lockClassification = expectedClaim
+            ? classifyLockSnapshot(lockSnap, expectedClaim)
+            : LOCK_MATCH.MALFORMED;
+          if (!expectedClaim || lockConflict(lockClassification)) {
+            console.error('claimLockRepairRequired', {
+              operation: 'phantom_claim_sweep',
+              classification: lockClassification,
+              claimKind: expectedClaim && expectedClaim.kind,
+            });
+            return false;
+          }
+          if (lockClassification === LOCK_MATCH.MISSING || lockClassification === LOCK_MATCH.UNRELATED_SPOT) {
+            console.warn('claimLockReconciliationNeeded', {
+              operation: 'phantom_claim_sweep',
+              classification: lockClassification,
+              claimKind: expectedClaim.kind,
+            });
+          }
           tx.update(d.ref, { ...PHANTOM_CLAIM_CLEAR_FIELDS });
-          if (lockSnap) deleteMatchingActiveIncomingClaim(tx, lockSnap, d.id);
+          if (lockClassification === LOCK_MATCH.EXACT) {
+            deleteMatchingActiveIncomingClaim(tx, lockSnap, expectedClaim);
+          }
           return true;
         });
         if (didClear) cleared++;
@@ -481,6 +509,25 @@ exports.cleanupExpiredInterests = onSchedule(
           ) return false;
 
           const lockSnap = await readActiveIncomingClaim(tx, db, spot.interestedUserId);
+          const expectedClaim = expectedClaimFromSpot(d.id, spot);
+          const lockClassification = expectedClaim
+            ? classifyLockSnapshot(lockSnap, expectedClaim)
+            : LOCK_MATCH.MALFORMED;
+          if (!expectedClaim || lockConflict(lockClassification)) {
+            console.error('claimLockRepairRequired', {
+              operation: 'expired_interest_cleanup',
+              classification: lockClassification,
+              claimKind: expectedClaim && expectedClaim.kind,
+            });
+            return false;
+          }
+          if (lockClassification === LOCK_MATCH.MISSING || lockClassification === LOCK_MATCH.UNRELATED_SPOT) {
+            console.warn('claimLockReconciliationNeeded', {
+              operation: 'expired_interest_cleanup',
+              classification: lockClassification,
+              claimKind: expectedClaim.kind,
+            });
+          }
 
           // Never reopen an already-expired Ping — only clear the stale claim.
           // Once cleared, interestExpiresAt is null, which Firestore's range
@@ -493,7 +540,9 @@ exports.cleanupExpiredInterests = onSchedule(
             ? spot.expiresAt.toMillis()
             : Number.NaN;
           tx.update(d.ref, releasedInterestPatch(expiresAtMs, now.toMillis()));
-          deleteMatchingActiveIncomingClaim(tx, lockSnap, d.id);
+          if (lockClassification === LOCK_MATCH.EXACT) {
+            deleteMatchingActiveIncomingClaim(tx, lockSnap, expectedClaim);
+          }
           return true;
         });
         if (didRelease) released++; else skipped++;
@@ -797,6 +846,25 @@ exports.processScheduledClaims = onSchedule(
           // records when this scheduler released the claim. A heading claim
           // fails the claimState == 'committed' re-check above and is left intact.
           const lockSnap = await readActiveIncomingClaim(tx, db, spot.interestedUserId);
+          const expectedClaim = expectedClaimFromSpot(d.id, spot);
+          const lockClassification = expectedClaim
+            ? classifyLockSnapshot(lockSnap, expectedClaim)
+            : LOCK_MATCH.MALFORMED;
+          if (!expectedClaim || lockConflict(lockClassification)) {
+            console.error('claimLockRepairRequired', {
+              operation: 'scheduled_claim_release',
+              classification: lockClassification,
+              claimKind: expectedClaim && expectedClaim.kind,
+            });
+            return;
+          }
+          if (lockClassification === LOCK_MATCH.MISSING || lockClassification === LOCK_MATCH.UNRELATED_SPOT) {
+            console.warn('claimLockReconciliationNeeded', {
+              operation: 'scheduled_claim_release',
+              classification: lockClassification,
+              claimKind: expectedClaim.kind,
+            });
+          }
 
           const spotExpired = spot.expiresAt && spot.expiresAt.toMillis() <= now.toMillis();
           const expiresAtMs = spot.expiresAt && typeof spot.expiresAt.toMillis === 'function'
@@ -810,7 +878,9 @@ exports.processScheduledClaims = onSchedule(
           const claimId = `claim_${stableId(d.id, snapshotGeneration(fresh), spot.interestedUserId)}`;
 
           tx.update(d.ref, clearFields);
-          deleteMatchingActiveIncomingClaim(tx, lockSnap, d.id);
+          if (lockClassification === LOCK_MATCH.EXACT) {
+            deleteMatchingActiveIncomingClaim(tx, lockSnap, expectedClaim);
+          }
 
           if (spot.interestedUserId !== spot.finderId) {
             tx.set(db.doc(`spotNotifications/released_claimer_${claimId}`), {
@@ -1226,6 +1296,15 @@ exports.moderateAvatarUpload = onObjectFinalized(
     const moderationRef  = db.collection("avatarModeration").doc(uid);
     const pendingRef     = db.doc(`users/${uid}/private/avatar`);
     const bucket         = getStorage().bucket(event.data.bucket);
+    try {
+      if ((await db.doc(`accountLifecycle/${uid}`).get()).exists) {
+        await bucket.file(filePath).delete({ ignoreNotFound: true }).catch(() => {});
+        return;
+      }
+    } catch (err) {
+      console.error(`[moderateAvatarUpload] ${maskedUid} fence read failed`);
+      return;
+    }
     const sourceFile     = bucket.file(filePath);
     const candidatePath  = `avatarCandidates/${uid}/${uploadId}.webp`;
     const candidateFile  = bucket.file(candidatePath);
@@ -2237,6 +2316,10 @@ exports.claimUsername = onCall(
     try {
       await db.runTransaction(async (tx) => {
         const existing = await tx.get(usernameRef);
+        const lifeSnap = await tx.get(db.doc(`accountLifecycle/${uid}`));
+        if (lifeSnap.exists) {
+          throw new HttpsError('permission-denied', 'Product access is not available.');
+        }
         if (existing.exists) {
           if (existing.data().uid !== uid) {
             // Belongs to a different user — reject normally
@@ -2394,16 +2477,18 @@ exports.claimSpot = onCall(
   {
     region: 'us-central1',
     enforceAppCheck: true,
+    serviceAccount: 'parqueen-cancel@parkqueen-46475363-ccf36.iam.gserviceaccount.com',
   },
   (request) => claimSpotHandler(request)
 );
 
-// Prepare and revoke are the intent protocol around claimSpot. Same region
-// and App Check switch. No service account is added. Neither export is deployed.
+// Prepare and revoke are the intent protocol around claimSpot. Same region,
+// App Check switch, and existing cancel runtime identity. No new account.
 exports.prepareClaimIntent = onCall(
   {
     region: 'us-central1',
     enforceAppCheck: true,
+    serviceAccount: 'parqueen-cancel@parkqueen-46475363-ccf36.iam.gserviceaccount.com',
   },
   (request) => prepareClaimIntentHandler(request)
 );
@@ -2412,6 +2497,7 @@ exports.revokeClaimIntent = onCall(
   {
     region: 'us-central1',
     enforceAppCheck: true,
+    serviceAccount: 'parqueen-cancel@parkqueen-46475363-ccf36.iam.gserviceaccount.com',
   },
   (request) => revokeClaimIntentHandler(request)
 );
@@ -2424,6 +2510,7 @@ exports.finderCancelSpot = onCall(
   {
     region: 'us-central1',
     enforceAppCheck: true,
+    serviceAccount: 'parqueen-cancel@parkqueen-46475363-ccf36.iam.gserviceaccount.com',
   },
   (request) => finderCancelSpotHandler(request)
 );
@@ -2896,6 +2983,7 @@ exports.setStaffRole = onCall(
     const actorUid = request.auth.uid;
     const lockRef = db.doc('adminRoleLock/singleton');
     const opRef = db.doc(`adminRoleOperations/${operationId}`);
+    const lockOperationId = `${operationId}:${randomUUID()}`;
 
     // Lease duration: this Function's own timeout is 60s (Cloud Functions v2
     // default, unchanged). A lease shorter than that would not structurally
@@ -2926,11 +3014,10 @@ exports.setStaffRole = onCall(
         if (snap.exists) {
           const data = snap.data();
           const expired = !data.leaseExpiresAt || data.leaseExpiresAt.toMillis() <= now.toMillis();
-          const sameOwner = data.ownerOperationId === operationId;
-          if (!expired && !sameOwner) return false;
+          if (!expired) return false;
         }
         tx.set(lockRef, {
-          ownerOperationId: operationId,
+          ownerOperationId: lockOperationId,
           acquiredAt: now,
           leaseExpiresAt: Timestamp.fromMillis(now.toMillis() + LEASE_MS),
         });
@@ -2951,10 +3038,10 @@ exports.setStaffRole = onCall(
     async function renewLockOrThrow() {
       const stillOwned = await db.runTransaction(async (tx) => {
         const snap = await tx.get(lockRef);
-        if (!snap.exists || snap.data().ownerOperationId !== operationId) return false;
+        if (!snap.exists || snap.data().ownerOperationId !== lockOperationId) return false;
         const now = Timestamp.now();
         tx.set(lockRef, {
-          ownerOperationId: operationId,
+          ownerOperationId: lockOperationId,
           acquiredAt: snap.data().acquiredAt,
           leaseExpiresAt: Timestamp.fromMillis(now.toMillis() + LEASE_MS),
         });
@@ -3105,7 +3192,7 @@ exports.setStaffRole = onCall(
       await db.runTransaction(async (tx) => {
         const snap = await tx.get(lockRef);
         if (!snap.exists) return;
-        if (snap.data().ownerOperationId !== operationId) return;
+        if (snap.data().ownerOperationId !== lockOperationId) return;
         tx.delete(lockRef);
       }).catch(() => {});
     }
@@ -3332,53 +3419,25 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
     await checkRateLimit(uid, 'deleteAccount', { limit: 3, windowSec: 86400 });
 
     const jobRef = db.doc(`accountDeletionJobs/${uid}`);
+    const lifecycleRef = db.doc(`accountLifecycle/${uid}`);
     const maskedUid = uid.slice(0, 4) + '***';
 
-    // ── Atomic lock ───────────────────────────────────────────────────────────
-    // Transaction prevents two concurrent callers from both entering the deletion body.
-    // A fresh 'running' lease (< 10 min) is an active worker — reject the second caller.
-    // A stale lease or 'failed' state → claim the job and resume.
+    // A completed job is terminal. This read does not create a fence.
+    // A fresh running lease rejects the second caller before any fence write.
+    const preview = await jobRef.get();
+    if (preview.exists && (preview.data() || {}).state === 'completed') {
+        return { alreadyCompleted: true };
+    }
+    if (preview.exists && (preview.data() || {}).state === 'running') {
+        const leaseSeconds = preview.data().leaseAt && preview.data().leaseAt.seconds
+            ? preview.data().leaseAt.seconds : 0;
+        if ((Date.now() / 1000) - leaseSeconds < 600) {
+            throw new HttpsError('already-exists', 'A deletion request is already in progress.');
+        }
+    }
+
     let alreadyDone = false;
     let doneSteps = {};
-
-    await db.runTransaction(async (tx) => {
-        const snap = await tx.get(jobRef);
-        if (snap.exists) {
-            const job = snap.data();
-            if (job.state === 'completed') {
-                alreadyDone = true;
-                return;
-            }
-            if (job.state === 'running') {
-                const leaseAge = (Date.now() / 1000) - job.leaseAt.seconds;
-                if (leaseAge < 600) {
-                    throw new HttpsError('already-exists', 'A deletion request is already in progress.');
-                }
-                // Stale lease — previous worker died; take over and resume
-            }
-            // 'failed' or stale 'running' — resume from where we left off
-            doneSteps = job.steps || {};
-            tx.update(jobRef, {
-                state: 'running',
-                leaseAt: Timestamp.now(),
-                currentStep: null,
-                lastError: null,
-                attemptNumber: (job.attemptNumber || 0) + 1,
-            });
-        } else {
-            tx.set(jobRef, {
-                state: 'running',
-                leaseAt: Timestamp.now(),
-                startedAt: Timestamp.now(),
-                currentStep: null,
-                lastError: null,
-                attemptNumber: 1,
-                steps: {},
-            });
-        }
-    });
-
-    if (alreadyDone) return { alreadyCompleted: true };
 
     // ── Admin-lifecycle serialization ──────────────────────────────────────────
     // Shares adminRoleLock/singleton with setStaffRole so account deletion is
@@ -3404,12 +3463,12 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
     // 60s (confirmed against the deployed config), so a 120s lease (2x margin)
     // guarantees any lease acquired or renewed at any point in this invocation's
     // life outlives the latest possible moment Cloud Functions could kill it.
-    // Deterministic per-uid, not random: at most one deletion can legitimately
-    // be in flight for a given uid at a time (already enforced by the
-    // accountDeletionJobs lease above), so a crash-and-resume attempt for the
-    // SAME uid naturally re-identifies as the same lock owner and can reclaim
-    // an unexpired lease immediately rather than needing to wait it out.
-    const deletionOperationId = `delete_${uid}`;
+    // The logical deletion identity stays delete_${uid}. Lock ownership is a
+    // different value for every invocation. A second live call for the same uid
+    // must not renew or release the first call's lock. Crash recovery waits
+    // until the recorded lease expires, then a new invocation may acquire it.
+    const deletionIdentity = `delete_${uid}`;
+    const deletionOperationId = `${deletionIdentity}:${randomUUID()}`;
     const lockRef = db.doc('adminRoleLock/singleton');
     const LOCK_LEASE_MS = 120000;
     const LOCK_ACQUIRE_ATTEMPTS = 6;
@@ -3442,8 +3501,7 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
             if (snap.exists) {
                 const data = snap.data();
                 const expired = !data.leaseExpiresAt || data.leaseExpiresAt.toMillis() <= now.toMillis();
-                const sameOwner = data.ownerOperationId === deletionOperationId;
-                if (!expired && !sameOwner) return false;
+                if (!expired) return false;
             }
             tx.set(lockRef, {
                 ownerOperationId: deletionOperationId,
@@ -3490,17 +3548,82 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
             } while (pageToken);
 
             if (otherActiveAdmins === 0) {
-                await jobRef.update({
-                    state: 'failed',
-                    currentStep: null,
-                    lastError: 'adminSafetyCheck: cannot delete the last active administrator',
-                }).catch(() => {});
+                const existingJob = await jobRef.get();
+                if (existingJob.exists) {
+                    await jobRef.update({
+                        state: 'failed',
+                        currentStep: null,
+                        lastError: 'adminSafetyCheck: cannot delete the last active administrator',
+                    }).catch(() => {});
+                }
                 throw new HttpsError(
                     'failed-precondition',
                     'You are the last active administrator. Add or promote another administrator before deleting this account.'
                 );
             }
         }
+
+        // The fence and the accepted job commit together, after the last-admin
+        // rejection and before any profile cleanup. A retry does not delete a
+        // fence that already exists. A rejected request never reaches here.
+        let acceptance = 'proceed';
+        await db.runTransaction(async (tx) => {
+            const lockSnap = await tx.get(lockRef);
+            const jobSnap = await tx.get(jobRef);
+            const lifeSnap = await tx.get(lifecycleRef);
+            if (!lockSnap.exists || (lockSnap.data() || {}).ownerOperationId !== deletionOperationId) {
+                acceptance = 'lost';
+                return;
+            }
+            const job = jobSnap.exists ? (jobSnap.data() || {}) : null;
+            if (job && job.state === 'completed') {
+                alreadyDone = true;
+                return;
+            }
+            if (job && job.state === 'running') {
+                const leaseSeconds = job.leaseAt && job.leaseAt.seconds ? job.leaseAt.seconds : 0;
+                if ((Date.now() / 1000) - leaseSeconds < 600) {
+                    acceptance = 'busy';
+                    return;
+                }
+            }
+            if (job) doneSteps = job.steps || {};
+            const now = Timestamp.now();
+            if (!lifeSnap.exists) {
+                tx.set(lifecycleRef, {
+                    decision: 'delete',
+                    fenceGeneration: 1,
+                    fencedAt: now,
+                    source: 'deleteAccount',
+                });
+            }
+            if (!job) {
+                tx.set(jobRef, {
+                    state: 'running',
+                    leaseAt: now,
+                    startedAt: now,
+                    currentStep: null,
+                    lastError: null,
+                    attemptNumber: 1,
+                    steps: {},
+                });
+            } else {
+                tx.update(jobRef, {
+                    state: 'running',
+                    leaseAt: now,
+                    currentStep: null,
+                    lastError: null,
+                    attemptNumber: (job.attemptNumber || 0) + 1,
+                });
+            }
+        });
+        if (acceptance === 'busy') {
+            throw new HttpsError('already-exists', 'A deletion request is already in progress.');
+        }
+        if (acceptance === 'lost') {
+            throw new HttpsError('aborted', 'Lock ownership lost before deletion was committed; retry.');
+        }
+        if (alreadyDone) return { alreadyCompleted: true };
 
         // ── True cursor-based paginated delete ────────────────────────────────
         // Does NOT load the entire result set into memory. Uses startAfter cursor to
@@ -3519,55 +3642,6 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
                 if (snap.size < 499) break;
                 cursor = snap.docs[snap.docs.length - 1];
             }
-        }
-
-        // ── True cursor-based paginated update ────────────────────────────────
-        async function releaseClaimsOfDeletedUser(claimerUid) {
-            const identity = {
-                interestedUserId: FieldValue.delete(),
-                interestedUserName: FieldValue.delete(),
-                interestedUserVehicleColor: FieldValue.delete(),
-                interestedUserVehicleType: FieldValue.delete(),
-                interestedUserVehicleBrand: FieldValue.delete(),
-                interestedUserTitle: FieldValue.delete(),
-                claimGenerationId: FieldValue.delete(),
-            };
-            const activeClaimClear = {
-                claimState: null,
-                claimStartedAt: null,
-                etaMinutes: null,
-                interestExpiresAt: null,
-                ownerLeavingNow: null,
-                ownerLeavingNowAt: null,
-                claimReminderAt: null,
-                claimReminderSentAt: null,
-                claimAutoReleaseAt: null,
-                claimAutoReleasedAt: null,
-                claimGenerationId: null,
-            };
-            for (let guard = 0; guard < 1000; guard++) {
-                const snap = await db.collection('spots')
-                    .where('interestedUserId', '==', claimerUid).limit(499).get();
-                if (snap.empty) return;
-                const nowMs = Date.now();
-                const batch = db.batch();
-                for (const d of snap.docs) {
-                    const spot = d.data();
-                    const active = spot.status === 'interested'
-                        && spot.claimState !== 'arrived_pending_outcome';
-                    if (!active) {
-                        batch.update(d.ref, identity);
-                        continue;
-                    }
-                    const expired = spot.expiresAt && typeof spot.expiresAt.toMillis === 'function'
-                        && spot.expiresAt.toMillis() <= nowMs;
-                    batch.update(d.ref, expired
-                        ? { ...identity, ...activeClaimClear }
-                        : { ...identity, ...activeClaimClear, status: 'available' });
-                }
-                await batch.commit();
-            }
-            throw new Error('spotsAsClaimer: release did not converge');
         }
 
         async function paginatedUpdate(baseQuery, updateData) {
@@ -3674,7 +3748,7 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
         // re-publishing the finder's private history and breaking the durable
         // handoff state. Updated docs drop out of the query (interestedUserId
         // deleted), so the loop drains without a cursor; bounded per batch.
-        await step('spotsAsClaimer', () => releaseClaimsOfDeletedUser(uid));
+        await step('spotsAsClaimer', () => releaseClaimsOfDeletedUser(db, uid));
 
         // Chats — paginated to avoid loading all IDs into memory. Uses the
         // same markChatDeletingAndRecursiveDelete helper deleteChat uses —
@@ -3942,7 +4016,24 @@ exports.updateTrustOnSpotDelete = onDocumentDeleted(
     // skipped (admin delete, natural expiry, non-interested status). A lock
     // that already points at a newer claim is left alone.
     if (typeof data.interestedUserId === 'string' && data.interestedUserId) {
-      await clearMatchingActiveIncomingClaim(db, data.interestedUserId, event.params.spotId);
+      const expectedClaim = expectedClaimFromSpot(event.params.spotId, data);
+      if (expectedClaim) {
+        const lockClassification = await clearMatchingActiveIncomingClaim(
+          db,
+          data.interestedUserId,
+          expectedClaim,
+        );
+        // A same-Ping identity conflict is not a verified finder-cancel cycle.
+        // Preserve the lock and suppress every receipt-driven trust side effect.
+        if (lockConflict(lockClassification)) return;
+      } else {
+        console.error('claimLockRepairRequired', {
+          operation: 'spot_delete',
+          classification: LOCK_MATCH.MALFORMED,
+          claimKind: null,
+        });
+        return;
+      }
     }
 
     if (data.status !== 'interested' || !data.finderId) return;
@@ -4463,9 +4554,12 @@ async function _attachSweepnycProductEvidence(segmentId, segment, capture, ruleO
       const snap = await db.collection(`streetSegments/${segmentId}/streetRules`)
         .where('supersededAt', '==', null)
         .get();
-      rules = snap.docs.map(doc => doc.data()).filter(rule => (
+      const loadedSweep = snap.docs.map(doc => doc.data()).filter(rule => (
         rule && rule.type === 'streetCleaning' && rule.source === 'sweepnyc'
       ));
+      const { filterAuthoritativeRules } = require('./curbIntelligence/writeAuthority');
+      const selectedSweep = filterAuthoritativeRules(segment || {}, loadedSweep);
+      rules = selectedSweep.ok ? selectedSweep.rules : [];
       if (!rules.length) {
         const fallback = await db.doc(`streetSegments/${segmentId}/streetRules/sweepnyc_v1`).get();
         if (fallback.exists) rules = [fallback.data()];
@@ -4478,7 +4572,7 @@ async function _attachSweepnycProductEvidence(segmentId, segment, capture, ruleO
   }
 }
 
-async function _loadActiveStreetRules(segmentId) {
+async function _loadActiveStreetRules(segmentId, segment) {
   const snap = await db.collection(`streetSegments/${segmentId}/streetRules`)
     .where('supersededAt', '==', null)
     .get();
@@ -4487,14 +4581,16 @@ async function _loadActiveStreetRules(segmentId) {
     const fallback = await db.doc(`streetSegments/${segmentId}/streetRules/sweepnyc_v1`).get();
     if (fallback.exists) rules = [...rules.filter(rule => rule.type !== 'streetCleaning'), fallback.data()];
   }
-  return rules;
+  const { filterAuthoritativeRules } = require('./curbIntelligence/writeAuthority');
+  const selected = filterAuthoritativeRules(segment || {}, rules);
+  return selected.ok ? selected.rules : [];
 }
 
 async function _considerSweepnycDedup({ segmentId, segment, lat, lng, captureProductEvidence, via }) {
   if (segment.status === 'archived') {
     return { action: 'return', value: { success: false, reason: 'archived_segment' } };
   }
-  const rules = await _loadActiveStreetRules(segmentId);
+  const rules = await _loadActiveStreetRules(segmentId, segment);
   const usableCount = countUsableStreetIntelligence(rules);
   if (decideDedupPath(usableCount) === 'fast') {
     logStreetIntelEvent('dedup_hit_usable', { via, usableCount });
@@ -5099,9 +5195,35 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
       getIdToken: localBinding.getIdToken,
     } : {}),
   });
+  const initializationStartedAt = Date.now();
+  const {
+    createRequestDeadline,
+  } = require('./curbIntelligence/requestDeadline');
+  const requestDeadline = createRequestDeadline({ startedAt: initializationStartedAt });
+  const { enforceUpstreamCostGuard } = require('./curbIntelligence/upstreamCostGuard');
+  const costGuard = enforceUpstreamCostGuard({
+    uid: verifiedUid,
+    location: requestData && requestData.location,
+  });
+  if (!costGuard.ok) {
+    try {
+      createCurbTelemetry().emit('upstream_cost_limited', {
+        protocolVersion: 2,
+        reason: costGuard.reason || 'source_unavailable',
+        hashedLocationKey: costGuard.hashedLocationKey,
+      });
+    } catch { /* telemetry is fail-soft */ }
+    return { protocolVersion: 2, status: 'unsupported', reason: costGuard.reason || 'source_unavailable' };
+  }
   const orchestratorDependencies = {
+    initializationStartedAt,
+    signal: requestDeadline.signal,
+    deadlineAt: requestDeadline.deadlineAt,
+    persistToken: requestDeadline.persistToken,
+    persistAllowed: requestDeadline.persistAllowed,
     db,
     Timestamp,
+    FieldValue,
     planimetricStore: createPlanimetricCurbStore({ fetchFn: fetch }),
     parkNycStore: createParkNycCandidateStore({
       fetchFn: fetch,
@@ -5118,17 +5240,22 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
       .readConfiguredSideConfirmationHmacKey(process.env),
     sideConfirmationHmacKeyName: curbSideConfirmationHmacKey.name,
     readCanonicalCache: streetIntelligenceCache.readCanonicalCache,
-    // The orchestrator fetches external evidence before this write. The
-    // authenticated uid is applied here, over any field in the orchestrator
-    // payload, and persistCanonicalCurb reads that user inside the commit
-    // transaction. Scheduled and internal callers do not set callerUid.
-    persistCanonicalCurb: async (input) => {
-      const supplied = input && typeof input === 'object' ? input : {};
-      return streetIntelligenceCache.persistCanonicalCurb({
-        ...supplied,
-        callerUid: verifiedUid,
-      });
-    },
+    // STREET_INTEL_A1_RESPONSE_ONLY defaults off. Off preserves main
+    // publication. On refuses shared writes for every caller.
+    publishUserResolution: !require('./curbIntelligence/a1ResponseOnlyFlag').isA1ResponseOnlyEnabled(),
+    persistCanonicalCurb: require('./curbIntelligence/a1ResponseOnlyFlag').isA1ResponseOnlyEnabled()
+      ? async () => ({
+        success: true,
+        skipped: 'user_request_not_authoritative',
+      })
+      : async (input) => {
+        const supplied = input && typeof input === 'object' ? input : {};
+        return streetIntelligenceCache.persistCanonicalCurb({
+          ...supplied,
+          callerUid: verifiedUid,
+          allowUserPublication: true,
+        });
+      },
   };
   if (process.env.FUNCTIONS_EMULATOR === 'true') {
     const { localRuntimeDependencies } = require('./curbIntelligence/runtimeSourceArtifact');
@@ -5142,9 +5269,13 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
     const { attachOwnerPilot } = require('./curbIntelligence/runtimeSourceArtifact');
     attachOwnerPilot(orchestratorDependencies, verifiedUid);
   }
-  const outcome = await runCanonicalCurbOrchestrator(requestData, orchestratorDependencies);
-  await assertProductAccess(verifiedUid);
-  return outcome;
+  try {
+    const outcome = await runCanonicalCurbOrchestrator(requestData, orchestratorDependencies);
+    await assertProductAccess(verifiedUid);
+    return outcome;
+  } finally {
+    requestDeadline.dispose();
+  }
 }
 
 // ─── Hydrant proximity (NYC DEP) ─────────────────────────────────────────────

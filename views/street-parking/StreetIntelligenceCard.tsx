@@ -13,6 +13,7 @@ import {
   classifyStreetIntelligence,
   StreetIntelligencePresentation,
 } from '../../utils/streetIntelligencePresentation';
+import { filterAuthoritativeRules } from '../../utils/canonicalCurbWriteAuthority';
 import { t, useLang } from '../../i18n';
 
 interface Props {
@@ -21,6 +22,9 @@ interface Props {
   streetName: string;
   sideConfidence: 'high' | 'low' | 'unknown';
   confirmedParkingSide: string | null;
+  drivingSide?: 'left' | 'right' | null;
+  resolvedPublicRules?: ReadonlyArray<Record<string, unknown>> | null;
+  resolvedRegulationStatus?: 'verified' | 'partial' | 'unknown' | 'verified_empty' | null;
   onConfirmSide: (side: string) => void;
   onResult?: (result: StreetIntelligenceCardResult) => void;
 }
@@ -59,7 +63,7 @@ const SIDE_KEY_MAP: Record<string, string> = {
 
 export const StreetIntelligenceCard = ({
   segmentId, parkingSide, streetName,
-  sideConfidence, confirmedParkingSide, onConfirmSide,
+  sideConfidence, confirmedParkingSide, drivingSide, resolvedPublicRules, resolvedRegulationStatus, onConfirmSide,
   onResult,
 }: Props) => {
   useLang();
@@ -112,35 +116,71 @@ export const StreetIntelligenceCard = ({
         const todayKey = toNYCDateKey(new Date());
         const horizonKey = addNYCDateKeyDays(todayKey, MAX_FORWARD_SEARCH_DAYS_AHEAD);
 
-        const [segSnap, suspSnap] = await Promise.all([
-          getDoc(doc(db, 'streetSegments', segmentId)),
+        const suspSnap = (await Promise.all([
           getDocs(query(
             collection(db, 'suspensions'),
             where('date', '>=', todayKey),
             where('date', '<=', horizonKey),
             orderBy('date', 'desc'),
           )),
-        ]);
+        ]))[0];
         if (cancelled) return;
 
-        const segment = segSnap.exists() ? segSnap.data() : null;
-        const activeRuleSetVersion = segment?.protocolVersion === 2
-          ? segment.activeRuleSetVersion : null;
-        const rulesSnap = await getDocs(activeRuleSetVersion
-          ? query(
-            collection(db, 'streetSegments', segmentId, 'streetRules'),
-            where('ruleSetVersion', '==', activeRuleSetVersion),
-          )
-          : query(
-            collection(db, 'streetSegments', segmentId, 'streetRules'),
-            where('supersededAt', '==', null),
-          ));
-        if (cancelled) return;
-        const rules = rulesSnap.docs
-          .map(d => ({ id: d.id, ...d.data() } as StreetRuleDoc & { ruleSetVersion?: string }))
-          .filter(rule => !activeRuleSetVersion || rule.ruleSetVersion === activeRuleSetVersion);
+        let rules: Array<StreetRuleDoc & { ruleSetVersion?: string }> = [];
+        let authoritativeSegment: Record<string, unknown> | null = null;
+        const resolvedAreVerified = Array.isArray(resolvedPublicRules)
+          && (resolvedRegulationStatus == null || resolvedRegulationStatus === 'verified');
+        if (resolvedAreVerified) {
+          rules = resolvedPublicRules.map((rule, index) => ({
+            id: `response_${index}`,
+            ...(rule as StreetRuleDoc),
+          }));
+          const source = typeof rules[0]?.source === 'string' ? rules[0].source : 'nyc_open_data';
+          authoritativeSegment = {
+            segmentId,
+            streetName,
+            status: 'active',
+            source,
+            provenance: { provider: source },
+            confidenceScore: 1,
+          };
+        } else if (Array.isArray(resolvedPublicRules) && resolvedRegulationStatus && resolvedRegulationStatus !== 'verified') {
+          rules = [];
+          authoritativeSegment = {
+            segmentId,
+            streetName,
+            status: 'active',
+            source: 'nyc_open_data',
+            provenance: { provider: 'nyc_open_data' },
+            confidenceScore: 1,
+            protocolVersion: 2,
+          };
+        } else {
+          const segSnap = await getDoc(doc(db, 'streetSegments', segmentId));
+          if (cancelled) return;
+          const segment = (typeof segSnap.exists === 'function' ? segSnap.exists() : Boolean(segSnap.exists))
+            ? segSnap.data() : null;
+          const activeRuleSetVersion = segment?.protocolVersion === 2
+            ? segment.activeRuleSetVersion : null;
+          const rulesSnap = await getDocs(activeRuleSetVersion
+            ? query(
+              collection(db, 'streetSegments', segmentId, 'streetRules'),
+              where('ruleSetVersion', '==', activeRuleSetVersion),
+            )
+            : query(
+              collection(db, 'streetSegments', segmentId, 'streetRules'),
+              where('supersededAt', '==', null),
+            ));
+          if (cancelled) return;
+          const loadedRules = rulesSnap.docs
+            .map(d => ({ id: d.id, ...d.data() } as StreetRuleDoc & { ruleSetVersion?: string }))
+            .filter(rule => !activeRuleSetVersion || rule.ruleSetVersion === activeRuleSetVersion);
+          const selected = filterAuthoritativeRules(segment, loadedRules);
+          rules = selected.ok ? selected.rules : [];
+          authoritativeSegment = selected.ok ? segment : null;
+        }
         cdbg(`streetRules count: ${rules.length}`);
-        const nextPresentation = classifyStreetIntelligence(segment, rules);
+        const nextPresentation = classifyStreetIntelligence(authoritativeSegment, rules);
         cdbg(`presentation state: ${nextPresentation.state} | source: ${nextPresentation.source ?? 'none'}`);
         setPresentation(nextPresentation);
 
@@ -224,7 +264,7 @@ export const StreetIntelligenceCard = ({
     load();
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [segmentId, effectiveSide]);
+  }, [segmentId, effectiveSide, resolvedPublicRules, resolvedRegulationStatus]);
 
   const debugBlock = isDebugMode && debugLines.length > 0 ? (
     <div style={{ marginTop: 8, padding: '6px 8px', background: 'rgba(0,0,0,0.85)', borderRadius: 8, border: '1px solid #1e75ff55' }}>
@@ -236,7 +276,40 @@ export const StreetIntelligenceCard = ({
     </div>
   ) : null;
 
+  const curbVerified = sideConfidence === 'high' && Boolean(parkingSide);
+  const identifiedCurb = curbVerified ? (
+    <div className="pq-mycar-intel-street">
+      <CheckCircle size={14} className="text-[var(--color-text-secondary)] shrink-0" />
+      <div>
+        <p className="text-sm font-semibold text-[var(--color-text)]">{t('street_intel.curb_identified')}</p>
+        {drivingSide === 'left' || drivingSide === 'right' ? (
+          <p className="pq-mycar-intel-reason" style={{ marginBottom: 0 }}>
+            {t(drivingSide === 'right' ? 'street_intel.parked_right' : 'street_intel.parked_left')}
+          </p>
+        ) : null}
+      </div>
+    </div>
+  ) : null;
+  const parkingUnavailable = (
+    <div>
+      <p className="text-sm font-semibold text-[var(--color-text)]">{t('street_intel.parking_information_unavailable')}</p>
+      <p className="pq-mycar-intel-reason" style={{ marginBottom: 0 }}>
+        {t('street_intel.parking_information_unavailable_body')}
+      </p>
+    </div>
+  );
+
   if (loading) {
+    if (curbVerified) {
+      return (
+        <div className="pq-mycar-intel" role="status">
+          {identifiedCurb}
+          <p className="pq-mycar-intel-reason" style={{ marginBottom: 0 }}>
+            {t('street_intel.parking_information_loading')}
+          </p>
+        </div>
+      );
+    }
     return (
       <div className="pq-mycar-intel animate-pulse">
         <div className="h-3 w-24 bg-white/10 rounded mb-3" />
@@ -246,11 +319,16 @@ export const StreetIntelligenceCard = ({
     );
   }
 
-  if (loadError) {
-    return <StreetIntelligenceUnavailableCard />;
-  }
-
-  if (presentation.state === 'unknown' || presentation.state === 'caution') {
+  if (loadError || presentation.state === 'unknown' || presentation.state === 'caution') {
+    if (curbVerified) {
+      return (
+        <div className="pq-mycar-intel">
+          {identifiedCurb}
+          {parkingUnavailable}
+          {debugBlock}
+        </div>
+      );
+    }
     return <StreetIntelligenceUnavailableCard />;
   }
 
@@ -258,6 +336,7 @@ export const StreetIntelligenceCard = ({
     if (availableSides.length === 0) return null;
     return (
       <div className="pq-mycar-intel pq-mycar-intel--caution">
+        {identifiedCurb}
         <div className="pq-mycar-intel-street">
           <AlertTriangle size={14} className="text-[var(--color-warning)] shrink-0" />
           <p>{t('street_intel.info_available')}</p>
@@ -287,7 +366,9 @@ export const StreetIntelligenceCard = ({
   if (!result) return null;
 
   const effectiveSideLabel = sideLabel(effectiveSide);
-  const sideHeader = `${streetName} · ${effectiveSideLabel}${confirmedParkingSide ? ' ✓' : ''}`;
+  const sideHeader = drivingSide === 'left' || drivingSide === 'right'
+    ? `${streetName} · ${t(drivingSide === 'right' ? 'street_intel.parked_right' : 'street_intel.parked_left')}`
+    : streetName;
   const sideMeters = meterWindows.filter(window => !window.side || window.side === effectiveSide);
   const sideRestrictions = restrictionWindows.filter(window => !window.side || window.side === effectiveSide);
   const sideTimeLimits = timeLimitedWindows.filter(window => !window.side || window.side === effectiveSide);
@@ -343,7 +424,7 @@ export const StreetIntelligenceCard = ({
     </div>
   ) : (sideMeters.length || sideRestrictions.length) ? (
     <p className="pq-mycar-intel-reason" style={{ marginTop: 10, marginBottom: 0 }}>
-      {t('street_intel.no_cleaning_schedule_found')}
+      {t('street_intel.cleaning_schedule_unavailable')}
     </p>
   ) : null;
   const timeLimitDetails = sideTimeLimits.length ? (
@@ -361,6 +442,15 @@ export const StreetIntelligenceCard = ({
   ) : null;
 
   if (!result.scheduleDescription && !sideMeters.length && !sideRestrictions.length) {
+    if (curbVerified) {
+      return (
+        <div className="pq-mycar-intel">
+          {identifiedCurb}
+          {parkingUnavailable}
+          {debugBlock}
+        </div>
+      );
+    }
     return (
       <div className="pq-mycar-intel">
         <div className="pq-mycar-intel-street">
@@ -389,6 +479,7 @@ export const StreetIntelligenceCard = ({
 
   return (
     <div className={`pq-mycar-intel ${toneClass}`}>
+      {identifiedCurb}
       <div className="pq-mycar-intel-street">
         <Leaf size={14} className="text-[var(--color-text-secondary)]" />
         <p>{sideHeader}</p>

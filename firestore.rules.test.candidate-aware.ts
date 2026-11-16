@@ -3,7 +3,7 @@
  *
  * Run via:
  *   npm run test:rules          (starts emulator automatically, then exits)
- *   npm run test:rules:unit     (assumes emulator already on :8080)
+ *   npm run test:rules:unit     (requires FIRESTORE_EMULATOR_HOST)
  *
  * Requires Java 11+ and Firebase CLI with the Firestore emulator installed.
  *
@@ -37,6 +37,7 @@ import {
     runTransaction,
     writeBatch,
 } from 'firebase/firestore';
+import { assertRulesProject, readRulesEmulatorEndpoint } from './firestoreRulesEmulator';
 import { cancelClaimTransaction } from './views/street-parking/cancelClaimTransaction';
 import { commitClaimToHeading } from './views/street-parking/commitToHeading';
 import {
@@ -61,6 +62,8 @@ const OTHER_UID  = 'other-bbb-222';
 const ADMIN_UID  = 'admin-ccc-333';
 const THIRD_UID  = 'third-ddd-444';
 const PROJECT_ID = 'demo-parkqueen-rules-test';
+const rulesEmulator = readRulesEmulatorEndpoint();
+assertRulesProject(PROJECT_ID);
 const requireFromFunctions = createRequire(path.join(process.cwd(), 'functions/package.json'));
 
 let testEnv: RulesTestEnvironment;
@@ -126,6 +129,18 @@ async function seed(col: string, id: string, data: object) {
     });
 }
 
+// t743u: Ping-domain writes require users/{uid} to exist (same as the
+// interim rules). Participants in the Ping, notice, feedback and arrival
+// suites are ordinary signed-up users, so they get a minimal Active profile.
+async function seedParticipantProfiles(...uids: string[]) {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        const fs = ctx.firestore();
+        for (const uid of uids) {
+            await setDoc(doc(fs, 'users', uid), { status: 'Active' }, { merge: true });
+        }
+    });
+}
+
 async function seedActiveClaimInvariantOpen() {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
         await setDoc(doc(ctx.firestore(), 'activeIncomingClaimRollout', 'status'), {
@@ -144,9 +159,7 @@ async function closeActiveClaimRollout() {
 }
 
 function rolloutTools() {
-    if (!process.env.FIRESTORE_EMULATOR_HOST) {
-        process.env.FIRESTORE_EMULATOR_HOST = '127.0.0.1:8080';
-    }
+    process.env.FIRESTORE_EMULATOR_HOST = rulesEmulator.endpoint;
     const { initializeApp, getApps } = requireFromFunctions('firebase-admin/app');
     const { getFirestore, Timestamp: AdminTimestamp } = requireFromFunctions('firebase-admin/firestore');
     const { reconcileActiveIncomingClaims } = requireFromFunctions('./activeIncomingClaim.js');
@@ -256,8 +269,8 @@ beforeAll(async () => {
         projectId: PROJECT_ID,
         firestore: {
             rules: readFileSync('firestore.rules', 'utf8'),
-            host:  'localhost',
-            port:  8080,
+            host:  rulesEmulator.host,
+            port:  rulesEmulator.port,
         },
     });
 });
@@ -503,6 +516,7 @@ describe('spots — security regression: cross-user history attack denied', () =
 // SPOT FEEDBACK — private parking confirmations
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('spotFeedback', () => {
+    beforeEach(async () => { await seedParticipantProfiles(OWNER_UID, OTHER_UID, THIRD_UID); });
     const FB_ID = 'fb-1';
     const feedbackDoc = {
         userId:    OWNER_UID,
@@ -1534,6 +1548,7 @@ describe('X-1 — chats create requires canonical sorted-pair ID', () => {
 // SPOTS — claimant cancellation (Arm 3 / Arm 3b)
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('spots — claimer cancellation', () => {
+    beforeEach(async () => { await seedParticipantProfiles(OWNER_UID, OTHER_UID, THIRD_UID); });
     const clearFields = {
         claimState: null,
         ownerLeavingNow: null,
@@ -1812,6 +1827,7 @@ describe('S-SPOT-1 — claimer cancel requires complete claimer-metadata cleanup
 // cancelClaimTransaction — real Firestore SDK transaction execution (no mocks)
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('cancelClaimTransaction — transaction read/write ordering and behavior', () => {
+    beforeEach(async () => { await seedParticipantProfiles(OWNER_UID, OTHER_UID, THIRD_UID); });
     async function readSpot(id: string) {
         let data: any;
         await testEnv.withSecurityRulesDisabled(async ctx => {
@@ -2092,6 +2108,7 @@ describe('cancelClaimTransaction — transaction read/write ordering and behavio
 // SPOT NOTIFICATIONS — Ping participants only
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('spotNotifications — participant-bound creation', () => {
+    beforeEach(async () => { await seedParticipantProfiles(OWNER_UID, OTHER_UID, THIRD_UID); });
     beforeEach(async () => {
         await seed('spots', 'notification-spot', interestedSpot);
     });
@@ -4693,7 +4710,7 @@ describe('A1 — one active incoming claim', () => {
             finderId: OWNER_UID,
             fingerprint,
             message: 'Changed my mind',
-        })).rejects.toMatchObject({ code: 'permission-denied' });
+        })).rejects.toThrow(/identity conflict/);
         expect((await readSpot('a1-cancel')).data().status).toBe('interested');
         expect((await readSpot('a1-cancel')).data().interestedUserId).toBe(OTHER_UID);
         expect((await readLock(OTHER_UID)).data().spotId).toBe('a1-cancel');
@@ -4778,6 +4795,36 @@ describe('A1 — one active incoming claim', () => {
         expect((await readLock(OTHER_UID)).data().spotId).toBe('a1-keep-lock');
     });
 
+    it.each([
+        ['missing', {}],
+        ['non-string', { spotId: 42 }],
+    ])('A1-F1-MAL-SPOT: arrival is denied when the existing lock spotId is %s', async (_label, malformed) => {
+        await seedClaimer(OTHER_UID, 'bob');
+        const spotId = `a1-malformed-lock-${_label}`;
+        const startedAt = Timestamp.now();
+        await seed('spots', spotId, {
+            ...availablePing(`A1 malformed ${_label}`),
+            ...claimPayload(OTHER_UID, 'bob', 'heading', startedAt),
+        });
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            await setDoc(activeIncomingClaimRef(ctx.firestore(), OTHER_UID), {
+                claimStartedAt: startedAt,
+                claimState: 'heading',
+                updatedAt: startedAt,
+                ...malformed,
+            });
+        });
+
+        const db = otherDb();
+        await assertFails(updateDoc(doc(db, 'spots', spotId), {
+            status: 'occupied',
+            claimState: 'arrived_pending_outcome',
+            arrivedAt: Timestamp.now(),
+        }));
+        expect((await readSpot(spotId)).data().status).toBe('interested');
+        expect((await readLock(OTHER_UID)).exists()).toBe(true);
+    });
+
     it('A1-13: another user cannot read the lock, and a non-current doc id cannot be created', async () => {
         await seedClaimer(OTHER_UID, 'bob');
         await seed('spots', 'a1-private', availablePing('A1 private'));
@@ -4814,14 +4861,16 @@ describe('A1 — one active incoming claim', () => {
     it('A1-15: driver terminal completion clears a leftover lock that still names the Ping', async () => {
         await seedClaimer(OTHER_UID, 'bob');
         const spotId = 'a1-terminal';
+        const startedAt = Timestamp.now();
         await seed('spots', spotId, {
             ...interestedSpot,
             status: 'occupied',
             claimState: 'arrived_pending_outcome',
             arrivedAt: Timestamp.fromMillis(Date.now() - 60_000),
             address: 'A1 terminal',
+            claimStartedAt: startedAt,
         });
-        await seedLock(OTHER_UID, spotId);
+        await seedLock(OTHER_UID, spotId, startedAt);
         const db = otherDb();
         const feedbackId = `${spotId}_${OTHER_UID}`;
         await assertSucceeds(runTransaction(db, async (tx) => {
@@ -4846,14 +4895,16 @@ describe('A1 — one active incoming claim', () => {
         await seedClaimer(OTHER_UID, 'bob');
         const spotId = 'a1-15-30p-feedback-only';
         const arrivedAt = Timestamp.fromMillis(Date.now() - 60_000);
+        const startedAt = Timestamp.now();
         await seed('spots', spotId, {
             ...interestedSpot,
             status: 'occupied',
             claimState: 'arrived_pending_outcome',
             arrivedAt,
             address: 'A1 terminal',
+            claimStartedAt: startedAt,
         });
-        await seedLock(OTHER_UID, spotId);
+        await seedLock(OTHER_UID, spotId, startedAt);
         const db = otherDb();
         const feedbackId = `${spotId}_${OTHER_UID}`;
         let denied: unknown = null;
@@ -4901,14 +4952,16 @@ describe('A1 — one active incoming claim', () => {
         await seedClaimer(OTHER_UID, 'bob');
         const spotId = 'a1-15-30p-lock-delete-only';
         const arrivedAt = Timestamp.fromMillis(Date.now() - 60_000);
+        const startedAt = Timestamp.now();
         await seed('spots', spotId, {
             ...interestedSpot,
             status: 'occupied',
             claimState: 'arrived_pending_outcome',
             arrivedAt,
             address: 'A1 terminal',
+            claimStartedAt: startedAt,
         });
-        await seedLock(OTHER_UID, spotId);
+        await seedLock(OTHER_UID, spotId, startedAt);
         const db = otherDb();
         const feedbackId = `${spotId}_${OTHER_UID}`;
         let denied: unknown = null;
@@ -4940,6 +4993,33 @@ describe('A1 — one active incoming claim', () => {
         expect(spot.data().claimState).toBe('arrived_pending_outcome');
         expect(spot.data().arrivedAt.isEqual(arrivedAt)).toBe(true);
         expect(spot.data().interestedUserId).toBe(OTHER_UID);
+    });
+
+    it('A1-F1: Rules deny deletion of a same-Ping lock from another modern generation', async () => {
+        const spotId = 'a1-f1-modern-conflict';
+        const spotGeneration = 'a'.repeat(64);
+        const lockGeneration = 'b'.repeat(64);
+        const startedAt = Timestamp.now();
+        await seed('spots', spotId, {
+            ...interestedSpot,
+            status: 'occupied',
+            claimState: 'arrived_pending_outcome',
+            claimGenerationId: spotGeneration,
+            claimStartedAt: startedAt,
+            arrivedAt: startedAt,
+        });
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            await setDoc(activeIncomingClaimRef(ctx.firestore(), OTHER_UID), {
+                spotId,
+                claimGenerationId: lockGeneration,
+                claimStartedAt: startedAt,
+                claimState: 'heading',
+                updatedAt: startedAt,
+            });
+        });
+
+        await assertFails(deleteDoc(activeIncomingClaimRef(otherDb(), OTHER_UID)));
+        expect((await readLock(OTHER_UID)).data().claimGenerationId).toBe(lockGeneration);
     });
 
     async function seedLegacyInterest(id: string, uid: string, claimStartedAt: Timestamp) {
@@ -5061,6 +5141,21 @@ describe('A1 — one active incoming claim', () => {
             releasedSpotIds: [],
         }));
     });
+
+    it('F1-GATE-DORMANT: the complete dormant rollout predicate requires an explicit integer zero malformed count', () => {
+        const rules = readFileSync('firestore.rules', 'utf8');
+        const start = rules.indexOf('function activeIncomingClaimInvariantEnforced() {');
+        const end = rules.indexOf('\n    }', start);
+        expect(start).toBeGreaterThan(-1);
+        expect(end).toBeGreaterThan(start);
+        const predicate = rules.slice(start, end);
+        expect(predicate).toContain("status.get('malformedInterestedCount', null) is int");
+        expect(predicate).toContain("status.get('malformedInterestedCount', null) == 0");
+        expect(predicate).toContain('status.enforced == true');
+        expect(predicate).toContain('status.locklessCount == 0');
+        expect(predicate).toContain('status.duplicateUserCount == 0');
+        expect(predicate).toContain('status.duplicatePingCount == 0');
+    });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -5068,6 +5163,7 @@ describe('A1 — one active incoming claim', () => {
 // Arm 2b is unchanged. The client transaction writes only that field set.
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('A3 — commit to heading', () => {
+    beforeEach(async () => { await seedParticipantProfiles(OWNER_UID, OTHER_UID, THIRD_UID); });
     async function readSpot(id: string) {
         let data: any;
         await testEnv.withSecurityRulesDisabled(async ctx => {
@@ -5394,6 +5490,7 @@ describe('A5 — Ping lifetime bounds', () => {
 // not covered here.
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('B1 — durable arrived_pending_outcome', () => {
+    beforeEach(async () => { await seedParticipantProfiles(OWNER_UID, OTHER_UID, THIRD_UID); });
     function headingPing(id: string, extra: Record<string, unknown> = {}) {
         return {
             finderId: OWNER_UID,
@@ -5413,9 +5510,12 @@ describe('B1 — durable arrived_pending_outcome', () => {
     }
 
     async function seedLock(spotId: string) {
-        const started = Timestamp.now();
         await testEnv.withSecurityRulesDisabled(async (ctx) => {
-            await setDoc(activeIncomingClaimRef(ctx.firestore(), OTHER_UID), {
+            const admin = ctx.firestore();
+            const spot = await getDoc(doc(admin, 'spots', spotId));
+            const started = spot.data()?.claimStartedAt;
+            if (!(started instanceof Timestamp)) throw new Error('seedLock requires claimStartedAt');
+            await setDoc(activeIncomingClaimRef(admin, OTHER_UID), {
                 spotId,
                 claimStartedAt: started,
                 claimState: 'heading',
@@ -5480,6 +5580,22 @@ describe('B1 — durable arrived_pending_outcome', () => {
         expect(spot.arrivedAt).toBeTruthy();
         expect(spot.lat).toBe(40.71);
         expect(spot.lng).toBe(-74.01);
+        expect((await readLock()).exists()).toBe(false);
+    });
+
+    it('B1-LEGACY-MISSING-LOCK: first arrival remains allowed when the legacy lock is absent', async () => {
+        const spotId = 'b1-legacy-missing-lock';
+        await seed('spots', spotId, headingPing(spotId));
+
+        await assertSucceeds(updateDoc(doc(otherDb(), 'spots', spotId), {
+            status: 'occupied',
+            claimState: 'arrived_pending_outcome',
+            arrivedAt: Timestamp.now(),
+        }));
+
+        const spot = (await readSpot(spotId)).data();
+        expect(spot.status).toBe('occupied');
+        expect(spot.claimState).toBe('arrived_pending_outcome');
         expect((await readLock()).exists()).toBe(false);
     });
 
@@ -5930,6 +6046,7 @@ describe('B4 — client cannot create unconfirmed', () => {
 // One attestation is not terminal: claimState stays arrived_pending_outcome.
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('C1 — participant success attestations', () => {
+    beforeEach(async () => { await seedParticipantProfiles(OWNER_UID, OTHER_UID, THIRD_UID); });
     function arrivedSpot(id: string, extra: Record<string, unknown> = {}) {
         return {
             finderId: OWNER_UID,
@@ -6254,4 +6371,362 @@ describe('S7 access — Firestore caller gate', () => {
         expect(snap.data()?.state).toBe('queued');
         await assertFails(setDoc(doc(userDb(), 'users', UID, 'private', 'preferences'), { lang: 'en' }));
     });
+});
+
+// ── t743u: Step 7 final-rules correction ──────────────────────────────────────
+// The final rules must keep two interim-rules denials that the first final
+// draft lost: a caller with no users/{uid} profile cannot write the Ping
+// domain, and a caller with the server-written deletion fence
+// accountLifecycle/{uid} (any value) cannot use the product. Legacy direct
+// claim, claimant cancel and claimed-Ping finder delete stay removed.
+describe('t743u — final rules: deletion fence and missing-profile denials', () => {
+    const FIN = 't743-finder';
+    const CLM = 't743-claimer';
+    const GEN = 'ab'.repeat(32);
+    const STARTED = Timestamp.fromMillis(Date.now() - 60_000);
+    const ACTIVE = { username: 'claimer743', fullName: 'C', crowns: 0, status: 'Active', productAccessBlocked: false };
+    const FINDER_PROFILE = { username: 'finder743', fullName: 'F', crowns: 0, status: 'Active', productAccessBlocked: false };
+    type Actor = 'active' | 'suspended' | 'blocked' | 'missing' | 'fenced' | 'deleted';
+    const RESTRICTED: Actor[] = ['suspended', 'blocked', 'missing', 'fenced', 'deleted'];
+
+    function db(uid: string) { return testEnv.authenticatedContext(uid).firestore(); }
+
+    // A denial must be a rules decision, not an evaluation-limit failure.
+    async function denied(p: Promise<unknown>) {
+        const err = await assertFails(p) as { message?: string };
+        expect(String(err?.message ?? '')).not.toMatch(/maximum|exceed|too many|limit/i);
+    }
+
+    async function seedActor(uid: string, actor: Actor, base: Record<string, unknown> = ACTIVE) {
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            const fs = ctx.firestore();
+            if (actor === 'active') await setDoc(doc(fs, 'users', uid), base);
+            if (actor === 'suspended') await setDoc(doc(fs, 'users', uid), { ...base, status: 'Suspended' });
+            if (actor === 'blocked') await setDoc(doc(fs, 'users', uid), { ...base, productAccessBlocked: true });
+            if (actor === 'fenced') {
+                await setDoc(doc(fs, 'users', uid), base);
+                await setDoc(doc(fs, 'accountLifecycle', uid), { state: 'deleting' });
+            }
+            // deleted: profile already removed, fence still present, ID token still valid.
+            // missing: no users/{uid} and no fence.
+            if (actor === 'deleted' || actor === 'missing') await deleteDoc(doc(fs, 'users', uid));
+            if (actor === 'deleted') await setDoc(doc(fs, 'accountLifecycle', uid), { state: 'deleting' });
+        });
+    }
+
+    function available(id: string, extra: Record<string, unknown> = {}) {
+        return {
+            finderId: FIN, finderName: 'finder743', address: id, lat: 40.71, lng: -74.01,
+            status: 'available', pingMode: 'now', type: 'free', geohash: 'dr5ru',
+            reportedAt: Timestamp.now(), expiresAt: FUTURE, ...extra,
+        };
+    }
+
+    // What the claimSpot callable leaves behind (Admin SDK write).
+    async function seedServerClaim(id: string, extra: Record<string, unknown> = {}, lockGeneration: string | null = GEN) {
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            const fs = ctx.firestore();
+            await setDoc(doc(fs, 'spots', id), available(id, {
+                status: 'interested', claimState: 'heading', interestedUserId: CLM,
+                claimGenerationId: GEN, claimStartedAt: STARTED, interestExpiresAt: FUTURE, ...extra,
+            }));
+            await setDoc(activeIncomingClaimRef(fs, CLM), {
+                spotId: id, claimStartedAt: STARTED, claimState: 'heading', updatedAt: STARTED,
+                ...(lockGeneration ? { claimGenerationId: lockGeneration } : {}),
+            });
+        });
+    }
+
+    function notice(spotId: string, senderId: string, targetUserId: string, type: string) {
+        return { spotId, senderId, targetUserId, type, message: 'm', createdAt: Timestamp.fromMillis(Date.now() - 1000) };
+    }
+
+    function arrivedAttestation(spotId: string, role: 'claimer' | 'finder') {
+        return {
+            spotId, userId: CLM, finderId: FIN, outcome: 'participant_success', role,
+            failureReason: null, address: spotId, createdAt: Timestamp.now(),
+        };
+    }
+
+    async function seedArrived(id: string) {
+        await seed('spots', id, available(id, {
+            status: 'occupied', claimState: 'arrived_pending_outcome', interestedUserId: CLM,
+            claimGenerationId: GEN, claimStartedAt: STARTED, arrivedAt: Timestamp.fromMillis(Date.now() - 30_000),
+        }));
+    }
+
+    beforeEach(async () => {
+        await seed('users', FIN, FINDER_PROFILE);
+    });
+
+    it('T743-ACTIVE: an Active user with a valid profile keeps every new-client path', async () => {
+        await seedActor(CLM, 'active');
+        await seedServerClaim('act');
+        const c = db(CLM);
+        await assertSucceeds(getDoc(doc(c, 'spots', 'act')));
+        await assertSucceeds(getDoc(activeIncomingClaimRef(c, CLM)));
+        await assertSucceeds(updateDoc(doc(c, 'spots', 'act'), { etaMinutes: 5 }));
+        await assertSucceeds(setDoc(doc(c, 'spotNotifications', 'act-n'), notice('act', CLM, FIN, 'delayed')));
+        await assertSucceeds(getDoc(doc(db(FIN), 'spotNotifications', 'act-n')));
+        await assertSucceeds(updateDoc(doc(c, 'users', CLM), { vehicleColor: 'red' }));
+        await assertSucceeds(setDoc(doc(c, 'users', CLM, 'private', 'preferences'), { lang: 'en' }));
+        await seed('usernames', 'taken743', { uid: FIN });
+        await assertSucceeds(getDoc(doc(c, 'usernames', 'taken743')));
+        await assertSucceeds(getDoc(doc(c, 'users', FIN)));
+        // Arrival on a callable-minted (generation) claim, then the attestation.
+        await markClaimArrived(c, 'act', CLM);
+        await assertSucceeds(setDoc(doc(c, 'spotFeedback', `act_${CLM}`), arrivedAttestation('act', 'claimer')));
+        // Finder side: Ping create (worst-case create transaction) and the finder attestation.
+        await assertSucceeds(commitBoundedPing(db(FIN), FIN, 'act-new', available('act-new', {
+            reportedAt: Timestamp.now(), expiresAt: Timestamp.fromMillis(Date.now() + 20 * 60_000),
+        })));
+        await assertSucceeds(setDoc(doc(db(FIN), 'spotFeedback', `act_${CLM}_finder`), arrivedAttestation('act', 'finder')));
+    });
+
+    for (const actor of RESTRICTED) {
+        it(`T743-DENY-${actor}: claimant Ping-domain writes are denied (${actor})`, async () => {
+            await seedActor(CLM, actor);
+            await seedServerClaim(`d-${actor}`);
+            const c = db(CLM);
+            await denied(updateDoc(doc(c, 'spots', `d-${actor}`), { etaMinutes: 5 }));
+            await denied(setDoc(doc(c, 'spotNotifications', `n-${actor}`), notice(`d-${actor}`, CLM, FIN, 'delayed')));
+            await denied(markClaimArrived(c, `d-${actor}`, CLM));
+            await denied(deleteDoc(activeIncomingClaimRef(c, CLM)));
+            await seedArrived(`a-${actor}`);
+            await denied(setDoc(doc(c, 'spotFeedback', `a-${actor}_${CLM}`), arrivedAttestation(`a-${actor}`, 'claimer')));
+        });
+
+        it(`T743-DENY-FINDER-${actor}: finder Ping create, orphan delete and re-ping are denied (${actor})`, async () => {
+            await seedActor(FIN, actor, FINDER_PROFILE);
+            await seed('spots', `o-${actor}`, available(`o-${actor}`));
+            const f = db(FIN);
+            await denied(deleteDoc(doc(f, 'spots', `o-${actor}`)));
+            await denied(commitBoundedPing(f, FIN, `c-${actor}`, available(`c-${actor}`, {
+                reportedAt: Timestamp.now(), expiresAt: Timestamp.fromMillis(Date.now() + 20 * 60_000),
+            })));
+            await denied(setDoc(doc(f, 'users', FIN, 'pingCreateRate', 'current'), {
+                spotIds: ['x'], createdAts: [Timestamp.now()],
+            }));
+        });
+    }
+
+    for (const actor of ['suspended', 'blocked', 'fenced', 'deleted'] as Actor[]) {
+        it(`T743-READ-${actor}: product reads are denied (${actor})`, async () => {
+            await seedActor(CLM, actor);
+            await seedServerClaim(`r-${actor}`);
+            const c = db(CLM);
+            await denied(getDoc(doc(c, 'spots', `r-${actor}`)));
+            await denied(getDoc(activeIncomingClaimRef(c, CLM)));
+            await denied(getDoc(doc(c, 'users', FIN)));
+            await denied(setDoc(doc(c, 'users', CLM, 'private', 'preferences'), { lang: 'en' }));
+            await denied(getDoc(doc(c, 'usernames', 'finder743')));
+        });
+    }
+
+    it('T743-FENCE-ANY: any accountLifecycle/{uid} document is a fence, whatever it holds', async () => {
+        await seedActor(CLM, 'active');
+        await seed('accountLifecycle', CLM, {});
+        await seedServerClaim('fa');
+        await denied(updateDoc(doc(db(CLM), 'spots', 'fa'), { etaMinutes: 5 }));
+        await denied(getDoc(doc(db(CLM), 'spots', 'fa')));
+    });
+
+    it('T743-FENCE-CLIENT: clients cannot read, create, clear or delete the fence', async () => {
+        await seedActor(CLM, 'active');
+        await denied(setDoc(doc(db(CLM), 'accountLifecycle', CLM), { state: 'deleting' }));
+        await seedActor(CLM, 'fenced');
+        await denied(getDoc(doc(db(CLM), 'accountLifecycle', CLM)));
+        await denied(deleteDoc(doc(db(CLM), 'accountLifecycle', CLM)));
+        await denied(setDoc(doc(db(CLM), 'accountLifecycle', CLM), {}));
+    });
+
+    it('T743-ONBOARD: a signed-in user with no profile keeps first-time onboarding but cannot write Pings', async () => {
+        await seedActor(CLM, 'missing');
+        const c = db(CLM);
+        const own = await assertSucceeds(getDoc(doc(c, 'users', CLM)));
+        expect(own.exists()).toBe(false);
+        await seed('usernames', 'taken743', { uid: FIN });
+        await assertSucceeds(getDoc(doc(c, 'usernames', 'taken743')));
+        await assertSucceeds(setDoc(doc(c, 'users', CLM, 'private', 'preferences'), { lang: 'en' }));
+        await seed('spots', 'feed', available('feed'));
+        await assertSucceeds(getDoc(doc(c, 'spots', 'feed')));
+        await denied(setDoc(doc(c, 'users', CLM), { username: 'self-made' }));
+        await denied(setDoc(doc(c, 'users', CLM, 'pingCreateRate', 'current'), {
+            spotIds: ['x'], createdAts: [Timestamp.now()],
+        }));
+    });
+
+    it('T743-CARLOCATION: carLocation behavior is unchanged (self-scoped signedIn, not product-gated)', async () => {
+        const car = () => ({
+            verification: 'UNVERIFIED', approximate: true, lat: 40.7, lng: -74,
+            accuracyMeters: 10, savedAt: Timestamp.now(),
+        });
+        for (const actor of ['active', 'missing', 'fenced'] as Actor[]) {
+            await testEnv.clearFirestore();
+            await seedActor(CLM, actor);
+            await assertSucceeds(setDoc(doc(db(CLM), 'users', CLM, 'private', 'carLocation'), car()));
+            await assertSucceeds(getDoc(doc(db(CLM), 'users', CLM, 'private', 'carLocation')));
+            await denied(getDoc(doc(db(FIN), 'users', CLM, 'private', 'carLocation')));
+        }
+    });
+
+    it('T743-CALLABLE: server claim and server cancel leave the client able to follow the claim', async () => {
+        await seedActor(CLM, 'active');
+        await seedServerClaim('cb');
+        const c = db(CLM);
+        expect((await assertSucceeds(getDoc(doc(c, 'spots', 'cb')))).data()?.claimGenerationId).toBe(GEN);
+        expect((await assertSucceeds(getDoc(activeIncomingClaimRef(c, CLM)))).exists()).toBe(true);
+        // cancelClaim callable (Admin SDK): Ping back to available, lock removed, notice to the finder.
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            const fs = ctx.firestore();
+            await setDoc(doc(fs, 'spots', 'cb'), available('cb'));
+            await deleteDoc(activeIncomingClaimRef(fs, CLM));
+        });
+        expect((await assertSucceeds(getDoc(doc(c, 'spots', 'cb')))).data()?.status).toBe('available');
+        expect((await assertSucceeds(getDoc(activeIncomingClaimRef(c, CLM)))).exists()).toBe(false);
+    });
+
+    it('T743-LEGACY: legacy direct claim, claimant cancel and claimed-Ping finder delete stay denied for an Active user', async () => {
+        await seedActor(CLM, 'active');
+        await seed('spots', 'lg-claim', available('lg-claim'));
+        const c = db(CLM);
+        const claimedAt = Timestamp.now();
+        await denied(runTransaction(c, async (tx) => {
+            tx.update(doc(c, 'spots', 'lg-claim'), {
+                status: 'interested', claimState: 'heading', interestedUserId: CLM,
+                interestExpiresAt: FUTURE, claimStartedAt: claimedAt,
+            });
+            tx.set(activeIncomingClaimRef(c, CLM), {
+                spotId: 'lg-claim', claimStartedAt: claimedAt, claimState: 'heading', updatedAt: claimedAt,
+            });
+        }));
+        // A legacy (no generation) claim and a callable claim: the claimant cannot release either directly.
+        for (const [id, legacy] of [['lg-old', true], ['lg-gen', false]] as const) {
+            if (legacy) {
+                // Oct 16 client claim: no generation on the Ping or the lock.
+                await seedServerClaim(id, {}, null);
+                await testEnv.withSecurityRulesDisabled(async (ctx) => {
+                    const { deleteField } = await import('firebase/firestore');
+                    await updateDoc(doc(ctx.firestore(), 'spots', id), { claimGenerationId: deleteField() });
+                });
+            } else {
+                await seedServerClaim(id);
+            }
+            await denied(runTransaction(c, async (tx) => {
+                tx.update(doc(c, 'spots', id), {
+                    status: 'available', interestedUserId: null, claimState: null,
+                    claimStartedAt: null, interestExpiresAt: null,
+                });
+                tx.delete(activeIncomingClaimRef(c, CLM));
+            }));
+            await denied(updateDoc(doc(c, 'spots', id), { status: 'available', interestedUserId: null }));
+            // Finder cannot delete a claimed Ping directly (finderCancelSpot owns that).
+            await denied(deleteDoc(doc(db(FIN), 'spots', id)));
+        }
+    });
+
+    it('T743-ORPHAN: an Active finder can still delete an unclaimed, generation-free Ping; not a claimed or generation one', async () => {
+        await seed('spots', 'orph', available('orph'));
+        await assertSucceeds(deleteDoc(doc(db(FIN), 'spots', 'orph')));
+        await seed('spots', 'orph-gen', available('orph-gen', { claimGenerationId: GEN }));
+        await denied(deleteDoc(doc(db(FIN), 'spots', 'orph-gen')));
+        await seed('spots', 'orph-other', available('orph-other', { finderId: 'someone-else' }));
+        await denied(deleteDoc(doc(db(FIN), 'spots', 'orph-other')));
+    });
+});
+
+// ── t743u: document-access headroom of the corrected final rules ─────────────
+// Firestore allows 10 distinct document lookups per single-document request or
+// per operation, and 20 per transaction or batch. The correction adds one
+// lookup (accountLifecycle/{uid}) to every actorMayUseProduct() caller. Each
+// case pads an in-memory copy of firestore.rules with K extra exists() calls on
+// distinct existing documents inside actorMayUseProduct() and records the
+// largest K the valid operation still passes. Nothing is written to disk.
+describe('t743u — final rules: document-access headroom', () => {
+    const FIN = 't743b-finder';
+    const CLM = 't743b-claimer';
+    const GEN = 'cd'.repeat(32);
+    const STARTED = Timestamp.fromMillis(Date.now() - 60_000);
+    const RULES_TEXT = readFileSync('firestore.rules', 'utf8');
+    const PAD = 't743uPadDocs';
+    const ANCHOR = 'return request.auth != null && !productAccessDenied() && !accountDeletionFenced();';
+    const MIN_HEADROOM = 2;
+
+    function padded(k: number) {
+        const at = RULES_TEXT.indexOf(ANCHOR);
+        if (at < 0 || RULES_TEXT.indexOf(ANCHOR, at + 1) >= 0) throw new Error('pad anchor not unique');
+        const terms = Array.from({ length: k }, (_, i) => ` && exists(/databases/$(database)/documents/${PAD}/p${i})`).join('');
+        return RULES_TEXT.slice(0, at) + ANCHOR.slice(0, -1) + terms + ';' + RULES_TEXT.slice(at + ANCHOR.length);
+    }
+    let padEnv: RulesTestEnvironment | undefined;
+    async function useRules(text: string) {
+        if (padEnv) await padEnv.cleanup();
+        padEnv = await initializeTestEnvironment({
+            projectId: PROJECT_ID,
+            firestore: { rules: text, host: rulesEmulator.host, port: rulesEmulator.port },
+        });
+    }
+    afterAll(async () => {
+        // Restore the unpadded rules for anything that runs after this block.
+        await useRules(RULES_TEXT);
+        if (padEnv) await padEnv.cleanup();
+    });
+
+    function db(uid: string) { return testEnv.authenticatedContext(uid).firestore(); }
+    function available(id: string, extra: Record<string, unknown> = {}) {
+        return {
+            finderId: FIN, finderName: 'finderb', address: id, lat: 40.71, lng: -74.01,
+            status: 'available', pingMode: 'now', type: 'free', geohash: 'dr5ru',
+            reportedAt: Timestamp.now(), expiresAt: FUTURE, ...extra,
+        };
+    }
+    async function seedAll() {
+        await testEnv.clearFirestore();
+        await seedActiveClaimInvariantOpen();
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+            const fs = ctx.firestore();
+            for (let i = 0; i < 12; i += 1) await setDoc(doc(fs, PAD, `p${i}`), { p: 1 });
+            await setDoc(doc(fs, 'users', FIN), { username: 'finderb', crowns: 0, status: 'Active', productAccessBlocked: false });
+            await setDoc(doc(fs, 'users', CLM), { username: 'claimerb', crowns: 0, status: 'Active', productAccessBlocked: false });
+            const claim = { status: 'interested', claimState: 'heading', interestedUserId: CLM, claimGenerationId: GEN, claimStartedAt: STARTED, interestExpiresAt: FUTURE };
+            await setDoc(doc(fs, 'spots', 'eta'), available('eta', claim));
+            await setDoc(doc(fs, 'spots', 'arr'), available('arr', claim));
+            await setDoc(doc(fs, 'spots', 'fb'), available('fb', {
+                status: 'occupied', claimState: 'arrived_pending_outcome', interestedUserId: CLM,
+                claimGenerationId: GEN, claimStartedAt: STARTED, arrivedAt: Timestamp.fromMillis(Date.now() - 30_000),
+            }));
+            await setDoc(doc(fs, 'spots', 'orph'), available('orph'));
+            await setDoc(activeIncomingClaimRef(fs, CLM), { spotId: 'arr', claimStartedAt: STARTED, claimState: 'heading', updatedAt: STARTED, claimGenerationId: GEN });
+            // A full rolling hour minus one, so the quota update reads and carries four prior entries.
+            const prior = [1, 2, 3, 4].map((m) => Timestamp.fromMillis(Date.now() - m * 60_000));
+            await setDoc(doc(fs, 'users', FIN, 'pingCreateRate', 'current'), { spotIds: ['q1', 'q2', 'q3', 'q4'], createdAts: prior });
+        });
+    }
+    const CASES: { id: string; limit: number; run: () => Promise<unknown> }[] = [
+        { id: 'H-1 finder Ping create with quota carry (transaction)', limit: 20,
+            run: () => commitBoundedPing(db(FIN), FIN, 'new1', available('new1', { reportedAt: Timestamp.now(), expiresAt: Timestamp.fromMillis(Date.now() + 20 * 60_000) })) },
+        { id: 'H-2 claimant arrival with lock release (transaction)', limit: 20,
+            run: () => markClaimArrived(db(CLM), 'arr', CLM) },
+        { id: 'H-3 claimant ETA (single write)', limit: 10,
+            run: () => updateDoc(doc(db(CLM), 'spots', 'eta'), { etaMinutes: 4 }) },
+        { id: 'H-4 claimant notice to finder (single write)', limit: 10,
+            run: () => setDoc(doc(db(CLM), 'spotNotifications', 'n1'), { spotId: 'eta', senderId: CLM, targetUserId: FIN, type: 'delayed', message: 'm', createdAt: Timestamp.fromMillis(Date.now() - 1000) }) },
+        { id: 'H-5 claimant success attestation (single write)', limit: 10,
+            run: () => setDoc(doc(db(CLM), 'spotFeedback', `fb_${CLM}`), { spotId: 'fb', userId: CLM, finderId: FIN, outcome: 'participant_success', role: 'claimer', failureReason: null, address: 'fb', createdAt: Timestamp.now() }) },
+        { id: 'H-6 finder unclaimed-orphan delete (single write)', limit: 10,
+            run: () => deleteDoc(doc(db(FIN), 'spots', 'orph')) },
+    ];
+
+    for (const c of CASES) {
+        it(`${c.id}: valid unpadded and keeps at least ${MIN_HEADROOM} lookups of headroom`, async () => {
+            let headroom = -1;
+            for (let k = 0; k <= 12; k += 1) {
+                await useRules(padded(k));
+                await seedAll();
+                try { await c.run(); headroom = k; } catch { break; }
+            }
+            console.log(JSON.stringify({ t743u: 'access', id: c.id, limit: c.limit, headroom }));
+            expect(headroom).toBeGreaterThanOrEqual(MIN_HEADROOM);
+        }, 240_000);
+    }
 });

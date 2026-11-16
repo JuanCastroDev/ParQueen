@@ -4,6 +4,10 @@ const { createHash } = require('node:crypto');
 const { publicCurbKey, toPublicCurb } = require('./canonicalCurbIdentity');
 const { hasPrimaryTopologyAuthority } = require('./canonicalCurbResolver');
 const { hasCanonicalCurbIdentityProof } = require('./canonicalCurbIdentityProof');
+const {
+  evaluateWriteAuthority,
+  associateDocumentAuthorities,
+} = require('./writeAuthority');
 
 const PUBLIC_KEY = /^curb2_[a-f0-9]{32}$/;
 const RULE_SET_VERSION = /^curbrules2_[a-f0-9]{20}$/;
@@ -184,11 +188,132 @@ async function readCanonicalCache({ db, topologyResult, identityProof }) {
     || canonicalGeometry(publicSegment.geometry) !== canonicalGeometry(currentPublic?.geometry)) {
     return { hit: false, reason: 'cache_curb_mismatch' };
   }
-  return { hit: true, identity: storedIdentityValue, publicSegment };
+  const privateAuth = evaluateWriteAuthority(privateData?.writeAuthority);
+  const publicAuth = evaluateWriteAuthority(publicSegment?.writeAuthority);
+  const associated = associateDocumentAuthorities([privateAuth, publicAuth]);
+  if (associated.status === 'reject') {
+    return { hit: false, reason: associated.reason || 'write_authority_rejected' };
+  }
+  let publicRules = [];
+  if (typeof db.collection === 'function' && publicSegment?.activeRuleSetVersion) {
+    const rulesSnap = await db.collection(`streetSegments/${key}/streetRules`)
+      .where('ruleSetVersion', '==', publicSegment.activeRuleSetVersion)
+      .get();
+    const ruleDocs = Array.isArray(rulesSnap?.docs) ? rulesSnap.docs : [];
+    if (associated.status === 'valid' && ruleDocs.length) {
+      const ruleEvals = ruleDocs.map((doc) => (
+        evaluateWriteAuthority((typeof doc.data === 'function' ? doc.data() : doc)?.writeAuthority)
+      ));
+      const rulesAssociated = associateDocumentAuthorities([publicAuth, ...ruleEvals]);
+      if (rulesAssociated.status === 'reject') {
+        return { hit: false, reason: rulesAssociated.reason || 'write_authority_rejected' };
+      }
+    }
+    publicRules = ruleDocs.map((doc) => {
+      const data = typeof doc.data === 'function' ? doc.data() : doc;
+      return data && typeof data === 'object' ? { ...data } : null;
+    }).filter(Boolean).map((data) => {
+      const sanitized = toPublicRule(data);
+      if (sanitized) return sanitized;
+      return toPublicRule({
+        ...data,
+        category: typeof data.category === 'string' ? data.category
+          : data.type === 'streetCleaning' ? 'cleaning'
+          : data.type === 'meter' ? 'meter'
+          : data.type === 'timeLimited' ? 'timeLimit'
+          : 'restriction',
+      });
+    }).filter(Boolean);
+  }
+  return { hit: true, identity: storedIdentityValue, publicSegment, publicRules };
+}
+
+function writePermitted(input = {}) {
+  if (input.signal?.aborted) return false;
+  if (Number.isFinite(input.deadlineAt) && Date.now() >= input.deadlineAt) return false;
+  if (typeof input.persistAllowed === 'function') {
+    return input.persistAllowed(input.persistToken) === true;
+  }
+  return true;
+}
+
+function refuseWrite(input = {}) {
+  if (input.signal?.aborted) return { success: false, reason: 'request_aborted' };
+  if (Number.isFinite(input.deadlineAt) && Date.now() >= input.deadlineAt) {
+    return { success: false, reason: 'request_aborted' };
+  }
+  if (typeof input.persistAllowed === 'function' && input.persistAllowed(input.persistToken) !== true) {
+    return { success: false, reason: 'request_aborted' };
+  }
+  return null;
 }
 
 function trustedProductCaller(uid) {
   return typeof uid === 'string' && uid.length > 0 && uid.length <= 128 && !uid.includes('/');
+}
+
+
+function resolveFieldValue(input = {}) {
+  if (input.FieldValue && typeof input.FieldValue.serverTimestamp === 'function') {
+    return input.FieldValue;
+  }
+  try {
+    return require('firebase-admin/firestore').FieldValue;
+  } catch {
+    return null;
+  }
+}
+
+async function runGuardedPersistTransaction(input, work) {
+  const db = input.db;
+  const userInitiated = Object.prototype.hasOwnProperty.call(input || {}, 'callerUid');
+  if (userInitiated) {
+    const callerUid = input.callerUid;
+    if (!trustedProductCaller(callerUid) || typeof db.runTransaction !== 'function') {
+      return { success: false, reason: 'product_access_denied' };
+    }
+    const { userRecordDenies } = require('../productAccess');
+    const denied = Symbol('product-access-denied');
+    try {
+      await db.runTransaction(async (tx) => {
+        const snap = await tx.get(db.doc(`users/${callerUid}`));
+        const data = snap && snap.exists && typeof snap.data === 'function' ? snap.data() : null;
+        if (userRecordDenies(data)) throw denied;
+        if (!writePermitted(input)) throw new Error('request_aborted');
+        await work(tx);
+      });
+    } catch (err) {
+      if (err === denied) return { success: false, reason: 'product_access_denied' };
+      const late = refuseWrite(input);
+      if (late) return late;
+      if (String(err?.message || err) === 'request_aborted') {
+        return { success: false, reason: 'request_aborted' };
+      }
+      if (String(err?.message || err) === 'newer_valid_exists') {
+        return { success: true, published: false, skipped: 'newer_valid_exists' };
+      }
+      throw err;
+    }
+    return { success: true };
+  }
+
+  try {
+    await db.runTransaction(async (tx) => {
+      if (!writePermitted(input)) throw new Error('request_aborted');
+      await work(tx);
+    });
+  } catch (err) {
+    const late = refuseWrite(input);
+    if (late) return late;
+    if (String(err?.message || err) === 'request_aborted') {
+      return { success: false, reason: 'request_aborted' };
+    }
+    if (String(err?.message || err) === 'newer_valid_exists') {
+      return { success: true, published: false, skipped: 'newer_valid_exists' };
+    }
+    throw err;
+  }
+  return { success: true };
 }
 
 async function persistCanonicalCurb(input = {}) {
@@ -225,7 +350,10 @@ async function persistCanonicalCurb(input = {}) {
       protocolVersion: 2,
       cacheCompatibilityVersion: CACHE_COMPATIBILITY_VERSION,
       activeRuleSetVersion: ruleSetVersion,
-      ruleSummary: { cleaningAvailable: Boolean(selectedRules?.cleaning) },
+      ruleSummary: {
+        cleaningAvailable: Boolean(selectedRules?.cleaning),
+        rulesResolved: selectedRules?.rulesResolved === true,
+      },
       updatedAt: now,
     }],
     ...rules.map((rule, index) => [db.doc(`streetSegments/${key}/streetRules/${ruleSetVersion}_${index}`), {
@@ -239,9 +367,27 @@ async function persistCanonicalCurb(input = {}) {
   ];
 
   // User-initiated saves name the authenticated caller. The access read and
-  // the curb writes commit in one transaction. Callers that do not supply
-  // callerUid are scheduled, internal, or test paths and keep the batch.
+  // the curb writes commit in one transaction that re-checks the shared
+  // deadline, abort signal, and request-scoped persist token so a late
+  // commit after cancellation is refused. Callers that do not supply
+  // callerUid are scheduled, internal, or test paths and keep the batch
+  // only when transactions are unavailable.
+  // Timed A1 user requests carry deadlineAt / persistToken and must not
+  // publish unless the migration flag is off and the callable opts in.
+  if (input.allowUserPublication !== true
+    && (Number.isFinite(input.deadlineAt) || (typeof input.persistToken === 'string' && input.persistToken))) {
+    return {
+      success: true,
+      skipped: 'user_request_not_authoritative',
+      publicCurbKey: key,
+      ruleCount: rules.length,
+    };
+  }
+  const refused = refuseWrite(input);
+  if (refused) return refused;
   const userInitiated = Object.prototype.hasOwnProperty.call(input || {}, 'callerUid');
+  const useTransaction = typeof db.runTransaction === 'function'
+    && (userInitiated || input.signal || Number.isFinite(input.deadlineAt) || typeof input.persistAllowed === 'function');
   if (userInitiated) {
     const callerUid = input.callerUid;
     if (!trustedProductCaller(callerUid) || typeof db.runTransaction !== 'function') {
@@ -254,18 +400,51 @@ async function persistCanonicalCurb(input = {}) {
         const snap = await tx.get(db.doc(`users/${callerUid}`));
         const data = snap && snap.exists && typeof snap.data === 'function' ? snap.data() : null;
         if (userRecordDenies(data)) throw denied;
+        if (!writePermitted(input)) throw new Error('request_aborted');
         for (const [ref, value] of documents) tx.set(ref, value);
       });
     } catch (err) {
       if (err === denied) return { success: false, reason: 'product_access_denied' };
+      const late = refuseWrite(input);
+      if (late) return late;
+      if (String(err?.message || err) === 'request_aborted') {
+        return { success: false, reason: 'request_aborted' };
+      }
       throw err;
     }
+    const after = refuseWrite(input);
+    if (after) return after;
     return { success: true, publicCurbKey: key, ruleCount: rules.length };
   }
 
+  if (useTransaction) {
+    try {
+      await db.runTransaction(async (tx) => {
+        if (!writePermitted(input)) throw new Error('request_aborted');
+        for (const [ref, value] of documents) tx.set(ref, value);
+      });
+    } catch (err) {
+      const late = refuseWrite(input);
+      if (late) return late;
+      if (String(err?.message || err) === 'request_aborted') {
+        return { success: false, reason: 'request_aborted' };
+      }
+      throw err;
+    }
+    const after = refuseWrite(input);
+    if (after) return after;
+    return { success: true, publicCurbKey: key, ruleCount: rules.length };
+  }
+
+  const beforeBatch = refuseWrite(input);
+  if (beforeBatch) return beforeBatch;
   const batch = db.batch();
   for (const [ref, value] of documents) batch.set(ref, value);
+  const beforeCommit = refuseWrite(input);
+  if (beforeCommit) return beforeCommit;
   await batch.commit();
+  const afterCommit = refuseWrite(input);
+  if (afterCommit) return afterCommit;
   return { success: true, publicCurbKey: key, ruleCount: rules.length };
 }
 
@@ -288,6 +467,7 @@ async function migrateCompatibleLegacyRules(input = {}) {
 module.exports = {
   readCanonicalCache,
   persistCanonicalCurb,
+  toPublicRule,
   migrateCompatibleLegacyRules,
   toPublicRule,
   compatibleIdentity,

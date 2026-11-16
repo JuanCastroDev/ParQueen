@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FirebaseApp } from 'firebase/app';
 import {
   fetchNativeAppCheckToken,
+  getParQueenAppCheck,
   initializeParQueenAppCheck,
   NATIVE_APP_CHECK_FAILURE,
   resetParQueenAppCheckInitForTests,
@@ -9,7 +10,8 @@ import {
 } from './appCheck';
 
 const app = { name: '[DEFAULT]' } as FirebaseApp;
-const initializeAppCheck = vi.fn();
+const appCheckInstance = { kind: 'existing-app-check' };
+const initializeAppCheck = vi.fn(() => appCheckInstance);
 const CustomProvider = vi.fn(function CustomProviderMock(this: { options: unknown }, options: unknown) {
   this.options = options;
   return { kind: 'custom', options };
@@ -24,7 +26,7 @@ const warn = vi.fn();
 const androidDeps = (): AppCheckInitDependencies => ({
   resolvePath: () => 'native-android',
   getNativeToken,
-  initializeAppCheck,
+  initializeAppCheck: initializeAppCheck as unknown as AppCheckInitDependencies['initializeAppCheck'],
   CustomProvider: CustomProvider as never,
   ReCaptchaEnterpriseProvider: ReCaptchaEnterpriseProvider as never,
   siteKey: 'web-recaptcha-site-key',
@@ -91,6 +93,20 @@ describe('initializeParQueenAppCheck', () => {
       expireTimeMillis: 1_700_000_000_000,
     });
     expect(getNativeToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns the instance from the single initializeAppCheck call', () => {
+    expect(getParQueenAppCheck()).toBeNull();
+    initializeParQueenAppCheck(app, androidDeps());
+    expect(getParQueenAppCheck()).toBe(appCheckInstance);
+    initializeParQueenAppCheck(app, webDeps());
+    expect(initializeAppCheck).toHaveBeenCalledTimes(1);
+    expect(getParQueenAppCheck()).toBe(appCheckInstance);
+  });
+
+  it('leaves the accessor null when web initialization is skipped', () => {
+    initializeParQueenAppCheck(app, { ...webDeps(), siteKey: undefined });
+    expect(getParQueenAppCheck()).toBeNull();
   });
 
   it('does not initialize App Check twice', () => {

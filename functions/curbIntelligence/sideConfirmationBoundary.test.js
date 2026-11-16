@@ -339,7 +339,7 @@ describe('side-confirmation authority boundaries', () => {
     expect(valid.outcome.status).toBe('high_confidence');
     expect(valid.outcome.sideLabel).toBe('North');
     expect(validProof.transport).toHaveBeenCalledTimes(1);
-    expect(valid.persist).toHaveBeenCalledTimes(1);
+    expect(valid.persist).not.toHaveBeenCalled();
   });
 
   it('keeps the gate off and rejects an altered token before Function 3C', async () => {

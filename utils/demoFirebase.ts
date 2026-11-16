@@ -27,6 +27,28 @@ export function assertDemoFirebaseAllowed(env: DemoFirebaseEnv): boolean {
   return true;
 }
 
+export const STREET_INTEL_QA_MODE = 'streetintelqa';
+export const STREET_INTEL_QA_PACKAGE = 'app.parqueen.qa';
+
+export interface StreetIntelQaEnv {
+  MODE?: string;
+  VITE_PARQUEEN_STREET_INTEL_QA?: string;
+}
+
+export function assertStreetIntelQaBuildAllowed(env: StreetIntelQaEnv): boolean {
+  const requested = env.VITE_PARQUEEN_STREET_INTEL_QA;
+  if (requested == null || requested === '') return false;
+  if (requested !== STREET_INTEL_QA_PACKAGE || env.MODE !== STREET_INTEL_QA_MODE) {
+    throw new Error('Street Intelligence QA is refused outside the streetintelqa build.');
+  }
+  return true;
+}
+
+export function streetIntelQaBuild(): boolean {
+  return import.meta.env.MODE === STREET_INTEL_QA_MODE
+    && import.meta.env.VITE_PARQUEEN_STREET_INTEL_QA === STREET_INTEL_QA_PACKAGE;
+}
+
 export function assertDemoEndpoints(): void {
   const { auth, functions, firestore } = DEMO_EMULATORS;
   if (auth.host !== '127.0.0.1' || auth.port !== 9099

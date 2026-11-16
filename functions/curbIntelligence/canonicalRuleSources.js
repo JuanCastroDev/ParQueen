@@ -3,9 +3,9 @@
 const { normalizeBlockFaceId } = require('./curbIdentity');
 const { CURB_RESOLUTION_POLICY } = require('./curbResolutionPolicy');
 const { runCanonicalDotLookup } = require('./canonicalDotLookup');
-const { runCanonicalSweepLookup } = require('./canonicalSweepLookup');
 const { runCanonicalMeterLookup } = require('./productMeterLookup');
 const { selectRuleSet } = require('./ruleConflictPolicy');
+const { childBudgetMs } = require('./requestDeadline');
 
 const unavailable = reason => ({ state: 'unavailable', reason, rules: [], product: null });
 
@@ -23,7 +23,17 @@ async function boundedLookup(lookup, input, options) {
     finishAbort(unavailable('execution_timeout'));
   };
   input.signal?.addEventListener('abort', abort, { once: true });
-  const timer = setTimeout(abort, CURB_RESOLUTION_POLICY.sourceDeadlineMs);
+  const budget = childBudgetMs(CURB_RESOLUTION_POLICY.sourceDeadlineMs, {
+    deadlineAt: options.deadlineAt ?? input.deadlineAt,
+    signal: input.signal,
+  });
+  if (budget <= 0) {
+    abort();
+    return Promise.resolve(unavailable('execution_timeout')).finally(() => {
+      input.signal?.removeEventListener('abort', abort);
+    });
+  }
+  const timer = setTimeout(abort, budget);
   const task = Promise.resolve().then(() => lookup({
     identity: input.identity,
     signal: controller.signal,
@@ -38,18 +48,16 @@ async function loadCanonicalRules(identity, options = {}) {
   if (!validIdentity(identity)) {
     return { state: 'unsupported', reason: 'canonical_identity_required' };
   }
-  const sourceInput = { identity, signal: options.signal };
+  const sourceInput = { identity, signal: options.signal, deadlineAt: options.deadlineAt };
   const dotLookup = options.dotLookup || runCanonicalDotLookup;
   const parkNycLookup = options.parkNycLookup || runCanonicalMeterLookup;
-  const sweepLookup = options.sweepLookup || runCanonicalSweepLookup;
   const adminLookup = options.adminLookup || (async () => ({ state: 'complete', rules: [] }));
-  const [dot, parkNyc, sweepNyc, admin] = await Promise.all([
+  const [dot, parkNyc, admin] = await Promise.all([
     boundedLookup(dotLookup, sourceInput, options),
     boundedLookup(parkNycLookup, sourceInput, options),
-    boundedLookup(sweepLookup, sourceInput, options),
     boundedLookup(adminLookup, sourceInput, options),
   ]);
-  const sources = { dot, parkNyc, sweepNyc, admin };
+  const sources = { dot, parkNyc, admin };
   return { state: 'complete', sources, selected: selectRuleSet(sources) };
 }
 

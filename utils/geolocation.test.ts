@@ -172,6 +172,22 @@ describe('native permission request does not re-prompt', () => {
     expect(plugin.requestPermissions).not.toHaveBeenCalled();
   });
 
+  it('forwards an explicit Android update interval and leaves it off when omitted', async () => {
+    const plugin = makeNativePlugin();
+    const backend = createNativeGeolocation(plugin);
+    const production = { enableHighAccuracy: true, timeout: 10_000, maximumAge: 0 };
+    backend.watchPosition(() => undefined, undefined, production);
+    expect(plugin.watchPosition).toHaveBeenLastCalledWith(production, expect.any(Function));
+
+    const qaBurst = {
+      ...production,
+      interval: 2_000,
+      minimumUpdateInterval: 1_000,
+    };
+    backend.watchPosition(() => undefined, undefined, qaBurst);
+    expect(plugin.watchPosition).toHaveBeenLastCalledWith(qaBurst, expect.any(Function));
+  });
+
   it('requests only when the OS state is still prompt', async () => {
     const plugin = makeNativePlugin();
     const snap = await createNativeGeolocation(plugin).requestPermission();

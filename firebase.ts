@@ -5,23 +5,24 @@ import { auth as parqueenAuth, db as parqueenDb } from "./firebaseConfig";
 import { usesCapacitorIosAuthPersistence } from "./utils/authInitialization";
 import { DEMO_PROJECT_ID } from "./utils/demoFirebase";
 
-const firebaseConfig = {
-  apiKey: "AIzaSyCKSqWVd6JqpcrNUG6hei8Ug1njaIkAI7Y",
-  authDomain: "parkqueen-46475363-ccf36.firebaseapp.com",
-  projectId: "parkqueen-46475363-ccf36",
-  storageBucket: "parkqueen-46475363-ccf36.firebasestorage.app",
-  messagingSenderId: "768131391875",
-  appId: "1:768131391875:web:613c5d2a948862333196b6"
-};
-
-const demoMode = import.meta.env.DEV && import.meta.env.VITE_PARQUEEN_DEMO_FIREBASE === 'local';
+const streetIntelQa = import.meta.env.MODE === 'streetintelqa'
+  && import.meta.env.VITE_PARQUEEN_STREET_INTEL_QA === 'app.parqueen.qa';
+const demoMode = streetIntelQa
+  || (import.meta.env.DEV && import.meta.env.VITE_PARQUEEN_DEMO_FIREBASE === 'local');
 
 const app = (() => {
   try {
     if (typeof window === 'undefined') return null;
     if (getApps().length === 0) {
-      if (demoMode) throw new Error('Demo Firebase app was not initialized before use.');
-      return initializeApp(firebaseConfig);
+      if (streetIntelQa || demoMode) throw new Error('Demo Firebase app was not initialized before use.');
+      return initializeApp({
+        apiKey: "AIzaSyCKSqWVd6JqpcrNUG6hei8Ug1njaIkAI7Y",
+        authDomain: "parkqueen-46475363-ccf36.firebaseapp.com",
+        projectId: "parkqueen-46475363-ccf36",
+        storageBucket: "parkqueen-46475363-ccf36.firebasestorage.app",
+        messagingSenderId: "768131391875",
+        appId: "1:768131391875:web:613c5d2a948862333196b6"
+      });
     }
     const existing = getApp();
     if (demoMode && existing.options.projectId !== DEMO_PROJECT_ID) {

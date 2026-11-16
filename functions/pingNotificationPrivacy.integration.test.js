@@ -11,6 +11,7 @@ const db = getFirestore(testApp);
 const indexModule = require('./index.js');
 const { receiptDocumentId, receiptBody } = require('./finderCancelReceipt');
 const TRUST_GENERATION = 'cd'.repeat(32);
+const LATER_GENERATION = 'ef'.repeat(32);
 
 const RUN = `${process.pid}_${Date.now()}`;
 let sequence = 0;
@@ -56,6 +57,26 @@ async function removeCollectionDocs(collectionName, field, value) {
     await Promise.all(snap.docs.map(doc => doc.ref.delete()));
 }
 
+async function removeRunFixtures() {
+    const [spotRefs, userRefs] = await Promise.all([
+        db.collection('spots').listDocuments(),
+        db.collection('users').listDocuments(),
+    ]);
+    const ownedSpots = spotRefs.filter(ref => ref.id.includes(RUN));
+    const ownedUsers = userRefs.filter(ref => ref.id.includes(RUN));
+    await Promise.all([
+        ...ownedSpots.flatMap(ref => [
+            removeCollectionDocs('spotNotifications', 'spotId', ref.id),
+            removeCollectionDocs('notificationDeliveries', 'spotId', ref.id),
+            ref.delete(),
+        ]),
+        ...ownedUsers.flatMap(ref => [
+            ref.collection('activeIncomingClaims').doc('current').delete(),
+            ref.delete(),
+        ]),
+    ]);
+}
+
 describe('Ping notification/privacy Function contract', () => {
     beforeEach(() => {
         if (!indexModule._pingNotificationHooks) return;
@@ -69,13 +90,18 @@ describe('Ping notification/privacy Function contract', () => {
         indexModule._pingNotificationHooks.now = null;
     });
 
-    afterEach(() => {
-        if (!indexModule._pingNotificationHooks) return;
-        indexModule._pingNotificationHooks.sendEach = null;
-        indexModule._pingNotificationHooks.send = null;
-        indexModule._pingNotificationHooks.beforeStaleTokenCleanup = null;
-        indexModule._pingNotificationHooks.now = null;
-        vi.restoreAllMocks();
+    afterEach(async () => {
+        try {
+            await removeRunFixtures();
+        } finally {
+            if (indexModule._pingNotificationHooks) {
+                indexModule._pingNotificationHooks.sendEach = null;
+                indexModule._pingNotificationHooks.send = null;
+                indexModule._pingNotificationHooks.beforeStaleTokenCleanup = null;
+                indexModule._pingNotificationHooks.now = null;
+            }
+            vi.restoreAllMocks();
+        }
     });
 
     it('PN-1 increments once for a retry and again when the same Ping ID is genuinely recreated', async () => {
@@ -336,14 +362,21 @@ describe('Ping notification/privacy Function contract', () => {
         const ownerId = nextId('owner');
         const claimerId = nextId('claimer');
         const now = Timestamp.now();
+        const claimStartedAt = Timestamp.fromMillis(now.toMillis() - 60000);
         await db.doc(`spots/${spotId}`).set({
             finderId: ownerId,
             status: 'interested',
             claimState: 'committed',
             interestedUserId: claimerId,
+            claimGenerationId: TRUST_GENERATION,
+            claimStartedAt,
             claimReminderAt: null,
             claimAutoReleaseAt: Timestamp.fromMillis(now.toMillis() - 1000),
             expiresAt: Timestamp.fromMillis(now.toMillis() + 600000),
+        });
+        await db.doc(`users/${claimerId}/activeIncomingClaims/current`).set({
+            spotId, claimState: 'committed', claimGenerationId: TRUST_GENERATION,
+            claimStartedAt, updatedAt: claimStartedAt,
         });
         await indexModule.processScheduledClaims.run({});
         await indexModule.processScheduledClaims.run({});
@@ -356,6 +389,7 @@ describe('Ping notification/privacy Function contract', () => {
         expect(notifications.docs.map(doc => doc.data().targetUserId).sort()).toEqual([claimerId, ownerId].sort());
         expect(notifications.docs.every(doc => typeof doc.data().claimId === 'string')).toBe(true);
         expect(notifications.docs.every(doc => doc.data().senderId === null)).toBe(true);
+        expect((await db.doc(`users/${claimerId}/activeIncomingClaims/current`).get()).exists).toBe(false);
 
         await Promise.all([db.doc(`spots/${spotId}`).delete(), ...notifications.docs.map(doc => doc.ref.delete())]);
     });
@@ -364,19 +398,27 @@ describe('Ping notification/privacy Function contract', () => {
         const spotId = nextId('self');
         const ownerId = nextId('owner');
         const now = Timestamp.now();
+        const claimStartedAt = Timestamp.fromMillis(now.toMillis() - 60000);
         await db.doc(`spots/${spotId}`).set({
             finderId: ownerId,
             status: 'interested',
             claimState: 'committed',
             interestedUserId: ownerId,
+            claimGenerationId: TRUST_GENERATION,
+            claimStartedAt,
             claimReminderAt: null,
             claimAutoReleaseAt: Timestamp.fromMillis(now.toMillis() - 1000),
             expiresAt: Timestamp.fromMillis(now.toMillis() + 600000),
+        });
+        await db.doc(`users/${ownerId}/activeIncomingClaims/current`).set({
+            spotId, claimState: 'committed', claimGenerationId: TRUST_GENERATION,
+            claimStartedAt, updatedAt: claimStartedAt,
         });
         await indexModule.processScheduledClaims.run({});
         const notifications = await db.collection('spotNotifications').where('spotId', '==', spotId).get();
         expect(notifications.empty).toBe(true);
         expect((await db.doc(`spots/${spotId}`).get()).data().status).toBe('available');
+        expect((await db.doc(`users/${ownerId}/activeIncomingClaims/current`).get()).exists).toBe(false);
         await db.doc(`spots/${spotId}`).delete();
     });
 
@@ -416,15 +458,27 @@ describe('Ping notification/privacy Function contract', () => {
         const secondClaimerId = nextId('claimer');
         const timeout = Timestamp.fromMillis(Date.now() - 1000);
         const expiresAt = Timestamp.fromMillis(Date.now() + 600000);
+        const firstStartedAt = Timestamp.fromMillis(Date.now() - 120000);
+        const secondStartedAt = Timestamp.fromMillis(Date.now() - 60000);
         const spotRef = db.doc(`spots/${spotId}`);
         await spotRef.set({
             finderId: ownerId, status: 'interested', claimState: 'committed', interestedUserId: firstClaimerId,
+            claimGenerationId: TRUST_GENERATION, claimStartedAt: firstStartedAt,
             claimReminderAt: null, claimAutoReleaseAt: timeout, expiresAt,
+        });
+        await db.doc(`users/${firstClaimerId}/activeIncomingClaims/current`).set({
+            spotId, claimState: 'committed', claimGenerationId: TRUST_GENERATION,
+            claimStartedAt: firstStartedAt, updatedAt: firstStartedAt,
         });
         await indexModule.processScheduledClaims.run({});
         await spotRef.update({
             status: 'interested', claimState: 'committed', interestedUserId: secondClaimerId,
+            claimGenerationId: LATER_GENERATION, claimStartedAt: secondStartedAt,
             claimReminderAt: null, claimAutoReleaseAt: timeout, expiresAt,
+        });
+        await db.doc(`users/${secondClaimerId}/activeIncomingClaims/current`).set({
+            spotId, claimState: 'committed', claimGenerationId: LATER_GENERATION,
+            claimStartedAt: secondStartedAt, updatedAt: secondStartedAt,
         });
         await indexModule.processScheduledClaims.run({});
 
@@ -432,6 +486,8 @@ describe('Ping notification/privacy Function contract', () => {
         expect(notifications.docs).toHaveLength(4);
         expect(new Set(notifications.docs.map(doc => doc.data().claimId)).size).toBe(2);
         expect(notifications.docs.every(doc => doc.data().senderId === null)).toBe(true);
+        expect((await db.doc(`users/${firstClaimerId}/activeIncomingClaims/current`).get()).exists).toBe(false);
+        expect((await db.doc(`users/${secondClaimerId}/activeIncomingClaims/current`).get()).exists).toBe(false);
         await Promise.all([spotRef.delete(), ...notifications.docs.map(doc => doc.ref.delete())]);
     });
 

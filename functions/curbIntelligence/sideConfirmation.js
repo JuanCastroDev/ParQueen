@@ -3,16 +3,23 @@
 const { createHash } = require('node:crypto');
 const { normalizeBlockFaceId } = require('./curbIdentity');
 
+const COMPASS = Object.freeze([
+  'North', 'Northeast', 'East', 'Southeast', 'South', 'Southwest', 'West', 'Northwest',
+]);
 const OPPOSITE = Object.freeze({
   North: 'South', South: 'North', East: 'West', West: 'East',
+  Northeast: 'Southwest', Southwest: 'Northeast',
+  Northwest: 'Southeast', Southeast: 'Northwest',
 });
 const AXIS = Object.freeze({
   North: 'east-west', South: 'east-west', East: 'north-south', West: 'north-south',
 });
-// The cross-section draws only a north-up, axis-aligned road. A street more
-// than 20 degrees from east-west or north-south is refused rather than drawn
-// on the wrong axis. This limit is presentation-only. It does not change the
-// official face, the tangent, or any resolution threshold.
+// Streets whose unrounded axis offset is at most 20 degrees of east-west or
+// north-south keep the original axis-aligned drawing. Exactly 20.0 degrees
+// stays axis-aligned (the conservative historical boundary: refuse only when
+// the unrounded offset is greater than 20). A valid tangent beyond that limit
+// is drawn obliquely. A missing or zero-length tangent stays ineligible.
+// Rounding is used only for presented bearingDegrees, never for the boundary.
 const PRESENTATION_AXIS_LIMIT_DEGREES = 20;
 
 function isSideConfirmationEnabled(dependencies, env = process.env) {
@@ -21,41 +28,74 @@ function isSideConfirmationEnabled(dependencies, env = process.env) {
   return env?.CURB_SIDE_CONFIRMATION === 'on';
 }
 
-function cardinalForSide(tangent, csclSide) {
+function rawRoadBearing(tangent) {
   const eastMeters = tangent?.eastMeters;
   const northMeters = tangent?.northMeters;
   if (!Number.isFinite(eastMeters) || !Number.isFinite(northMeters)) return null;
   if (Math.hypot(eastMeters, northMeters) < 1e-6) return null;
-  if (csclSide !== 'LEFT' && csclSide !== 'RIGHT') return null;
-  const left = { east: -northMeters, north: eastMeters };
-  const vector = csclSide === 'LEFT' ? left : { east: -left.east, north: -left.north };
-  if (Math.abs(vector.north) >= Math.abs(vector.east)) return vector.north >= 0 ? 'North' : 'South';
-  return vector.east >= 0 ? 'East' : 'West';
+  const raw = Math.atan2(eastMeters, northMeters) * 180 / Math.PI;
+  return (raw % 360 + 360) % 360;
 }
 
-function presentationAxis(tangent) {
-  const eastMeters = tangent?.eastMeters;
-  const northMeters = tangent?.northMeters;
-  if (!Number.isFinite(eastMeters) || !Number.isFinite(northMeters)) return null;
-  const east = Math.abs(eastMeters);
-  const north = Math.abs(northMeters);
-  const major = Math.max(east, north);
-  if (!(major > 0)) return null;
-  const offAxisDegrees = Math.atan2(Math.min(east, north), major) * 180 / Math.PI;
-  if (offAxisDegrees > PRESENTATION_AXIS_LIMIT_DEGREES) return null;
-  return east >= north ? 'east-west' : 'north-south';
+function presentationBearingDegrees(bearing) {
+  return (Math.round((bearing % 360 + 360) % 360)) % 360;
+}
+
+function roundedRoadBearing(tangent) {
+  const bearing = rawRoadBearing(tangent);
+  return bearing === null ? null : presentationBearingDegrees(bearing);
+}
+
+function axisOffset(bearing) {
+  const quadrant = bearing % 90;
+  return Math.min(quadrant, 90 - quadrant);
+}
+
+function compassLabel(bearing) {
+  return COMPASS[Math.round(bearing / 45) % 8];
 }
 
 function orientationForTangent(tangent) {
-  const left = cardinalForSide(tangent, 'LEFT');
-  const right = cardinalForSide(tangent, 'RIGHT');
-  const axis = presentationAxis(tangent);
-  if (!left || !right || !axis || OPPOSITE[left] !== right || AXIS[left] !== axis) return null;
+  const bearing = rawRoadBearing(tangent);
+  if (bearing === null) return null;
+  const left = compassLabel((bearing + 270) % 360);
+  const right = compassLabel((bearing + 90) % 360);
+  if (OPPOSITE[left] !== right) return null;
+  const sides = Object.freeze({ LEFT: left, RIGHT: right });
+  const offset = axisOffset(bearing);
+  if (offset <= PRESENTATION_AXIS_LIMIT_DEGREES) {
+    const axis = Math.min(Math.abs(bearing - 90), Math.abs(bearing - 270))
+      <= PRESENTATION_AXIS_LIMIT_DEGREES ? 'east-west' : 'north-south';
+    if (AXIS[left] !== axis) return null;
+    return Object.freeze({ north: 'up', axis, sides });
+  }
   return Object.freeze({
     north: 'up',
-    axis,
-    sides: Object.freeze({ LEFT: left, RIGHT: right }),
+    axis: 'oblique',
+    // Unrounded bearing is compared to the 20° boundary and sent to the client
+    // so 20.1° cannot be reclassified as axis-aligned after rounding.
+    // presentationBearingDegrees() is the display-only rounded value.
+    bearingDegrees: bearing,
+    sides,
   });
+}
+
+function drivingChoices(records) {
+  const codes = (Array.isArray(records) ? records : []).map(record => (
+    String(record?.sourceNative?.trafdir || '').trim().toUpperCase()
+  ));
+  if (!codes.length || codes.some(code => code !== codes[0])) return null;
+  // CSCL trafdir is relative to the centerline's digitized vertex order.
+  // FT travels with that order. TF travels against it. Anything else, including
+  // two-way TW, is not a legal left/right.
+  if (codes[0] === 'FT') return Object.freeze({ LEFT: 'left', RIGHT: 'right' });
+  if (codes[0] === 'TF') return Object.freeze({ LEFT: 'right', RIGHT: 'left' });
+  return null;
+}
+
+function cardinalForSide(tangent, csclSide) {
+  if (csclSide !== 'LEFT' && csclSide !== 'RIGHT') return null;
+  return orientationForTangent(tangent)?.sides[csclSide] ?? null;
 }
 
 function consistentOfficialFaces(records) {
@@ -71,20 +111,24 @@ function consistentOfficialFaces(records) {
   return Object.freeze({ LEFT: left, RIGHT: right });
 }
 
-function sideConfirmationEligible(evidence) {
+function firstSideConfirmationEligibilityFailure(evidence) {
   const reasons = Array.isArray(evidence?.decisionReasons) ? evidence.decisionReasons : [];
-  return evidence?.enabled === true
-    && evidence.consideredCount === 1
-    && evidence.sideCrossesCenterline === true
-    && evidence.endpointAmbiguous === false
-    && evidence.levelOrRoadbedAmbiguous === false
-    && evidence.topologySelectable === true
-    && evidence.sourceEnrichment !== true
-    && evidence.decisionState === 'UNSUPPORTED'
-    && reasons.length === 1
-    && reasons[0] === 'ambiguity_unresolved'
-    && Boolean(evidence.faces)
-    && Boolean(evidence.orientation);
+  if (evidence?.enabled !== true) return 'confirmation_disabled';
+  if (evidence?.consideredCount !== 1) return 'considered_count';
+  if (evidence?.sideCrossesCenterline !== true) return 'centerline_uncertainty';
+  if (evidence?.endpointAmbiguous !== false) return 'endpoint_ambiguity';
+  if (evidence?.levelOrRoadbedAmbiguous !== false) return 'roadway_topology';
+  if (evidence?.topologySelectable !== true) return 'roadway_topology';
+  if (evidence?.sourceEnrichment === true) return 'source_enrichment';
+  if (evidence?.decisionState !== 'UNSUPPORTED') return 'classifier_state';
+  if (reasons.length !== 1 || reasons[0] !== 'ambiguity_unresolved') return 'classifier_reason';
+  if (!evidence?.faces) return 'official_faces';
+  if (!evidence?.orientation) return 'street_orientation';
+  return null;
+}
+
+function sideConfirmationEligible(evidence) {
+  return firstSideConfirmationEligibilityFailure(evidence) === null;
 }
 
 const finiteCoordinate = value => Number.isFinite(value);
@@ -141,11 +185,14 @@ module.exports = {
   AXIS,
   OPPOSITE,
   PRESENTATION_AXIS_LIMIT_DEGREES,
-  presentationAxis,
   cardinalForSide,
+  drivingChoices,
   consistentOfficialFaces,
+  firstSideConfirmationEligibilityFailure,
   isSideConfirmationEnabled,
   orientationForTangent,
+  rawRoadBearing,
+  presentationBearingDegrees,
   sideConfirmationEligible,
   stableSideAuthorityDigest,
 };

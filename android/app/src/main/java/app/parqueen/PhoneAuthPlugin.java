@@ -31,6 +31,10 @@ public class PhoneAuthPlugin extends Plugin {
 
     @PluginMethod
     public void startVerification(PluginCall call) {
+        if (BuildConfig.STREET_INTEL_QA) {
+            call.reject("Street Intelligence QA uses emulator authentication.");
+            return;
+        }
         String phoneNumber = call.getString("phoneNumber");
         if (phoneNumber == null || phoneNumber.isEmpty()) {
             call.reject("phoneNumber is required");

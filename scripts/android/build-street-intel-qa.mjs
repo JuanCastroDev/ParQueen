@@ -1,0 +1,176 @@
+import { execFileSync } from 'node:child_process';
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { inflateRawSync } from 'node:zlib';
+
+const root = resolve(import.meta.dirname, '..', '..');
+const mode = 'streetintelqa';
+const packageId = 'app.parqueen.qa';
+const forbidden = [
+  'AIzaSy',
+  'parkqueen-46475363-ccf36.firebaseapp.com',
+  'parkqueen-46475363-ccf36.firebasestorage.app',
+  'www.gstatic.com/firebasejs',
+];
+const required = [
+  'demo-parkqueen-functions-test',
+  '127.0.0.1',
+  '9099',
+  '5001',
+  '8080',
+];
+
+function fail(message) {
+  console.error(`BLOCKED: ${message}`);
+  process.exit(1);
+}
+
+function run(command, args, env, cwd = root) {
+  try {
+    execFileSync(command, args, {
+      cwd,
+      env,
+      stdio: 'inherit',
+      shell: false,
+    });
+  } catch (error) {
+    const status = typeof error.status === 'number' ? error.status : 'failed';
+    fail(`${command} exited ${status}`);
+  }
+}
+
+const env = {
+  ...process.env,
+  MODE: mode,
+  PARQUEEN_STREET_INTEL_QA: packageId,
+  VITE_PARQUEEN_STREET_INTEL_QA: packageId,
+};
+delete env.VITE_PARQUEEN_DEMO_FIREBASE;
+
+const tokenFile = 'C:/Users/jayca/GitWorktrees/blocked-users-manual-qa/.env.local';
+if (!env.VITE_MAPBOX_TOKEN && existsSync(tokenFile)) {
+  const match = readFileSync(tokenFile, 'utf8').match(/^VITE_MAPBOX_TOKEN=(.*)$/m);
+  if (match?.[1]) env.VITE_MAPBOX_TOKEN = match[1].trim();
+}
+if (!env.VITE_MAPBOX_TOKEN) fail('Mapbox token is missing for the QA build.');
+if (!env.VITE_MAPBOX_ANDROID_TOKEN) env.VITE_MAPBOX_ANDROID_TOKEN = env.VITE_MAPBOX_TOKEN;
+
+writeFileSync(join(root, '.env.streetintelqa.local'), [
+  `VITE_PARQUEEN_STREET_INTEL_QA=${packageId}`,
+  `VITE_MAPBOX_TOKEN=${env.VITE_MAPBOX_TOKEN}`,
+  `VITE_MAPBOX_ANDROID_TOKEN=${env.VITE_MAPBOX_ANDROID_TOKEN}`,
+  '',
+].join('\n'), 'utf8');
+
+run(process.execPath, [join(root, 'node_modules', 'vite', 'bin', 'vite.js'), 'build', '--mode', mode], env);
+
+const serviceWorker = `self.addEventListener('install', (event) => {
+  event.waitUntil(self.skipWaiting());
+});
+self.addEventListener('activate', (event) => {
+  event.waitUntil(self.clients.claim());
+});
+`;
+writeFileSync(join(root, 'dist', 'firebase-messaging-sw.js'), serviceWorker, 'utf8');
+
+function scanDirectory(directory) {
+  const hits = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      hits.push(...scanDirectory(path));
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    const fd = openSync(path, 'r');
+    try {
+      if (fstatSync(fd).size > 20 * 1024 * 1024) continue;
+      const text = readFileSync(fd).toString('latin1');
+      for (const needle of forbidden) {
+        if (text.includes(needle)) hits.push(`${path}: ${needle}`);
+      }
+    } finally {
+      closeSync(fd);
+    }
+  }
+  return hits;
+}
+
+const distHits = scanDirectory(join(root, 'dist'));
+if (distHits.length > 0) fail(`QA web bundle contains production Firebase material:\n${distHits.join('\n')}`);
+const distText = readdirSync(join(root, 'dist', 'assets')).filter(name => name.endsWith('.js')).map(name => readFileSync(join(root, 'dist', 'assets', name), 'utf8')).join('\n');
+const missing = required.filter(needle => !distText.includes(needle));
+if (missing.length > 0) fail(`QA web bundle is missing demo emulator configuration: ${missing.join(', ')}`);
+
+run(process.execPath, [join(root, 'node_modules', '@capacitor', 'cli', 'bin', 'capacitor'), 'sync', 'android'], env);
+
+const androidDir = join(root, 'android');
+const gradleArguments = ['assembleDebug', '-Pparqueen.qa=app.parqueen.qa'];
+if (process.platform === 'win32') {
+  run('java', [
+    '-Xmx64m',
+    '-Xms64m',
+    '-Dorg.gradle.appname=gradlew',
+    '-jar',
+    join(androidDir, 'gradle', 'wrapper', 'gradle-wrapper.jar'),
+    ...gradleArguments,
+  ], env, androidDir);
+} else {
+  run(join(androidDir, 'gradlew'), gradleArguments, env, androidDir);
+}
+
+const apk = join(root, 'android', 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk');
+let apkFd;
+try {
+  apkFd = openSync(apk, 'r');
+} catch {
+  fail('QA APK was not produced.');
+}
+const apkBuffer = readFileSync(apkFd);
+closeSync(apkFd);
+const apkHits = new Set();
+let offset = 0;
+while (offset + 30 < apkBuffer.length && apkBuffer.readUInt32LE(offset) === 0x04034b50) {
+  const method = apkBuffer.readUInt16LE(offset + 8);
+  const compressedSize = apkBuffer.readUInt32LE(offset + 18);
+  const nameLength = apkBuffer.readUInt16LE(offset + 26);
+  const extraLength = apkBuffer.readUInt16LE(offset + 28);
+  const name = apkBuffer.slice(offset + 30, offset + 30 + nameLength).toString('utf8');
+  const dataStart = offset + 30 + nameLength + extraLength;
+  const compressed = apkBuffer.slice(dataStart, dataStart + compressedSize);
+  let body = compressed;
+  if (method === 8) {
+    try { body = inflateRawSync(compressed); } catch { body = Buffer.alloc(0); }
+  }
+  const text = body.toString('latin1');
+  for (const needle of forbidden) {
+    if (text.includes(needle)) apkHits.add(`${name}: ${needle}`);
+  }
+  offset = dataStart + compressedSize;
+}
+if (apkHits.size > 0) fail(`QA APK contains production Firebase material:\n${[...apkHits].join('\n')}`);
+
+const aapt = 'C:/Users/jayca/AppData/Local/Android/Sdk/build-tools/36.0.0/aapt.exe';
+const apksignerJar = 'C:/Users/jayca/AppData/Local/Android/Sdk/build-tools/36.0.0/lib/apksigner.jar';
+let badgingText = '';
+try {
+  badgingText = execFileSync(aapt, ['dump', 'badging', apk], { encoding: 'utf8', shell: false });
+} catch {
+  fail('QA APK package id could not be read.');
+}
+const packageName = badgingText.match(/package: name='([^']+)'/)?.[1];
+if (packageName !== 'app.parqueen.qa') {
+  fail(`QA APK package id is ${packageName || 'missing'}, not app.parqueen.qa.`);
+}
+let signerText = '';
+try {
+  signerText = execFileSync('java', ['-jar', apksignerJar, 'verify', '--print-certs', apk], {
+    encoding: 'utf8',
+    shell: false,
+  });
+} catch {
+  fail('QA APK signing certificate could not be read.');
+}
+const fingerprint = '269fd3fdeb292368bfc3c58780330437e48fb572251bd61b93389c69c29327af';
+if (!signerText.toLowerCase().includes(fingerprint)) fail('QA APK signing certificate does not match the installed QA package.');
+console.log(`QA_APK ${apk}`);

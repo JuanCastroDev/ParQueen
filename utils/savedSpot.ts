@@ -45,6 +45,10 @@ export interface SavedSpot {
   gpsAccuracyMeters: number | null;
   sideConfidence: SideConfidence;
   confirmedParkingSide: string | null;
+  drivingSide?: 'left' | 'right' | null;
+  publicRules?: import('./canonicalCurbClient').CanonicalPublicRule[] | null;
+  publicSchedules?: import('./canonicalCurbClient').CanonicalPublicSchedules | null;
+  regulationStatus?: 'verified' | 'partial' | 'unknown' | 'verified_empty' | null;
 }
 
 interface MinStorage {
@@ -152,6 +156,9 @@ export function readSavedSpot(now: number = Date.now()): SavedSpot | null {
       }
     }
     if (typeof s.curbRefreshAttempted !== 'boolean') { s.curbRefreshAttempted = false; changed = true; }
+    if (s.drivingSide !== undefined && s.drivingSide !== 'left' && s.drivingSide !== 'right' && s.drivingSide !== null) {
+      s.drivingSide = null; changed = true;
+    }
     if (changed) store.setItem(SAVED_SPOT_KEY, JSON.stringify(s));
 
     return s as SavedSpot;

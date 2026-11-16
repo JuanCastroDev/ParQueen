@@ -18,6 +18,7 @@ const { releasedInterestPatch } = require('./activeIncomingClaimLogic');
 
 const UID = 'claimer-1';
 const OTHER_UID = 'claimer-2';
+const OTHER_GENERATION = 'b2'.repeat(32);
 const FINDER = 'finder-1';
 const SPOT = 'spot-1';
 const OTHER_SPOT = 'spot-2';
@@ -54,6 +55,7 @@ function memoryDb(seed) {
   return {
     docs,
     times,
+    doc(path) { return ref(path); },
     collection(name) {
       return { doc(id) { return ref(`${name}/${id}`); } };
     },
@@ -157,24 +159,25 @@ describe('claimSpot generation identity', () => {
   const indexSrc = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
   const rulesSrc = fs.readFileSync(path.join(__dirname, '..', 'firestore.rules'), 'utf8');
 
-  it('exports claimSpot with App Check and does not add a service account', () => {
+  it('exports the parking callables with App Check and the shared cancel identity', () => {
     const starts = [...indexSrc.matchAll(/exports\.claimSpot\s*=\s*onCall\(/g)];
     expect(starts).toHaveLength(1);
-    const slice = indexSrc.slice(starts[0].index, starts[0].index + 450);
+    const slice = indexSrc.slice(starts[0].index, starts[0].index + 500);
     expect(slice).toMatch(/region:\s*'us-central1'/);
     expect(slice).toMatch(/enforceAppCheck:\s*true/);
     expect(slice).toContain('claimSpotHandler(request)');
     expect(slice).not.toContain('request.data');
-    expect(indexSrc.match(/parqueen-cancel@parkqueen-46475363-ccf36\.iam\.gserviceaccount\.com/g)).toHaveLength(1);
-    for (const name of ['prepareClaimIntent', 'revokeClaimIntent']) {
+    expect(slice).toContain("serviceAccount: 'parqueen-cancel@parkqueen-46475363-ccf36.iam.gserviceaccount.com'");
+    expect(indexSrc.match(/parqueen-cancel@parkqueen-46475363-ccf36\.iam\.gserviceaccount\.com/g)).toHaveLength(5);
+    for (const name of ['prepareClaimIntent', 'revokeClaimIntent', 'finderCancelSpot']) {
       const found = [...indexSrc.matchAll(new RegExp(`exports\\.${name}\\s*=\\s*onCall\\(`, 'g'))];
       expect(found).toHaveLength(1);
-      const body = indexSrc.slice(found[0].index, found[0].index + 450);
+      const body = indexSrc.slice(found[0].index, found[0].index + 550);
       expect(body).toMatch(/region:\s*'us-central1'/);
       expect(body).toMatch(/enforceAppCheck:\s*true/);
       expect(body).toContain(`${name}Handler(request)`);
       expect(body).not.toContain('request.data');
-      expect(body).not.toContain('serviceAccount');
+      expect(body).toContain("serviceAccount: 'parqueen-cancel@parkqueen-46475363-ccf36.iam.gserviceaccount.com'");
     }
     expect(rulesSrc.includes('claimSpotAttempts')).toBe(false);
     expect(rulesSrc.includes('claimIntentCounters')).toBe(false);
@@ -189,7 +192,11 @@ describe('claimSpot generation identity', () => {
     expect(phantom).toContain('claimGenerationId: null');
     const cleanup = indexSrc.slice(indexSrc.indexOf('exports.cleanupExpiredInterests'), indexSrc.indexOf('exports.cleanupExpiredHolds'));
     expect(cleanup).toContain('releasedInterestPatch');
-    const deleted = indexSrc.slice(indexSrc.indexOf('function releaseClaimsOfDeletedUser'), indexSrc.indexOf('async function paginatedUpdate'));
+    // S4 t695u: deleted-claimer release moved to deletedUserClaimRelease.js.
+    expect(indexSrc).toContain("require('./deletedUserClaimRelease')");
+    expect(indexSrc).toContain("step('spotsAsClaimer', () => releaseClaimsOfDeletedUser(db, uid))");
+    expect(indexSrc.includes('function releaseClaimsOfDeletedUser')).toBe(false);
+    const deleted = fs.readFileSync(path.join(__dirname, 'deletedUserClaimRelease.js'), 'utf8');
     expect(deleted).toContain('claimGenerationId: FieldValue.delete()');
     expect(deleted).toContain('claimGenerationId: null');
     const holds = indexSrc.slice(indexSrc.indexOf('exports.cleanupExpiredHolds'), indexSrc.indexOf('exports.cleanupAbandonedArrivedHandoffs'));
@@ -578,6 +585,30 @@ describe('claim intent protocol', () => {
     expect(kept).toEqual(expired);
   });
 
+  it('maps only the Firestore transaction lock-timeout INTERNAL signature to unavailable', async () => {
+    const invokeWith = async (message) => {
+      const box = harness({
+        [`users/${UID}`]: profile(),
+        [`spots/${SPOT}`]: availableSpot(),
+      });
+      await box.runPrepare(immediate(ATTEMPT_A));
+      const db = {
+        ...box.db,
+        async runTransaction() {
+          const error = new Error(message);
+          error.code = 13;
+          throw error;
+        },
+      };
+      return claimSpot(request(immediate(ATTEMPT_A)), box.intentDeps({ db }));
+    };
+
+    await expect(invokeWith('13 INTERNAL: Transaction lock timeout.'))
+      .rejects.toMatchObject({ code: 'unavailable' });
+    await expect(invokeWith('13 INTERNAL: unrelated backend invariant failure'))
+      .rejects.toMatchObject({ code: 'internal' });
+  });
+
   it('keeps a revocation tombstone ahead of prepare and redeem', async () => {
     const box = harness({
       [`users/${UID}`]: profile(),
@@ -633,6 +664,26 @@ describe('claim intent protocol', () => {
     await expect(box.runCancel(g1.claimGenerationId)).resolves.toEqual({ outcome: 'stale_claim' });
     expect([...box.db.docs.keys()].filter((key) => key.startsWith('spotNotifications/'))).toHaveLength(before);
     expect(box.db.docs.get(`spots/${SPOT}`).claimGenerationId).toBe(g2.claimGenerationId);
+  });
+
+  it('F1-02: revoke preserves a same-Ping lock from a different generation and makes no notification', async () => {
+    const box = harness({
+      [`users/${UID}`]: profile(),
+      [`spots/${SPOT}`]: availableSpot(),
+    });
+    const claimed = await box.runClaim(immediate(ATTEMPT_A));
+    const lockPath = `users/${UID}/activeIncomingClaims/current`;
+    box.db.docs.set(lockPath, {
+      ...box.db.docs.get(lockPath),
+      claimGenerationId: OTHER_GENERATION,
+    });
+
+    const result = await box.runRevoke(immediate(ATTEMPT_A));
+    expect(result.outcome).toBe('generation_unchanged');
+    expect(box.db.docs.get(`spots/${SPOT}`).claimGenerationId).toBe(claimed.claimGenerationId);
+    expect(box.db.docs.get(lockPath).claimGenerationId).toBe(OTHER_GENERATION);
+    expect(box.db.docs.get(`${ATTEMPT_COLLECTION}/${ATTEMPT_A}`).state).toBe('claimed');
+    expect([...box.db.docs.keys()].filter((key) => key.startsWith('spotNotifications/'))).toHaveLength(0);
   });
 
   it('returns a released replay without the stored generation and does not touch G2', async () => {
@@ -720,7 +771,10 @@ describe('claim intent protocol', () => {
     expect(MAX_PREPARED).toBe(3);
   });
 
-  it('lets a suspended owner release an already committed generation', async () => {
+  // S7 D5a (t721u) replaced the earlier contract ("lets a suspended owner
+  // release an already committed generation"): revoke now applies the same
+  // suspension denial as cancelClaim, with no write. Expiry cleanup releases.
+  it('denies a suspended owner revoking an already committed generation (D5a)', async () => {
     const box = harness({
       [`users/${UID}`]: profile(),
       [`spots/${SPOT}`]: availableSpot(),
@@ -732,9 +786,12 @@ describe('claim intent protocol', () => {
       message: 'Product access is not available.',
     });
     expect(box.calls.mints).toBe(1);
-    const released = await box.runRevoke(immediate(ATTEMPT_A));
-    expect(released.outcome).toBe('released');
-    expect(box.db.docs.get(`spots/${SPOT}`).claimGenerationId).toBeNull();
+    await expect(box.runRevoke(immediate(ATTEMPT_A))).rejects.toMatchObject({
+      code: 'permission-denied',
+      message: 'Product access is not available.',
+    });
+    expect(box.db.docs.get(`spots/${SPOT}`).claimGenerationId).toBe(claimed.claimGenerationId);
+    expect(box.db.docs.get(`${ATTEMPT_COLLECTION}/${ATTEMPT_A}`).state).toBe('claimed');
     await expect(box.runCancel(claimed.claimGenerationId)).rejects.toMatchObject({
       code: 'permission-denied',
       message: 'Product access is not available.',

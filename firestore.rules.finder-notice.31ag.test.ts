@@ -2,6 +2,10 @@ import { readFileSync } from 'node:fs';
 import { beforeAll, afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { initializeTestEnvironment, type RulesTestEnvironment } from '@firebase/rules-unit-testing';
 import { doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
+import { assertRulesProject, readRulesEmulatorEndpoint, RULES_PROJECT_ID } from './firestoreRulesEmulator';
+
+const rulesEmulator = readRulesEmulatorEndpoint();
+assertRulesProject(RULES_PROJECT_ID);
 
 const FINDER = 'finder-31ag';
 const CLAIMER = 'claimer-31ag';
@@ -9,8 +13,8 @@ let env: RulesTestEnvironment;
 
 beforeAll(async () => {
   env = await initializeTestEnvironment({
-    projectId: 'demo-parkqueen-rules-test',
-    firestore: { rules: readFileSync('firestore.rules', 'utf8'), host: 'localhost', port: 8080 },
+    projectId: RULES_PROJECT_ID,
+    firestore: { rules: readFileSync('firestore.rules', 'utf8'), host: rulesEmulator.host, port: rulesEmulator.port },
   });
 });
 
@@ -25,7 +29,11 @@ afterAll(async () => {
 describe('finder cancellation notice authority', () => {
   it('denies a client cancellation notice and a client receipt write', async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
-      await setDoc(doc(ctx.firestore(), 'spots', 'live'), {
+      // t743u: both participants are signed-up users with a profile.
+      const fs = ctx.firestore();
+      await setDoc(doc(fs, 'users', FINDER), { status: 'Active' });
+      await setDoc(doc(fs, 'users', CLAIMER), { status: 'Active' });
+      await setDoc(doc(fs, 'spots', 'live'), {
         finderId: FINDER,
         status: 'interested',
         interestedUserId: CLAIMER,

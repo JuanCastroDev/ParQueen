@@ -5,7 +5,6 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     include: [
-      'functions/deleteAccount.integration.test.js',
       'functions/initUserPrivateAccount.integration.test.js',
       'functions/verifyEmailOTP.integration.test.js',
       'functions/generateEmailOTP.integration.test.js',
@@ -50,6 +49,9 @@ export default defineConfig({
       'functions/incrementTotalSpotsPinged.impactStats.integration.test.js',
       'functions/waitlist.integration.test.js',
       'functions/scheduleCleaningReminders.integration.test.js',
+      'functions/parkingCallableDeletionFence.test.js',
+      // S7 PR-A (t721u): D5a revoke suspension, DR-2 finder-cancel notice, Q8 admin guard.
+      'functions/s7PrAServerSecurity.integration.test.js',
     ],
     testTimeout: 120000,
     hookTimeout: 120000,

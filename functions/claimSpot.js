@@ -2,7 +2,7 @@
 
 const { HttpsError } = require('firebase-functions/v2/https');
 const { Timestamp } = require('firebase-admin/firestore');
-const { userRecordDenies, PRODUCT_ACCESS_DENIED } = require('./productAccess');
+const { userRecordDenies, deletionFencePresent, throwIfDeleting, PRODUCT_ACCESS_DENIED } = require('./productAccess');
 const { checkRateLimit } = require('./rateLimiter');
 const { pingHoldsActiveClaim } = require('./activeIncomingClaimLogic');
 const { CLEAR_FIELDS, REASONS } = require('./cancelClaim');
@@ -11,6 +11,11 @@ const {
   hasLeftoverGenerationId,
   mintClaimGenerationId,
 } = require('./claimGeneration');
+const {
+  LOCK_MATCH,
+  classifyLockSnapshot,
+  lockConflict,
+} = require('./claimLockIdentity');
 
 // One durable document per logical acquisition attempt. The id is a
 // client-generated UUID. It is not a claimGenerationId and it does not
@@ -100,17 +105,49 @@ function errorCode(error) {
   return error && error.code;
 }
 
+function isTransactionLockTimeout(error) {
+  const code = errorCode(error);
+  if (code !== 13 && code !== 'internal') return false;
+  return typeof (error && error.message) === 'string'
+    && /(?:^|\b)transaction lock timeout(?:\b|$)/i.test(error.message);
+}
+
 function isRetryable(error) {
   const code = errorCode(error);
   return code === 4 || code === 10 || code === 14
-    || code === 'deadline-exceeded' || code === 'aborted' || code === 'unavailable';
+    || code === 'deadline-exceeded' || code === 'aborted' || code === 'unavailable'
+    || isTransactionLockTimeout(error);
 }
+
+// S7 T2-G3 (t682u). recoverLeftoverGeneration: true is an explicit opt-in.
+// Without it a claimable Ping that still stores a claimGenerationId is
+// refused_stale_generation, as before. With it, claimSpot may claim that Ping
+// with a freshly minted generation (never the leftover one) only when the
+// same transaction proves the orphan conditions of clearOrphanGeneration:
+// status available, no claimant, no claimState, and no activeIncomingClaims
+// lock anywhere that names this Ping. Any other state is still refused.
+// prepareClaimIntent and revokeClaimIntent accept the key and ignore it.
+//
+// Race argument (t683u). The empty lock query is not the proof on its own.
+// Every writer of a lock that names a Ping commits only when the same commit
+// sees that Ping interested by the lock owner: Rules lockAgreesWithSpotAfter
+// for clients (deployed 134a97cf, interim candidate and head), and claimSpot
+// and reconcileUserClaims, which read the Ping in their own transaction. This
+// transaction read the Ping as available and writes it, so a competing lock
+// for this Ping cannot commit between that read and this commit without a
+// write to the Ping document, which conflicts with this transaction. The
+// prepared spotUpdateTime precondition also refuses any Ping write made after
+// prepareClaimIntent. A writer that bypasses those preconditions (console,
+// new server code) is outside this argument.
+const RECOVERY_KEY = 'recoverLeftoverGeneration';
 
 function parseInput(data) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     throw new HttpsError('invalid-argument', INVALID);
   }
-  const keys = Object.keys(data);
+  const recover = Object.prototype.hasOwnProperty.call(data, RECOVERY_KEY);
+  if (recover && data[RECOVERY_KEY] !== true) throw new HttpsError('invalid-argument', INVALID);
+  const keys = Object.keys(data).filter((key) => key !== RECOVERY_KEY);
   const mode = data.mode;
   const allowed = mode === 'scheduled'
     ? ['spotId', 'attemptId', 'mode']
@@ -138,7 +175,13 @@ function parseInput(data) {
       throw new HttpsError('invalid-argument', INVALID);
     }
   }
-  return { spotId, attemptId, mode, etaMinutes };
+  return { spotId, attemptId, mode, etaMinutes, recoverLeftoverGeneration: recover };
+}
+
+function leftoverIsRecoverableShape(spot) {
+  return !!spot && spot.status === 'available'
+    && (spot.interestedUserId === undefined || spot.interestedUserId === null)
+    && (spot.claimState === undefined || spot.claimState === null);
 }
 
 function publicResult(record) {
@@ -312,15 +355,19 @@ function requireUid(request) {
 }
 
 function openDeps(deps) {
-  if (deps.afterReads && deps.allowTestHooks !== true) {
+  if ((deps.afterReads || deps.afterLifecycleRead || deps.afterRecoveryQuery) && deps.allowTestHooks !== true) {
     throw new HttpsError('internal', FAILURE);
   }
+  const hook = (name) => (deps.allowTestHooks === true && typeof deps[name] === 'function' ? deps[name] : null);
   return {
     db: deps.db || require('firebase-admin/firestore').getFirestore(),
     limit: deps.checkRateLimit || checkRateLimit,
     now: deps.now || (() => Timestamp.now()),
     randomBytes: deps.randomBytes || ((size) => require('crypto').randomBytes(size)),
-    afterReads: deps.allowTestHooks === true && typeof deps.afterReads === 'function' ? deps.afterReads : null,
+    afterReads: hook('afterReads'),
+    afterLifecycleRead: hook('afterLifecycleRead'),
+    // t683u: test-only pause after the T2-G3 lock query, for the phantom-lock race proof.
+    afterRecoveryQuery: hook('afterRecoveryQuery'),
   };
 }
 
@@ -361,7 +408,10 @@ function dropPrepared(tx, counterRef, uid, ids, attemptId) {
 async function prepareClaimIntent(request, deps = {}) {
   const uid = requireUid(request);
   const input = parseInput(request.data);
-  const { db, limit, now } = openDeps(deps);
+  const { db, limit, now, afterReads, afterLifecycleRead } = openDeps(deps);
+  if (await deletionFencePresent(uid, db)) {
+    throw new HttpsError('permission-denied', PRODUCT_ACCESS_DENIED);
+  }
   const attemptRef = db.collection(ATTEMPT_COLLECTION).doc(input.attemptId);
   const existing = await attemptRef.get();
   if (!existing.exists) await limit(uid, 'claimIntentPrepare', RATE_LIMIT);
@@ -373,6 +423,7 @@ async function prepareClaimIntent(request, deps = {}) {
       const counterRef = db.collection(COUNTER_COLLECTION).doc(uid);
       const userRef = db.collection('users').doc(uid);
       const spotRef = db.collection('spots').doc(input.spotId);
+      const lifeRef = db.collection('accountLifecycle').doc(uid);
       const attemptSnap = await tx.get(attemptRef);
       const counterSnap = await tx.get(counterRef);
       const siblingIds = preparedIdsOf(counterSnap).filter((id) => id !== input.attemptId);
@@ -386,16 +437,21 @@ async function prepareClaimIntent(request, deps = {}) {
       if (nowMs == null) throw new HttpsError('internal', FAILURE);
 
       const liveIds = [];
+      const expireRefs = [];
       for (let i = 0; i < siblingSnaps.length; i += 1) {
         const sibling = siblingSnaps[i];
         if (!sibling.exists) continue;
         const record = sibling.data() || {};
         if (record.uid !== uid || record.state !== 'prepared') continue;
-        if (intentExpired(record, createdAt)) {
-          tx.update(siblingRefs[i], { state: 'expired', outcome: 'expired' });
-        } else {
-          liveIds.push(siblingIds[i]);
-        }
+        if (intentExpired(record, createdAt)) expireRefs.push(siblingRefs[i]);
+        else liveIds.push(siblingIds[i]);
+      }
+      if (afterReads) await afterReads();
+      const lifeSnap = await tx.get(lifeRef);
+      if (afterLifecycleRead) await afterLifecycleRead(lifeSnap);
+      throwIfDeleting(lifeSnap);
+      for (const expireRef of expireRefs) {
+        tx.update(expireRef, { state: 'expired', outcome: 'expired' });
       }
 
       if (attemptSnap.exists) {
@@ -461,7 +517,10 @@ async function prepareClaimIntent(request, deps = {}) {
 async function claimSpot(request, deps = {}) {
   const uid = requireUid(request);
   const input = parseInput(request.data);
-  const { db, limit, now, randomBytes, afterReads } = openDeps(deps);
+  const { db, limit, now, randomBytes, afterReads, afterLifecycleRead, afterRecoveryQuery } = openDeps(deps);
+  if (await deletionFencePresent(uid, db)) {
+    throw new HttpsError('permission-denied', PRODUCT_ACCESS_DENIED);
+  }
   const attemptRef = db.collection(ATTEMPT_COLLECTION).doc(input.attemptId);
   const existing = await attemptRef.get();
   if (!existing.exists) throw new HttpsError('failed-precondition', FAILURE);
@@ -491,6 +550,9 @@ async function claimSpot(request, deps = {}) {
         hookUsed = true;
         await afterReads();
       }
+      const claimLife = await tx.get(db.collection('accountLifecycle').doc(uid));
+      if (afterLifecycleRead) await afterLifecycleRead(claimLife);
+      throwIfDeleting(claimLife);
       if (!attemptSnap.exists) throw new HttpsError('failed-precondition', FAILURE);
       const record = attemptSnap.data() || {};
       if (record.uid !== uid) throw new HttpsError('permission-denied', FAILURE);
@@ -519,17 +581,28 @@ async function claimSpot(request, deps = {}) {
         return publicResult({ ...record, outcome: 'stale_precondition', claimGenerationId: null });
       }
 
+      let leftoverRecoverable = false;
+      if (input.recoverLeftoverGeneration && spotIsClaimable(spot, uid)
+        && hasLeftoverGenerationId(spot.claimGenerationId) && leftoverIsRecoverableShape(spot)) {
+        const namingLocks = await tx.get(
+          db.collectionGroup('activeIncomingClaims').where('spotId', '==', input.spotId).limit(1),
+        );
+        leftoverRecoverable = namingLocks.empty;
+        if (afterRecoveryQuery) await afterRecoveryQuery(namingLocks.empty);
+      }
+
       let outcome;
       let generationId = null;
       if (holdsLiveClaim(spot, uid)) {
         outcome = 'already_held';
         generationId = null;
       } else if (!spotIsClaimable(spot, uid)) outcome = 'unavailable';
-      else if (hasLeftoverGenerationId(spot.claimGenerationId)) outcome = 'refused_stale_generation';
+      else if (hasLeftoverGenerationId(spot.claimGenerationId) && !leftoverRecoverable) outcome = 'refused_stale_generation';
       else if (otherSpot && pingHoldsActiveClaim(otherSpot, uid)) outcome = 'already_claimed';
       else {
         outcome = 'claimed';
         generationId = mintClaimGenerationId(randomBytes);
+        if (generationId === spot.claimGenerationId) throw new HttpsError('internal', FAILURE);
         const patch = claimPatch(input, spot, { uid, profile }, generationId, createdAt);
         tx.update(spotRef, patch);
         tx.set(lockRef, {
@@ -566,7 +639,13 @@ function spotStillThisGeneration(spot, uid, generationId) {
 async function revokeClaimIntent(request, deps = {}) {
   const uid = requireUid(request);
   const input = parseInput(request.data);
-  const { db, limit, now, afterReads } = openDeps(deps);
+  const { db, limit, now, afterReads, afterLifecycleRead } = openDeps(deps);
+  // deleteAccount already releases this user's claims. A fence denies revoke
+  // outright so this handler cannot create a revoked tombstone, notice, or
+  // spot/lock write while deletion is in progress.
+  if (await deletionFencePresent(uid, db)) {
+    throw new HttpsError('permission-denied', PRODUCT_ACCESS_DENIED);
+  }
   const attemptRef = db.collection(ATTEMPT_COLLECTION).doc(input.attemptId);
   const existing = await attemptRef.get();
   if (!existing.exists) await limit(uid, 'claimIntentRevoke', RATE_LIMIT);
@@ -582,6 +661,10 @@ async function revokeClaimIntent(request, deps = {}) {
       const lockRef = userRef.collection('activeIncomingClaims').doc('current');
       const attemptSnap = await tx.get(attemptRef);
       const counterSnap = await tx.get(counterRef);
+      // S7 D5a (t721u): the profile is read inside the transaction, before
+      // the lifecycle read, so a suspension that commits after this read is
+      // serialized like cancelClaim (retry rereads it and denies).
+      const userSnap = await tx.get(userRef);
       const createdAt = now();
       const nowMs = millisOf(createdAt);
       if (nowMs == null) throw new HttpsError('internal', FAILURE);
@@ -590,6 +673,17 @@ async function revokeClaimIntent(request, deps = {}) {
       if (afterReads && !hookUsed && (!preread || preread.state === 'prepared')) {
         hookUsed = true;
         await afterReads();
+      }
+      const revokeLife = await tx.get(db.collection('accountLifecycle').doc(uid));
+      if (afterLifecycleRead && (!preread || preread.state !== 'claimed')) {
+        await afterLifecycleRead(revokeLife);
+      }
+      throwIfDeleting(revokeLife);
+      // S7 D5a (t721u): a suspended or product-blocked caller is denied every
+      // revoke outcome with no write (no tombstone, release, lock or notice),
+      // the same boundary as cancelClaim. Expiry cleanup releases their claims.
+      if (userSnap.exists && userRecordDenies(userSnap.data())) {
+        throw new HttpsError('permission-denied', PRODUCT_ACCESS_DENIED);
       }
 
       if (!attemptSnap.exists) {
@@ -617,15 +711,39 @@ async function revokeClaimIntent(request, deps = {}) {
         hookUsed = true;
         await afterReads();
       }
+      const releaseLife = await tx.get(db.collection('accountLifecycle').doc(uid));
+      if (afterLifecycleRead) await afterLifecycleRead(releaseLife);
+      throwIfDeleting(releaseLife);
       const spot = spotSnap.exists ? (spotSnap.data() || {}) : null;
       if (!spot || !spotStillThisGeneration(spot, uid, generationId)) {
         const liveOther = spot && holdsLiveClaim(spot, spot.interestedUserId) && isClaimGenerationId(spot.claimGenerationId);
         return revokeView(liveOther ? 'generation_unchanged' : 'already_resolved', input);
       }
+      const expectedClaim = {
+        kind: 'generation',
+        spotId: input.spotId,
+        claimGenerationId: generationId,
+      };
+      const lockClassification = classifyLockSnapshot(lockSnap, expectedClaim);
+      if (lockConflict(lockClassification)) {
+        console.error('claimLockRepairRequired', {
+          operation: 'revoke_claim_intent',
+          classification: lockClassification,
+          claimKind: 'generation',
+        });
+        return revokeView('generation_unchanged', input);
+      }
       const patch = { ...CLEAR_FIELDS };
       if (!(millisOf(spot.expiresAt) != null && millisOf(spot.expiresAt) <= nowMs)) patch.status = 'available';
       tx.update(spotRef, patch);
-      if (lockSnap.exists && lockSnap.data() && lockSnap.data().spotId === input.spotId) tx.delete(lockRef);
+      if (lockClassification === LOCK_MATCH.EXACT) tx.delete(lockRef);
+      if (lockClassification === LOCK_MATCH.MISSING || lockClassification === LOCK_MATCH.UNRELATED_SPOT) {
+        console.warn('claimLockReconciliationNeeded', {
+          operation: 'revoke_claim_intent',
+          classification: lockClassification,
+          claimKind: 'generation',
+        });
+      }
       if (!notifSnap.exists && typeof spot.finderId === 'string' && spot.finderId && spot.finderId !== uid) {
         tx.create(notifRef, {
           spotId: input.spotId,
