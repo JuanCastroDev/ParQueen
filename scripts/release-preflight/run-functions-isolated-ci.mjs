@@ -94,12 +94,13 @@ function firebaseLaunch() {
   };
 }
 
-// The pagination pass runs last so the onCreate trigger backlog of its large
-// seeds cannot overlap the timing-sensitive suites. && keeps a main-pass
-// failure fatal.
+// Account deletion gets its own complete pass on this explicitly isolated
+// Functions host. The pagination pass runs last so the onCreate trigger
+// backlog of its large seeds cannot overlap the timing-sensitive suites.
+// && keeps every pass fatal.
 const vitestCommand = [
   'node node_modules/vitest/vitest.mjs run --config vite.functions.isolated.config.ts --exclude functions/deleteAccount.integration.test.js',
-  'node node_modules/vitest/vitest.mjs run functions/deleteAccount.integration.test.js --config vite.functions.isolated.config.ts -t "FN-08|FN-09b"',
+  'node node_modules/vitest/vitest.mjs run functions/deleteAccount.integration.test.js --config vite.functions.isolated.config.ts',
   'node node_modules/vitest/vitest.mjs run --config vite.functions.isolated.pagination.config.ts',
 ].join(' && ');
 const script = process.platform === 'win32'

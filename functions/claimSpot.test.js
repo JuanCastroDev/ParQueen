@@ -585,6 +585,30 @@ describe('claim intent protocol', () => {
     expect(kept).toEqual(expired);
   });
 
+  it('maps only the Firestore transaction lock-timeout INTERNAL signature to unavailable', async () => {
+    const invokeWith = async (message) => {
+      const box = harness({
+        [`users/${UID}`]: profile(),
+        [`spots/${SPOT}`]: availableSpot(),
+      });
+      await box.runPrepare(immediate(ATTEMPT_A));
+      const db = {
+        ...box.db,
+        async runTransaction() {
+          const error = new Error(message);
+          error.code = 13;
+          throw error;
+        },
+      };
+      return claimSpot(request(immediate(ATTEMPT_A)), box.intentDeps({ db }));
+    };
+
+    await expect(invokeWith('13 INTERNAL: Transaction lock timeout.'))
+      .rejects.toMatchObject({ code: 'unavailable' });
+    await expect(invokeWith('13 INTERNAL: unrelated backend invariant failure'))
+      .rejects.toMatchObject({ code: 'internal' });
+  });
+
   it('keeps a revocation tombstone ahead of prepare and redeem', async () => {
     const box = harness({
       [`users/${UID}`]: profile(),

@@ -644,20 +644,30 @@ describe('T2-G3 recovery of an available Ping with a leftover claimGenerationId'
     const opt = { recoverLeftoverGeneration: true };
     expect((await prepareClaimIntent(claimReq(row.b, row.s1, row.attempt, opt), deps())).state).toBe('prepared');
     expect((await prepareClaimIntent(claimReq(row.c, row.s1, row.attempt2, opt), deps())).state).toBe('prepared');
-    const results = await Promise.all([
+    const settled = await Promise.allSettled([
       claimSpot(claimReq(row.b, row.s1, row.attempt, opt), deps()),
       claimSpot(claimReq(row.c, row.s1, row.attempt2, opt), deps()),
     ]);
+    const results = settled.map((result) => (result.status === 'fulfilled'
+      ? result.value
+      : { outcome: `rejected:${result.reason && result.reason.code}` }));
     const outcomes = results.map((r) => r.outcome).sort();
     expect(outcomes.filter((o) => o === 'claimed')).toHaveLength(1);
-    expect(['stale_precondition', 'unavailable']).toContain(outcomes.find((o) => o !== 'claimed'));
+    expect(['stale_precondition', 'unavailable', 'rejected:unavailable'])
+      .toContain(outcomes.find((o) => o !== 'claimed'));
     const winner = results[0].outcome === 'claimed' ? row.b : row.c;
     const loser = winner === row.b ? row.c : row.b;
+    const winnerAttempt = winner === row.b ? row.attempt : row.attempt2;
+    const loserAttempt = winner === row.b ? row.attempt2 : row.attempt;
     const spot = await spotData(row.s1);
     expect(spot.interestedUserId).toBe(winner);
     expect(spot.claimGenerationId).not.toBe(G1);
+    expect((await db.collection('claimSpotAttempts').doc(winnerAttempt).get()).data().state).toBe('claimed');
+    const loserAttemptState = (await db.collection('claimSpotAttempts').doc(loserAttempt).get()).data().state;
+    expect(['prepared', 'stale_precondition', 'unavailable']).toContain(loserAttemptState);
     expect(await lockData(loser)).toBeNull();
-    console.log(JSON.stringify({ t682u: 'T2R-G3-6', outcomes }));
+    expect(await lockData(winner)).toMatchObject({ spotId: row.s1, claimGenerationId: spot.claimGenerationId });
+    console.log(JSON.stringify({ t682u: 'T2R-G3-6', outcomes, loserAttemptState }));
   });
 });
 

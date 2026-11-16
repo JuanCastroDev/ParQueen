@@ -5,7 +5,6 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     include: [
-      'functions/deleteAccount.integration.test.js',
       'functions/initUserPrivateAccount.integration.test.js',
       'functions/verifyEmailOTP.integration.test.js',
       'functions/generateEmailOTP.integration.test.js',

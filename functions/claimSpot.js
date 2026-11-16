@@ -105,10 +105,18 @@ function errorCode(error) {
   return error && error.code;
 }
 
+function isTransactionLockTimeout(error) {
+  const code = errorCode(error);
+  if (code !== 13 && code !== 'internal') return false;
+  return typeof (error && error.message) === 'string'
+    && /(?:^|\b)transaction lock timeout(?:\b|$)/i.test(error.message);
+}
+
 function isRetryable(error) {
   const code = errorCode(error);
   return code === 4 || code === 10 || code === 14
-    || code === 'deadline-exceeded' || code === 'aborted' || code === 'unavailable';
+    || code === 'deadline-exceeded' || code === 'aborted' || code === 'unavailable'
+    || isTransactionLockTimeout(error);
 }
 
 // S7 T2-G3 (t682u). recoverLeftoverGeneration: true is an explicit opt-in.
