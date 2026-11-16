@@ -1,0 +1,400 @@
+import React from 'react';
+import TestRenderer, { act, type ReactTestInstance } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const env = vi.hoisted(() => {
+  const values = new Map<string, string>();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, String(value)); },
+      removeItem: (key: string) => { values.delete(key); },
+      clear: () => values.clear(),
+    },
+  });
+  const state = { reduceMotion: false, focused: [] as string[], visibility: 'visible' as 'visible' | 'hidden', listeners: new Map<string, Set<() => void>>() };
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: {
+      matchMedia: (q: string) => ({ matches: q.includes('reduce') ? state.reduceMotion : false }),
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    },
+  });
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: {
+      getElementById: (id: string) => ({ focus: () => state.focused.push(id) }),
+      get visibilityState() { return state.visibility; },
+      addEventListener: (type: string, fn: () => void) => { if (!state.listeners.has(type)) state.listeners.set(type, new Set()); state.listeners.get(type)!.add(fn); },
+      removeEventListener: (type: string, fn: () => void) => { state.listeners.get(type)?.delete(fn); },
+    },
+  });
+  return state;
+});
+
+import { OnboardingV2View, type OnboardingV2AndroidBackHandle } from './OnboardingV2View';
+import { getLang, setLang } from '../../i18n';
+import en from '../../i18n/en';
+import es from '../../i18n/es';
+
+// Every element measures as a 360x712 stage with 200px panels.
+const nodeMock = () => ({
+  clientWidth: 360, clientHeight: 712, offsetWidth: 120, offsetHeight: 200, offsetTop: 24,
+  scrollHeight: 200, scrollTop: 0, getBoundingClientRect: () => ({ left: 0 }), focus: () => {},
+});
+
+function inMeasurer(node: ReactTestInstance): boolean {
+  for (let p: ReactTestInstance | null = node.parent; p; p = p.parent) {
+    if (typeof p.props?.className === 'string' && p.props.className.split(' ').includes('obv2-measure')) return true;
+  }
+  return false;
+}
+function textOf(node: ReactTestInstance | string): string {
+  if (typeof node === 'string') return node;
+  return node.children.map(c => textOf(c as ReactTestInstance | string)).join('');
+}
+function liveButtons(r: TestRenderer.ReactTestRenderer) {
+  return r.root.findAll(n => n.type === 'button' && !inMeasurer(n));
+}
+function button(r: TestRenderer.ReactTestRenderer, label: string) {
+  const found = liveButtons(r).filter(b => textOf(b).includes(label) || b.props['aria-label'] === label);
+  if (!found.length) throw new Error(`no button "${label}"`);
+  return found[0];
+}
+const stage = (r: TestRenderer.ReactTestRenderer) => r.root.find(n => n.props['data-testid'] === 'obv2-stage');
+const stateOf = (r: TestRenderer.ReactTestRenderer) => stage(r).props['data-state'];
+const live = (r: TestRenderer.ReactTestRenderer) => textOf(r.root.find(n => n.props['data-testid'] === 'obv2-live'));
+
+function mount(props: Partial<React.ComponentProps<typeof OnboardingV2View>> = {}) {
+  const onChooseIntent = vi.fn();
+  const onAccount = vi.fn();
+  const androidBackRef = { current: null as OnboardingV2AndroidBackHandle | null };
+  let r!: TestRenderer.ReactTestRenderer;
+  act(() => {
+    r = TestRenderer.create(
+      <OnboardingV2View initialState="arrive" onChooseIntent={onChooseIntent} onAccount={onAccount} androidBackRef={androidBackRef} {...props} />,
+      { createNodeMock: nodeMock },
+    );
+  });
+  return { r, onChooseIntent, onAccount, androidBackRef };
+}
+
+describe('OnboardingV2View', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    env.reduceMotion = false;
+    env.focused = [];
+    setLang('en');
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('opens on arrival with the approved copy and no auto-play', () => {
+    const { r } = mount();
+    expect(stateOf(r)).toBe('arrive');
+    const t = textOf(r.root);
+    expect(t).toContain(en['onboarding_v2.headline_1']);
+    expect(t).toContain(en['onboarding_v2.primary']);
+    act(() => { vi.advanceTimersByTime(20_000); });
+    expect(stateOf(r)).toBe('arrive');
+  });
+
+  it('one tap plays the ~8.3 s story: captions at 2.3 s and 6 s, the three intentions at 7.7 s', () => {
+    const { r } = mount();
+    act(() => { button(r, en['onboarding_v2.primary']).props.onClick(); });
+    expect(stateOf(r)).toBe('demo');
+    expect(stage(r).props.className).toContain('play');
+    const caption = () => textOf(r.root.find(n => n.props.id === 'obv2-cap'));
+    expect(caption()).toBe(en['onboarding_v2.caption_1']);
+    act(() => { vi.advanceTimersByTime(2299); });
+    expect(caption()).toBe(en['onboarding_v2.caption_1']);
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(caption()).toBe(en['onboarding_v2.caption_2']);
+    act(() => { vi.advanceTimersByTime(6000 - 2300); });
+    expect(caption()).toBe(en['onboarding_v2.caption_3']);
+    act(() => { vi.advanceTimersByTime(7699 - 6000); });
+    expect(stateOf(r)).toBe('demo');
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(stateOf(r)).toBe('choose');
+    act(() => { vi.advanceTimersByTime(200); });
+    expect(live(r)).toBe(en['onboarding_v2.done']);
+    expect(env.focused).toContain('obv2-h-choose');
+  });
+
+  it('tapping the car also starts the story', () => {
+    const { r } = mount();
+    const car = r.root.find(n => n.props['data-testid'] === 'obv2-car');
+    expect(car.props.hidden).toBe(false);
+    act(() => { car.props.onClick(); });
+    expect(stateOf(r)).toBe('demo');
+    expect(r.root.find(n => n.props['data-testid'] === 'obv2-car').props.hidden).toBe(true);
+  });
+
+  it('Skip on arrival and during the story goes straight to the choices', () => {
+    const a = mount();
+    act(() => { button(a.r, en['onboarding_v2.skip']).props.onClick(); });
+    expect(stateOf(a.r)).toBe('choose');
+    const b = mount();
+    act(() => { button(b.r, en['onboarding_v2.primary']).props.onClick(); });
+    act(() => { button(b.r, en['onboarding_v2.skip_to_choices']).props.onClick(); });
+    expect(stateOf(b.r)).toBe('choose');
+    act(() => { vi.advanceTimersByTime(10_000); });
+    expect(stateOf(b.r)).toBe('choose');
+  });
+
+  it('Replay runs the story again from the start; Back returns to arrival', () => {
+    const { r } = mount({ initialState: 'choose' });
+    expect(stateOf(r)).toBe('choose');
+    act(() => { button(r, en['onboarding_v2.replay']).props.onClick(); });
+    expect(stateOf(r)).toBe('demo');
+    act(() => { vi.advanceTimersByTime(7700); });
+    expect(stateOf(r)).toBe('choose');
+    act(() => { button(r, en['onboarding_v2.back']).props.onClick(); });
+    expect(stateOf(r)).toBe('arrive');
+  });
+
+  it('choosing an intention hands off after the highlight and never more than once', () => {
+    const { r, onChooseIntent } = mount({ initialState: 'choose' });
+    const opt = (id: string) => liveButtons(r).find(b => b.props['data-intent'] === id)!;
+    act(() => { opt('leave').props.onClick(); });
+    act(() => { opt('find').props.onClick(); });
+    expect(onChooseIntent).not.toHaveBeenCalled();
+    act(() => { vi.advanceTimersByTime(200); });
+    expect(onChooseIntent).toHaveBeenCalledTimes(1);
+    expect(onChooseIntent).toHaveBeenCalledWith('leave');
+  });
+
+  it('offers exactly the three intentions plus an account link', () => {
+    const { r, onAccount } = mount({ initialState: 'choose' });
+    const ids = liveButtons(r).map(b => b.props['data-intent']).filter(Boolean);
+    expect(ids).toEqual(['find', 'leave', 'explore']);
+    const accountButtons = liveButtons(r).filter(b => textOf(b) === en['onboarding_v2.account']);
+    act(() => { accountButtons[accountButtons.length - 1].props.onClick(); });
+    expect(onAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it('reduced motion: Play goes straight to the choices and choosing is immediate', () => {
+    env.reduceMotion = true;
+    const { r, onChooseIntent } = mount();
+    expect(stage(r).props.className).not.toContain('intro');
+    act(() => { button(r, en['onboarding_v2.primary']).props.onClick(); });
+    expect(stateOf(r)).toBe('choose');
+    act(() => { liveButtons(r).find(b => b.props['data-intent'] === 'explore')!.props.onClick(); });
+    expect(onChooseIntent).toHaveBeenCalledWith('explore');
+  });
+
+  it('switches language in place and persists it', () => {
+    const { r } = mount();
+    act(() => { button(r, 'Español').props.onClick(); });
+    expect(getLang()).toBe('es');
+    expect(stage(r).props.lang).toBe('es');
+    expect(textOf(r.root)).toContain(es['onboarding_v2.headline_1']);
+    expect(localStorage.getItem('parqueen_lang')).toBe('es');
+    expect(button(r, 'Español').props['aria-pressed']).toBe(true);
+  });
+
+  it('Android Back: story and choices step back to arrival; arrival minimizes', () => {
+    const { r, androidBackRef } = mount();
+    expect(androidBackRef.current?.handleAndroidBack()).toBe('minimize');
+    act(() => { button(r, en['onboarding_v2.primary']).props.onClick(); });
+    let result: string | undefined;
+    act(() => { result = androidBackRef.current?.handleAndroidBack(); });
+    expect(result).toBe('handled');
+    expect(stateOf(r)).toBe('arrive');
+    act(() => { vi.advanceTimersByTime(10_000); });
+    expect(stateOf(r)).toBe('arrive');
+  });
+
+  it('inactive panels are inert and hidden from assistive technology', () => {
+    const { r } = mount();
+    const sections = r.root.findAll(n => n.type === 'section' && !inMeasurer(n));
+    expect(sections).toHaveLength(3);
+    const inactive = sections.filter(s => s.props.inert === '');
+    expect(inactive).toHaveLength(2);
+    inactive.forEach(s => expect(s.props['aria-hidden']).toBe(true));
+  });
+
+  describe('original welcome screen', () => {
+    const welcomeEl = (r: TestRenderer.ReactTestRenderer) => r.root.findAll(n => n.props['data-testid'] === 'obv2-welcome');
+
+    it('opens on the original ParQueen welcome by default, with the street inert behind it', () => {
+      const { r } = mount({ initialState: 'welcome' });
+      expect(welcomeEl(r)).toHaveLength(1);
+      const t = textOf(welcomeEl(r)[0]);
+      expect(t).toContain(en['onboarding.slide1.headline_prefix']);
+      expect(t).toContain('ParQueen');
+      expect(t).toContain(en['onboarding.slide1.body']);
+      expect(t).toContain(en['onboarding.slide1.supporting']);
+      expect(t).toContain(en['onboarding.get_started']);
+      expect(stage(r).props.inert).toBe('');
+      expect(stage(r).props.className).toContain('from-welcome');
+      act(() => { vi.advanceTimersByTime(20_000); });
+      expect(welcomeEl(r)).toHaveLength(1);
+      expect(stateOf(r)).toBe('arrive');
+    });
+
+    it('Get Started dissolves into the street, then the story plays by itself (8.3 s timed from the story start)', () => {
+      const { r } = mount({ initialState: 'welcome' });
+      act(() => { button(r, en['onboarding.get_started']).props.onClick(); });
+      act(() => { button(r, en['onboarding.get_started']).props.onClick(); });   // a double tap starts it once
+      expect(welcomeEl(r)[0].props.className).toContain('leaving');
+      act(() => { vi.advanceTimersByTime(449); });
+      expect(stateOf(r)).toBe('arrive');
+      act(() => { vi.advanceTimersByTime(1); });
+      expect(welcomeEl(r)).toHaveLength(0);
+      expect(stateOf(r)).toBe('demo');
+      expect(stage(r).props.inert).toBeUndefined();
+      act(() => { vi.advanceTimersByTime(7699); });
+      expect(stateOf(r)).toBe('demo');
+      act(() => { vi.advanceTimersByTime(1); });
+      expect(stateOf(r)).toBe('choose');
+    });
+
+    it('reduced motion: Get Started goes straight to the choices without the dissolve', () => {
+      env.reduceMotion = true;
+      const { r } = mount({ initialState: 'welcome' });
+      act(() => { button(r, en['onboarding.get_started']).props.onClick(); });
+      expect(welcomeEl(r)).toHaveLength(0);
+      expect(stateOf(r)).toBe('choose');
+    });
+
+    it('Android Back and the header Back return to the welcome; Back on the welcome minimizes', () => {
+      const { r, androidBackRef } = mount({ initialState: 'welcome' });
+      expect(androidBackRef.current?.handleAndroidBack()).toBe('minimize');
+      act(() => { button(r, en['onboarding.get_started']).props.onClick(); });
+      act(() => { vi.advanceTimersByTime(450 + 3000); });
+      let res: string | undefined;
+      act(() => { res = androidBackRef.current?.handleAndroidBack(); });
+      expect(res).toBe('handled');
+      expect(welcomeEl(r)).toHaveLength(1);
+      act(() => { vi.advanceTimersByTime(20_000); });
+      expect(stateOf(r)).toBe('arrive');                       // the story stopped
+      act(() => { button(r, en['onboarding.get_started']).props.onClick(); });
+      act(() => { vi.advanceTimersByTime(450 + 8000); });
+      expect(stateOf(r)).toBe('choose');
+      act(() => { button(r, en['onboarding_v2.back']).props.onClick(); });
+      expect(welcomeEl(r)).toHaveLength(1);
+    });
+
+    it('Replay replays the street story, not the welcome', () => {
+      const { r } = mount({ initialState: 'choose' });
+      expect(welcomeEl(r)).toHaveLength(0);
+      act(() => { button(r, en['onboarding_v2.replay']).props.onClick(); });
+      expect(welcomeEl(r)).toHaveLength(0);
+      expect(stateOf(r)).toBe('demo');
+    });
+
+    it('keeps an existing-account route on the welcome', () => {
+      const { r, onAccount } = mount({ initialState: 'welcome' });
+      const acc = liveButtons(r).filter(b => textOf(b) === en['onboarding_v2.account'] && b.props.className === 'obv2-welcome-account');
+      expect(acc).toHaveLength(1);
+      act(() => { acc[0].props.onClick(); });
+      expect(onAccount).toHaveBeenCalledTimes(1);
+    });
+
+    it('is localized', () => {
+      setLang('es');
+      const { r } = mount({ initialState: 'welcome' });
+      const t = textOf(welcomeEl(r)[0]);
+      expect(t).toContain(es['onboarding.slide1.headline_prefix']);
+      expect(t).toContain(es['onboarding.get_started']);
+      expect(welcomeEl(r)[0].props.lang).toBe('es');
+    });
+  });
+
+  describe('background / resume (device lifecycle)', () => {
+    const setVisibility = (v: 'visible' | 'hidden') => { env.visibility = v; act(() => { env.listeners.get('visibilitychange')?.forEach(fn => fn()); }); };
+    const caption = (r: TestRenderer.ReactTestRenderer) => textOf(r.root.find(n => n.props.id === 'obv2-cap'));
+    afterEach(() => { env.visibility = 'visible'; });
+
+    it('backgrounded during the story: restarts cleanly from the first frame; old timers never advance it', () => {
+      const { r } = mount();
+      act(() => { button(r, en['onboarding_v2.primary']).props.onClick(); });
+      act(() => { vi.advanceTimersByTime(3000); });
+      expect(caption(r)).toBe(en['onboarding_v2.caption_2']);
+      setVisibility('hidden');
+      act(() => { vi.advanceTimersByTime(20_000); });          // throttled timers would have run the story to the end
+      expect(stateOf(r)).toBe('demo');                          // nothing advanced while hidden
+      setVisibility('visible');
+      expect(stateOf(r)).toBe('demo');
+      expect(caption(r)).toBe(en['onboarding_v2.caption_1']);   // restarted from the first frame
+      act(() => { vi.advanceTimersByTime(2299); });
+      expect(caption(r)).toBe(en['onboarding_v2.caption_1']);
+      act(() => { vi.advanceTimersByTime(1); });
+      expect(caption(r)).toBe(en['onboarding_v2.caption_2']);
+      act(() => { vi.advanceTimersByTime(7700 - 2300); });
+      expect(stateOf(r)).toBe('choose');
+    });
+
+    it('rapid background/resume cycles never duplicate or skip captions', () => {
+      const { r } = mount();
+      act(() => { button(r, en['onboarding_v2.primary']).props.onClick(); });
+      for (let i = 0; i < 6; i++) {
+        act(() => { vi.advanceTimersByTime(700 + i * 300); });
+        setVisibility('hidden');
+        act(() => { vi.advanceTimersByTime(1500); });
+        setVisibility('visible');
+        expect(stateOf(r)).toBe('demo');
+        expect(caption(r)).toBe(en['onboarding_v2.caption_1']);
+      }
+      act(() => { vi.advanceTimersByTime(7699); });
+      expect(stateOf(r)).toBe('demo');
+      act(() => { vi.advanceTimersByTime(1); });
+      expect(stateOf(r)).toBe('choose');
+    });
+
+    it('backgrounded during the welcome dissolve: finishes it and starts the story from its first frame on resume', () => {
+      const { r } = mount({ initialState: 'welcome' });
+      act(() => { button(r, en['onboarding.get_started']).props.onClick(); });
+      act(() => { vi.advanceTimersByTime(200); });
+      setVisibility('hidden');
+      act(() => { vi.advanceTimersByTime(5000); });
+      expect(r.root.findAll(n => n.props['data-testid'] === 'obv2-welcome')).toHaveLength(1);   // the dissolve timer was cancelled
+      setVisibility('visible');
+      expect(r.root.findAll(n => n.props['data-testid'] === 'obv2-welcome')).toHaveLength(0);
+      expect(stateOf(r)).toBe('demo');
+      expect(caption(r)).toBe(en['onboarding_v2.caption_1']);
+      act(() => { vi.advanceTimersByTime(7700); });
+      expect(stateOf(r)).toBe('choose');
+    });
+
+    it('does nothing on the choices or the welcome, and never repeats a chosen intention', () => {
+      const { r, onChooseIntent } = mount({ initialState: 'choose' });
+      setVisibility('hidden'); setVisibility('visible');
+      expect(stateOf(r)).toBe('choose');
+      act(() => { liveButtons(r).find(b => b.props['data-intent'] === 'leave')!.props.onClick(); });
+      act(() => { vi.advanceTimersByTime(200); });
+      expect(onChooseIntent).toHaveBeenCalledTimes(1);
+      setVisibility('hidden'); setVisibility('visible');
+      act(() => { vi.advanceTimersByTime(5000); });
+      expect(onChooseIntent).toHaveBeenCalledTimes(1);
+      const w = mount({ initialState: 'welcome' });
+      setVisibility('hidden'); setVisibility('visible');
+      expect(w.r.root.findAll(n => n.props['data-testid'] === 'obv2-welcome')).toHaveLength(1);
+      expect(stateOf(w.r)).toBe('arrive');
+    });
+
+    it('Replay and Back still work after a resume', () => {
+      const { r, androidBackRef } = mount();
+      act(() => { button(r, en['onboarding_v2.primary']).props.onClick(); });
+      setVisibility('hidden'); setVisibility('visible');
+      act(() => { vi.advanceTimersByTime(7700); });
+      act(() => { button(r, en['onboarding_v2.replay']).props.onClick(); });
+      expect(stateOf(r)).toBe('demo');
+      let res: string | undefined;
+      act(() => { res = androidBackRef.current?.handleAndroidBack(); });
+      expect(res).toBe('handled');
+      act(() => { vi.advanceTimersByTime(20_000); });
+      expect(stateOf(r)).toBe('arrive');
+    });
+  });
+
+  it('describes the street as an example, never as live activity', () => {
+    const { r } = mount();
+    const art = r.root.find(n => n.props.role === 'img');
+    expect(art.props['aria-label']).toBe(en['onboarding_v2.alt_arrive']);
+    expect(en['onboarding_v2.alt_arrive'].toLowerCase()).toMatch(/example|illustrat/);
+    expect(es['onboarding_v2.alt_arrive'].toLowerCase()).toMatch(/ejemplo|ilustra/);
+  });
+});

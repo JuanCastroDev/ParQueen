@@ -6,6 +6,7 @@ import { db } from '../firebase';
 import { doc, getDoc } from 'firebase/firestore';
 import { t, useLang } from '../i18n';
 import { SignupProgress } from '../components/SignupProgress';
+import { ONBOARDING_V2_ENABLED } from '../utils/onboardingFlags';
 import { validateUsername, parseCooldownDays } from '../utils/username';
 import { moderateUsername } from '../utils/moderation';
 import { reportCriticalActionFailure } from '../utils/errorReporting';
@@ -186,12 +187,12 @@ export const NameEntryView: React.FC<NameEntryViewProps> = ({ onComplete }) => {
             <div className="flex items-center justify-between mb-3">
                 <div className="w-11 h-11" aria-hidden="true" />
                 <span className="text-[12px] font-semibold text-[var(--color-text-secondary)] tracking-wide">
-                    {t('name_entry.step')}
+                    {ONBOARDING_V2_ENABLED ? t('onboarding_v2.signup_step', { n: 3 }) : t('name_entry.step')}
                 </span>
             </div>
 
             {/* 4-segment progress bar */}
-            <SignupProgress step={3} />
+            <SignupProgress step={3} total={ONBOARDING_V2_ENABLED ? 3 : 4} />
 
             {/* Content block — entrance animation matching Steps 1 & 2 */}
             <div className={prefersReduced ? '' : 'auth-fade-in'}>

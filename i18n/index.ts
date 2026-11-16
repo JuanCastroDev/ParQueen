@@ -45,6 +45,13 @@ export function t(key: string, params?: Record<string, string | number>): string
     return value;
 }
 
+/** Translate in a specific language without changing the active one (used to measure layouts in both languages). */
+export function translateIn(lang: Lang, key: string): string {
+    return DICTIONARIES[lang]?.[key] ?? DICTIONARIES['en'][key] ?? key;
+}
+
+export type { Lang };
+
 export function useLang(): Lang {
     const [lang, setLangState] = useState<Lang>(currentLang);
     useEffect(() => {

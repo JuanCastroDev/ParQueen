@@ -4,6 +4,7 @@ import { t, useLang } from '../i18n';
 import { maskPhone, maskPhoneForDisplay } from '../utils/phone';
 import { filterOtpInput, otpErrorKey, isOtpComplete } from '../utils/otp';
 import { SignupProgress } from '../components/SignupProgress';
+import { ONBOARDING_V2_ENABLED } from '../utils/onboardingFlags';
 import { clearRecaptchaVerifier } from '../utils/recaptchaLifecycle';
 import { resendPhoneVerification, type PhoneVerificationSession } from '../utils/phoneAuth';
 import { iosPhoneAuthUiTone, reportIosPhoneAuthConfirmFailure, reportIosPhoneAuthFailure } from '../utils/phoneAuthNative';
@@ -151,13 +152,13 @@ export const VerifyPhoneView: React.FC<VerifyPhoneViewProps> = ({
             <div className="flex items-center justify-between mb-3 shrink-0">
                 <div className="w-11 h-11" aria-hidden="true" />
                 <span className="text-[12px] font-semibold text-[var(--color-text-secondary)] tracking-wide">
-                    {t('verify_phone.step')}
+                    {ONBOARDING_V2_ENABLED ? t('onboarding_v2.signup_step', { n: 2 }) : t('verify_phone.step')}
                 </span>
             </div>
 
             {/* 4-segment progress */}
             <div className="shrink-0">
-                <SignupProgress step={2} />
+                <SignupProgress step={2} total={ONBOARDING_V2_ENABLED ? 3 : 4} />
             </div>
 
             {/* Content — entrance animation. shrink-0 so a short keyboard

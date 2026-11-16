@@ -32,6 +32,8 @@ export type AndroidBackContext = {
   currentView: AppView;
   vehicleOnboarding: boolean;
   locationAccess: LocationAccess;
+  /** Onboarding 2.0: Create account was reached from the intention choices, so Back returns there. */
+  returnToOnboarding?: boolean;
 };
 
 /** Destination after finishing vehicle onboarding (mirrors EditVehicle visible onBack). */
@@ -44,7 +46,7 @@ export function editVehicleAfterOnboarding(locationAccess: LocationAccess): AppV
  * Mirrors visible onBack / header Back semantics; does not invent parents.
  */
 export function resolveAndroidBack(ctx: AndroidBackContext): AndroidBackAction {
-  const { currentView, vehicleOnboarding, locationAccess } = ctx;
+  const { currentView, vehicleOnboarding, locationAccess, returnToOnboarding } = ctx;
 
   switch (currentView) {
     case AppView.MAP:
@@ -103,8 +105,12 @@ export function resolveAndroidBack(ctx: AndroidBackContext): AndroidBackAction {
     case AppView.ONBOARDING:
       return { type: 'delegateOnboarding' };
 
-    // Auth / admin / unused legacy: no legitimate in-app parent.
     case AppView.CREATE_ACCOUNT:
+      return returnToOnboarding
+        ? { type: 'navigate', view: AppView.ONBOARDING }
+        : { type: 'minimize' };
+
+    // Auth / admin / unused legacy: no legitimate in-app parent.
     case AppView.SETUP_PROFILE:
     case AppView.LOCATION_PROMPT:
     case AppView.ADMIN_LOGIN:

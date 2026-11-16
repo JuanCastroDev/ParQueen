@@ -58,4 +58,12 @@ export interface MapViewProps {
     showPrimaryNavigation?: boolean;
     unreadMessagesCount?: number;
     onPendingUpdatesCountChange?: (count: number) => void;
+    /**
+     * Onboarding 2.0 intention, applied once when the map is ready (local navigation context only).
+     * 'leave' opens the existing Ping composer (never publishes); 'explore' offers the optional tour; 'find' shows the map.
+     */
+    onboardingIntent?: 'find' | 'leave' | 'explore' | null;
+    onOnboardingIntentHandled?: () => void;
+    /** Onboarding 2.0: the first-run tour no longer starts by itself (Blueprint D12). */
+    suppressAutoTour?: boolean;
 }
