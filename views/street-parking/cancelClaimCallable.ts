@@ -1,6 +1,6 @@
 import { getApp } from 'firebase/app';
 import { getFunctions, httpsCallable } from 'firebase/functions';
-import { isClaimGenerationId } from './claimIdentity';
+import { isClaimGenerationId, parseLegacyClaimStartedAt, type LegacyClaimStartedAt } from './claimIdentity';
 
 export const CANCEL_CLAIM_REASONS = [
   'found_elsewhere',
@@ -26,6 +26,17 @@ export function cancelClaimReasonForUi(reason: string): CancelClaimReason {
     return reason as CancelClaimReason;
   }
   return 'unspecified';
+}
+
+type LegacyCancellation = { spotId: string; legacyClaimStartedAt: LegacyClaimStartedAt; reason: CancelClaimReason };
+
+function validSpotId(spotId: unknown): spotId is string {
+  return typeof spotId === 'string'
+    && spotId.length >= 1
+    && spotId.length <= 200
+    && !spotId.includes('/')
+    && spotId !== '.'
+    && spotId !== '..';
 }
 
 function cancellationRequest(input: {
@@ -54,6 +65,28 @@ function cancellationRequest(input: {
   };
 }
 
+// S7 T2-G1 legacy shape: exactly { spotId, legacyClaimStartedAt, reason }.
+// It never carries a claimGenerationId and is never a fallback for one.
+function legacyCancellationRequest(input: {
+  spotId: unknown;
+  legacyClaimStartedAt: unknown;
+  reason: unknown;
+}): LegacyCancellation {
+  const { spotId } = input;
+  if (!validSpotId(spotId)) {
+    throw new Error('Invalid cancellation request.');
+  }
+  const fingerprint = parseLegacyClaimStartedAt(input.legacyClaimStartedAt);
+  if (!fingerprint) {
+    throw new Error('Invalid cancellation request.');
+  }
+  return {
+    spotId,
+    legacyClaimStartedAt: fingerprint,
+    reason: cancelClaimReasonForUi(typeof input.reason === 'string' ? input.reason : ''),
+  };
+}
+
 function outcomeOf(response: { data?: { outcome?: unknown } } | null | undefined): CancelClaimOutcome {
   const outcome = response?.data?.outcome;
   if (outcome !== 'cancelled' && outcome !== 'already_resolved' && outcome !== 'stale_claim') {
@@ -72,6 +105,23 @@ export async function cancelClaimCallable(input: {
   reason: string;
 }): Promise<CancelClaimOutcome> {
   const request = cancellationRequest(input);
+  const functions = getFunctions(getApp(), 'us-central1');
+  const callable = httpsCallable<typeof request, { outcome?: unknown }>(functions, 'cancelClaim');
+  return outcomeOf(await callable(request));
+}
+
+/**
+ * Release of a generationless legacy claim through the same cancelClaim
+ * callable. The payload is only spotId, the exact stored claimStartedAt as
+ * { seconds, nanoseconds }, and an allowlisted reason. The server rereads the
+ * claim and releases it only for the caller with that exact value.
+ */
+export async function cancelLegacyClaimCallable(input: {
+  spotId: string;
+  legacyClaimStartedAt: LegacyClaimStartedAt;
+  reason: string;
+}): Promise<CancelClaimOutcome> {
+  const request = legacyCancellationRequest(input);
   const functions = getFunctions(getApp(), 'us-central1');
   const callable = httpsCallable<typeof request, { outcome?: unknown }>(functions, 'cancelClaim');
   return outcomeOf(await callable(request));
