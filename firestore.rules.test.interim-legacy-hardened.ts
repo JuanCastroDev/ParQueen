@@ -421,6 +421,29 @@ function withEnv(name: string, rulesText: () => string, body: () => void) {
     });
 }
 
+// t728u: workflows may name the candidate fixture only as an `on:` path-filter entry or inside
+// the pr-gate changed-file classification regex. Any other workflow line that mentions it
+// (deploy, --config, cp into firestore.rules, a step using the fixture) is returned as offending.
+function workflowCandidateMisuse(text: string): string[] {
+    const offending: string[] = [];
+    let topKey = '';
+    let pathsIndent = -1;
+    for (const line of text.split('\n')) {
+        const indent = line.length - line.trimStart().length;
+        const top = /^([A-Za-z_][\w-]*):/.exec(line);
+        if (top) { topKey = top[1]; pathsIndent = -1; }
+        if (line.trim() && pathsIndent >= 0 && indent <= pathsIndent && !/^\s*-\s/.test(line)) pathsIndent = -1;
+        const key = /^(\s*)paths:\s*$/.exec(line);
+        if (key && topKey === 'on') { pathsIndent = key[1].length; continue; }
+        if (!line.includes('interim-candidate')) continue;
+        const pathFilter = topKey === 'on' && pathsIndent >= 0 && indent > pathsIndent
+            && /^\s*-\s+['"]?test-fixtures\/interim-candidate\/\*\*['"]?\s*$/.test(line);
+        const classifier = /^\s*if echo "\$CHANGED_FILES" \| grep -qE '[^']*'; then\s*$/.test(line);
+        if (!pathFilter && !classifier) offending.push(line.trim());
+    }
+    return offending;
+}
+
 describe('t680u candidate file guards (no deploy path)', () => {
     it('GUARD I-G1: the candidate carries the NONDEPLOYABLE header and is not main firestore.rules', () => {
         const candidate = readCandidateRules();
@@ -429,7 +452,7 @@ describe('t680u candidate file guards (no deploy path)', () => {
         expect(createHash('sha256').update(readFileSync(DEPLOYED_RULES_PATH)).digest('hex')).toBe(DEPLOYED_RULES_SHA256);
     });
 
-    it('GUARD I-G2: firebase.json still targets firestore.rules and no root config, script or workflow references interim-candidate', () => {
+    it('GUARD I-G2: firebase.json still targets firestore.rules; no root config or script references interim-candidate, and workflows name it only in path filters or the pr-gate classifier', () => {
         const fb = JSON.parse(readFileSync('firebase.json', 'utf8'));
         const targets = ([] as any[]).concat(fb.firestore ?? []).map((t) => t.rules);
         expect(targets).toEqual(['firestore.rules']);
@@ -443,9 +466,40 @@ describe('t680u candidate file guards (no deploy path)', () => {
             }
         };
         scan('.', (f) => /^(firebase.*\.json|\.firebaserc|package\.json|apphosting.*\.ya?ml)$/.test(f));
-        scan('.github/workflows', (f) => /\.ya?ml$/.test(f));
         scan('scripts/ci', (f) => /\.(m?js|sh|json)$/.test(f));
+        const workflows = readdirSync('.github/workflows').filter((f) => /\.ya?ml$/.test(f));
+        for (const f of workflows) {
+            const p = `.github/workflows/${f}`;
+            scanned.push(p);
+            expect(workflowCandidateMisuse(readFileSync(p, 'utf8')), p).toEqual([]);
+        }
+        expect(workflows.length).toBeGreaterThan(0);
         expect(scanned.length).toBeGreaterThan(3);
+    });
+
+    it('GUARD I-G2b: a workflow that deploys, copies or otherwise uses the candidate fixture still fails the guard', () => {
+        const misuse = [
+            'on:',
+            '  push:',
+            '    paths:',
+            '      - test-fixtures/interim-candidate/**',
+            'jobs:',
+            '  deploy:',
+            '    steps:',
+            '      - run: firebase deploy --only firestore:rules --config test-fixtures/interim-candidate/firebase.json',
+            '      - run: cp test-fixtures/interim-candidate/firestore.interim-legacy-hardened.rules firestore.rules',
+            '      - uses: ./test-fixtures/interim-candidate',
+            '        with:',
+            '          paths:',
+            '            - test-fixtures/interim-candidate/**',
+        ].join('\n');
+        expect(workflowCandidateMisuse(misuse)).toEqual([
+            '- run: firebase deploy --only firestore:rules --config test-fixtures/interim-candidate/firebase.json',
+            '- run: cp test-fixtures/interim-candidate/firestore.interim-legacy-hardened.rules firestore.rules',
+            '- uses: ./test-fixtures/interim-candidate',
+            '- test-fixtures/interim-candidate/**',
+        ]);
+        expect(workflowCandidateMisuse('on:\n  pull_request:\n    paths:\n      - test-fixtures/interim-candidate/**\n')).toEqual([]);
     });
 });
 
