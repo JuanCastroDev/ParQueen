@@ -5,6 +5,7 @@ import { LoadingScreen } from './components/LoadingScreen';
 import { AuthStartupRecovery } from './components/AuthStartupRecovery';
 import { OnboardingView } from './views/OnboardingView';
 import { ONBOARDING_V2_ENABLED } from './utils/onboardingFlags';
+import { Capacitor } from '@capacitor/core';
 import { bindPendingIntent, clearPendingIntent, savePendingIntent, takePendingIntent, type OnboardingIntent } from './utils/onboardingIntent';
 import type { OnboardingV2AndroidBackHandle } from './views/onboarding-v2/OnboardingV2View';
 // Onboarding 2.0 is only fetched when its build flag is on; the legacy OnboardingView stays the rollback.
@@ -66,7 +67,7 @@ import { checkLocationPermission, requestLocationPermission } from './utils/geol
 import { resolveGeolocationPath } from './utils/geolocationPlatform';
 import { getLang, setLang, t } from './i18n';
 import { getLanguageHydrationAction } from './utils/languageHydration';
-import { ChevronLeft } from 'lucide-react';
+import { ChevronLeft, X } from 'lucide-react';
 import ErrorBoundary from './ErrorBoundary';
 import { logoutUser, deleteUser, unlinkFcmTokenBeforeDeletion } from './database';
 import { ConfirmationResult, RecaptchaVerifier, signOut } from 'firebase/auth';
@@ -109,6 +110,13 @@ import { AccessibleModal } from './components/AccessibleModal';
 import { useUnreadMessages } from './views/street-parking/useUnreadMessages';
 import { parsePersistedCount } from './utils/persistedCount';
 
+// Founder-only QA entry: enabled solely in explicitly flagged Android builds.
+// The preview cannot invoke the real onboarding-to-signup or intention handoffs.
+const ONBOARDING_V2_ANDROID_PREVIEW_ENABLED = ONBOARDING_V2_ENABLED
+  && import.meta.env.VITE_OBV2_PREVIEW === '1'
+  && Capacitor.isNativePlatform()
+  && Capacitor.getPlatform() === 'android';
+
 // Clears all account-scoped browser state after account deletion.
 // Preserves device-scoped preferences (theme, language) so they survive account transitions.
 // Clearing FCM ownership markers ensures legacyInstall detection on the next sign-in,
@@ -133,6 +141,7 @@ export default function App() {
   const [pendingMyCarOpen, setPendingMyCarOpen] = useState(false);
   // Onboarding 2.0: whether Back on Create account returns to the choices, and the one-shot map intention.
   const [onboardingReturn, setOnboardingReturn] = useState<'choose' | null>(null);
+  const [previewOnboarding, setPreviewOnboarding] = useState(false);
   const [mapOnboardingIntent, setMapOnboardingIntent] = useState<OnboardingIntent | null>(null);
   const [user, setUser] = useState(null);
   const unreadMessagesCount = useUnreadMessages(user?.id);
@@ -162,6 +171,7 @@ export default function App() {
     locationAccess,
     closeLegal,
     onboardingReturn,
+    previewOnboarding,
   });
   androidBackStateRef.current = {
     currentView,
@@ -169,11 +179,16 @@ export default function App() {
     locationAccess,
     closeLegal,
     onboardingReturn,
+    previewOnboarding,
   };
 
   useAndroidSystemBack({
     handleBack: () => {
       const state = androidBackStateRef.current;
+      if (state.previewOnboarding && state.currentView === AppView.SETTINGS) {
+        setPreviewOnboarding(false);
+        return;
+      }
       diag('back:press', { view: state.currentView, onboardingReturn: state.onboardingReturn, overlays: androidBackOverlayCount(), visibility: typeof document !== 'undefined' ? document.visibilityState : null });
       dispatchAndroidSystemBack(
         () => {
@@ -1055,6 +1070,27 @@ export default function App() {
     }
 
 
+    // Founder preview: real story, isolated callbacks, no signup, storage, or Ping side effects.
+    if (previewOnboarding && ONBOARDING_V2_ANDROID_PREVIEW_ENABLED && currentView === AppView.SETTINGS && user?.id) {
+      return (
+        <>
+          <OnboardingV2View
+            onChooseIntent={() => setPreviewOnboarding(false)}
+            onAccount={() => setPreviewOnboarding(false)}
+          />
+          <button
+            type="button"
+            aria-label={t('settings.onboarding_preview_exit')}
+            title={t('settings.onboarding_preview_exit')}
+            onClick={() => setPreviewOnboarding(false)}
+            className="fixed z-[70] right-3 top-[calc(env(safe-area-inset-top,0px)+58px)] h-10 w-10 rounded-full border border-white/30 bg-[#050d1c]/85 text-white flex items-center justify-center shadow-lg focus-visible:ring-2 focus-visible:ring-cyan-300"
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </>
+      );
+    }
+
     // MAP and MESSAGES share the same MapView instance so selectedItem survives the transition.
     // While Messages is the full-screen overlay, the map stays mounted but is inert so its
     // still-open Ping BottomSheet cannot reclaim keyboard focus (Android adjustResize).
@@ -1184,7 +1220,7 @@ export default function App() {
       case AppView.PROFILE:
         return <ProfileView user={user} setView={navigatePrimary} onBack={() => setCurrentView(AppView.MAP)} unreadMessagesCount={unreadMessagesCount} pendingUpdatesCount={pendingUpdatesCount} />;
       case AppView.SETTINGS:
-        return <SettingsView user={user} setView={setViewWithLegalReturn} onBack={() => setCurrentView(AppView.PROFILE)} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} theme={theme} toggleTheme={toggleTheme} permissionState={nearbyPermissionState(locationAccess, { locationServicesEnabled })} notificationRuntime={notificationRuntime} />;
+        return <SettingsView user={user} setView={setViewWithLegalReturn} onBack={() => setCurrentView(AppView.PROFILE)} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} onPreviewOnboarding={ONBOARDING_V2_ANDROID_PREVIEW_ENABLED && user?.id ? () => setPreviewOnboarding(true) : undefined} theme={theme} toggleTheme={toggleTheme} permissionState={nearbyPermissionState(locationAccess, { locationServicesEnabled })} notificationRuntime={notificationRuntime} />;
       case AppView.NOTIFICATIONS_SETTINGS:
         return <NotificationsSettingsView user={user} onBack={() => setCurrentView(AppView.SETTINGS)} notificationRuntime={notificationRuntime} notificationBusy={notificationBusy} onEnableNotifications={handleEnableNotifications} onRecheckNotifications={handleRecheckNotifications} />;
       case AppView.LOCATION_SETTINGS:
