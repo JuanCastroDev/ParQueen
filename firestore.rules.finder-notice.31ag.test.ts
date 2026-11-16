@@ -29,7 +29,11 @@ afterAll(async () => {
 describe('finder cancellation notice authority', () => {
   it('denies a client cancellation notice and a client receipt write', async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
-      await setDoc(doc(ctx.firestore(), 'spots', 'live'), {
+      // t743u: both participants are signed-up users with a profile.
+      const fs = ctx.firestore();
+      await setDoc(doc(fs, 'users', FINDER), { status: 'Active' });
+      await setDoc(doc(fs, 'users', CLAIMER), { status: 'Active' });
+      await setDoc(doc(fs, 'spots', 'live'), {
         finderId: FINDER,
         status: 'interested',
         interestedUserId: CLAIMER,
