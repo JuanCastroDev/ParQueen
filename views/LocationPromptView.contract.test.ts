@@ -55,5 +55,7 @@ describe('Onboarding 2.0 location permission continuation', () => {
     expect(screen).toContain("t('location_prompt.skip')");
     expect(screen).toContain('aria-live="polite"');
     expect(screen).toContain('disabled={requesting}');
+    expect(screen).toContain('if (previewMode) return;');
+    expect(screen).toContain("if (previewMode) { onComplete('declined'); return; }");
   });
 });

@@ -23,6 +23,7 @@ interface SettingsViewProps {
     onLogout: () => void;
     onDeleteAccount: () => void;
     onPreviewOnboarding?: () => void;
+    onPreviewLocation?: () => void;
     theme: string;
     toggleTheme: () => void;
     permissionState?: LocationPermissionState;
@@ -56,7 +57,7 @@ const RowBody = ({ icon, title, detail, trailing, tone = 'primary' }: {
 
 const Chevron = () => <ChevronRight size={17} className="pq-row-chevron shrink-0" aria-hidden="true" />;
 
-export const SettingsView: React.FC<SettingsViewProps> = ({ user, setView, onBack, onLogout, onDeleteAccount, onPreviewOnboarding, theme, toggleTheme, permissionState, notificationRuntime }) => {
+export const SettingsView: React.FC<SettingsViewProps> = ({ user, setView, onBack, onLogout, onDeleteAccount, onPreviewOnboarding, onPreviewLocation, theme, toggleTheme, permissionState, notificationRuntime }) => {
     useLang();
     const [emailStep, setEmailStep] = useState<'view' | 'input' | 'otp'>('view');
     const [emailDraft, setEmailDraft] = useState(user?.email || '');
@@ -340,6 +341,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user, setView, onBac
                         {onPreviewOnboarding && (
                             <button type="button" data-testid="settings-preview-onboarding" onClick={onPreviewOnboarding} className={`${rowClass} px-1`}>
                                 <RowBody tone="quiet" icon={<Play size={16} />} title={t('settings.onboarding_preview')} detail={t('settings.onboarding_preview_subtitle')} trailing={<Chevron />} />
+                            </button>
+                        )}
+                        {onPreviewLocation && (
+                            <button type="button" data-testid="settings-preview-location" onClick={onPreviewLocation} className={`${rowClass} px-1`}>
+                                <RowBody tone="quiet" icon={<Navigation size={16} />} title={t('settings.location_preview')} detail={t('settings.location_preview_subtitle')} trailing={<Chevron />} />
                             </button>
                         )}
                         <button onClick={handleShare} className={`${rowClass} px-1`}>

@@ -9,15 +9,18 @@ import { resolveGeolocationPath } from '../utils/geolocationPlatform';
 
 interface LocationPromptViewProps {
     onComplete: (access: 'granted' | 'declined' | 'denied') => void;
+    /** Authenticated Android visual preview: never read or request OS permissions. */
+    previewMode?: boolean;
 }
 
-export const LocationPromptView: React.FC<LocationPromptViewProps> = ({ onComplete }) => {
+export const LocationPromptView: React.FC<LocationPromptViewProps> = ({ onComplete, previewMode = false }) => {
     useLang();
     const [requesting, setRequesting] = useState(false);
     const [hint, setHint] = useState<'services_off' | 'try_again' | null>(null);
 
     // Skip the primer when OS / browser permission is already resolved.
     useEffect(() => {
+        if (previewMode) return;
         let cancelled = false;
         checkLocationPermission()
             .then((snap) => {
@@ -30,9 +33,10 @@ export const LocationPromptView: React.FC<LocationPromptViewProps> = ({ onComple
                 // Unavailable — show the primer normally
             });
         return () => { cancelled = true; };
-    }, [onComplete]);
+    }, [onComplete, previewMode]);
 
     const handleEnable = useCallback(async () => {
+        if (previewMode) { onComplete('declined'); return; }
         if (requesting) return;
         setRequesting(true);
         setHint(null);
@@ -56,7 +60,7 @@ export const LocationPromptView: React.FC<LocationPromptViewProps> = ({ onComple
         } finally {
             setRequesting(false);
         }
-    }, [requesting, onComplete]);
+    }, [requesting, onComplete, previewMode]);
 
     const handleSkip = useCallback(() => {
         onComplete('declined');
