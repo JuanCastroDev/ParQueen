@@ -48,6 +48,7 @@ export default defineConfig({
       'functions/eventarcRetryHardening.integration.test.js',
       'functions/incrementTotalSpotsPinged.impactStats.integration.test.js',
       'functions/waitlist.integration.test.js',
+      'scripts/release-preflight/waitlist-deploy-guard.test.mjs',
       'functions/scheduleCleaningReminders.integration.test.js',
       'functions/parkingCallableDeletionFence.test.js',
       // S7 PR-A (t721u): D5a revoke suspension, DR-2 finder-cancel notice, Q8 admin guard.

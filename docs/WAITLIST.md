@@ -305,6 +305,28 @@ confirmation test after each change.
 Parameter changes take effect only after the waitlist functions are
 redeployed.
 
+## Deploy guard
+
+`firebase.json` runs `scripts/release-preflight/waitlist-deploy-guard.mjs`
+before every deploy that includes functions. It refuses the deploy when the
+source lacks a waitlist protection that production runs with, so an older or
+weakened checkout cannot silently replace it. Deploys of other functions are
+unaffected while the waitlist source is intact.
+
+| Check | Protects |
+|---|---|
+| W0 | the waitlist source files and handlers exist |
+| W1, W3 | join verification order |
+| W2 | the global join limit |
+| W4 | confirmation link handling |
+| W5 | unsubscribe link handling |
+| W6 | client grouping for per-client limits |
+| W7 | `maxInstances: 20` on the waitlist functions |
+
+It protects only deploys from a checkout that contains it. A branch made
+before it, or a deploy that does not use the Firebase CLI (Cloud Console,
+`gcloud`), is not checked. Its tests run in the `gate` check.
+
 ## Deploy checklist (not yet approved)
 
 1. Create the three new secrets.
