@@ -283,6 +283,66 @@ describe('WL-I — join', () => {
         expect(sent).toHaveLength(0);
     });
 
+    // Remediation wave 1: the client throttle used to run before Turnstile, keyed on a header the caller chooses.
+    const joinCounters = async () => (await db.collection('rateLimits').where('operation', 'in', ['waitlistJoin', 'waitlistJoinAll']).get()).size;
+    const globalRef = () => db.collection('rateLimits')
+        .doc(`waitlistJoinAll_${require('./rateLimiter').windowKey(Date.now(), waitlist.GLOBAL_JOIN_LIMIT.windowSec)}_all`);
+
+    it('WL-I16 unverified requests write nothing, with a new, a repeated, a malformed or no client IP', async () => {
+        const before = await joinCounters();
+        const headers = [{ ip: '198.51.100.31' }, { ip: '198.51.100.31' }, { ip: '198.51.100.32' }, { ip: 'not-an-ip' }, { ip: null }];
+        for (const opts of headers) {
+            expect((await join(nextEmail('unverified'), opts, 'turnstile-bad')).statusCode).toBe(400);
+            expect((await join(nextEmail('notoken'), opts, null)).statusCode).toBe(400);
+        }
+        expect(await joinCounters()).toBe(before);
+        expect(sent).toHaveLength(0);
+    });
+
+    it('WL-I17 a full global window refuses verified joins whatever the client IP says, and writes no record', async () => {
+        const ref = globalRef();
+        const prior = await ref.get();
+        await ref.set({ count: waitlist.GLOBAL_JOIN_LIMIT.limit, uid: 'all', operation: 'waitlistJoinAll',
+            expiresAt: Timestamp.fromMillis(Date.now() + 1200000) }, { merge: true });
+        try {
+            for (const ip of [nextIp(), nextIp(), '2001:db8::99', 'spoofed', null]) {
+                const email = nextEmail('globalfull');
+                const res = await join(email, { ip });
+                expect(res.statusCode).toBe(429);
+                expect(res.body).toEqual({ status: 'rate_limited' });
+                expect(await readDoc(email)).toBeUndefined();
+            }
+            expect(sent).toHaveLength(0);
+        } finally {
+            // Other cases in this window count on it.
+            if (prior.exists) await ref.set(prior.data()); else await ref.delete();
+        }
+    });
+
+    it('WL-I18 a new spoofed client IP per request still counts every verified join in the one global counter', async () => {
+        const before = (await globalRef().get()).data()?.count ?? 0;
+        for (let i = 0; i < 4; i++) expect((await join(nextEmail('rotating'), { ip: `192.0.2.${10 + i}` })).statusCode).toBe(202);
+        expect((await globalRef().get()).data().count).toBe(before + 4);
+    });
+
+    it('WL-I19 concurrent verified joins from one client: exactly the per-client limit gets through, and the global count matches', async () => {
+        const ip = nextIp();
+        const before = (await globalRef().get()).data()?.count ?? 0;
+        const n = waitlist.JOIN_LIMIT.limit + 3;
+        const results = await Promise.all(Array.from({ length: n }, (_, i) => join(nextEmail(`burst${i}`), { ip })));
+        const codes = results.map(r => r.statusCode).sort();
+        expect(codes.filter(c => c === 202)).toHaveLength(waitlist.JOIN_LIMIT.limit);
+        expect(codes.filter(c => c === 429)).toHaveLength(3);
+        expect((await globalRef().get()).data().count).toBe(before + waitlist.JOIN_LIMIT.limit);
+    });
+
+    it('WL-I20 concurrent verified joins without a client IP are all counted globally (no lost updates)', async () => {
+        const before = (await globalRef().get()).data()?.count ?? 0;
+        const results = await Promise.all(Array.from({ length: 8 }, (_, i) => join(nextEmail(`noipburst${i}`), { ip: null })));
+        expect(results.map(r => r.statusCode)).toEqual(Array(8).fill(202));
+        expect((await globalRef().get()).data().count).toBe(before + 8);
+    });
+
     it('WL-I13 accepts only JSON POST requests', async () => {
         expect((await post(indexModule.joinWaitlist, {}, { method: 'GET' })).statusCode).toBe(405);
         expect((await post(indexModule.joinWaitlist, 'email=x', { json: false })).statusCode).toBe(400);
@@ -592,5 +652,183 @@ describe('WL-XR — scheduled cleanup and former subscribers', () => {
 
         expect((await tokens.doc(expiredId).get()).exists).toBe(false);
         expect((await tokens.doc(validId).get()).exists).toBe(true);
+    });
+});
+
+// Remediation wave 2: confirm and unsubscribe check the link before anything is written, and the join breaker's edges.
+describe('WL-W2 — no writes for dead links; one-time use under concurrency; the global breaker', () => {
+    const counters = async op => (await db.collection('rateLimits').where('operation', '==', op).get()).size;
+    const unsub = (token, opts) => post(indexModule.unsubscribeWaitlist, { token }, opts);
+    const refFor = email => db.collection('waitlist').doc(docIdFor(email));
+    const issue = email => waitlist.issueUnsubscribeToken(refFor(email), {
+        db, FieldValue, Timestamp, newToken: () => waitlist.newConfirmToken(), now: () => clock,
+    });
+    const seedSubscriber = async label => {
+        const email = nextEmail(label);
+        await refFor(email).set({
+            email, status: 'subscribed', optInMethod: 'double-opt-in', source: 'marketing-site',
+            consentVersion: 'waitlist-2026-09-v1', createdAt: Timestamp.fromMillis(clock - 5000),
+            confirmedAt: Timestamp.fromMillis(clock - 4000),
+        });
+        return email;
+    };
+    const HEADERS = [{ ip: '198.51.100.41' }, { ip: '198.51.100.41' }, { ip: '2001:db8:41::1' }, { ip: 'spoofed' }, { ip: null }];
+
+    it('WL-W2-C1 unknown, used and expired confirmation links write nothing, with any client IP or none', async () => {
+        await join(nextEmail('c1used'));
+        const used = tokenFrom(sent[0].url);
+        expect((await confirm(used)).statusCode).toBe(200);
+        await join(nextEmail('c1expired'));
+        const expired = tokenFrom(sent[1].url);
+        clock += waitlist.TOKEN_TTL_MS + 1;
+        const before = await counters('waitlistConfirm');
+        for (const opts of HEADERS) {
+            for (const token of [waitlist.newConfirmToken(), used, expired]) {
+                const res = await confirm(token, opts);
+                expect(res.statusCode).toBe(410);
+                expect(res.body).toEqual({ status: 'invalid_or_expired' });
+            }
+        }
+        expect(await counters('waitlistConfirm')).toBe(before);
+    });
+
+    it('WL-W2-C2 a live link still confirms after 30 junk attempts from the same client', async () => {
+        const ip = nextIp();
+        for (let i = 0; i < 30; i++) expect((await confirm(waitlist.newConfirmToken(), { ip })).statusCode).toBe(410);
+        const email = nextEmail('c2legit');
+        await join(email);
+        expect((await confirm(tokenFrom(sent[0].url), { ip })).statusCode).toBe(200);
+        expect((await readDoc(email)).status).toBe('subscribed');
+    });
+
+    it('WL-W2-C3 eight concurrent confirmations of one link: exactly one succeeds, the record is subscribed once', async () => {
+        const email = nextEmail('c3race');
+        await join(email);
+        const token = tokenFrom(sent[0].url);
+        const results = await Promise.all(Array.from({ length: 8 }, (_, i) => confirm(token, { ip: i % 2 ? null : nextIp() })));
+        expect(results.map(r => r.statusCode).sort()).toEqual([200, 410, 410, 410, 410, 410, 410, 410]);
+        const data = await readDoc(email);
+        expect(data.status).toBe('subscribed');
+        expect(data).not.toHaveProperty('confirmTokenHash');
+    });
+
+    it('WL-W2-C4 a missing token, or one of the wrong type, is refused without a lookup or a write', async () => {
+        const before = await counters('waitlistConfirm');
+        for (const body of [{}, { token: null }, { token: 42 }, { token: ['x'] }, { token: 'A'.repeat(44) }]) {
+            expect((await post(indexModule.confirmWaitlist, body)).statusCode).toBe(410);
+        }
+        expect(await counters('waitlistConfirm')).toBe(before);
+    });
+
+    it('WL-W2-U1 unknown, spent and expired unsubscribe links write nothing, with any client IP or none', async () => {
+        const spentEmail = await seedSubscriber('u1spent');
+        const spent = await issue(spentEmail);
+        expect((await unsub(spent)).statusCode).toBe(200);
+        const oldEmail = await seedSubscriber('u1old');
+        const old = await issue(oldEmail);
+        clock += waitlist.UNSUBSCRIBE_TOKEN_TTL_MS + 1;
+        const before = await counters('waitlistUnsubscribe');
+        for (const opts of HEADERS) {
+            for (const token of [waitlist.newConfirmToken(), spent, old]) expect((await unsub(token, opts)).statusCode).toBe(410);
+        }
+        expect(await counters('waitlistUnsubscribe')).toBe(before);
+        expect((await readDoc(oldEmail)).status).toBe('subscribed');
+    });
+
+    it('WL-W2-U2 a legitimate unsubscribe works after 30 junk attempts from the same client', async () => {
+        const ip = nextIp();
+        for (let i = 0; i < 30; i++) expect((await unsub(waitlist.newConfirmToken(), { ip })).statusCode).toBe(410);
+        const email = await seedSubscriber('u2legit');
+        expect((await unsub(await issue(email), { ip })).statusCode).toBe(200);
+        expect((await readDoc(email)).status).toBe('unsubscribed');
+    });
+
+    it('WL-W2-U3 eight concurrent unsubscribes with one token: one 200, the rest 410, and no resubscription', async () => {
+        const email = await seedSubscriber('u3race');
+        const token = await issue(email);
+        const results = await Promise.all(Array.from({ length: 8 }, (_, i) => unsub(token, { ip: i % 2 ? null : nextIp() })));
+        expect(results.map(r => r.statusCode).sort()).toEqual([200, 410, 410, 410, 410, 410, 410, 410]);
+        expect((await readDoc(email)).status).toBe('unsubscribed');
+        // A repeat, and a confirmation-shaped retry, change nothing.
+        expect((await unsub(token)).statusCode).toBe(410);
+        expect((await readDoc(email)).status).toBe('unsubscribed');
+    });
+
+    it('WL-W2-U4 repeated legitimate unsubscribe clicks from one client are throttled only after the limit', async () => {
+        const ip = nextIp();
+        const codes = [];
+        for (let i = 0; i < waitlist.UNSUBSCRIBE_LIMIT.limit + 1; i++) {
+            const email = await seedSubscriber(`u4_${i}`);
+            codes.push((await unsub(await issue(email), { ip })).statusCode);
+        }
+        expect(codes.slice(0, waitlist.UNSUBSCRIBE_LIMIT.limit).every(c => c === 200)).toBe(true);
+        expect(codes.at(-1)).toBe(429);
+    });
+
+    const globalRef = (ms = Date.now()) => db.collection('rateLimits')
+        .doc(`waitlistJoinAll_${require('./rateLimiter').windowKey(ms, waitlist.GLOBAL_JOIN_LIMIT.windowSec)}_all`);
+
+    it('WL-W2-G1 the global breaker admits the 300th verified join and refuses the 301st, whatever the headers', async () => {
+        const ref = globalRef();
+        const prior = await ref.get();
+        await ref.set({ count: waitlist.GLOBAL_JOIN_LIMIT.limit - 1, uid: 'all', operation: 'waitlistJoinAll',
+            expiresAt: Timestamp.fromMillis(Date.now() + 1200000) });
+        try {
+            expect((await join(nextEmail('g1last'), { ip: null })).statusCode).toBe(202);
+            expect((await ref.get()).data().count).toBe(waitlist.GLOBAL_JOIN_LIMIT.limit);
+            for (const opts of [{ ip: null }, { ip: nextIp() }, { ip: '2001:db8:99::1' }, { ip: 'spoof' }]) {
+                expect((await join(nextEmail('g1over'), opts)).statusCode).toBe(429);
+            }
+            expect((await ref.get()).data().count).toBe(waitlist.GLOBAL_JOIN_LIMIT.limit); // refusals do not count
+        } finally {
+            if (prior.exists) await ref.set(prior.data()); else await ref.delete();
+        }
+    });
+
+    it('WL-W2-G2 a full window closes signups only until it ends: a full previous window, not yet deleted by TTL, blocks nothing now', async () => {
+        // Recovery without moving the clock (a shifted Date.now stalls the Firestore SDK's own deadlines): the window
+        // that just ended is still full and still present, as TTL deletes asynchronously; the current one decides.
+        const now = Date.now(), win = waitlist.GLOBAL_JOIN_LIMIT.windowSec * 1000;
+        const prevRef = globalRef(now - win), ref = globalRef(now);
+        const [prevPrior, prior] = [await prevRef.get(), await ref.get()];
+        await prevRef.set({ count: waitlist.GLOBAL_JOIN_LIMIT.limit, uid: 'all', operation: 'waitlistJoinAll', expiresAt: Timestamp.fromMillis(now + win) });
+        await ref.set({ count: 0, uid: 'all', operation: 'waitlistJoinAll', expiresAt: Timestamp.fromMillis(now + 2 * win) });
+        try {
+            expect((await join(nextEmail('g2now'))).statusCode).toBe(202);
+            expect((await prevRef.get()).data().count).toBe(waitlist.GLOBAL_JOIN_LIMIT.limit);
+            // And the window just filled refuses until it, too, has ended.
+            await ref.update({ count: waitlist.GLOBAL_JOIN_LIMIT.limit });
+            expect((await join(nextEmail('g2full'))).statusCode).toBe(429);
+            // Windows are fixed slices of time, so the next one starts empty.
+            const rl = require('./rateLimiter');
+            expect(rl.windowKey(now + win, waitlist.GLOBAL_JOIN_LIMIT.windowSec)).toBe(rl.windowKey(now, waitlist.GLOBAL_JOIN_LIMIT.windowSec) + 1);
+        } finally {
+            if (prevPrior.exists) await prevRef.set(prevPrior.data()); else await prevRef.delete();
+            if (prior.exists) await ref.set(prior.data()); else await ref.delete();
+        }
+    });
+
+    it('WL-W2-T1 every new counter carries expiresAt and no address, email or raw IP', async () => {
+        const ip = '2001:db8:77::5';
+        const email = nextEmail('t1');
+        await join(email, { ip });
+        const docs = (await db.collection('rateLimits').get()).docs.map(d => ({ id: d.id, ...d.data() }));
+        expect(docs.length).toBeGreaterThan(0);
+        for (const d of docs) {
+            expect(d.expiresAt).toBeInstanceOf(Timestamp);
+            expect(Object.keys(d).sort()).toEqual(['count', 'expiresAt', 'id', 'operation', 'uid']);
+            expect(JSON.stringify(d)).not.toContain(ip);
+            expect(JSON.stringify(d)).not.toContain('2001:db8:77');
+            expect(JSON.stringify(d).toLowerCase()).not.toContain(email.toLowerCase());
+        }
+    });
+
+    it('WL-W2-T2 two addresses in one IPv6 /64 share a bucket; another /64 does not', async () => {
+        const net = `2001:db8:${Math.floor(Math.random() * 65535).toString(16)}:1`;
+        const codes = [];
+        for (let i = 0; i < waitlist.JOIN_LIMIT.limit + 1; i++) codes.push((await join(nextEmail('v6'), { ip: `${net}::${i + 1}` })).statusCode);
+        expect(codes.slice(0, waitlist.JOIN_LIMIT.limit).every(c => c === 202)).toBe(true);
+        expect(codes.at(-1)).toBe(429);
+        expect((await join(nextEmail('v6other'), { ip: `${net.replace(/:1$/, ':2')}::1` })).statusCode).toBe(202);
     });
 });
