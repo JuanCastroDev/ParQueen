@@ -88,7 +88,6 @@ vi.mock('./cancelClaimCallable', () => ({ cancelClaimCallable }));
 
 vi.mock('../../utils/errorReporting', () => ({ reportCriticalActionFailure: vi.fn() }));
 
-import { ALREADY_CLAIMED_MESSAGE } from './activeIncomingClaim';
 import { useInterestFlow } from './useInterestFlow';
 
 const user = { id: 'driver-1', username: 'Driver', crowns: 0 };
@@ -143,6 +142,7 @@ describe('useInterestFlow in-flight claim and arrive guards', () => {
   beforeEach(() => {
     getDocs.mockReset();
     getDocs.mockResolvedValue({ empty: true, docs: [] });
+    prepareClaimIntentCallable.mockClear();
     claimSpotCallable.mockReset();
     claimSpotCallable.mockImplementation(async (input: { spotId: string; mode: 'immediate' | 'scheduled' }) => ({
       outcome: 'claimed' as const,
@@ -254,14 +254,26 @@ describe('useInterestFlow in-flight claim and arrive guards', () => {
     expect(getFlow().interestError).toBeNull();
   });
 
-  it('clears the claim guard when the already-active hint fires, without a write', async () => {
-    getDocs.mockResolvedValueOnce({ empty: false, docs: [{ id: 'other' }] });
+  it('does not let the advisory Firestore query block an immediate server-authoritative claim', async () => {
+    getDocs.mockRejectedValueOnce(Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' }));
     const getFlow = mount();
 
     await act(async () => { await getFlow().handleExpressInterest(5); });
-    expect(claimSpotCallable).not.toHaveBeenCalled();
+    expect(prepareClaimIntentCallable).toHaveBeenCalledTimes(1);
+    expect(claimSpotCallable).toHaveBeenCalledTimes(1);
     expect(getFlow().claiming).toBe(false);
-    expect(getFlow().interestError).toBe(ALREADY_CLAIMED_MESSAGE);
+    expect(getFlow().interestError).toBeNull();
+  });
+
+  it('does not let the advisory Firestore query block a scheduled server-authoritative claim', async () => {
+    getDocs.mockRejectedValueOnce(Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' }));
+    const getFlow = mount();
+
+    await act(async () => { await getFlow().handleScheduledClaim(); });
+    expect(prepareClaimIntentCallable).toHaveBeenCalledTimes(1);
+    expect(claimSpotCallable).toHaveBeenCalledTimes(1);
+    expect(getFlow().claiming).toBe(false);
+    expect(getFlow().interestError).toBeNull();
   });
 
   it('clears the arrive guard after a failed arrival so the user can retry', async () => {
