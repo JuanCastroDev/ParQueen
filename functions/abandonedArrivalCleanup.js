@@ -4,6 +4,7 @@ const { FieldPath, Timestamp } = require('firebase-admin/firestore');
 const {
   TWO_HOURS_MS,
   finderAttestationId,
+  isClaimerAuthoritativeSuccess,
   isMutualSuccessPair,
 } = require('./handoffSuccessContract');
 
@@ -104,9 +105,21 @@ async function closeAbandonedArrivedHandoff(db, spotRef, nowMs) {
     const claimerData = feedbackSnap.exists ? feedbackSnap.data() : null;
     const finderData = finderSnap.exists ? finderSnap.data() : null;
 
-    // Both timely success attestations beat cleanup. Do not write unconfirmed.
-    // The award transaction sets completed_success; a retry of this sweep sees
-    // that claimState and is no longer eligible.
+    // A valid claimer success beats cleanup even if the award trigger is still
+    // retrying. Never race a legitimate completion into unconfirmed.
+    if (isClaimerAuthoritativeSuccess({
+      spotId: fresh.id,
+      claimerId,
+      finderId,
+      claimerDocId: feedbackId,
+      claimerData,
+      spot,
+    })) {
+      return 'skipped-terminal';
+    }
+
+    // Legacy mutual success also beats cleanup. The award transaction sets
+    // completed_success; a retry of this sweep then becomes ineligible.
     if (isMutualSuccessPair({
       spotId: fresh.id,
       claimerId,

@@ -44,6 +44,19 @@ function isClaimerSuccessAttestation(docId, data, spotId, claimerId, finderId) {
     && sameParticipants(data, spotId, claimerId, finderId);
 }
 
+function hasMatchingGenerationOrLegacyArrival(data, spot) {
+  if (typeof data?.claimGenerationId === 'string') {
+    return data.claimGenerationId.length > 0
+      && data.claimGenerationId === spot?.claimGenerationId;
+  }
+  // Legacy clients did not include claimGenerationId. Their immutable document
+  // is safe only when it was created at or after this durable arrival, which
+  // prevents an old attestation from completing a later claim cycle.
+  const createdAtMs = attestationCreatedAtMs(data);
+  const arrivedAtMs = isTimestampLike(spot?.arrivedAt) ? spot.arrivedAt.toMillis() : null;
+  return createdAtMs != null && arrivedAtMs != null && createdAtMs >= arrivedAtMs;
+}
+
 function isFinderSuccessAttestation(docId, data, spotId, claimerId, finderId) {
   return docId === finderAttestationId(spotId, claimerId)
     && !!data
@@ -71,6 +84,23 @@ function isRewardableArrival(spot) {
     && isTimestampLike(spot.arrivedAt)
     && typeof spot.interestedUserId === 'string'
     && typeof spot.finderId === 'string';
+}
+
+
+function isClaimerAuthoritativeSuccess({
+  spotId,
+  claimerId,
+  finderId,
+  claimerDocId,
+  claimerData,
+  spot,
+}) {
+  if (!isRewardableArrival(spot)) return false;
+  if (spot.interestedUserId !== claimerId || spot.finderId !== finderId) return false;
+  if (!isClaimerSuccessAttestation(claimerDocId, claimerData, spotId, claimerId, finderId)) return false;
+  const arrivedAtMs = spot.arrivedAt.toMillis();
+  return isTimelyAttestation(claimerData, arrivedAtMs)
+    && hasMatchingGenerationOrLegacyArrival(claimerData, spot);
 }
 
 function isMutualSuccessPair({
@@ -102,5 +132,7 @@ module.exports = {
   isFinderSuccessAttestation,
   isTimelyAttestation,
   isRewardableArrival,
+  isClaimerAuthoritativeSuccess,
+  hasMatchingGenerationOrLegacyArrival,
   isMutualSuccessPair,
 };

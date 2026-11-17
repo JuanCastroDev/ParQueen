@@ -66,6 +66,7 @@ export function buildParticipantSuccessAttestation(params: {
   address: string;
   role: ParticipantRole;
   createdAt: unknown;
+  claimGenerationId?: string | null;
 }) {
   return {
     spotId: params.spotId,
@@ -76,12 +77,19 @@ export function buildParticipantSuccessAttestation(params: {
     failureReason: null,
     address: params.address.slice(0, ADDRESS_MAX_LENGTH),
     createdAt: params.createdAt,
+    ...(params.claimGenerationId ? { claimGenerationId: params.claimGenerationId } : {}),
   };
 }
 
 export function isMatchingParticipantAttestation(
   existing: Record<string, any> | undefined,
-  intended: { spotId: string; userId: string; finderId: string; role: ParticipantRole },
+  intended: {
+    spotId: string;
+    userId: string;
+    finderId: string;
+    role: ParticipantRole;
+    claimGenerationId?: string | null;
+  },
 ): boolean {
   if (!existing) return false;
   return existing.spotId === intended.spotId
@@ -89,5 +97,9 @@ export function isMatchingParticipantAttestation(
     && existing.finderId === intended.finderId
     && existing.outcome === 'participant_success'
     && existing.role === intended.role
+    // A shipped legacy attestation has no generation. It remains retryable;
+    // the server independently proves createdAt belongs to this arrival.
+    && (existing.claimGenerationId == null
+      || existing.claimGenerationId === (intended.claimGenerationId ?? null))
     && (existing.failureReason ?? null) === null;
 }

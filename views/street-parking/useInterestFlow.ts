@@ -38,16 +38,14 @@ import { captureClientException, reportCriticalActionFailure } from '../../utils
 import { t } from '../../i18n';
 import { completeTerminalHandoff } from './completeTerminalHandoff';
 import { attestParticipantSuccess } from './attestParticipantSuccess';
-import { ArrivalNotDurableError, isHandoffFailureReason } from '../../utils/spotFeedback';
+import { completeHandoffSuccessCallable } from './completeHandoffSuccessCallable';
+import { isHandoffFailureReason } from '../../utils/spotFeedback';
 import {
     claimerArrivedSpotsQuery,
     claimerTerminalFeedbackQuery,
-    finderArrivedSpotsQuery,
-    selectFinderPendingHandoff,
     selectUnfinishedHandoff,
     terminalSpotIdsFromFeedback,
     type ClaimerSpotRecord,
-    type FinderPendingHandoff,
     type UnfinishedHandoff,
 } from './unfinishedHandoff';
 import { ARRIVAL_DISTANCE_KM } from './arrivalLocation';
@@ -149,7 +147,7 @@ export function useInterestFlow({
     const lastWrittenEtaRef = useRef<number | null>(null);
     const etaWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const expiryWarnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const [handoffStep, setHandoffStep] = useState<'outcome' | 'celebration' | 'failure_reason' | 'waiting' | 'finder_attest' | null>(null);
+    const [handoffStep, setHandoffStep] = useState<'outcome' | 'celebration' | 'failure_reason' | 'waiting' | null>(null);
     const handoffStepRef = useRef(handoffStep);
     handoffStepRef.current = handoffStep;
     const [handoffSubmitError, setHandoffSubmitError] = useState<string | null>(null);
@@ -160,12 +158,6 @@ export function useInterestFlow({
         | { outcome: 'failed'; reason: string }
         | null
     >(null);
-    const finderAttestRef = useRef<{
-        spotId: string;
-        claimerId: string;
-        address: string;
-        claimerName: string;
-    } | null>(null);
     const [handoffFinderName, setHandoffFinderName] = useState<string | null>(null);
     const [handoffAddress, setHandoffAddress] = useState<string>('');
     const handoffSpotRef = useRef<{
@@ -174,7 +166,6 @@ export function useInterestFlow({
     } | null>(null);
     const [handoffSpotCoords, setHandoffSpotCoords] = useState<{ lat: number; lng: number; address: string } | null>(null);
     const [unfinishedHandoff, setUnfinishedHandoff] = useState<UnfinishedHandoff | null>(null);
-    const [finderPendingHandoff, setFinderPendingHandoff] = useState<FinderPendingHandoff | null>(null);
     const arrivedSpotsRef = useRef<ClaimerSpotRecord[]>([]);
     const terminalSpotIdsRef = useRef<Set<string>>(new Set());
     const optimisticTerminalRef = useRef<Set<string>>(new Set());
@@ -312,27 +303,6 @@ export function useInterestFlow({
             awardUnsubRef.current?.();
             awardUnsubRef.current = null;
         };
-    }, [user?.id]);
-
-    // Finder-side recovery. Occupied Pings disappear from the public map feed,
-    // so the owner needs an independent path back to their half of the mutual
-    // confirmation. Query only by finderId to avoid requiring a new composite
-    // index; selectFinderPendingHandoff filters the pending state client-side.
-    useEffect(() => {
-        if (!user?.id || !db) {
-            setFinderPendingHandoff(null);
-            return;
-        }
-        const uid = user.id;
-        const unsub = onSnapshot(
-            finderArrivedSpotsQuery(db, uid),
-            (snap) => {
-                const records = snap.docs.map((spotDoc) => ({ id: spotDoc.id, data: spotDoc.data() }));
-                setFinderPendingHandoff(selectFinderPendingHandoff(records, uid));
-            },
-            () => setFinderPendingHandoff(null),
-        );
-        return () => unsub();
     }, [user?.id]);
 
     const noteTerminalHandoff = useCallback((spotId: string) => {
@@ -709,20 +679,9 @@ export function useInterestFlow({
         }
     };
 
-    const showAwardedCrowns = (role: 'claimer' | 'finder', claimerName: string) => {
-        if (role === 'finder') {
-            const name = claimerName || t('handoff.other_driver');
-            setFinderToast(t('handoff.finder_award', { name }));
-            setFinderToastTitle(t('handoff.crown_earned_finder'));
-            setFinderToastVariant('success');
-            setTimeout(() => setFinderToast(null), 6000);
-            if (handoffStepRef.current === 'waiting') {
-                handoffStepRef.current = null;
-                setHandoffStep(null);
-            }
-            return;
-        }
-        // Claimer copy is +1. The finder string is never shown to the claimer.
+    const showAwardedCrowns = () => {
+        // Claimer copy is +1. Finder reward information arrives through the
+        // server-authored notification, never a confirmation task.
         if (handoffStepRef.current === 'waiting') {
             handoffStepRef.current = 'celebration';
             setHandoffStep('celebration');
@@ -734,7 +693,7 @@ export function useInterestFlow({
         setTimeout(() => { setDriverNotification(null); setDriverNotifTitle(null); }, 6000);
     };
 
-    const watchForServerAward = (spotId: string, role: 'claimer' | 'finder', claimerName: string) => {
+    const watchForServerAward = (spotId: string) => {
         awardUnsubRef.current?.();
         awardUnsubRef.current = null;
         if (!db) return;
@@ -756,17 +715,17 @@ export function useInterestFlow({
             // A cached success may be displayed by the existing Crown UI, but
             // cannot count as an analytics completion or close the claimer's
             // observer. Wait for fresh server metadata before recording.
-            if (role === 'claimer' && serverConfirmed && !successAnalyticsRecordedRef.current.has(spotId)) {
+            if (serverConfirmed && !successAnalyticsRecordedRef.current.has(spotId)) {
                 successAnalyticsRecordedRef.current.add(spotId);
                 recordParkingAnalyticsEvent('handoff_success_recorded');
             }
             if (!awardDeliveredRef.current.has(spotId)) {
                 awardDeliveredRef.current.add(spotId);
-                showAwardedCrowns(role, claimerName);
+                showAwardedCrowns();
             }
             // The finder never records this event. For the claimer, keep the
             // listener alive after cache-only success until server confirmation.
-            if (role === 'claimer' && !serverConfirmed) return;
+            if (!serverConfirmed) return;
             unsubscribe();
             if (awardUnsubRef.current === unsubscribe) awardUnsubRef.current = null;
         }, () => {});
@@ -775,73 +734,13 @@ export function useInterestFlow({
 
     const enterAttestationWaiting = (
         spotId: string,
-        role: 'claimer' | 'finder',
-        claimerName: string,
     ) => {
         setFinderToast(null);
         setFinderToastTitle(null);
         handoffStepRef.current = 'waiting';
         setHandoffStep('waiting');
-        watchForServerAward(spotId, role, claimerName);
+        watchForServerAward(spotId);
     };
-
-    // Finder attests only after the claimer arrival is already durable.
-    // A rejected write stays on this sheet with a retry, and Crowns copy
-    // waits for the server award.
-    const submitFinderAttestation = async () => {
-        if (!user || !db || handoffSubmitLock.current) return;
-        const fromCard = selectedItem?.interestedUserId ? {
-            spotId: selectedItem.id as string,
-            claimerId: selectedItem.interestedUserId as string,
-            address: String(selectedItem.title || selectedItem.address || ''),
-            claimerName: String(selectedItem.interestedUserName || t('handoff.other_driver')),
-        } : null;
-        const attempt = finderAttestRef.current ?? fromCard;
-        if (!attempt?.claimerId || attempt.claimerId === user.id) return;
-
-        finderAttestRef.current = attempt;
-        handoffSubmitLock.current = true;
-        setHandoffSubmitting(true);
-        setHandoffSubmitError(null);
-        try {
-            await attestParticipantSuccess(db, {
-                spotId: attempt.spotId,
-                claimerId: attempt.claimerId,
-                finderId: user.id,
-                address: attempt.address,
-                role: 'finder',
-                actorId: user.id,
-            });
-            finderAttestRef.current = null;
-            setSelectedItem(null);
-            enterAttestationWaiting(attempt.spotId, 'finder', attempt.claimerName);
-        } catch (error) {
-            if (error instanceof ArrivalNotDurableError) {
-                finderAttestRef.current = null;
-                return;
-            }
-            showTerminalSubmitFailure(error);
-            handoffStepRef.current = 'finder_attest';
-            setHandoffStep('finder_attest');
-        } finally {
-            handoffSubmitLock.current = false;
-            setHandoffSubmitting(false);
-        }
-    };
-
-    const confirmPendingFinderHandoff = () => {
-        const pending = finderPendingHandoff;
-        if (!pending || handoffSubmitLock.current) return;
-        finderAttestRef.current = {
-            spotId: pending.id,
-            claimerId: pending.claimerId,
-            address: pending.address,
-            claimerName: pending.claimerName || t('handoff.other_driver'),
-        };
-        return submitFinderAttestation();
-    };
-
-    const handleFinderConfirmsArrival = () => submitFinderAttestation();
 
     const selectedSpotId = selectedItem?.id ?? null;
     useEffect(() => {
@@ -1128,12 +1027,20 @@ export function useInterestFlow({
                 role: 'claimer',
                 actorId: user.id,
             });
+            // Always re-enter the idempotent server transaction. Besides
+            // reducing trigger latency, this repairs a valid immutable
+            // attestation written by a legacy client before this protocol.
+            await completeHandoffSuccessCallable({
+                spotId: spotSnap.id,
+                finderId: spotSnap.finderId,
+            });
 
-            // A one-sided attestation is not terminal. Leave Finish-your-handoff
-            // recoverable and wait for the server award before any Crowns copy.
+            // The client never declares success from the callable response.
+            // Leave Finish-your-handoff recoverable and wait for the fresh
+            // server snapshot before any Crowns copy or success UI.
             setHandoffSpotCoords({ lat: spotSnap.lat, lng: spotSnap.lng, address: spotSnap.address || '' });
             lastTerminalAttempt.current = null;
-            enterAttestationWaiting(spotSnap.id, 'claimer', user.username || t('handoff.other_driver'));
+            enterAttestationWaiting(spotSnap.id);
         } catch (error) {
             showTerminalSubmitFailure(error);
         } finally {
@@ -1185,7 +1092,6 @@ export function useInterestFlow({
 
     const retryTerminalHandoff = () => {
         if (handoffSubmitLock.current) return;
-        if (finderAttestRef.current) return submitFinderAttestation();
         const attempt = lastTerminalAttempt.current;
         if (!attempt) return;
         if (attempt.outcome === 'success') return handleHandoffOutcome('success');
@@ -1328,7 +1234,6 @@ export function useInterestFlow({
         setHandoffSubmitting(false);
         handoffSubmitLock.current = false;
         lastTerminalAttempt.current = null;
-        finderAttestRef.current = null;
         setHandoffFinderName(null);
         setHandoffAddress('');
         setHandoffSpotCoords(null);
@@ -1355,8 +1260,6 @@ export function useInterestFlow({
         handoffSpotCoords,
         unfinishedHandoff,
         resumeUnfinishedHandoff,
-        finderPendingHandoff,
-        confirmPendingFinderHandoff,
         finderToast,
         finderToastTitle,
         finderToastVariant,
@@ -1381,7 +1284,6 @@ export function useInterestFlow({
         cancelingClaim,
         claiming,
         arriving,
-        handleFinderConfirmsArrival,
         handleDelayByFinder,
         handleArrival,
         handleHandoffOutcome,

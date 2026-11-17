@@ -49,6 +49,7 @@ const {
   isTimestampLike,
 } = require('./abandonedArrivalCleanup');
 const { joinMutualSuccess } = require('./mutualSuccessJoin');
+const { createCompleteHandoffSuccessHandler } = require('./completeHandoffSuccess');
 const { releasedInterestPatch } = require('./activeIncomingClaimLogic');
 const { releaseClaimsOfDeletedUser } = require('./deletedUserClaimRelease');
 const {
@@ -2515,8 +2516,8 @@ exports.finderCancelSpot = onCall(
   (request) => finderCancelSpotHandler(request)
 );
 
-// 10) Award crowns on a mutual parking handoff.
-// One participant attestation does not award. The idempotency key is the
+// 10) Award crowns on a server-validated claimer success.
+// Finder confirmation is informational, never a completion dependency. The idempotency key is the
 // claimer attestation id `${spotId}_${claimerId}` (functionEvents/awardCrowns_
 // that id), shared by the claimer create, the finder create, and any retry.
 // Crowns, the finder trust increment, and claimState completed_success commit
@@ -2527,6 +2528,20 @@ const mutualSuccessDeps = {
   defaultTrustStats,
   computeTrustScore,
 };
+
+// Authenticated retry path for immutable claimer attestations. This is needed
+// when a shipped client created the deterministic document before the
+// single-party completion trigger existed: retrying setDoc cannot create a
+// second Firestore event, so the callable re-enters the same idempotent server
+// transaction. It never trusts client-supplied outcome or generation state.
+exports.completeHandoffSuccess = onCall(
+  {
+    region: 'us-central1',
+    enforceAppCheck: true,
+    serviceAccount: 'parqueen-system-events@parkqueen-46475363-ccf36.iam.gserviceaccount.com',
+  },
+  createCompleteHandoffSuccessHandler({ db, assertProductAccess, joinMutualSuccess, deps: mutualSuccessDeps }),
+);
 
 exports.awardCrowns = onDocumentCreated(
   {
@@ -3861,9 +3876,8 @@ exports.deleteAccount = onCall({ region: 'us-central1', serviceAccount: 'parquee
     }
 });
 
-// 11) Trust: record a mutual handoff for the finder.
-// Same join as awardCrowns. A one-sided participant_success does not increment
-// trust. The pair marker makes a duplicate delivery, or this function racing
+// 11) Trust: record a server-validated claimer success for the finder.
+// Same join as awardCrowns. The pair marker makes a duplicate delivery, or this function racing
 // awardCrowns, apply handoffsCompleted exactly once.
 exports.updateTrustOnFeedback = onDocumentCreated(
   { document: 'spotFeedback/{feedbackId}', region: 'us-central1', retry: true, serviceAccount: 'parqueen-system-events@parkqueen-46475363-ccf36.iam.gserviceaccount.com' },

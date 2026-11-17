@@ -72,6 +72,10 @@ vi.mock('firebase/firestore', () => ({
 }));
 
 vi.mock('../../utils/errorReporting', () => ({ reportCriticalActionFailure: vi.fn() }));
+const { completeHandoffSuccessCallable } = vi.hoisted(() => ({
+  completeHandoffSuccessCallable: vi.fn(async () => ({ outcome: 'awarded' })),
+}));
+vi.mock('./completeHandoffSuccessCallable', () => ({ completeHandoffSuccessCallable }));
 
 const GENERATION = 'b'.repeat(64);
 const { claimSpotCallable, prepareClaimIntentCallable, revokeClaimIntentCallable } = vi.hoisted(() => ({
@@ -164,18 +168,14 @@ function Harness({
     activeRouteDestinationRef: { current: null },
   });
   onReady(flow);
-  const pending = flow.finderPendingHandoff ?? flow.unfinishedHandoff;
+  const pending = flow.unfinishedHandoff;
   return (
     <>
       {pending && flow.handoffStep === null && (
         <FinishHandoffChip
-          role={flow.finderPendingHandoff ? 'finder' : 'claimer'}
           address={pending.address}
-          driverName={flow.finderPendingHandoff?.claimerName}
           submitting={flow.handoffSubmitting}
-          onResume={flow.finderPendingHandoff
-            ? flow.confirmPendingFinderHandoff
-            : flow.resumeUnfinishedHandoff}
+          onResume={flow.resumeUnfinishedHandoff}
         />
       )}
       <BottomSheet
@@ -211,6 +211,8 @@ async function dismissSheet() {
 
 describe('useInterestFlow — resumable finish-your-handoff', () => {
   beforeEach(() => {
+    completeHandoffSuccessCallable.mockReset();
+    completeHandoffSuccessCallable.mockResolvedValue({ outcome: 'awarded' });
     listeners.clear();
     documents.clear();
     getDocs.mockClear();
@@ -350,44 +352,6 @@ describe('useInterestFlow — resumable finish-your-handoff', () => {
     ]);
     expect(chipCount()).toBe(1);
     expect(getFlow().unfinishedHandoff?.id).toBe('spot-1');
-  });
-
-  it('gives the Ping owner a durable confirmation action after the claimer arrives', async () => {
-    const finder = { id: 'finder-1', username: 'Finder', crowns: 0 };
-    const ownerSpot = {
-      ...arrivedSpot,
-      interestedUserId: user.id,
-      interestedUserName: 'Driver',
-    };
-    const { getFlow } = mount(null, finder);
-
-    await emitResume('spot-1', ownerSpot);
-
-    expect(getFlow().unfinishedHandoff).toBeNull();
-    expect(getFlow().finderPendingHandoff).toMatchObject({
-      id: 'spot-1',
-      claimerId: user.id,
-      claimerName: 'Driver',
-      address: '1 Main St',
-    });
-    expect(chipCount()).toBe(1);
-    const card = renderer!.root.findByProps({ 'data-testid': 'finish-handoff-chip' });
-    expect(card.props['data-handoff-role']).toBe('finder');
-    expect(JSON.stringify(renderer!.toJSON())).toContain('Did they get your spot?');
-
-    const button = card.findByType('button');
-    await act(async () => { await button.props.onClick(); });
-
-    expect(documents.get('spotFeedback/spot-1_driver-1_finder')).toMatchObject({
-      spotId: 'spot-1',
-      userId: user.id,
-      finderId: finder.id,
-      outcome: 'participant_success',
-      role: 'finder',
-      failureReason: null,
-    });
-    expect(getFlow().handoffStep).toBe('waiting');
-    expect(chipCount()).toBe(0);
   });
 
   it('completed_success and unconfirmed drop the chip; failed still ends the handoff', async () => {

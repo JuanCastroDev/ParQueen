@@ -3,6 +3,7 @@
 const {
   TWO_HOURS_MS,
   isMutualSuccessPair,
+  isClaimerAuthoritativeSuccess,
   isTimelyAttestation,
   claimerAttestationId,
   finderAttestationId,
@@ -21,6 +22,7 @@ function spot(overrides = {}) {
     arrivedAt: at(NOW - 60_000),
     interestedUserId: 'claimer',
     finderId: 'finder',
+    claimGenerationId: '11111111-1111-4111-8111-111111111111',
     ...overrides,
   };
 }
@@ -80,6 +82,47 @@ describe('handoff success contract', () => {
     expect(isMutualSuccessPair({
       ...pair,
       spot: spot({ claimState: 'completed_success' }),
+    })).toBe(false);
+  });
+
+  it('accepts one timely claimer attestation bound to the current generation', () => {
+    const arrived = spot();
+    const claimerData = {
+      ...attestation('claimer', NOW - 30_000),
+      claimGenerationId: arrived.claimGenerationId,
+    };
+    expect(isClaimerAuthoritativeSuccess({
+      spotId: 'spot',
+      claimerId: 'claimer',
+      finderId: 'finder',
+      claimerDocId: claimerAttestationId('spot', 'claimer'),
+      claimerData,
+      spot: arrived,
+    })).toBe(true);
+    expect(isClaimerAuthoritativeSuccess({
+      spotId: 'spot',
+      claimerId: 'claimer',
+      finderId: 'finder',
+      claimerDocId: claimerAttestationId('spot', 'claimer'),
+      claimerData: { ...claimerData, claimGenerationId: '22222222-2222-4222-8222-222222222222' },
+      spot: arrived,
+    })).toBe(false);
+  });
+
+  it('keeps legacy clients compatible only when their attestation follows this arrival', () => {
+    const arrived = spot();
+    const input = {
+      spotId: 'spot',
+      claimerId: 'claimer',
+      finderId: 'finder',
+      claimerDocId: claimerAttestationId('spot', 'claimer'),
+      claimerData: attestation('claimer', NOW - 30_000),
+      spot: arrived,
+    };
+    expect(isClaimerAuthoritativeSuccess(input)).toBe(true);
+    expect(isClaimerAuthoritativeSuccess({
+      ...input,
+      claimerData: attestation('claimer', NOW - 120_000),
     })).toBe(false);
   });
 });

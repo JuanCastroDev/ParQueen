@@ -5487,6 +5487,7 @@ describe('B1 — durable arrived_pending_outcome', () => {
             claimState: 'arrived_pending_outcome',
             arrivedAt,
         }));
+        const generation = (await readSpot(spotId)).data().claimGenerationId;
 
         await expect(completeTerminalHandoff(otherDb(), {
             spotId,
@@ -5504,6 +5505,7 @@ describe('B1 — durable arrived_pending_outcome', () => {
             address: spotId,
             outcome: 'participant_success',
             role: 'claimer',
+            claimGenerationId: generation,
             failureReason: null,
             createdAt: Timestamp.now(),
         }));
@@ -5514,6 +5516,34 @@ describe('B1 — durable arrived_pending_outcome', () => {
         expect(spot.arrivedAt.isEqual(arrivedAt)).toBe(true);
         const feedback = await getDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`));
         expect(feedback.data()).toMatchObject({ outcome: 'participant_success', role: 'claimer', failureReason: null });
+    });
+
+    it('B1-GENERATION: claimer completion must match the durable claim generation', async () => {
+        const spotId = 'b1-generation';
+        await seed('spots', spotId, headingPing(spotId, {
+            status: 'occupied',
+            claimState: 'arrived_pending_outcome',
+            arrivedAt: Timestamp.fromMillis(Date.now() - 30_000),
+        }));
+        const current = (await readSpot(spotId)).data().claimGenerationId;
+        const base = {
+            spotId,
+            userId: OTHER_UID,
+            finderId: OWNER_UID,
+            address: spotId,
+            outcome: 'participant_success',
+            role: 'claimer',
+            failureReason: null,
+            createdAt: Timestamp.now(),
+        };
+        await assertFails(setDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`), {
+            ...base,
+            claimGenerationId: '00000000-0000-4000-8000-000000000000',
+        }));
+        await assertSucceeds(setDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`), {
+            ...base,
+            claimGenerationId: current,
+        }));
     });
 
     it('B1-FINDER: finder success is a separate attestation and does not rewrite arrival', async () => {

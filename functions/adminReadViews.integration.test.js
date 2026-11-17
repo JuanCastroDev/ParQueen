@@ -210,6 +210,7 @@ const ENFORCED_APP_CHECK_CALLABLES = [
     'prepareClaimIntent',
     'revokeClaimIntent',
     'finderCancelSpot',
+    'completeHandoffSuccess',
 ];
 
 function expectReviewedAppCheckFleet(indexSrc) {
@@ -554,7 +555,7 @@ describe('adminReadView — coordinated read-side session hardening', () => {
         expectReviewedAppCheckFleet(indexSrc);
         expect(indexSrc.match(/consumeAppCheckToken:\s*true/g) || []).toHaveLength(0);
 
-        // Forty canaries should carry a serviceAccount override — adminReadView
+        // Reviewed canaries should carry a serviceAccount override — adminReadView
         // (admin-only), sendMessage (authoritative chat write path),
         // claimUsername, updateDisplayName (both authoritative
         // profile-identity write paths), moderateAvatarUpload (dedicated
@@ -593,7 +594,9 @@ describe('adminReadView — coordinated read-side session hardening', () => {
         // parqueen-system-events identity — see AC-9; source-only, not yet
         // deployed). This closes the Eventarc runtime migration — all five
         // formerly-compute-default functions now declare a dedicated
-        // serviceAccount in source.
+        // serviceAccount in source. completeHandoffSuccess reuses that same
+        // identity to re-enter the award transaction for immutable legacy
+        // attestations; it introduces no new principal.
         // moderateContent was retired (uncalled since deployment; see
         // docs/CHAT_MESSAGE_HARDENING.md) and no longer exists. deleteChat
         // (server-mediated conversation deletion) reuses the existing
@@ -627,7 +630,7 @@ describe('adminReadView — coordinated read-side session hardening', () => {
             expect(slice).not.toMatch(/serviceAccount:\s*'(?!parqueen-cancel@)/);
         }
         expect(indexSrc.match(/parqueen-cancel@parkqueen-46475363-ccf36\.iam\.gserviceaccount\.com/g) || []).toHaveLength(5);
-        expect(allServiceAccountMatches).toHaveLength(50);
+        expect(allServiceAccountMatches).toHaveLength(51);
     });
 
     it("AR-29: Runtime-IAM canary config-contract — moderateAvatarUpload's serviceAccount is the dedicated avatar-moderator identity, Storage-trigger config unaffected", () => {

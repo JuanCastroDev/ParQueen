@@ -6,8 +6,7 @@ const {
   claimerAttestationId,
   finderAttestationId,
   isClaimerSuccessAttestation,
-  isFinderSuccessAttestation,
-  isMutualSuccessPair,
+  isClaimerAuthoritativeSuccess,
   isTimelyAttestation,
   isTimestampLike,
 } = require('./handoffSuccessContract');
@@ -23,7 +22,7 @@ function markerPayload(outcome, pairId, claimerId, finderId) {
   };
 }
 
-function terminalSkipReason(spot, claimerDocId, claimerData, finderDocId, finderData, spotId, claimerId, finderId) {
+function terminalSkipReason(spot, claimerDocId, claimerData, spotId, claimerId, finderId) {
   if (!spot || spot.claimState === 'unconfirmed') return 'skipped_not_pending';
   if (spot.claimState === 'completed_success') return 'skipped_already_completed';
   if (spot.claimState !== 'arrived_pending_outcome') return 'skipped_not_pending';
@@ -31,54 +30,55 @@ function terminalSkipReason(spot, claimerDocId, claimerData, finderDocId, finder
   if (spot.interestedUserId !== claimerId || spot.finderId !== finderId) return 'skipped_mismatch';
 
   const claimerOk = isClaimerSuccessAttestation(claimerDocId, claimerData, spotId, claimerId, finderId);
-  const finderOk = isFinderSuccessAttestation(finderDocId, finderData, spotId, claimerId, finderId);
-  if (claimerOk && finderOk) {
+  if (claimerOk) {
     const arrivedAtMs = spot.arrivedAt.toMillis();
-    if (!isTimelyAttestation(claimerData, arrivedAtMs) || !isTimelyAttestation(finderData, arrivedAtMs)) {
+    if (!isTimelyAttestation(claimerData, arrivedAtMs)) {
       return 'skipped_late';
     }
+    if (typeof claimerData.claimGenerationId === 'string'
+      && claimerData.claimGenerationId !== spot.claimGenerationId) return 'skipped_generation_mismatch';
   }
   return 'skipped_mismatch';
 }
 
 /**
- * Award Crowns and the finder trust increment only when both participant
- * success attestations agree. A single attestation returns without a marker
- * so the sibling delivery can still complete the join. Terminal skips are
- * written only once both docs exist and the pair can never become rewardable.
+ * Award Crowns and finder trust from the legitimate claimer's immutable
+ * success attestation. The transaction revalidates the durable arrival,
+ * participants, generation identity (or the bounded legacy-arrival fallback),
+ * and writes rewards, terminal state, informational finder notification, and
+ * the idempotency marker together.
  */
 async function joinMutualSuccess(db, event, deps) {
   const data = event.data?.data();
-  if (!data || data.outcome !== PARTICIPANT_SUCCESS_OUTCOME) return;
+  if (!data || data.outcome !== PARTICIPANT_SUCCESS_OUTCOME) return { outcome: 'ignored' };
 
   const spotId = data.spotId;
   const claimerId = data.userId;
   const finderId = data.finderId;
-  if (typeof spotId !== 'string' || typeof claimerId !== 'string' || typeof finderId !== 'string') return;
-  if (!spotId || !claimerId || !finderId) return;
-  if (spotId.includes('/') || claimerId.includes('/') || finderId.includes('/')) return;
-  if (claimerId === finderId) return;
+  if (typeof spotId !== 'string' || typeof claimerId !== 'string' || typeof finderId !== 'string') return { outcome: 'ignored' };
+  if (!spotId || !claimerId || !finderId) return { outcome: 'ignored' };
+  if (spotId.includes('/') || claimerId.includes('/') || finderId.includes('/')) return { outcome: 'ignored' };
+  if (claimerId === finderId) return { outcome: 'ignored' };
 
   const claimerDocId = claimerAttestationId(spotId, claimerId);
   const finderDocId = finderAttestationId(spotId, claimerId);
   const triggeredId = event.params && event.params.feedbackId;
-  if (triggeredId !== claimerDocId && triggeredId !== finderDocId) return;
+  if (triggeredId !== claimerDocId && triggeredId !== finderDocId) return { outcome: 'ignored' };
 
   const pairId = claimerDocId;
   const processedRef = db.doc(`functionEvents/awardCrowns_${pairId}`);
   const trustEventId = `${pairId}:finder`;
   const claimerFbRef = db.doc(`spotFeedback/${claimerDocId}`);
-  const finderFbRef = db.doc(`spotFeedback/${finderDocId}`);
   const spotRef = db.doc(`spots/${spotId}`);
   const driverRef = db.doc(`users/${claimerId}`);
   const finderRef = db.doc(`users/${finderId}`);
   const trustRef = db.doc(`users/${finderId}/processedTrustEvents/${trustEventId}`);
+  const notificationRef = db.doc(`spotNotifications/handoff_success_${pairId}`);
 
-  await db.runTransaction(async (tx) => {
+  return db.runTransaction(async (tx) => {
     const [
       processedSnap,
       claimerFb,
-      finderFb,
       spotSnap,
       driverSnap,
       finderSnap,
@@ -86,49 +86,45 @@ async function joinMutualSuccess(db, event, deps) {
     ] = await Promise.all([
       tx.get(processedRef),
       tx.get(claimerFbRef),
-      tx.get(finderFbRef),
       tx.get(spotRef),
       tx.get(driverRef),
       tx.get(finderRef),
       tx.get(trustRef),
     ]);
 
-    if (processedSnap.exists) return;
-    if (!claimerFb.exists || !finderFb.exists) return;
+    if (processedSnap.exists) return { outcome: processedSnap.data()?.outcome || 'already_processed' };
+    if (!claimerFb.exists) return { outcome: 'pending_attestation' };
 
     const claimerData = claimerFb.data() || {};
-    const finderData = finderFb.data() || {};
     const spot = spotSnap.exists ? (spotSnap.data() || {}) : null;
 
     if (claimerData.outcome === 'failed') {
       tx.set(processedRef, markerPayload('skipped_claimer_failure', pairId, claimerId, finderId));
-      return;
+      return { outcome: 'skipped_claimer_failure' };
     }
 
-    const mutual = isMutualSuccessPair({
+    const authoritative = isClaimerAuthoritativeSuccess({
       spotId,
       claimerId,
       finderId,
       claimerDocId,
       claimerData,
-      finderDocId,
-      finderData,
       spot,
     });
 
-    if (!mutual) {
+    if (!authoritative) {
       tx.set(processedRef, markerPayload(
-        terminalSkipReason(spot, claimerDocId, claimerData, finderDocId, finderData, spotId, claimerId, finderId),
+        terminalSkipReason(spot, claimerDocId, claimerData, spotId, claimerId, finderId),
         pairId,
         claimerId,
         finderId,
       ));
-      return;
+      return { outcome: terminalSkipReason(spot, claimerDocId, claimerData, spotId, claimerId, finderId) };
     }
 
     if (!driverSnap.exists || !finderSnap.exists) {
       tx.set(processedRef, markerPayload('skipped_missing_user', pairId, claimerId, finderId));
-      return;
+      return { outcome: 'skipped_missing_user' };
     }
 
     const { getTitleForCrowns, defaultTrustStats, computeTrustScore } = deps;
@@ -147,7 +143,7 @@ async function joinMutualSuccess(db, event, deps) {
       tx.set(trustRef, {
         processedAt: Timestamp.now(),
         statField: 'handoffsCompleted',
-        source: 'mutual_success',
+        source: 'claimer_success',
       });
     }
 
@@ -157,9 +153,18 @@ async function joinMutualSuccess(db, event, deps) {
     });
     tx.update(finderRef, finderUpdate);
     tx.update(spotRef, { claimState: 'completed_success' });
+    tx.set(notificationRef, {
+      spotId,
+      senderId: claimerId,
+      targetUserId: finderId,
+      type: 'handoff_success',
+      message: 'The other driver parked successfully — +2 Crowns earned!',
+      createdAt: Timestamp.now(),
+    });
     tx.set(processedRef, markerPayload('awarded', pairId, claimerId, finderId));
 
     console.log(`Crowns awarded: driver ${claimerId.slice(0, 4)}*** +1 (${driverCrowns}), finder ${finderId.slice(0, 4)}*** +2 (${finderCrowns})`);
+    return { outcome: 'awarded' };
   });
 }
 

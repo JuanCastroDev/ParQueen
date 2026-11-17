@@ -982,7 +982,7 @@ service cloud.firestore {
           ['spotId', 'userId', 'finderId', 'outcome', 'address', 'createdAt', 'role'])
         && data.keys().hasOnly(
           ['spotId', 'userId', 'finderId', 'outcome', 'failureReason',
-           'address', 'createdAt', 'role'])
+           'address', 'createdAt', 'role', 'claimGenerationId'])
         && data.spotId is string
         && data.spotId.size() > 0
         && data.userId is string
@@ -991,6 +991,8 @@ service cloud.firestore {
         && data.finderId.size() > 0
         && data.userId != data.finderId
         && data.outcome == 'participant_success'
+        && (!('claimGenerationId' in data)
+          || (data.claimGenerationId is string && data.claimGenerationId.size() > 0))
         && data.get('failureReason', null) == null
         && data.address is string
         && data.address.size() <= 500
@@ -1060,7 +1062,12 @@ service cloud.firestore {
         && feedbackId == data.spotId + '_' + data.userId
         && durableArrivedFor(data.spotId)
         && spot.get('interestedUserId', null) == request.auth.uid
-        && spot.finderId == data.finderId;
+        && spot.finderId == data.finderId
+        // New clients bind completion to the exact server-issued claim
+        // generation. Missing is accepted only for shipped legacy clients;
+        // the server join additionally requires createdAt >= arrivedAt.
+        && (!('claimGenerationId' in data)
+          || data.claimGenerationId == spot.get('claimGenerationId', null));
     }
 
     function finderSuccessAttestation(feedbackId) {
