@@ -87,15 +87,27 @@ In order of strength:
 
 1. **Turnstile**, verified server-side: `success`, `action === "waitlist"`,
    and a hostname in `WAITLIST_ALLOWED_HOSTNAMES`. The visitor IP is not sent
-   to Cloudflare.
-2. **Per-address limit:** 3 confirmation emails / hour, keyed by the record
+   to Cloudflare. A join is verified before anything is written, so an
+   unverified request creates no counter and no record.
+2. **Global join limit:** 300 verified joins / 10 min across all clients
+   together. It is a circuit breaker: once reached, joins answer `429` until
+   the window ends, and the function logs one line (no address, token or IP)
+   that monitoring alerts on. The value is provisional, sized for pre-launch
+   traffic; review it before launch.
+3. **Per-address limit:** 3 confirmation emails / hour, keyed by the record
    ID. Exceeding it still answers `202` so the response never reveals
    activity on an address.
-3. **Best-effort per-client limit:** 5 joins / 10 min, 20 confirms / 10 min.
+4. **Best-effort per-client limit:** 5 joins / 10 min (counted after
+   Turnstile), 20 confirms / 10 min and 20 unsubscribes / 10 min (counted only
+   for a link that exists and has not expired; an invalid link gets `410`
+   without writing anything).
    - Input is `Fastly-Client-IP`, which the Firebase Hosting CDN sets to the
      connecting client (overwriting a value the client sent). This is **abuse
-     mitigation on the Hosting path, not authentication**: a request sent
-     straight to the function URL can set the header to anything.
+     mitigation on the Hosting path, not authentication**: the function URL
+     is still publicly callable, and a request sent straight to it can set
+     the header to anything. Layers 1–3 do not depend on it.
+   - IPv6 clients are counted per /64 network; IPv4-mapped IPv6 as the IPv4
+     address.
    - The IP is immediately HMAC'd with `WAITLIST_RATE_LIMIT_PEPPER`; only that
      digest is used, only inside expiring `rateLimits` counter IDs. The raw IP
      is never logged, returned or stored.
@@ -103,10 +115,13 @@ In order of strength:
      consulted.
    - If `Fastly-Client-IP` is absent or malformed, this layer is **skipped**
      (not collapsed into a shared bucket, which would let a Hosting header
-     change throttle every real visitor). Layers 1 and 2 still apply.
+     change throttle every real visitor). Layers 1–3 still apply.
+5. **Instance ceiling:** the three waitlist functions run with
+   `maxInstances: 20`, which bounds cost under load; past it Cloud Run
+   answers `429`.
 
-The per-client check runs first only so an obvious burst does not spend a
-Turnstile `siteverify` call per request; it is not the primary control.
+Deploy these functions only from source that carries all of the above; the
+deploy guard below refuses Firebase CLI deploys that would not.
 
 ## Marketing-site copy constraints
 
