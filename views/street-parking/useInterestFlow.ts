@@ -467,12 +467,6 @@ export function useInterestFlow({
         return attemptId;
     };
 
-    const holdsDifferentSpot = async (spotId: string) => {
-        const q = query(collection(db, 'spots'), where('interestedUserId', '==', user.id), where('status', '==', 'interested'));
-        const snap = await getDocs(q);
-        return snap.docs.some((item) => item.id !== spotId);
-    };
-
     const responseStillCurrent = (spotId: string, attemptId: string) => (
         claimAttemptRef.current?.attemptId === attemptId && selectedSpotIdRef.current === spotId
     );
@@ -652,10 +646,6 @@ export function useInterestFlow({
         setClaiming(true);
         try {
             try {
-                if (await holdsDifferentSpot(spot.id)) {
-                    setInterestError(ALREADY_CLAIMED_MESSAGE);
-                    return;
-                }
                 await acquirePreparedClaim(spot, 'immediate', etaMinutes, 'Someone already got this spot', true);
             } catch (e: any) {
                 reportClaimFailure(e, 'immediate');
@@ -1264,10 +1254,6 @@ export function useInterestFlow({
         setClaiming(true);
         try {
             try {
-                if (await holdsDifferentSpot(spot.id)) {
-                    setInterestError(ALREADY_CLAIMED_MESSAGE);
-                    return;
-                }
                 await acquirePreparedClaim(spot, 'scheduled', null, 'Someone already claimed this spot', false);
             } catch (e: any) {
                 reportClaimFailure(e, 'scheduled');
