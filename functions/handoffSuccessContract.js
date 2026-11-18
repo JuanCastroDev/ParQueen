@@ -44,19 +44,10 @@ function isClaimerSuccessAttestation(docId, data, spotId, claimerId, finderId) {
     && sameParticipants(data, spotId, claimerId, finderId);
 }
 
-function hasMatchingGenerationOrLegacyArrival(data, spot) {
-  if (typeof data?.claimGenerationId === 'string') {
-    return data.claimGenerationId.length > 0
-      && data.claimGenerationId === spot?.claimGenerationId;
-  }
-  // A generation-less request cannot be attributed safely once the server has
-  // issued a durable generation: the same claimer could send a delayed request
-  // after reassignment. Retain compatibility only for historical arrivals that
-  // genuinely predate generation IDs.
-  if (typeof spot?.claimGenerationId === 'string' && spot.claimGenerationId.length > 0) return false;
-  const createdAtMs = attestationCreatedAtMs(data);
-  const arrivedAtMs = isTimestampLike(spot?.arrivedAt) ? spot.arrivedAt.toMillis() : null;
-  return createdAtMs != null && arrivedAtMs != null && createdAtMs >= arrivedAtMs;
+function hasMatchingGeneration(data, spot) {
+  return typeof data?.claimGenerationId === 'string'
+    && data.claimGenerationId.length > 0
+    && data.claimGenerationId === spot?.claimGenerationId;
 }
 
 function isFinderSuccessAttestation(docId, data, spotId, claimerId, finderId) {
@@ -76,7 +67,9 @@ function attestationCreatedAtMs(data) {
 // after that instant, matching B4's "exactly two hours is not yet eligible".
 function isTimelyAttestation(data, arrivedAtMs) {
   const createdAtMs = attestationCreatedAtMs(data);
-  return createdAtMs != null && createdAtMs <= arrivedAtMs + TWO_HOURS_MS;
+  return createdAtMs != null
+    && createdAtMs >= arrivedAtMs
+    && createdAtMs <= arrivedAtMs + TWO_HOURS_MS;
 }
 
 function isRewardableArrival(spot) {
@@ -102,10 +95,13 @@ function isClaimerAuthoritativeSuccess({
   if (!isClaimerSuccessAttestation(claimerDocId, claimerData, spotId, claimerId, finderId)) return false;
   const arrivedAtMs = spot.arrivedAt.toMillis();
   return isTimelyAttestation(claimerData, arrivedAtMs)
-    && hasMatchingGenerationOrLegacyArrival(claimerData, spot);
+    && hasMatchingGeneration(claimerData, spot);
 }
 
-function isMutualSuccessPair({
+// Transitional Option 2 compatibility. This path is deliberately disjoint
+// from modern completion: both genuine participant attestations must omit a
+// generation and must have been created within the current arrival window.
+function isLegacyMutualSuccessPair({
   spotId,
   claimerId,
   finderId,
@@ -119,6 +115,7 @@ function isMutualSuccessPair({
   if (spot.interestedUserId !== claimerId || spot.finderId !== finderId) return false;
   if (!isClaimerSuccessAttestation(claimerDocId, claimerData, spotId, claimerId, finderId)) return false;
   if (!isFinderSuccessAttestation(finderDocId, finderData, spotId, claimerId, finderId)) return false;
+  if (claimerData.claimGenerationId != null || finderData.claimGenerationId != null) return false;
   const arrivedAtMs = spot.arrivedAt.toMillis();
   return isTimelyAttestation(claimerData, arrivedAtMs)
     && isTimelyAttestation(finderData, arrivedAtMs);
@@ -135,6 +132,6 @@ module.exports = {
   isTimelyAttestation,
   isRewardableArrival,
   isClaimerAuthoritativeSuccess,
-  hasMatchingGenerationOrLegacyArrival,
-  isMutualSuccessPair,
+  hasMatchingGeneration,
+  isLegacyMutualSuccessPair,
 };

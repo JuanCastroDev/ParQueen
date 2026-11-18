@@ -94,10 +94,13 @@ describe('approved events are anchored to live parking flows', () => {
     expect(watcher).toContain("claimState !== 'completed_success'");
     expect(watcher).toContain('awardDeliveredRef.current.has(spotId)');
     expect(watcher).toContain("const serverConfirmed = isConfirmedServerHandoffSuccess(claimState, snap.metadata)");
-    expect(watcher).toContain("role === 'claimer' && serverConfirmed && !successAnalyticsRecordedRef.current.has(spotId)");
-    expect(watcher).toContain("if (role === 'claimer' && !serverConfirmed) return;");
+    expect(watcher).toContain('if (!serverConfirmed) return false;');
+    expect(watcher).toContain('!successAnalyticsRecordedRef.current.has(spotId)');
     expect(watcher).toContain("recordParkingAnalyticsEvent('handoff_success_recorded')");
     const action = section(interest, 'const handleHandoffOutcome =', 'const handleFailureReason =');
+    expect(action).toContain("role: 'claimer'");
+    expect(action).toContain('await completeHandoffSuccessCallable({');
+    expect(action.indexOf('await completeHandoffSuccessCallable({')).toBeLessThan(action.indexOf('enterAttestationWaiting(spotSnap.id)'));
     expect(action).not.toContain('handoff_success_recorded');
   });
 

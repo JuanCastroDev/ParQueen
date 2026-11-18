@@ -5,7 +5,7 @@ const {
   TWO_HOURS_MS,
   finderAttestationId,
   isClaimerAuthoritativeSuccess,
-  isMutualSuccessPair,
+  isLegacyMutualSuccessPair,
 } = require('./handoffSuccessContract');
 
 // Juan 2026-10-02: unresolved arrived handoffs close two hours after arrivedAt.
@@ -120,7 +120,7 @@ async function closeAbandonedArrivedHandoff(db, spotRef, nowMs) {
 
     // Legacy mutual success also beats cleanup. The award transaction sets
     // completed_success; a retry of this sweep then becomes ineligible.
-    if (isMutualSuccessPair({
+    if (isLegacyMutualSuccessPair({
       spotId: fresh.id,
       claimerId,
       finderId,

@@ -13,7 +13,7 @@ const {
   sweepAbandonedArrivedHandoffs,
   formatAbandonedArrivalSweepLog,
 } = require('./abandonedArrivalCleanup');
-const { finderAttestationId, isMutualSuccessPair } = require('./handoffSuccessContract');
+const { finderAttestationId, isLegacyMutualSuccessPair } = require('./handoffSuccessContract');
 
 const PROJECT_ID = requireEmulatorProjectId();
 const APP_NAME = '__abandoned_arrival_cleanup_intg__';
@@ -115,7 +115,7 @@ async function predict(nowMs) {
     const finderExisting = await db.doc(`spotFeedback/${id}_finder`).get();
     const claimerData = existing.exists ? existing.data() : null;
     const finderData = finderExisting.exists ? finderExisting.data() : null;
-    if (isMutualSuccessPair({
+    if (isLegacyMutualSuccessPair({
       spotId: docSnap.id,
       claimerId: data.interestedUserId,
       finderId: data.finderId,
@@ -436,10 +436,14 @@ describe('cleanupAbandonedArrivedHandoffs races', () => {
     const finderId = `finder_${spotId}`;
     const arrivedAt = Timestamp.fromMillis(NOW - TWO_HOURS_MS - 1);
     const createdAt = Timestamp.fromMillis(arrivedAt.toMillis() + 1000);
-    await seed(spotId, { interestedUserId: claimerId, finderId, address: '1 Race St', arrivedAt });
+    const claimGenerationId = '55555555-5555-4555-8555-555555555555';
+    await seed(spotId, { interestedUserId: claimerId, finderId, address: '1 Race St', arrivedAt, claimGenerationId });
     await db.doc(`users/${claimerId}`).set({ crowns: 3 });
     await db.doc(`users/${finderId}`).set({ crowns: 4, trustStats: { handoffsCompleted: 0, handoffsCancelledByFinder: 0 } });
-    const claimerDoc = successAttestation(spotId, claimerId, finderId, 'claimer', createdAt);
+    const claimerDoc = {
+      ...successAttestation(spotId, claimerId, finderId, 'claimer', createdAt),
+      claimGenerationId,
+    };
     await db.doc(`spotFeedback/${feedbackId(spotId, claimerId)}`).set(claimerDoc);
 
     expect(await closeAbandonedArrivedHandoff(db, db.doc(`spots/${spotId}`), NOW)).toBe('skipped-terminal');

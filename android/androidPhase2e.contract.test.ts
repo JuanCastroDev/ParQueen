@@ -14,6 +14,7 @@ const ENFORCED_CALLABLES = [
   'prepareClaimIntent',
   'revokeClaimIntent',
   'finderCancelSpot',
+  'completeHandoffSuccess',
 ];
 
 describe('Android Phase 2E App Check contracts', () => {

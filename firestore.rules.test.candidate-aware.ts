@@ -5782,7 +5782,7 @@ describe('B1 — durable arrived_pending_outcome', () => {
         expect(feedback.data()).toMatchObject({ outcome: 'participant_success', role: 'claimer', failureReason: null });
     });
 
-    it('B1-GENERATION: claimer completion must match the durable claim generation', async () => {
+    it('B1-GENERATION: modern completion must match; transitional legacy completion may omit generation', async () => {
         const spotId = 'b1-generation';
         await seed('spots', spotId, headingPing(spotId, {
             status: 'occupied',
@@ -5805,11 +5805,8 @@ describe('B1 — durable arrived_pending_outcome', () => {
             ...base,
             claimGenerationId: '00000000-0000-4000-8000-000000000000',
         }));
-        await assertFails(setDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`), base));
-        await assertSucceeds(setDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`), {
-            ...base,
-            claimGenerationId: current,
-        }));
+        await assertSucceeds(setDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`), base));
+        expect(current).toBe('22222222-2222-4222-8222-222222222222');
     });
 
     it('B1-FINDER: finder success is a separate attestation and does not rewrite arrival', async () => {

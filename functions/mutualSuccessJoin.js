@@ -7,6 +7,7 @@ const {
   finderAttestationId,
   isClaimerSuccessAttestation,
   isClaimerAuthoritativeSuccess,
+  isLegacyMutualSuccessPair,
   isTimelyAttestation,
   isTimestampLike,
 } = require('./handoffSuccessContract');
@@ -44,7 +45,7 @@ function terminalSkipReason(spot, claimerDocId, claimerData, spotId, claimerId, 
 /**
  * Award Crowns and finder trust from the legitimate claimer's immutable
  * success attestation. The transaction revalidates the durable arrival,
- * participants, generation identity (or the bounded legacy-arrival fallback),
+ * participants, exact modern generation or bounded legacy mutual attestations,
  * and writes rewards, terminal state, informational finder notification, and
  * the idempotency marker together.
  */
@@ -69,6 +70,7 @@ async function joinMutualSuccess(db, event, deps) {
   const processedRef = db.doc(`functionEvents/awardCrowns_${pairId}`);
   const trustEventId = `${pairId}:finder`;
   const claimerFbRef = db.doc(`spotFeedback/${claimerDocId}`);
+  const finderFbRef = db.doc(`spotFeedback/${finderDocId}`);
   const spotRef = db.doc(`spots/${spotId}`);
   const driverRef = db.doc(`users/${claimerId}`);
   const finderRef = db.doc(`users/${finderId}`);
@@ -79,6 +81,7 @@ async function joinMutualSuccess(db, event, deps) {
     const [
       processedSnap,
       claimerFb,
+      finderFb,
       spotSnap,
       driverSnap,
       finderSnap,
@@ -86,6 +89,7 @@ async function joinMutualSuccess(db, event, deps) {
     ] = await Promise.all([
       tx.get(processedRef),
       tx.get(claimerFbRef),
+      tx.get(finderFbRef),
       tx.get(spotRef),
       tx.get(driverRef),
       tx.get(finderRef),
@@ -96,6 +100,7 @@ async function joinMutualSuccess(db, event, deps) {
     if (!claimerFb.exists) return { outcome: 'pending_attestation' };
 
     const claimerData = claimerFb.data() || {};
+    const finderData = finderFb.exists ? (finderFb.data() || {}) : null;
     const spot = spotSnap.exists ? (spotSnap.data() || {}) : null;
 
     if (claimerData.outcome === 'failed') {
@@ -103,7 +108,7 @@ async function joinMutualSuccess(db, event, deps) {
       return { outcome: 'skipped_claimer_failure' };
     }
 
-    const authoritative = isClaimerAuthoritativeSuccess({
+    const modernAuthoritative = isClaimerAuthoritativeSuccess({
       spotId,
       claimerId,
       finderId,
@@ -111,8 +116,20 @@ async function joinMutualSuccess(db, event, deps) {
       claimerData,
       spot,
     });
+    const isLegacyRequest = claimerData.claimGenerationId == null;
+    if (isLegacyRequest && !finderFb.exists) return { outcome: 'pending_legacy_finder' };
+    const legacyAuthoritative = isLegacyRequest && isLegacyMutualSuccessPair({
+      spotId,
+      claimerId,
+      finderId,
+      claimerDocId,
+      claimerData,
+      finderDocId,
+      finderData,
+      spot,
+    });
 
-    if (!authoritative) {
+    if (!modernAuthoritative && !legacyAuthoritative) {
       tx.set(processedRef, markerPayload(
         terminalSkipReason(spot, claimerDocId, claimerData, spotId, claimerId, finderId),
         pairId,
