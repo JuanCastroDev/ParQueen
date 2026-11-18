@@ -337,6 +337,7 @@ const es: Record<string, string> = {
     'claim_flow.driver_arrived': 'El conductor llegó ✓',
     'claim_flow.message': 'Mensaje',
     'claim_flow.im_heading_there': 'Voy para allá',
+    'claim_flow.confirming_claim': 'Confirmando…',
     'claim_flow.too_far_drive': 'Muy lejos (~{min} min en auto)',
     'claim_flow.quick_reply_1': 'Ya estoy saliendo',
     'claim_flow.quick_reply_2': 'Llego en unos minutos',
