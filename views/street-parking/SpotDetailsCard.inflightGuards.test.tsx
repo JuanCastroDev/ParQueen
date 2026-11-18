@@ -129,17 +129,20 @@ describe('SpotDetailsCard in-flight claim and arrive controls', () => {
     act(() => idle.unmount());
 
     const busy = mount(liveAvailable, { claiming: true });
-    const busyClaim = buttonWithText(busy, t('claim_flow.im_heading_there'));
+    const busyClaim = buttonWithText(busy, t('claim_flow.confirming_claim'));
     expect(busyClaim.props.disabled).toBe(true);
     expect(busyClaim.props['aria-busy']).toBe(true);
+    expect(buttonWithText(busy, t('claim_flow.im_heading_there'))).toBeUndefined();
+    expect(busyClaim.findAll((node) => node.props?.className === 'animate-spin')).toHaveLength(1);
     act(() => busy.unmount());
   });
 
   it('disables the scheduled claim button and marks it busy while claiming', () => {
     const busy = mount(scheduledAvailable, { claiming: true });
-    const claim = buttonWithText(busy, 'Claim for');
+    const claim = buttonWithText(busy, t('claim_flow.confirming_claim'));
     expect(claim.props.disabled).toBe(true);
     expect(claim.props['aria-busy']).toBe(true);
+    expect(buttonWithText(busy, 'Claim for')).toBeUndefined();
     act(() => busy.unmount());
   });
 
