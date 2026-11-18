@@ -13,7 +13,11 @@ const {
   sweepAbandonedArrivedHandoffs,
   formatAbandonedArrivalSweepLog,
 } = require('./abandonedArrivalCleanup');
-const { finderAttestationId, isLegacyMutualSuccessPair } = require('./handoffSuccessContract');
+const {
+  finderAttestationId,
+  isClaimerAuthoritativeSuccess,
+  isLegacyMutualSuccessPair,
+} = require('./handoffSuccessContract');
 
 const PROJECT_ID = requireEmulatorProjectId();
 const APP_NAME = '__abandoned_arrival_cleanup_intg__';
@@ -115,6 +119,18 @@ async function predict(nowMs) {
     const finderExisting = await db.doc(`spotFeedback/${id}_finder`).get();
     const claimerData = existing.exists ? existing.data() : null;
     const finderData = finderExisting.exists ? finderExisting.data() : null;
+    if (isClaimerAuthoritativeSuccess({
+      spotId: docSnap.id,
+      claimerId: data.interestedUserId,
+      finderId: data.finderId,
+      claimerDocId: id,
+      claimerData,
+      spot: data,
+    })) {
+      expected.eligible++;
+      expected.skippedTerminal++;
+      continue;
+    }
     if (isLegacyMutualSuccessPair({
       spotId: docSnap.id,
       claimerId: data.interestedUserId,
