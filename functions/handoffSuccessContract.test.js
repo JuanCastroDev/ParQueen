@@ -2,7 +2,8 @@
 
 const {
   TWO_HOURS_MS,
-  isMutualSuccessPair,
+  isLegacyMutualSuccessPair,
+  isClaimerAuthoritativeSuccess,
   isTimelyAttestation,
   claimerAttestationId,
   finderAttestationId,
@@ -21,6 +22,7 @@ function spot(overrides = {}) {
     arrivedAt: at(NOW - 60_000),
     interestedUserId: 'claimer',
     finderId: 'finder',
+    claimGenerationId: '11111111-1111-4111-8111-111111111111',
     ...overrides,
   };
 }
@@ -56,30 +58,81 @@ describe('handoff success contract', () => {
       finderData: attestation('finder', created),
       spot: arrived,
     };
-    expect(isMutualSuccessPair(pair)).toBe(true);
-    expect(isMutualSuccessPair({ ...pair, finderData: null })).toBe(false);
-    expect(isMutualSuccessPair({
+    expect(isLegacyMutualSuccessPair(pair)).toBe(true);
+    expect(isLegacyMutualSuccessPair({ ...pair, finderData: null })).toBe(false);
+    expect(isLegacyMutualSuccessPair({
       ...pair,
       claimerData: { ...pair.claimerData, outcome: 'success' },
     })).toBe(false);
-    expect(isMutualSuccessPair({
+    expect(isLegacyMutualSuccessPair({
       ...pair,
       claimerData: { ...pair.claimerData, finderId: 'other' },
     })).toBe(false);
-    expect(isMutualSuccessPair({
+    expect(isLegacyMutualSuccessPair({
       ...pair,
       finderId: 'claimer',
       claimerData: { ...pair.claimerData, finderId: 'claimer' },
       finderData: { ...pair.finderData, finderId: 'claimer' },
       spot: spot({ finderId: 'claimer', interestedUserId: 'claimer' }),
     })).toBe(false);
-    expect(isMutualSuccessPair({
+    expect(isLegacyMutualSuccessPair({
       ...pair,
       spot: spot({ claimState: 'unconfirmed' }),
     })).toBe(false);
-    expect(isMutualSuccessPair({
+    expect(isLegacyMutualSuccessPair({
       ...pair,
       spot: spot({ claimState: 'completed_success' }),
+    })).toBe(false);
+  });
+
+  it('accepts one timely claimer attestation bound to the current generation', () => {
+    const arrived = spot();
+    const claimerData = {
+      ...attestation('claimer', NOW - 30_000),
+      claimGenerationId: arrived.claimGenerationId,
+    };
+    expect(isClaimerAuthoritativeSuccess({
+      spotId: 'spot',
+      claimerId: 'claimer',
+      finderId: 'finder',
+      claimerDocId: claimerAttestationId('spot', 'claimer'),
+      claimerData,
+      spot: arrived,
+    })).toBe(true);
+    expect(isClaimerAuthoritativeSuccess({
+      spotId: 'spot',
+      claimerId: 'claimer',
+      finderId: 'finder',
+      claimerDocId: claimerAttestationId('spot', 'claimer'),
+      claimerData: { ...claimerData, claimGenerationId: '22222222-2222-4222-8222-222222222222' },
+      spot: arrived,
+    })).toBe(false);
+  });
+
+  it('keeps legacy compatibility mutual, generation-less, and bounded to the current arrival', () => {
+    const arrived = spot();
+    const input = {
+      spotId: 'spot',
+      claimerId: 'claimer',
+      finderId: 'finder',
+      claimerDocId: claimerAttestationId('spot', 'claimer'),
+      claimerData: attestation('claimer', NOW - 30_000),
+      finderDocId: finderAttestationId('spot', 'claimer'),
+      finderData: attestation('finder', NOW - 30_000),
+      spot: arrived,
+    };
+    expect(isLegacyMutualSuccessPair(input)).toBe(true);
+    expect(isLegacyMutualSuccessPair({
+      ...input,
+      claimerData: attestation('claimer', NOW - 120_000),
+    })).toBe(false);
+    expect(isLegacyMutualSuccessPair({
+      ...input,
+      claimerData: { ...input.claimerData, claimGenerationId: arrived.claimGenerationId },
+    })).toBe(false);
+    expect(isLegacyMutualSuccessPair({
+      ...input,
+      finderData: { ...input.finderData, claimGenerationId: arrived.claimGenerationId },
     })).toBe(false);
   });
 });

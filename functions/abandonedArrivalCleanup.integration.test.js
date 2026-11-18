@@ -13,7 +13,11 @@ const {
   sweepAbandonedArrivedHandoffs,
   formatAbandonedArrivalSweepLog,
 } = require('./abandonedArrivalCleanup');
-const { finderAttestationId, isMutualSuccessPair } = require('./handoffSuccessContract');
+const {
+  finderAttestationId,
+  isClaimerAuthoritativeSuccess,
+  isLegacyMutualSuccessPair,
+} = require('./handoffSuccessContract');
 
 const PROJECT_ID = requireEmulatorProjectId();
 const APP_NAME = '__abandoned_arrival_cleanup_intg__';
@@ -115,7 +119,19 @@ async function predict(nowMs) {
     const finderExisting = await db.doc(`spotFeedback/${id}_finder`).get();
     const claimerData = existing.exists ? existing.data() : null;
     const finderData = finderExisting.exists ? finderExisting.data() : null;
-    if (isMutualSuccessPair({
+    if (isClaimerAuthoritativeSuccess({
+      spotId: docSnap.id,
+      claimerId: data.interestedUserId,
+      finderId: data.finderId,
+      claimerDocId: id,
+      claimerData,
+      spot: data,
+    })) {
+      expected.eligible++;
+      expected.skippedTerminal++;
+      continue;
+    }
+    if (isLegacyMutualSuccessPair({
       spotId: docSnap.id,
       claimerId: data.interestedUserId,
       finderId: data.finderId,
@@ -430,36 +446,38 @@ describe('cleanupAbandonedArrivedHandoffs races', () => {
     await race('failed');
   });
 
-  it('one-sided success past 2 hours becomes unconfirmed, keeps the attestation, and is not later promotable', async () => {
+  it('timely claimer success beats cleanup even when the award trigger is delayed past 2 hours', async () => {
     const spotId = `b4_onesided_${RUN}`;
     const claimerId = `claimer_${spotId}`;
     const finderId = `finder_${spotId}`;
     const arrivedAt = Timestamp.fromMillis(NOW - TWO_HOURS_MS - 1);
     const createdAt = Timestamp.fromMillis(arrivedAt.toMillis() + 1000);
-    await seed(spotId, { interestedUserId: claimerId, finderId, address: '1 Race St', arrivedAt });
+    const claimGenerationId = '55555555-5555-4555-8555-555555555555';
+    await seed(spotId, { interestedUserId: claimerId, finderId, address: '1 Race St', arrivedAt, claimGenerationId });
     await db.doc(`users/${claimerId}`).set({ crowns: 3 });
     await db.doc(`users/${finderId}`).set({ crowns: 4, trustStats: { handoffsCompleted: 0, handoffsCancelledByFinder: 0 } });
-    const claimerDoc = successAttestation(spotId, claimerId, finderId, 'claimer', createdAt);
+    const claimerDoc = {
+      ...successAttestation(spotId, claimerId, finderId, 'claimer', createdAt),
+      claimGenerationId,
+    };
     await db.doc(`spotFeedback/${feedbackId(spotId, claimerId)}`).set(claimerDoc);
 
-    expect(await closeAbandonedArrivedHandoff(db, db.doc(`spots/${spotId}`), NOW)).toBe('converted');
+    expect(await closeAbandonedArrivedHandoff(db, db.doc(`spots/${spotId}`), NOW)).toBe('skipped-terminal');
     const sealed = await readFeedback(spotId, claimerId);
     expect(sealed.outcome).toBe('participant_success');
     expect(sealed.role).toBe('claimer');
-    expect((await readSpot(spotId)).claimState).toBe('unconfirmed');
+    expect((await readSpot(spotId)).claimState).toBe('arrived_pending_outcome');
 
-    const finderDoc = successAttestation(spotId, claimerId, finderId, 'finder', createdAt);
-    await db.doc(`spotFeedback/${feedbackId(spotId, claimerId)}_finder`).set(finderDoc);
     await indexModule.awardCrowns.run({
       id: `event_late_${spotId}`,
-      params: { feedbackId: `${feedbackId(spotId, claimerId)}_finder` },
-      data: { id: `${feedbackId(spotId, claimerId)}_finder`, data: () => finderDoc },
+      params: { feedbackId: feedbackId(spotId, claimerId) },
+      data: { id: feedbackId(spotId, claimerId), data: () => claimerDoc },
     });
 
-    expect((await db.doc(`users/${claimerId}`).get()).data().crowns).toBe(3);
-    expect((await db.doc(`users/${finderId}`).get()).data().crowns).toBe(4);
-    expect((await db.doc(`users/${finderId}`).get()).data().trustStats.handoffsCompleted).toBe(0);
-    expect((await readSpot(spotId)).claimState).toBe('unconfirmed');
+    expect((await db.doc(`users/${claimerId}`).get()).data().crowns).toBe(4);
+    expect((await db.doc(`users/${finderId}`).get()).data().crowns).toBe(6);
+    expect((await db.doc(`users/${finderId}`).get()).data().trustStats.handoffsCompleted).toBe(1);
+    expect((await readSpot(spotId)).claimState).toBe('completed_success');
     expect((await readFeedback(spotId, claimerId)).outcome).toBe('participant_success');
     expect(await closeAbandonedArrivedHandoff(db, db.doc(`spots/${spotId}`), NOW)).toBe('ineligible');
   });

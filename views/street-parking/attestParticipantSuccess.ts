@@ -57,6 +57,7 @@ export async function attestParticipantSuccess(
     address: params.address,
     role: params.role,
     createdAt: Timestamp.now(),
+    claimGenerationId: typeof spot.claimGenerationId === 'string' ? spot.claimGenerationId : null,
   });
   const feedbackRef = doc(db, 'spotFeedback', participantSuccessFeedbackId(
     params.spotId,

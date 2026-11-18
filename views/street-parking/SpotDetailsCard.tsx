@@ -30,7 +30,8 @@ interface SpotDetailsCardProps {
     cancelingClaim?: boolean;
     claiming?: boolean;
     arriving?: boolean;
-    onDriverArrived: () => void;
+    /** Legacy test/caller compatibility; finder confirmation is no longer rendered. */
+    onDriverArrived?: () => void;
     onMessageUser: (userId: string, context: string, returnSpotId?: string) => void;
     interestError: string | null;
     estDriveMinutes: number | null;
@@ -51,7 +52,7 @@ export const SpotDetailsCard: React.FC<SpotDetailsCardProps> = ({
     selectedItem, freeSpots, user, userLocation, spotAddress,
     onHeadingThere, onScheduledClaim, onCommitToHeading, onOwnerLeaveNow,
     onEditSpot, onDeletePing, onArrival,
-    onCancelByFinder, onCancelByClaimer, cancelingClaim = false, claiming = false, arriving = false, onDriverArrived, onMessageUser,
+    onCancelByFinder, onCancelByClaimer, cancelingClaim = false, claiming = false, arriving = false, onMessageUser,
     interestError, estDriveMinutes, isWithinArrivalRange, arrivalLocation, onRetryArrivalLocation,
     arrivalLocationRetrying = false, arrivalNowMs, maxEtaMinutes, manageMode = false, nowMs = Date.now(),
     backLabel, onBack,
@@ -69,7 +70,7 @@ export const SpotDetailsCard: React.FC<SpotDetailsCardProps> = ({
                     <span>{backLabel ?? 'Back'}</span>
                 </button>
             )}
-            <SpotDetailsCardInner {...{ selectedItem, freeSpots, user, userLocation, spotAddress, onHeadingThere, onScheduledClaim, onCommitToHeading, onOwnerLeaveNow, onEditSpot, onDeletePing, onArrival, onCancelByFinder, onCancelByClaimer, cancelingClaim, claiming, arriving, onDriverArrived, onMessageUser, interestError, estDriveMinutes, isWithinArrivalRange, arrivalLocation, onRetryArrivalLocation, arrivalLocationRetrying, arrivalNowMs, maxEtaMinutes, manageMode, nowMs }} />
+            <SpotDetailsCardInner {...{ selectedItem, freeSpots, user, userLocation, spotAddress, onHeadingThere, onScheduledClaim, onCommitToHeading, onOwnerLeaveNow, onEditSpot, onDeletePing, onArrival, onCancelByFinder, onCancelByClaimer, cancelingClaim, claiming, arriving, onMessageUser, interestError, estDriveMinutes, isWithinArrivalRange, arrivalLocation, onRetryArrivalLocation, arrivalLocationRetrying, arrivalNowMs, maxEtaMinutes, manageMode, nowMs }} />
         </>
     );
 };
@@ -78,7 +79,7 @@ const SpotDetailsCardInner: React.FC<Omit<SpotDetailsCardProps, 'backLabel' | 'o
     selectedItem, freeSpots, user, userLocation, spotAddress,
     onHeadingThere, onScheduledClaim, onCommitToHeading, onOwnerLeaveNow,
     onEditSpot, onDeletePing, onArrival,
-    onCancelByFinder, onCancelByClaimer, cancelingClaim = false, claiming = false, arriving = false, onDriverArrived, onMessageUser,
+    onCancelByFinder, onCancelByClaimer, cancelingClaim = false, claiming = false, arriving = false, onMessageUser,
     interestError, estDriveMinutes, isWithinArrivalRange, arrivalLocation, onRetryArrivalLocation,
     arrivalLocationRetrying = false, arrivalNowMs, maxEtaMinutes, manageMode = false, nowMs = Date.now(),
 }) => {
@@ -486,10 +487,6 @@ const SpotDetailsCardInner: React.FC<Omit<SpotDetailsCardProps, 'backLabel' | 'o
                     <div>
                         <p className="text-[11px] font-bold text-[var(--color-text-secondary)] uppercase tracking-widest text-center mb-3">{t('claim_flow.whats_happening')}</p>
                         <div className="space-y-2 mb-2">
-                            <button onClick={onDriverArrived}
-                                className="w-full py-3 px-4 rounded-2xl text-sm font-semibold border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/15 transition-all active:scale-95 text-[var(--color-success)] text-left">
-                                {t('claim_flow.driver_arrived')}
-                            </button>
                             {finderCancelReasons.map(({ key, label, value }) => (
                                 <button key={key} onClick={() => onCancelByFinder(value)}
                                     className="w-full py-3 px-4 rounded-2xl text-sm font-semibold border border-[var(--color-border)] bg-white/5 hover:bg-white/10 transition-all active:scale-95 text-[var(--color-text)] text-left">

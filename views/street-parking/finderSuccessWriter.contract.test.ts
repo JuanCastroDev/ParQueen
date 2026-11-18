@@ -33,14 +33,6 @@ function read(rel: string) {
   return readFileSync(join(root, rel), 'utf8');
 }
 
-function sliceBetween(source: string, startMarker: string, endMarker: string) {
-  const start = source.indexOf(startMarker);
-  const end = source.indexOf(endMarker, start + startMarker.length);
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-  return source.slice(start, end);
-}
-
 describe('finder success writer contract', () => {
   it('no live source still names the legacy finder success writer', () => {
     const hits = walk(root)
@@ -49,21 +41,16 @@ describe('finder success writer contract', () => {
     expect(hits).toEqual([]);
   });
 
-  it('the live finder attestation cannot emit outcome success', () => {
+  it('the live client exposes no finder confirmation writer or mandatory confirmation UI', () => {
     const flow = read('views/street-parking/useInterestFlow.ts');
     const writer = read('views/street-parking/attestParticipantSuccess.ts');
     const builder = read('utils/spotFeedback.ts');
     const terminal = read('views/street-parking/completeTerminalHandoff.ts');
-    const finderPath = sliceBetween(
-      flow,
-      'const submitFinderAttestation',
-      'const handleFinderConfirmsArrival',
-    );
-
-    expect(finderPath).toContain('attestParticipantSuccess');
-    expect(finderPath).toContain("role: 'finder'");
-    expect(finderPath).not.toContain('completeTerminalHandoff');
-    expect(finderPath).not.toMatch(/outcome:\s*['"]success['"]/);
+    const spotCard = read('views/street-parking/SpotDetailsCard.tsx');
+    expect(flow).not.toContain('submitFinderAttestation');
+    expect(flow).not.toContain('handleFinderConfirmsArrival');
+    expect(flow).not.toContain('finderPendingHandoff');
+    expect(spotCard).not.toContain('t(\'claim_flow.driver_arrived\')');
     expect(writer).toContain('buildParticipantSuccessAttestation');
     expect(writer).toMatch(/setDoc\(feedbackRef,\s*feedback\)/);
     expect(writer).not.toMatch(/setDoc\([^)]*merge\s*:/);

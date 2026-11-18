@@ -2373,7 +2373,6 @@ export const MapView: React.FC<MapViewProps> = ({
                     cancelingClaim={interestFlow.cancelingClaim}
                     claiming={interestFlow.claiming}
                     arriving={interestFlow.arriving}
-                    onDriverArrived={interestFlow.handleFinderConfirmsArrival}
                     onMessageUser={onMessageUser}
                     interestError={interestFlow.interestError}
                     estDriveMinutes={selectedItem ? interestFlow.getEstDriveMinutes(selectedItem) : null}
@@ -3431,13 +3430,9 @@ export const MapView: React.FC<MapViewProps> = ({
                     {/* Durable handoff recovery stays reachable even after occupied Pings leave the public map feed. */}
                     {handoffRecoveryCardRendered && (
                         <FinishHandoffChip
-                            role={interestFlow.finderPendingHandoff ? 'finder' : 'claimer'}
-                            address={(interestFlow.finderPendingHandoff ?? interestFlow.unfinishedHandoff)?.address || ''}
-                            driverName={interestFlow.finderPendingHandoff?.claimerName || ''}
+                            address={interestFlow.unfinishedHandoff?.address || ''}
                             submitting={interestFlow.handoffSubmitting}
-                            onResume={interestFlow.finderPendingHandoff
-                                ? interestFlow.confirmPendingFinderHandoff
-                                : interestFlow.resumeUnfinishedHandoff}
+                            onResume={interestFlow.resumeUnfinishedHandoff}
                         />
                     )}
 

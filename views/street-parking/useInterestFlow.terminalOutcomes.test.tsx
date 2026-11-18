@@ -18,17 +18,25 @@ vi.hoisted(() => {
 vi.mock('../../firebase', () => ({ db: {} }));
 
 const {
-  addDoc, getDoc, getDocs, onSnapshot, runTransaction, setDoc, updateDoc, spotListeners,
+  addDoc, getDoc, getDocs, onSnapshot, runTransaction, setDoc, updateDoc, spotListeners, spotErrorListeners,
 } = vi.hoisted(() => {
   const spotListeners = new Set<(snap: any) => void>();
+  const spotErrorListeners = new Set<(error: unknown) => void>();
   return {
     spotListeners,
+    spotErrorListeners,
     addDoc: vi.fn(async (_collection: any, _data: any) => ({ id: 'notification' })),
     getDoc: vi.fn(async (_ref: any): Promise<any> => ({ exists: () => false, data: () => undefined })),
     getDocs: vi.fn(async () => ({ empty: true, docs: [] })),
-    onSnapshot: vi.fn((target: any, onNext: (snap: any) => void) => {
-      if (target?.__col === 'spots') spotListeners.add(onNext);
-      return () => spotListeners.delete(onNext);
+    onSnapshot: vi.fn((target: any, onNext: (snap: any) => void, onError?: (error: unknown) => void) => {
+      if (target?.__col === 'spots') {
+        spotListeners.add(onNext);
+        if (onError) spotErrorListeners.add(onError);
+      }
+      return () => {
+        spotListeners.delete(onNext);
+        if (onError) spotErrorListeners.delete(onError);
+      };
     }),
     runTransaction: vi.fn(async (_db: any, _callback: any): Promise<any> => undefined),
     setDoc: vi.fn(async (_ref: any, _data: any) => {}),
@@ -59,8 +67,15 @@ vi.mock('firebase/firestore', () => ({
 }));
 
 vi.mock('./cancelClaimCallable', () => ({ cancelClaimCallable: vi.fn() }));
-const { reportCriticalActionFailure } = vi.hoisted(() => ({ reportCriticalActionFailure: vi.fn() }));
-vi.mock('../../utils/errorReporting', () => ({ reportCriticalActionFailure }));
+const { completeHandoffSuccessCallable } = vi.hoisted(() => ({
+  completeHandoffSuccessCallable: vi.fn(async () => ({ outcome: 'awarded' })),
+}));
+vi.mock('./completeHandoffSuccessCallable', () => ({ completeHandoffSuccessCallable }));
+const { captureClientException, reportCriticalActionFailure } = vi.hoisted(() => ({
+  captureClientException: vi.fn(),
+  reportCriticalActionFailure: vi.fn(),
+}));
+vi.mock('../../utils/errorReporting', () => ({ captureClientException, reportCriticalActionFailure }));
 
 const { recordParkingAnalyticsEvent } = vi.hoisted(() => ({
   recordParkingAnalyticsEvent: vi.fn(),
@@ -97,6 +112,7 @@ function snapshotFor(ref: { __col: string; __id: string }) {
   return {
     exists: () => data !== undefined,
     data: () => data,
+    metadata: { fromCache: false, hasPendingWrites: false },
   };
 }
 
@@ -211,6 +227,7 @@ async function emitServerAward() {
   await act(async () => {
     spotListeners.forEach((fn) => fn({
       data: () => ({ status: 'occupied', claimState: 'completed_success' }),
+      metadata: { fromCache: false, hasPendingWrites: false },
     }));
   });
 }
@@ -246,6 +263,7 @@ describe('useInterestFlow — terminal handoff outcomes', () => {
     runTransaction.mockReset();
     setDoc.mockReset();
     spotListeners.clear();
+    spotErrorListeners.clear();
     setDoc.mockImplementation(async (ref, data) => {
       if ((ref.__col === 'spotFeedback' || ref.__col === 'spotNotifications')
         && documents.has(pathOf(ref))) {
@@ -261,6 +279,8 @@ describe('useInterestFlow — terminal handoff outcomes', () => {
     documents.set('spots/spot-1', { ...spot });
     reportCriticalActionFailure.mockClear();
     recordParkingAnalyticsEvent.mockClear();
+    completeHandoffSuccessCallable.mockReset();
+    completeHandoffSuccessCallable.mockResolvedValue({ outcome: 'awarded' });
     getDoc.mockImplementation(async (ref) => snapshotFor(ref));
     runTransaction.mockImplementation(async (_db, callback) => {
       const staged: Array<{ ref: any; data: Record<string, any>; merge?: boolean }> = [];
@@ -311,217 +331,54 @@ describe('useInterestFlow — terminal handoff outcomes', () => {
     assertClientDidNotAward();
   });
 
-  it('finder success before durable arrival writes nothing and shows no Crowns toast', async () => {
-    const finder = { id: 'finder-1', username: 'Finder', crowns: 0 };
-    const { getFlow } = mount(finder);
+  it('a callable failure keeps the immutable success recoverable and exposes retry', async () => {
+    const error = Object.assign(new Error('unavailable'), { code: 'functions/unavailable' });
+    completeHandoffSuccessCallable.mockRejectedValueOnce(error);
+    const { getFlow, renderer } = mount(user, spot, true);
+    await arrive(getFlow);
 
-    await act(async () => { await getFlow().handleFinderConfirmsArrival(); });
+    await act(async () => { await getFlow().handleHandoffOutcome('success'); });
 
-    expect(getFlow().handoffStep).toBeNull();
-    expect(getFlow().finderToast).toBeNull();
-    expect(feedbackPaths()).toEqual([]);
-    expect(runTransaction).not.toHaveBeenCalled();
-    expect(documents.get('spots/spot-1')?.status).toBe('interested');
-    expect(documents.get('spots/spot-1')?.claimState).toBeUndefined();
-    assertClientDidNotAward();
+    expect(documents.get('spotFeedback/spot-1_driver-1')).toMatchObject({
+      outcome: 'participant_success',
+      role: 'claimer',
+    });
+    expect(getFlow().handoffStep).toBe('outcome');
+    expect(getFlow().handoffSubmitError).toBe("Couldn't save this outcome.");
+    expect(renderer.root.findByProps({ 'data-testid': 'handoff-submit-retry' })).toBeTruthy();
+    expect(reportCriticalActionFailure).toHaveBeenCalledWith('terminal_handoff', error);
+
+    await act(async () => { await getFlow().retryTerminalHandoff(); });
+    expect(completeHandoffSuccessCallable).toHaveBeenCalledTimes(2);
+    expect(getFlow().handoffStep).toBe('waiting');
   });
 
-  it('finder success writes only the finder doc after durable arrival and waits', async () => {
+  it('an arrived Ping creates no finder approval task or finder-authored feedback path', async () => {
     const finder = { id: 'finder-1', username: 'Finder', crowns: 0 };
     documents.set('spots/spot-1', {
       ...spot,
       status: 'occupied',
       claimState: 'arrived_pending_outcome',
-      arrivedAt: { toMillis: () => Date.now() },
+      arrivedAt: { toMillis: () => Date.now() - 30_000 },
       interestedUserId: 'driver-1',
       interestedUserName: 'Driver',
     });
-    const { getFlow, renderer } = mount(finder, {
+    const { getFlow } = mount(finder, {
       ...spot,
       status: 'occupied',
+      claimState: 'arrived_pending_outcome',
       interestedUserId: 'driver-1',
       interestedUserName: 'Driver',
-    }, true);
-
-    await act(async () => {
-      await getFlow().handleFinderConfirmsArrival();
-      await getFlow().handleFinderConfirmsArrival();
     });
 
-    expect(getFlow().handoffStep).toBe('waiting');
-    expect(getFlow().finderToast).toBeNull();
-    expect(renderer.root.findByProps({ 'data-testid': 'handoff-waiting' })).toBeTruthy();
-    expect(buttonText(renderer.root)).not.toMatch(/Crown|\+1|\+2/);
-    expect(feedbackPaths()).toEqual(['spotFeedback/spot-1_driver-1_finder']);
-    expect(documents.get('spotFeedback/spot-1_driver-1_finder')).toMatchObject({
-      spotId: 'spot-1',
-      userId: 'driver-1',
-      finderId: 'finder-1',
-      outcome: 'participant_success',
-      role: 'finder',
-      failureReason: null,
-      address: '1 Main St',
-    });
-    expect(documents.has('spotFeedback/spot-1_driver-1')).toBe(false);
-    expect(documents.get('spots/spot-1')?.claimState).toBe('arrived_pending_outcome');
-    expect([...documents.keys()].filter((path) => path.startsWith('spotNotifications/'))).toHaveLength(0);
-    expect(addDoc).toHaveBeenCalledTimes(0);
-    expect(runTransaction).not.toHaveBeenCalled();
-    assertClientDidNotAward();
-  });
-
-  it('a rejected finder attestation shows a visible error', async () => {
-    const error = Object.assign(new Error('unavailable'), { code: 'unavailable' });
-    const { getFlow, renderer, setSelectedItem } = mountDurableFinder();
-    setDoc.mockRejectedValueOnce(error);
-
-    await act(async () => { await getFlow().handleFinderConfirmsArrival(); });
-
-    expect(getFlow().handoffStep).toBe('finder_attest');
-    expect(getFlow().handoffSubmitError).toBe("Couldn't save this outcome.");
-    expect(reportCriticalActionFailure).toHaveBeenCalledWith('terminal_handoff', error);
-    const alert = renderer.root.findByProps({ 'data-testid': 'handoff-submit-error' });
-    expect(buttonText(alert)).toContain("Couldn't save this outcome.");
-    expect(renderer.root.findByProps({ 'data-testid': 'finder-attest-error' })).toBeTruthy();
-    expect(setSelectedItem).not.toHaveBeenCalledWith(null);
-    expect(documents.get('spots/spot-1')?.claimState).toBe('arrived_pending_outcome');
-    expect(feedbackPaths()).toEqual([]);
-    expect(getFlow().finderToast).toBeNull();
-    assertClientDidNotAward();
-  });
-
-  it('a rejected finder attestation keeps a retry action', async () => {
-    const error = Object.assign(new Error('unavailable'), { code: 'unavailable' });
-    const { getFlow, renderer } = mountDurableFinder();
-    setDoc.mockRejectedValueOnce(error);
-
-    await act(async () => { await getFlow().handleFinderConfirmsArrival(); });
-
-    expect(getFlow().handoffSubmitting).toBe(false);
-    const retry = renderer.root.findByProps({ 'data-testid': 'handoff-submit-retry' });
-    expect(retry.props.disabled).toBe(false);
-    expect(buttonText(retry)).toContain('Try again');
-    expect(renderer.root.findAll((node) => node.type === 'button' && buttonText(node).includes('No luck'))).toHaveLength(0);
-  });
-
-  it('finder retry uses the deterministic finder attestation id', async () => {
-    const error = Object.assign(new Error('unavailable'), { code: 'unavailable' });
-    const { getFlow, renderer } = mountDurableFinder();
-    setDoc.mockRejectedValueOnce(error);
-    await act(async () => { await getFlow().handleFinderConfirmsArrival(); });
-
-    const retry = renderer.root.findByProps({ 'data-testid': 'handoff-submit-retry' });
-    await act(async () => { await retry.props.onClick(); });
-
-    const feedbackWrites = writesTo('spotFeedback');
-    expect(feedbackWrites).toHaveLength(2);
-    for (const call of feedbackWrites) {
-      expect(call).toHaveLength(2);
-      expect(call[0]).toMatchObject({ __col: 'spotFeedback', __id: 'spot-1_driver-1_finder' });
-      expect(call[1]).toMatchObject({
-        outcome: 'participant_success',
-        role: 'finder',
-        userId: 'driver-1',
-        finderId: 'finder-1',
-        failureReason: null,
-      });
-    }
-    expect(documents.get('spotFeedback/spot-1_driver-1_finder')?.outcome).toBe('participant_success');
-    expect(documents.has('spotFeedback/spot-1_driver-1')).toBe(false);
-  });
-
-  it('a duplicate finder retry cannot fire while a submission is in flight', async () => {
-    const error = Object.assign(new Error('unavailable'), { code: 'unavailable' });
-    const { getFlow, renderer } = mountDurableFinder();
-    setDoc.mockRejectedValueOnce(error);
-    await act(async () => { await getFlow().handleFinderConfirmsArrival(); });
-
-    const gate = deferred();
-    const writesBeforeRetry = setDoc.mock.calls.length;
-    setDoc.mockImplementationOnce(async (ref, data) => {
-      documents.set(pathOf(ref), data);
-      await gate.promise;
-    });
-    let retryDone!: Promise<unknown>;
-    act(() => {
-      retryDone = renderer.root.findByProps({ 'data-testid': 'handoff-submit-retry' }).props.onClick();
-    });
     await act(async () => { await Promise.resolve(); });
 
-    expect(getFlow().handoffSubmitting).toBe(true);
-    expect(getFlow().handoffStep).toBe('finder_attest');
-    expect(setDoc.mock.calls.length).toBe(writesBeforeRetry + 1);
-    expect(setDoc.mock.calls.at(-1)?.[0]).toMatchObject({
-      __col: 'spotFeedback',
-      __id: 'spot-1_driver-1_finder',
-    });
-    expect(renderer.root.findByProps({ 'data-testid': 'handoff-submit-pending' })).toBeTruthy();
-    expect(renderer.root.findAllByProps({ 'data-testid': 'handoff-submit-retry' })).toHaveLength(0);
-
-    await act(async () => {
-      await getFlow().retryTerminalHandoff();
-      await getFlow().handleFinderConfirmsArrival();
-    });
-
-    expect(setDoc.mock.calls.length).toBe(writesBeforeRetry + 1);
-    expect(getFlow().handoffStep).toBe('finder_attest');
-    expect(documents.get('spots/spot-1')?.claimState).toBe('arrived_pending_outcome');
-
-    await act(async () => {
-      gate.resolve();
-      await retryDone;
-    });
-  });
-
-  it('a successful finder retry returns to waiting for mutual confirmation', async () => {
-    const error = Object.assign(new Error('unavailable'), { code: 'unavailable' });
-    const { getFlow, renderer } = mountDurableFinder();
-    setDoc.mockRejectedValueOnce(error);
-    await act(async () => { await getFlow().handleFinderConfirmsArrival(); });
-    expect(getFlow().handoffStep).toBe('finder_attest');
-
-    await act(async () => {
-      await renderer.root.findByProps({ 'data-testid': 'handoff-submit-retry' }).props.onClick();
-    });
-
-    expect(getFlow().handoffSubmitting).toBe(false);
-    expect(getFlow().handoffSubmitError).toBeNull();
-    expect(getFlow().handoffStep).toBe('waiting');
-    expect(renderer.root.findByProps({ 'data-testid': 'handoff-waiting' })).toBeTruthy();
-    expect(buttonText(renderer.root.findByProps({ 'data-testid': 'handoff-waiting' }))).toContain('Waiting on the other driver');
-    expect(documents.get('spots/spot-1')?.claimState).toBe('arrived_pending_outcome');
-    expect(documents.get('spotFeedback/spot-1_driver-1_finder')).toMatchObject({
-      outcome: 'participant_success',
-      role: 'finder',
-      userId: 'driver-1',
-    });
+    expect(getFlow().handoffStep).toBeNull();
+    expect(getFlow()).not.toHaveProperty('finderPendingHandoff');
+    expect(getFlow()).not.toHaveProperty('confirmPendingFinderHandoff');
+    expect(getFlow()).not.toHaveProperty('handleFinderConfirmsArrival');
+    expect(feedbackPaths()).toEqual([]);
     expect(getFlow().finderToast).toBeNull();
-    expect(getFlow().driverNotification).toBeNull();
-  });
-
-  it('no Crown copy appears before the server claimState is completed_success', async () => {
-    const error = Object.assign(new Error('unavailable'), { code: 'unavailable' });
-    const { getFlow, renderer } = mountDurableFinder();
-    setDoc.mockRejectedValueOnce(error);
-    await act(async () => { await getFlow().handleFinderConfirmsArrival(); });
-
-    expect(buttonText(renderer.root)).not.toMatch(/Crown|\+1|\+2/);
-    expect(renderer.root.findAllByProps({ 'data-testid': 'handoff-crown-copy' })).toHaveLength(0);
-    expect(getFlow().finderToast).toBeNull();
-    expect(documents.get('spots/spot-1')?.claimState).toBe('arrived_pending_outcome');
-
-    await act(async () => {
-      await renderer.root.findByProps({ 'data-testid': 'handoff-submit-retry' }).props.onClick();
-    });
-
-    expect(getFlow().handoffStep).toBe('waiting');
-    expect(buttonText(renderer.root)).not.toMatch(/Crown|\+1|\+2/);
-    expect(renderer.root.findAllByProps({ 'data-testid': 'handoff-crown-copy' })).toHaveLength(0);
-    expect(getFlow().finderToastTitle).toBeNull();
-    expect(getFlow().finderToast).toBeNull();
-    expect(getFlow().driverNotification).toBeNull();
-    expect(documents.get('spots/spot-1')?.claimState).toBe('arrived_pending_outcome');
-    assertClientDidNotAward();
   });
 
   it('duplicate claimer confirmation keeps a single claimer doc and does not notify', async () => {
@@ -577,7 +434,8 @@ describe('useInterestFlow — terminal handoff outcomes', () => {
     });
     expect(recordParkingAnalyticsEvent).not.toHaveBeenCalledWith('handoff_success_recorded');
     expect(spotListeners.size).toBe(1);
-    expect(getFlow().handoffStep).toBe('celebration');
+    expect(getFlow().handoffStep).toBe('waiting');
+    expect(renderer.root.findAllByProps({ 'data-testid': 'handoff-crown-copy' })).toHaveLength(0);
 
     await act(async () => {
       spotListeners.forEach((fn) => fn({
@@ -589,6 +447,63 @@ describe('useInterestFlow — terminal handoff outcomes', () => {
     expect(recordParkingAnalyticsEvent).toHaveBeenCalledWith('handoff_success_recorded');
     expect(spotListeners.size).toBe(0);
     expect(renderer.root.findByProps({ 'data-testid': 'handoff-crown-copy' })).toBeTruthy();
+  });
+
+  it('reconciles a listener error with a fresh authoritative read before showing success', async () => {
+    const { getFlow, renderer } = mount(user, spot, true);
+    await arrive(getFlow);
+    await act(async () => { await getFlow().handleHandoffOutcome('success'); });
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => ({ status: 'occupied', claimState: 'completed_success' }),
+      metadata: { fromCache: false, hasPendingWrites: false },
+    });
+
+    await act(async () => {
+      spotErrorListeners.forEach((fn) => fn(new Error('listener lost')));
+      await Promise.resolve();
+    });
+
+    expect(getFlow().handoffStep).toBe('celebration');
+    expect(renderer.root.findByProps({ 'data-testid': 'handoff-crown-copy' })).toBeTruthy();
+    expect(spotListeners.size).toBe(0);
+  });
+
+  it('listener failure without fresh server confirmation exits waiting and exposes safe retry', async () => {
+    const { getFlow, renderer } = mount(user, spot, true);
+    await arrive(getFlow);
+    await act(async () => { await getFlow().handleHandoffOutcome('success'); });
+    getDoc.mockRejectedValueOnce(new Error('offline'));
+
+    await act(async () => {
+      spotErrorListeners.forEach((fn) => fn(new Error('listener lost')));
+      await Promise.resolve();
+    });
+
+    expect(getFlow().handoffStep).toBe('outcome');
+    expect(renderer.root.findByProps({ 'data-testid': 'handoff-submit-retry' })).toBeTruthy();
+    expect(renderer.root.findAllByProps({ 'data-testid': 'handoff-crown-copy' })).toHaveLength(0);
+  });
+
+  it('bounds a silent listener wait and reconciles to retry without claiming success', async () => {
+    vi.useFakeTimers();
+    try {
+      const { getFlow, renderer } = mount(user, spot, true);
+      await arrive(getFlow);
+      await act(async () => { await getFlow().handleHandoffOutcome('success'); });
+      getDoc.mockRejectedValueOnce(new Error('offline'));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+
+      expect(getFlow().handoffStep).toBe('outcome');
+      expect(renderer.root.findByProps({ 'data-testid': 'handoff-submit-retry' })).toBeTruthy();
+      expect(renderer.root.findAllByProps({ 'data-testid': 'handoff-crown-copy' })).toHaveLength(0);
+      expect(spotListeners.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('sends claimer +1 only after the server award and never tells the claimer +2', async () => {
@@ -605,34 +520,6 @@ describe('useInterestFlow — terminal handoff outcomes', () => {
     expect(buttonText(renderer.root)).not.toContain('+2');
     expect(getFlow().finderToast ?? '').not.toContain('+2');
     expect(getFlow().driverNotification ?? '').not.toContain('+2');
-    assertClientDidNotAward();
-  });
-
-  it('sends finder +2 only after the server award', async () => {
-    const finder = { id: 'finder-1', username: 'Finder', crowns: 0 };
-    documents.set('spots/spot-1', {
-      ...spot,
-      status: 'occupied',
-      claimState: 'arrived_pending_outcome',
-      arrivedAt: { toMillis: () => Date.now() },
-      interestedUserName: 'Driver',
-    });
-    const { getFlow } = mount(finder, {
-      ...spot,
-      interestedUserName: 'Driver',
-    });
-    await act(async () => { await getFlow().handleFinderConfirmsArrival(); });
-    expect(getFlow().finderToast).toBeNull();
-    expect(getFlow().handoffStep).toBe('waiting');
-
-    await emitServerAward();
-
-    expect(getFlow().handoffStep).toBeNull();
-    expect(getFlow().finderToastTitle).toBe('+2 Crowns earned');
-    expect(getFlow().finderToast).toContain('Driver');
-    expect(getFlow().finderToast).toContain('+2 Crowns earned');
-    expect(getFlow().finderToast).not.toContain('+1');
-    expect(getFlow().driverNotification).toBeNull();
     assertClientDidNotAward();
   });
 
@@ -823,7 +710,7 @@ describe('useInterestFlow — terminal handoff outcomes', () => {
     await arrive(getFlow);
 
     setDoc.mockRejectedValueOnce(error);
-    await act(async () => { await findButton(renderer, "Yes, I'm in").props.onClick(); });
+    await act(async () => { await findButton(renderer, 'I got it!').props.onClick(); });
 
     expect(getFlow().handoffStep).toBe('outcome');
     expect(getFlow().handoffSubmitting).toBe(false);
@@ -841,7 +728,7 @@ describe('useInterestFlow — terminal handoff outcomes', () => {
     expect(getFlow().handoffStep).toBe('outcome');
     expect(renderer.root.findByProps({ 'data-testid': 'handoff-submit-pending' })).toBeTruthy();
     expect(setDoc.mock.calls.length).toBe(writesBeforeRetry + 1);
-    expect(findButton(renderer, "Yes, I'm in").props.disabled).toBe(true);
+    expect(findButton(renderer, 'I got it!').props.disabled).toBe(true);
     expect(findButton(renderer, 'No luck').props.disabled).toBe(true);
     expect(renderer.root.findAllByProps({ 'data-testid': 'handoff-submit-retry' })).toHaveLength(0);
 
@@ -849,7 +736,7 @@ describe('useInterestFlow — terminal handoff outcomes', () => {
       findButton(renderer, 'No luck').props.onClick();
       await getFlow().handleHandoffOutcome('failed');
       await getFlow().retryTerminalHandoff();
-      findButton(renderer, "Yes, I'm in").props.onClick();
+      findButton(renderer, 'I got it!').props.onClick();
     });
 
     expect(getFlow().handoffStep).toBe('outcome');
@@ -867,7 +754,7 @@ describe('useInterestFlow — terminal handoff outcomes', () => {
     const noLuck = findButton(renderer, 'No luck');
     const retry = renderer.root.findByProps({ 'data-testid': 'handoff-submit-retry' });
     expect(noLuck.props.disabled).toBe(false);
-    expect(findButton(renderer, "Yes, I'm in").props.disabled).toBe(false);
+    expect(findButton(renderer, 'I got it!').props.disabled).toBe(false);
     expect(retry.props.disabled).toBe(false);
 
     await act(async () => { await noLuck.props.onClick(); });
@@ -881,7 +768,7 @@ describe('useInterestFlow — terminal handoff outcomes', () => {
     await arrive(getFlow);
 
     setDoc.mockRejectedValueOnce(error);
-    await act(async () => { await findButton(renderer, "Yes, I'm in").props.onClick(); });
+    await act(async () => { await findButton(renderer, 'I got it!').props.onClick(); });
     expect(getFlow().handoffSubmitError).toBe("Couldn't save this outcome.");
 
     const gate = deferred();
