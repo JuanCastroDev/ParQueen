@@ -279,8 +279,21 @@ afterAll(async () => {
     await testEnv.cleanup();
 });
 
+async function clearFirestoreAfterTransactionContention() {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+        try {
+            await testEnv.clearFirestore();
+            return;
+        } catch (error) {
+            const transient = /409|ABORTED|Transaction lock timeout/.test(String(error));
+            if (!transient || attempt === 3) throw error;
+            await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+        }
+    }
+}
+
 beforeEach(async () => {
-    await testEnv.clearFirestore();
+    await clearFirestoreAfterTransactionContention();
     await seedActiveClaimInvariantOpen();
 });
 
