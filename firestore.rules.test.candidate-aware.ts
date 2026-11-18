@@ -5749,7 +5749,9 @@ describe('B1 — durable arrived_pending_outcome', () => {
             status: 'occupied',
             claimState: 'arrived_pending_outcome',
             arrivedAt,
+            claimGenerationId: '11111111-1111-4111-8111-111111111111',
         }));
+        const generation = (await readSpot(spotId)).data().claimGenerationId;
 
         await expect(completeTerminalHandoff(otherDb(), {
             spotId,
@@ -5767,6 +5769,7 @@ describe('B1 — durable arrived_pending_outcome', () => {
             address: spotId,
             outcome: 'participant_success',
             role: 'claimer',
+            claimGenerationId: generation,
             failureReason: null,
             createdAt: Timestamp.now(),
         }));
@@ -5777,6 +5780,36 @@ describe('B1 — durable arrived_pending_outcome', () => {
         expect(spot.arrivedAt.isEqual(arrivedAt)).toBe(true);
         const feedback = await getDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`));
         expect(feedback.data()).toMatchObject({ outcome: 'participant_success', role: 'claimer', failureReason: null });
+    });
+
+    it('B1-GENERATION: claimer completion must match the durable claim generation', async () => {
+        const spotId = 'b1-generation';
+        await seed('spots', spotId, headingPing(spotId, {
+            status: 'occupied',
+            claimState: 'arrived_pending_outcome',
+            arrivedAt: Timestamp.fromMillis(Date.now() - 30_000),
+            claimGenerationId: '22222222-2222-4222-8222-222222222222',
+        }));
+        const current = (await readSpot(spotId)).data().claimGenerationId;
+        const base = {
+            spotId,
+            userId: OTHER_UID,
+            finderId: OWNER_UID,
+            address: spotId,
+            outcome: 'participant_success',
+            role: 'claimer',
+            failureReason: null,
+            createdAt: Timestamp.now(),
+        };
+        await assertFails(setDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`), {
+            ...base,
+            claimGenerationId: '00000000-0000-4000-8000-000000000000',
+        }));
+        await assertFails(setDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`), base));
+        await assertSucceeds(setDoc(doc(otherDb(), 'spotFeedback', `${spotId}_${OTHER_UID}`), {
+            ...base,
+            claimGenerationId: current,
+        }));
     });
 
     it('B1-FINDER: finder success is a separate attestation and does not rewrite arrival', async () => {
@@ -6444,7 +6477,7 @@ describe('t743u — final rules: deletion fence and missing-profile denials', ()
     function arrivedAttestation(spotId: string, role: 'claimer' | 'finder') {
         return {
             spotId, userId: CLM, finderId: FIN, outcome: 'participant_success', role,
-            failureReason: null, address: spotId, createdAt: Timestamp.now(),
+            claimGenerationId: GEN, failureReason: null, address: spotId, createdAt: Timestamp.now(),
         };
     }
 
@@ -6712,7 +6745,7 @@ describe('t743u — final rules: document-access headroom', () => {
         { id: 'H-4 claimant notice to finder (single write)', limit: 10,
             run: () => setDoc(doc(db(CLM), 'spotNotifications', 'n1'), { spotId: 'eta', senderId: CLM, targetUserId: FIN, type: 'delayed', message: 'm', createdAt: Timestamp.fromMillis(Date.now() - 1000) }) },
         { id: 'H-5 claimant success attestation (single write)', limit: 10,
-            run: () => setDoc(doc(db(CLM), 'spotFeedback', `fb_${CLM}`), { spotId: 'fb', userId: CLM, finderId: FIN, outcome: 'participant_success', role: 'claimer', failureReason: null, address: 'fb', createdAt: Timestamp.now() }) },
+            run: () => setDoc(doc(db(CLM), 'spotFeedback', `fb_${CLM}`), { spotId: 'fb', userId: CLM, finderId: FIN, outcome: 'participant_success', role: 'claimer', claimGenerationId: GEN, failureReason: null, address: 'fb', createdAt: Timestamp.now() }) },
         { id: 'H-6 finder unclaimed-orphan delete (single write)', limit: 10,
             run: () => deleteDoc(doc(db(FIN), 'spots', 'orph')) },
     ];

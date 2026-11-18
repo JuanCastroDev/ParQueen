@@ -109,8 +109,8 @@ describe('handoff success contract', () => {
     })).toBe(false);
   });
 
-  it('keeps legacy clients compatible only when their attestation follows this arrival', () => {
-    const arrived = spot();
+  it('keeps legacy clients compatible only for generation-less historical arrivals', () => {
+    const arrived = spot({ claimGenerationId: null });
     const input = {
       spotId: 'spot',
       claimerId: 'claimer',
@@ -123,6 +123,10 @@ describe('handoff success contract', () => {
     expect(isClaimerAuthoritativeSuccess({
       ...input,
       claimerData: attestation('claimer', NOW - 120_000),
+    })).toBe(false);
+    expect(isClaimerAuthoritativeSuccess({
+      ...input,
+      spot: spot(),
     })).toBe(false);
   });
 });

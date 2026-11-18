@@ -367,7 +367,6 @@ const en: Record<string, string> = {
     'handoff.finder_helped_anon': 'Someone helped you claim this spot.',
     'handoff.crown_earned': '+1 Crown earned',
     'handoff.crown_earned_finder': '+2 Crowns earned',
-    'handoff.finder_award': 'Nice one! {name} is parked. +2 Crowns earned.',
     'handoff.other_driver': 'the driver',
     'handoff.waiting_title': 'Finishing your handoff',
     'handoff.waiting_body': 'Your result is saved. ParQueen is securely completing the handoff.',

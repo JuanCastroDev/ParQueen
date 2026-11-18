@@ -7,11 +7,24 @@ const { getFirestore, Timestamp } = require('firebase-admin/firestore');
 
 const { requireEmulatorProjectId } = require('./emulatorProjectId');
 const { TWO_HOURS_MS } = require('./handoffSuccessContract');
+const { joinMutualSuccess } = require('./mutualSuccessJoin');
+const { createCompleteHandoffSuccessHandler } = require('./completeHandoffSuccess');
 const PROJECT_ID = requireEmulatorProjectId();
 const APP_NAME = '__award_crowns_intg__';
 const testApp = getApps().find(app => app.name === APP_NAME) ?? initializeApp({ projectId: PROJECT_ID }, APP_NAME);
 const db = getFirestore(testApp);
 const indexModule = require('./index.js');
+const callableDeps = {
+    getTitleForCrowns: () => 'Newcomer',
+    defaultTrustStats: () => ({ handoffsCompleted: 0 }),
+    computeTrustScore: () => 100,
+};
+const completeHandler = createCompleteHandoffSuccessHandler({
+    db,
+    assertProductAccess: async () => {},
+    joinMutualSuccess,
+    deps: callableDeps,
+});
 
 const RUN = `${process.pid}_${Date.now()}`;
 let sequence = 0;
@@ -166,6 +179,43 @@ describe('awardCrowns idempotency contract', () => {
         expect(finderSnap.data().crowns).toBe(2);
         expect(finderSnap.data().trustStats.handoffsCompleted).toBe(1);
 
+        await cleanupUsers(driverId, finderId);
+        await cleanupMarker(seeded.pairId);
+    });
+
+    it('AC-3b: two simultaneous callable requests execute the real transaction exactly once', async () => {
+        const driverId = nextId('driver');
+        const finderId = nextId('finder');
+        const seeded = await seedRewardablePair({ driverId, finderId });
+        const request = { auth: { uid: driverId }, data: { spotId: seeded.spotId, finderId } };
+
+        await Promise.all([completeHandler(request), completeHandler(request)]);
+
+        expect((await db.doc(`users/${driverId}`).get()).data().crowns).toBe(1);
+        const finder = (await db.doc(`users/${finderId}`).get()).data();
+        expect(finder.crowns).toBe(2);
+        expect(finder.trustStats.handoffsCompleted).toBe(1);
+        expect((await db.collection('spotNotifications').where('spotId', '==', seeded.spotId).get()).size).toBe(1);
+        await cleanupUsers(driverId, finderId);
+        await cleanupMarker(seeded.pairId);
+    });
+
+    it('AC-3c: callable racing the Firestore trigger awards and notifies exactly once', async () => {
+        const driverId = nextId('driver');
+        const finderId = nextId('finder');
+        const seeded = await seedRewardablePair({ driverId, finderId });
+        const request = { auth: { uid: driverId }, data: { spotId: seeded.spotId, finderId } };
+
+        await Promise.all([
+            completeHandler(request),
+            indexModule.awardCrowns.run(createdEvent(seeded.pairId, seeded.claimerDoc, nextId('event'))),
+        ]);
+
+        expect((await db.doc(`users/${driverId}`).get()).data().crowns).toBe(1);
+        const finder = (await db.doc(`users/${finderId}`).get()).data();
+        expect(finder.crowns).toBe(2);
+        expect(finder.trustStats.handoffsCompleted).toBe(1);
+        expect((await db.collection('spotNotifications').where('spotId', '==', seeded.spotId).get()).size).toBe(1);
         await cleanupUsers(driverId, finderId);
         await cleanupMarker(seeded.pairId);
     });
@@ -409,6 +459,73 @@ describe('awardCrowns idempotency contract', () => {
             .toBe('skipped_generation_mismatch');
         expect((await db.doc(`spotNotifications/handoff_success_${seeded.pairId}`).get()).exists).toBe(false);
 
+        await cleanupUsers(driverId, finderId);
+        await cleanupMarker(seeded.pairId);
+    });
+
+    it('AC-17b: a delayed generation-less request cannot reward a later generation of the same spot and claimer', async () => {
+        const driverId = nextId('driver');
+        const finderId = nextId('finder');
+        const arrivedAt = Timestamp.fromMillis(Date.now() - 30_000);
+        const seeded = await seedRewardablePair({
+            driverId,
+            finderId,
+            spotGeneration: '33333333-3333-4333-8333-333333333333',
+            arrivedAt,
+            createdAt: Timestamp.fromMillis(arrivedAt.toMillis() + 1),
+        });
+
+        await indexModule.awardCrowns.run(createdEvent(seeded.pairId, seeded.claimerDoc));
+
+        expect((await db.doc(`users/${driverId}`).get()).data().crowns).toBe(0);
+        expect((await db.doc(`users/${finderId}`).get()).data().crowns).toBe(0);
+        expect((await db.doc(`spots/${seeded.spotId}`).get()).data().claimState).toBe('arrived_pending_outcome');
+        expect((await db.doc(`functionEvents/awardCrowns_${seeded.pairId}`).get()).data().outcome).toBe('skipped_mismatch');
+        await cleanupUsers(driverId, finderId);
+        await cleanupMarker(seeded.pairId);
+    });
+
+    it('AC-17c: a delayed old-client request after reassignment cannot reward either account', async () => {
+        const oldClaimer = nextId('old_driver');
+        const newClaimer = nextId('new_driver');
+        const finderId = nextId('finder');
+        const seeded = await seedRewardablePair({
+            driverId: oldClaimer,
+            finderId,
+            spotClaimerId: newClaimer,
+        });
+        await db.doc(`users/${newClaimer}`).set({ crowns: 0 });
+
+        await indexModule.awardCrowns.run(createdEvent(seeded.pairId, seeded.claimerDoc));
+
+        expect((await db.doc(`users/${oldClaimer}`).get()).data().crowns).toBe(0);
+        expect((await db.doc(`users/${newClaimer}`).get()).data().crowns).toBe(0);
+        expect((await db.doc(`users/${finderId}`).get()).data().crowns).toBe(0);
+        expect((await db.doc(`functionEvents/awardCrowns_${seeded.pairId}`).get()).data().outcome).toBe('skipped_mismatch');
+        await cleanupUsers(oldClaimer, newClaimer, finderId);
+        await cleanupMarker(seeded.pairId);
+    });
+
+    it('AC-17d: immutable feedback id collision cannot replace an old attestation for a new generation', async () => {
+        const driverId = nextId('driver');
+        const finderId = nextId('finder');
+        const arrivedAt = Timestamp.fromMillis(Date.now() - 30_000);
+        const seeded = await seedRewardablePair({
+            driverId,
+            finderId,
+            spotGeneration: '44444444-4444-4444-8444-444444444444',
+            arrivedAt,
+            createdAt: Timestamp.fromMillis(arrivedAt.toMillis() - 1),
+        });
+        await expect(db.doc(`spotFeedback/${seeded.pairId}`).create({
+            ...seeded.claimerDoc,
+            createdAt: Timestamp.fromMillis(arrivedAt.toMillis() + 1),
+        })).rejects.toBeTruthy();
+
+        await completeHandler({ auth: { uid: driverId }, data: { spotId: seeded.spotId, finderId } })
+            .then(() => { throw new Error('expected denial'); }, error => expect(error.code).toBe('failed-precondition'));
+        expect((await db.doc(`users/${driverId}`).get()).data().crowns).toBe(0);
+        expect((await db.doc(`users/${finderId}`).get()).data().crowns).toBe(0);
         await cleanupUsers(driverId, finderId);
         await cleanupMarker(seeded.pairId);
     });

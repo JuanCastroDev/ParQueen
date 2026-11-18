@@ -1063,11 +1063,12 @@ service cloud.firestore {
         && durableArrivedFor(data.spotId)
         && spot.get('interestedUserId', null) == request.auth.uid
         && spot.finderId == data.finderId
-        // New clients bind completion to the exact server-issued claim
-        // generation. Missing is accepted only for shipped legacy clients;
-        // the server join additionally requires createdAt >= arrivedAt.
-        && (!('claimGenerationId' in data)
-          || data.claimGenerationId == spot.get('claimGenerationId', null));
+        // A generated claim must carry its exact server-issued identity.
+        // Generation-less legacy completion remains possible only for
+        // historical spots that genuinely have no generation.
+        && (('claimGenerationId' in data)
+          ? data.claimGenerationId == spot.get('claimGenerationId', null)
+          : spot.get('claimGenerationId', null) == null);
     }
 
     function finderSuccessAttestation(feedbackId) {

@@ -18,17 +18,25 @@ vi.hoisted(() => {
 vi.mock('../../firebase', () => ({ db: {} }));
 
 const {
-  addDoc, getDoc, getDocs, onSnapshot, runTransaction, setDoc, updateDoc, spotListeners,
+  addDoc, getDoc, getDocs, onSnapshot, runTransaction, setDoc, updateDoc, spotListeners, spotErrorListeners,
 } = vi.hoisted(() => {
   const spotListeners = new Set<(snap: any) => void>();
+  const spotErrorListeners = new Set<(error: unknown) => void>();
   return {
     spotListeners,
+    spotErrorListeners,
     addDoc: vi.fn(async (_collection: any, _data: any) => ({ id: 'notification' })),
     getDoc: vi.fn(async (_ref: any): Promise<any> => ({ exists: () => false, data: () => undefined })),
     getDocs: vi.fn(async () => ({ empty: true, docs: [] })),
-    onSnapshot: vi.fn((target: any, onNext: (snap: any) => void) => {
-      if (target?.__col === 'spots') spotListeners.add(onNext);
-      return () => spotListeners.delete(onNext);
+    onSnapshot: vi.fn((target: any, onNext: (snap: any) => void, onError?: (error: unknown) => void) => {
+      if (target?.__col === 'spots') {
+        spotListeners.add(onNext);
+        if (onError) spotErrorListeners.add(onError);
+      }
+      return () => {
+        spotListeners.delete(onNext);
+        if (onError) spotErrorListeners.delete(onError);
+      };
     }),
     runTransaction: vi.fn(async (_db: any, _callback: any): Promise<any> => undefined),
     setDoc: vi.fn(async (_ref: any, _data: any) => {}),
@@ -63,8 +71,11 @@ const { completeHandoffSuccessCallable } = vi.hoisted(() => ({
   completeHandoffSuccessCallable: vi.fn(async () => ({ outcome: 'awarded' })),
 }));
 vi.mock('./completeHandoffSuccessCallable', () => ({ completeHandoffSuccessCallable }));
-const { reportCriticalActionFailure } = vi.hoisted(() => ({ reportCriticalActionFailure: vi.fn() }));
-vi.mock('../../utils/errorReporting', () => ({ reportCriticalActionFailure }));
+const { captureClientException, reportCriticalActionFailure } = vi.hoisted(() => ({
+  captureClientException: vi.fn(),
+  reportCriticalActionFailure: vi.fn(),
+}));
+vi.mock('../../utils/errorReporting', () => ({ captureClientException, reportCriticalActionFailure }));
 
 const { recordParkingAnalyticsEvent } = vi.hoisted(() => ({
   recordParkingAnalyticsEvent: vi.fn(),
@@ -101,6 +112,7 @@ function snapshotFor(ref: { __col: string; __id: string }) {
   return {
     exists: () => data !== undefined,
     data: () => data,
+    metadata: { fromCache: false, hasPendingWrites: false },
   };
 }
 
@@ -215,6 +227,7 @@ async function emitServerAward() {
   await act(async () => {
     spotListeners.forEach((fn) => fn({
       data: () => ({ status: 'occupied', claimState: 'completed_success' }),
+      metadata: { fromCache: false, hasPendingWrites: false },
     }));
   });
 }
@@ -250,6 +263,7 @@ describe('useInterestFlow — terminal handoff outcomes', () => {
     runTransaction.mockReset();
     setDoc.mockReset();
     spotListeners.clear();
+    spotErrorListeners.clear();
     setDoc.mockImplementation(async (ref, data) => {
       if ((ref.__col === 'spotFeedback' || ref.__col === 'spotNotifications')
         && documents.has(pathOf(ref))) {
@@ -420,7 +434,8 @@ describe('useInterestFlow — terminal handoff outcomes', () => {
     });
     expect(recordParkingAnalyticsEvent).not.toHaveBeenCalledWith('handoff_success_recorded');
     expect(spotListeners.size).toBe(1);
-    expect(getFlow().handoffStep).toBe('celebration');
+    expect(getFlow().handoffStep).toBe('waiting');
+    expect(renderer.root.findAllByProps({ 'data-testid': 'handoff-crown-copy' })).toHaveLength(0);
 
     await act(async () => {
       spotListeners.forEach((fn) => fn({
@@ -432,6 +447,63 @@ describe('useInterestFlow — terminal handoff outcomes', () => {
     expect(recordParkingAnalyticsEvent).toHaveBeenCalledWith('handoff_success_recorded');
     expect(spotListeners.size).toBe(0);
     expect(renderer.root.findByProps({ 'data-testid': 'handoff-crown-copy' })).toBeTruthy();
+  });
+
+  it('reconciles a listener error with a fresh authoritative read before showing success', async () => {
+    const { getFlow, renderer } = mount(user, spot, true);
+    await arrive(getFlow);
+    await act(async () => { await getFlow().handleHandoffOutcome('success'); });
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => ({ status: 'occupied', claimState: 'completed_success' }),
+      metadata: { fromCache: false, hasPendingWrites: false },
+    });
+
+    await act(async () => {
+      spotErrorListeners.forEach((fn) => fn(new Error('listener lost')));
+      await Promise.resolve();
+    });
+
+    expect(getFlow().handoffStep).toBe('celebration');
+    expect(renderer.root.findByProps({ 'data-testid': 'handoff-crown-copy' })).toBeTruthy();
+    expect(spotListeners.size).toBe(0);
+  });
+
+  it('listener failure without fresh server confirmation exits waiting and exposes safe retry', async () => {
+    const { getFlow, renderer } = mount(user, spot, true);
+    await arrive(getFlow);
+    await act(async () => { await getFlow().handleHandoffOutcome('success'); });
+    getDoc.mockRejectedValueOnce(new Error('offline'));
+
+    await act(async () => {
+      spotErrorListeners.forEach((fn) => fn(new Error('listener lost')));
+      await Promise.resolve();
+    });
+
+    expect(getFlow().handoffStep).toBe('outcome');
+    expect(renderer.root.findByProps({ 'data-testid': 'handoff-submit-retry' })).toBeTruthy();
+    expect(renderer.root.findAllByProps({ 'data-testid': 'handoff-crown-copy' })).toHaveLength(0);
+  });
+
+  it('bounds a silent listener wait and reconciles to retry without claiming success', async () => {
+    vi.useFakeTimers();
+    try {
+      const { getFlow, renderer } = mount(user, spot, true);
+      await arrive(getFlow);
+      await act(async () => { await getFlow().handleHandoffOutcome('success'); });
+      getDoc.mockRejectedValueOnce(new Error('offline'));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+
+      expect(getFlow().handoffStep).toBe('outcome');
+      expect(renderer.root.findByProps({ 'data-testid': 'handoff-submit-retry' })).toBeTruthy();
+      expect(renderer.root.findAllByProps({ 'data-testid': 'handoff-crown-copy' })).toHaveLength(0);
+      expect(spotListeners.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('sends claimer +1 only after the server award and never tells the claimer +2', async () => {

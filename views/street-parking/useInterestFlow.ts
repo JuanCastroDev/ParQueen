@@ -78,6 +78,7 @@ export function departurePingDenialCopy(error: unknown): { title: string; messag
 
 const MAX_ETA_MINUTES = 7;
 const MAX_CLAIM_MINUTES = 15;
+const HANDOFF_CONFIRMATION_TIMEOUT_MS = 15_000;
 const ETA_OPTIONS = [2, 5, 8, 10];
 const kmToEstMinutes = (km: number) => Math.ceil((km / 25) * 60);
 
@@ -170,6 +171,7 @@ export function useInterestFlow({
     const terminalSpotIdsRef = useRef<Set<string>>(new Set());
     const optimisticTerminalRef = useRef<Set<string>>(new Set());
     const awardUnsubRef = useRef<(() => void) | null>(null);
+    const awardTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const awardDeliveredRef = useRef<Set<string>>(new Set());
     const successAnalyticsRecordedRef = useRef<Set<string>>(new Set());
     const resumeReadyRef = useRef({ spots: false, feedback: false });
@@ -245,6 +247,8 @@ export function useInterestFlow({
             successAnalyticsRecordedRef.current = new Set();
             awardUnsubRef.current?.();
             awardUnsubRef.current = null;
+            if (awardTimeoutRef.current) clearTimeout(awardTimeoutRef.current);
+            awardTimeoutRef.current = null;
             resumeReadyRef.current = { spots: false, feedback: false };
             setUnfinishedHandoff(null);
             return;
@@ -258,6 +262,8 @@ export function useInterestFlow({
         successAnalyticsRecordedRef.current = new Set();
         awardUnsubRef.current?.();
         awardUnsubRef.current = null;
+        if (awardTimeoutRef.current) clearTimeout(awardTimeoutRef.current);
+        awardTimeoutRef.current = null;
         resumeReadyRef.current = { spots: false, feedback: false };
 
         const publish = () => {
@@ -302,6 +308,8 @@ export function useInterestFlow({
             unsubFeedback();
             awardUnsubRef.current?.();
             awardUnsubRef.current = null;
+            if (awardTimeoutRef.current) clearTimeout(awardTimeoutRef.current);
+            awardTimeoutRef.current = null;
         };
     }, [user?.id]);
 
@@ -696,26 +704,36 @@ export function useInterestFlow({
     const watchForServerAward = (spotId: string) => {
         awardUnsubRef.current?.();
         awardUnsubRef.current = null;
+        if (awardTimeoutRef.current) clearTimeout(awardTimeoutRef.current);
+        awardTimeoutRef.current = null;
         if (!db) return;
         let unsubscribe = () => {};
-        unsubscribe = onSnapshot(doc(db, 'spots', spotId), (snap) => {
+        let settled = false;
+        const stop = () => {
+            if (settled) return;
+            settled = true;
+            unsubscribe();
+            if (awardUnsubRef.current === unsubscribe) awardUnsubRef.current = null;
+            if (awardTimeoutRef.current) clearTimeout(awardTimeoutRef.current);
+            awardTimeoutRef.current = null;
+        };
+        const confirm = (snap: any): boolean => {
             const data = typeof snap?.data === 'function' ? snap.data() as Record<string, any> | undefined : undefined;
             const claimState = data?.claimState;
             if (claimState === 'unconfirmed') {
-                unsubscribe();
-                if (awardUnsubRef.current === unsubscribe) awardUnsubRef.current = null;
+                stop();
                 if (handoffStepRef.current === 'waiting') {
                     handoffStepRef.current = null;
                     setHandoffStep(null);
                 }
-                return;
+                return true;
             }
-            if (claimState !== 'completed_success') return;
+            if (claimState !== 'completed_success') return false;
             const serverConfirmed = isConfirmedServerHandoffSuccess(claimState, snap.metadata);
-            // A cached success may be displayed by the existing Crown UI, but
-            // cannot count as an analytics completion or close the claimer's
-            // observer. Wait for fresh server metadata before recording.
-            if (serverConfirmed && !successAnalyticsRecordedRef.current.has(spotId)) {
+            // Cached state never unlocks success UI or Crowns. Only a fresh
+            // server snapshot proves the authoritative transaction committed.
+            if (!serverConfirmed) return false;
+            if (!successAnalyticsRecordedRef.current.has(spotId)) {
                 successAnalyticsRecordedRef.current.add(spotId);
                 recordParkingAnalyticsEvent('handoff_success_recorded');
             }
@@ -723,13 +741,30 @@ export function useInterestFlow({
                 awardDeliveredRef.current.add(spotId);
                 showAwardedCrowns();
             }
-            // The finder never records this event. For the claimer, keep the
-            // listener alive after cache-only success until server confirmation.
-            if (!serverConfirmed) return;
-            unsubscribe();
-            if (awardUnsubRef.current === unsubscribe) awardUnsubRef.current = null;
-        }, () => {});
+            lastTerminalAttempt.current = null;
+            setHandoffSubmitError(null);
+            stop();
+            return true;
+        };
+        const reconcileOrRetry = async () => {
+            if (settled) return;
+            try {
+                const fresh = await getDoc(doc(db, 'spots', spotId));
+                if (confirm(fresh)) return;
+            } catch (error) {
+                captureClientException(error, { component: 'completeHandoffSuccessReconcile' });
+            }
+            stop();
+            lastTerminalAttempt.current = { outcome: 'success' };
+            setHandoffSubmitError(t('handoff.submit_error'));
+            handoffStepRef.current = 'outcome';
+            setHandoffStep('outcome');
+        };
+        unsubscribe = onSnapshot(doc(db, 'spots', spotId), (snap) => {
+            confirm(snap);
+        }, () => { void reconcileOrRetry(); });
         awardUnsubRef.current = unsubscribe;
+        awardTimeoutRef.current = setTimeout(() => { void reconcileOrRetry(); }, HANDOFF_CONFIRMATION_TIMEOUT_MS);
     };
 
     const enterAttestationWaiting = (
@@ -1039,7 +1074,6 @@ export function useInterestFlow({
             // Leave Finish-your-handoff recoverable and wait for the fresh
             // server snapshot before any Crowns copy or success UI.
             setHandoffSpotCoords({ lat: spotSnap.lat, lng: spotSnap.lng, address: spotSnap.address || '' });
-            lastTerminalAttempt.current = null;
             enterAttestationWaiting(spotSnap.id);
         } catch (error) {
             showTerminalSubmitFailure(error);

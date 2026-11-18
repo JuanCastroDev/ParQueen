@@ -49,9 +49,11 @@ function hasMatchingGenerationOrLegacyArrival(data, spot) {
     return data.claimGenerationId.length > 0
       && data.claimGenerationId === spot?.claimGenerationId;
   }
-  // Legacy clients did not include claimGenerationId. Their immutable document
-  // is safe only when it was created at or after this durable arrival, which
-  // prevents an old attestation from completing a later claim cycle.
+  // A generation-less request cannot be attributed safely once the server has
+  // issued a durable generation: the same claimer could send a delayed request
+  // after reassignment. Retain compatibility only for historical arrivals that
+  // genuinely predate generation IDs.
+  if (typeof spot?.claimGenerationId === 'string' && spot.claimGenerationId.length > 0) return false;
   const createdAtMs = attestationCreatedAtMs(data);
   const arrivedAtMs = isTimestampLike(spot?.arrivedAt) ? spot.arrivedAt.toMillis() : null;
   return createdAtMs != null && arrivedAtMs != null && createdAtMs >= arrivedAtMs;
