@@ -8,7 +8,7 @@
     "repository": "JuanCastroDev/ParQueen",
     "head": "0ab66f76c198434d33bf868d769d577c17841d1e",
     "tree": "0c99bfb3814eced00086ff9fbb19bdd83a98eb9e",
-    "base": "c176c4d8b687bf67094561f8df61edf04cbd2dcd",
+    "base": "eab0b6802036342935ef2a20c591fb48827c2a2c",
     "criticalPaths": [
       "functions/index.js",
       "functions/waitlist.js"
@@ -33,9 +33,9 @@
       "exitCode": 0
     },
     "founderIdentity": "parqueen-founder",
-    "executedAt": "2026-11-18T13:40:44.029Z",
-    "attestationId": "547d05bf-cb3c-453e-8800-9dac3cc7a646",
-    "expiresAt": "2026-12-02T13:40:44.029Z"
+    "executedAt": "2026-11-18T13:57:24.267Z",
+    "attestationId": "4e5f1242-5a9f-46a2-af13-bff1c4ca3f37",
+    "expiresAt": "2026-12-02T13:57:24.267Z"
   },
-  "signature": "oHrWP43E4fUreHs+OoBKOQ215udRzlWolBM5nPS5u+tX7il2pKTYaEZXitoY6M6ZeWB6hY+hBmkp1Rv1gXrgAg=="
+  "signature": "4O1TSJ+oosweZS7bOQttTk76yWhnWZEgZbkfyoJc/2vViNV7kdNgqBEf6W25Fu3ky67T1hs9xes8kHwi3eo3DA=="
 }
