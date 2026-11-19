@@ -40,6 +40,7 @@ function sanitizeError(err) {
     if (!err) return 'unknown';
     const rawName = typeof err.name === 'string' ? err.name : '';
     const rawCode = typeof err.code === 'string' ? err.code
+        : Number.isInteger(err.code) ? String(err.code) // gRPC status codes
         : typeof err.status === 'number' ? String(err.status) : '';
     const name = SAFE_NAME_RE.test(rawName) ? rawName : 'Error';
     const code = SAFE_CODE_RE.test(rawCode) ? rawCode : '';
