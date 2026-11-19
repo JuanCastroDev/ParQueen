@@ -169,3 +169,14 @@ describe('§7 — TM-17 log-redaction regression: no raw error in console.error'
         expect(rfl).toMatch(/module\.exports.*sanitizeError/);
     });
 });
+
+// Issue #354: gRPC errors carry a numeric code; it used to be dropped.
+describe('sanitizeError numeric gRPC codes', () => {
+    const { sanitizeError } = require(path.resolve('./functions/redactForLog.js'));
+    it('keeps an integer gRPC code', () => {
+        expect(sanitizeError(Object.assign(new Error('secret detail'), { code: 3 }))).toBe('Error/3');
+    });
+    it('drops a non-integer numeric code', () => {
+        expect(sanitizeError(Object.assign(new Error('x'), { code: 3.5 }))).toBe('Error');
+    });
+});

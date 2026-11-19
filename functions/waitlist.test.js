@@ -437,3 +437,53 @@ describe('WL-W2 — client networks; confirm and unsubscribe check the link befo
         expect(res).toEqual({ status: 429, body: { status: 'rate_limited' } });
     });
 });
+
+// Issue #354: under contention the emulator (gRPC) can fail a waiting
+// unsubscribe transaction with code 3 "Transaction is invalid or closed",
+// which the SDK does not retry. It used to escape as HTTP 500.
+describe('WL-354 — unsubscribe survives one closed transaction', () => {
+    const ts = ms => ({ toMillis: () => ms });
+    const token = waitlist.newConfirmToken();
+    const headers = { 'fastly-client-ip': '203.0.113.9' };
+    const closedTx = () => Object.assign(new Error('3 INVALID_ARGUMENT: Transaction is invalid or closed.'), { code: 3 });
+    // runTransaction plays the given outcomes in order (Error = reject, else resolve).
+    const run = (outcomes, checkRateLimit = vi.fn(async () => {})) => {
+        const runTransaction = vi.fn(async () => {
+            const next = outcomes.shift();
+            if (next instanceof Error) throw next;
+            return next;
+        });
+        const db = { collection: () => ({ doc: () => ({ get: async () => ({ exists: true, data: () => ({ validUntil: ts(5000) }) }) }) }), runTransaction };
+        const res = waitlist.handleUnsubscribe({ body: { token }, headers }, { db, now: () => 1000, checkRateLimit, rateLimitPepper: PEPPER });
+        return { res, runTransaction, checkRateLimit };
+    };
+
+    it('WL-354-1 retries once and answers 200 when the retry unsubscribes, counting the client once', async () => {
+        const { res, runTransaction, checkRateLimit } = run([closedTx(), true]);
+        expect(await res).toEqual({ status: 200, body: { status: 'unsubscribed' } });
+        expect(runTransaction).toHaveBeenCalledTimes(2);
+        expect(checkRateLimit).toHaveBeenCalledTimes(1);
+    });
+
+    it('WL-354-2 answers the generic 410 when the retry finds the token already used', async () => {
+        const { res, runTransaction } = run([closedTx(), false]);
+        expect(await res).toEqual({ status: 410, body: { status: 'invalid_or_expired' } });
+        expect(runTransaction).toHaveBeenCalledTimes(2);
+    });
+
+    it('WL-354-3 still fails when the retry hits the same error (no masking as 410)', async () => {
+        const { res, runTransaction } = run([closedTx(), closedTx()]);
+        await expect(res).rejects.toMatchObject({ code: 3 });
+        expect(runTransaction).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+        ['other INVALID_ARGUMENT', Object.assign(new Error('3 INVALID_ARGUMENT: bad field'), { code: 3 })],
+        ['ABORTED', Object.assign(new Error('10 ABORTED: Transaction lock timeout'), { code: 10 })],
+        ['string-coded', Object.assign(new Error('Transaction is invalid or closed'), { code: 'invalid-argument' })],
+    ])('WL-354-4 does not retry an unrelated error (%s)', async (_l, err) => {
+        const { res, runTransaction } = run([err, true]);
+        await expect(res).rejects.toBe(err);
+        expect(runTransaction).toHaveBeenCalledTimes(1);
+    });
+});

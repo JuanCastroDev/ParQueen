@@ -577,9 +577,23 @@ async function handleUnsubscribe({ body, headers }, deps) {
         return reply(429, { status: 'rate_limited' });
     }
 
-    return await unsubscribeWithToken(token, deps)
-        ? reply(200, { status: 'unsubscribed' })
-        : INVALID_OR_EXPIRED;
+    let unsubscribed;
+    try {
+        unsubscribed = await unsubscribeWithToken(token, deps);
+    } catch (err) {
+        if (!isClosedTransactionError(err)) throw err;
+        // Issue #354: a contended transaction can be closed (gRPC 3) instead
+        // of ABORTED, and the SDK does not retry that. Retry once: the
+        // transaction re-reads the token, so a token another request already
+        // used still gets the generic 410. A second failure propagates (500).
+        unsubscribed = await unsubscribeWithToken(token, deps);
+    }
+    return unsubscribed ? reply(200, { status: 'unsubscribed' }) : INVALID_OR_EXPIRED;
+}
+
+// Only the exact closed-transaction error; never broad INVALID_ARGUMENT.
+function isClosedTransactionError(err) {
+    return err?.code === 3 && /Transaction is invalid or closed/.test(String(err.message));
 }
 
 /**
