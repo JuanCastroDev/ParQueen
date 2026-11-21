@@ -1,25 +1,23 @@
-// Location prompt visual redesign contracts: the approved vector neighborhood
-// and real native permission semantics are intentionally independent.
+// Location prompt visual redesign contracts: the vector neighborhood art and the real native permission
+// semantics are intentionally independent.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const screen = read('./LocationPromptView.tsx');
-const artwork = read('./LocationPromptArtwork.tsx');
-const styles = read('./locationPrompt.css');
+const artwork = read('./location-prompt/LocationNeighborhoodArt.tsx');
+const styles = read('./location-prompt/locationPrompt.css');
 const en = read('../i18n/en.ts');
 const es = read('../i18n/es.ts');
 
 describe('Onboarding 2.0 location permission continuation', () => {
-  it('uses the exact editable vector street and production ParQueen Ping shape', () => {
-    expect(artwork).toContain("assets/onboarding-v2/env.svg");
-    expect(artwork).toContain("assets/onboarding-v2/depart-car.svg");
-    expect(artwork).toContain("assets/onboarding-v2/search-car.svg");
+  it('uses the original editable vector neighborhood and the production ParQueen Ping shape', () => {
+    expect(screen).toContain("import { LocationNeighborhoodArt } from './location-prompt/LocationNeighborhoodArt'");
+    expect(screen).toContain('<LocationNeighborhoodArt');
     expect(artwork).toContain('PARQUEEN_MARK_PATH');
     expect(artwork).toContain('PIN_PATH');
     expect(artwork).not.toMatch(/mapbox|firebase|https?:\/\//i);
-    expect(screen).toContain('<LocationPromptArtwork');
-    expect(styles).toContain('.pq-location-screen');
+    expect(styles).toContain('.pq-loc {');
   });
 
   it('keeps OS/browser permission state authoritative and never auto-prompts', () => {
@@ -37,9 +35,9 @@ describe('Onboarding 2.0 location permission continuation', () => {
   it('contains no saving-a-car promise and discloses example Pings in EN and ES', () => {
     const englishBody = en.match(/'location_prompt.body': '([^']+)'/)?.[1] ?? '';
     const spanishBody = es.match(/'location_prompt.body': '([^']+)'/)?.[1] ?? '';
-    expect(englishBody.toLowerCase()).not.toMatch(/save|parked car/);
-    expect(spanishBody.toLowerCase()).not.toMatch(/guardar|guardaste|carro/);
-    for (const key of ['headline_accent', 'you_label', 'pings_label']) {
+    expect(englishBody.toLowerCase()).not.toMatch(/save|parked car|guarantee/);
+    expect(spanishBody.toLowerCase()).not.toMatch(/guardar|guardaste|carro|garantiza/);
+    for (const key of ['headline_accent', 'you_label', 'pings_label', 'map_desc']) {
       expect(en).toContain(`'location_prompt.${key}'`);
       expect(es).toContain(`'location_prompt.${key}'`);
     }
@@ -47,10 +45,14 @@ describe('Onboarding 2.0 location permission continuation', () => {
     expect(es).toContain("'location_prompt.pings_label': 'Pings de ejemplo'");
   });
 
-  it('supports scrolling, reduced motion, two explicit actions, and status hints', () => {
+  it('supports scrolling, short screens, landscape, reduced motion, two explicit actions, and status hints', () => {
     expect(styles).toContain('overflow-y: auto');
     expect(styles).toContain('@media (prefers-reduced-motion: reduce)');
-    expect(styles).toContain('@media (max-height: 650px)');
+    expect(styles).toContain('@media (max-height: 680px)');
+    expect(styles).toContain('@media (orientation: landscape)');
+    // only transform/opacity animate, and no animation repeats forever
+    expect(styles).not.toMatch(/infinite/);
+    expect(styles).not.toMatch(/backdrop-filter|filter:\s*blur/);
     expect(screen).toContain("t('location_prompt.enable')");
     expect(screen).toContain("t('location_prompt.skip')");
     expect(screen).toContain('aria-live="polite"');

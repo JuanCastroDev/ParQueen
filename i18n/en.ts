@@ -70,7 +70,7 @@ const en: Record<string, string> = {
     'location_prompt.requesting': 'Requesting access…',
     'location_prompt.skip': 'Not now',
     'location_prompt.reassurance': 'You can change this anytime in your device settings.',
-    'location_prompt.map_desc': 'Illustrated city street with an example location dot and Pings',
+    'location_prompt.map_desc': 'Illustration of a city block seen from above, centered on an example location dot with example Pings nearby',
     'location_prompt.services_off': 'Location services are turned off. Turn them on in your device settings, then try again.',
     'location_prompt.try_again': 'Couldn’t get a location fix yet. Location was not blocked — try again.',
 

@@ -1,0 +1,293 @@
+/* Location permission: the closing scene of Onboarding 2.0. The camera rises from the street-level
+   onboarding block to an illustrated top-down view of it, and the map centres on you.
+   Scoped to .pq-loc; fixed night palette like the onboarding scene. Only transform and opacity animate,
+   nothing loops forever, and reduced motion shows the final frame. No blur effects. */
+.pq-loc {
+  --pq-loc-bg: #050d1c;
+  --pq-loc-cyan: #67ddfc;
+  --pq-loc-text-2: #c4d3e6;
+  --pq-loc-text-3: #9fb3cc;
+  --pq-loc-focus: #91e7ff;
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--pq-loc-bg);
+  color: #fff;
+  color-scheme: dark;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+.pq-loc *, .pq-loc *::before, .pq-loc *::after { box-sizing: border-box; }
+
+/* ---------- hero artwork ---------- */
+.pq-loc-hero {
+  position: relative;
+  flex: 1 0 clamp(220px, 47svh, 560px);
+  min-height: 220px;
+  overflow: hidden;
+  isolation: isolate;
+  background: #121a33;
+}
+.pq-loc-art {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform-origin: 50% 52%;
+  animation: pq-loc-settle 1000ms cubic-bezier(.2, .7, .2, 1) both;
+}
+/* header scrim keeps the brand legible over the art */
+.pq-loc-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: calc(env(safe-area-inset-top, 0px) + 92px);
+  background: linear-gradient(180deg, rgba(5, 13, 28, .9) 0%, rgba(5, 13, 28, .55) 45%, rgba(5, 13, 28, 0) 100%);
+  z-index: 1;
+  pointer-events: none;
+}
+/* the street dissolves into the panel; no hard sheet edge */
+.pq-loc-hero::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0;
+  height: 34%;
+  background: linear-gradient(180deg, rgba(5, 13, 28, 0) 0%, rgba(5, 13, 28, .62) 55%, var(--pq-loc-bg) 100%);
+  z-index: 1;
+  pointer-events: none;
+}
+
+.pq-loc-brand {
+  position: absolute;
+  z-index: 2;
+  top: calc(env(safe-area-inset-top, 0px) + 6px);
+  left: max(10px, env(safe-area-inset-left, 0px));
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+}
+.pq-loc-brand img { display: block; height: 50px; width: auto; margin: 0 -14px 0 -12px; }
+.pq-loc-brand span {
+  font-size: 20px;
+  font-weight: 900;
+  line-height: 1.05;
+  letter-spacing: -.03em;
+  white-space: nowrap;
+  text-shadow: 0 2px 14px rgba(5, 13, 28, .65);
+}
+
+.pq-loc-legend {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 32px);
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(161, 206, 246, .22);
+  background: rgba(5, 15, 32, .86);
+  color: #e6effa;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  animation: pq-loc-fade 420ms ease-out 1300ms both;
+}
+.pq-loc-legend-item { display: inline-flex; align-items: center; gap: 7px; }
+.pq-loc-legend-dot {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  background: linear-gradient(135deg, #0af0ff, #1e8fff);
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, .25);
+}
+.pq-loc-legend-pin { display: block; flex: none; width: 13px; height: 15px; }
+.pq-loc-legend-rule { width: 1px; height: 14px; background: rgba(212, 231, 255, .24); }
+
+/* ---------- panel ---------- */
+.pq-loc-panel {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 480px;
+  align-self: center;
+  padding: 6px 24px max(18px, calc(env(safe-area-inset-bottom, 0px) + 14px));
+}
+.pq-loc-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  color: var(--pq-loc-cyan);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .2em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+.pq-loc-eyebrow svg { width: 15px; height: 15px; flex: none; stroke-width: 2.4; }
+.pq-loc-title {
+  margin: 0;
+  max-width: 420px;
+  font-size: clamp(29px, 8.4vw, 40px);
+  font-weight: 850;
+  line-height: 1.06;
+  letter-spacing: -.045em;
+  text-wrap: balance;
+  color: #fff;
+}
+.pq-loc-title-accent {
+  background: linear-gradient(95deg, #38bdf8 0%, #22d8f6 45%, #6ff4ff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: #38d4fb;
+}
+.pq-loc-body {
+  max-width: 36ch;
+  margin: 12px 0 0;
+  color: var(--pq-loc-text-2);
+  font-size: 15px;
+  font-weight: 450;
+  line-height: 1.5;
+}
+.pq-loc-status:empty { display: none; }
+.pq-loc-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 14px 0 0;
+  padding: 11px 13px;
+  border-radius: 14px;
+  border: 1px solid rgba(103, 221, 252, .3);
+  background: rgba(33, 126, 208, .14);
+  color: #e3f6ff;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.pq-loc-hint svg { flex: none; width: 17px; height: 17px; margin-top: 1px; color: var(--pq-loc-cyan); }
+
+.pq-loc-actions { margin-top: 22px; display: flex; flex-direction: column; gap: 4px; }
+.pq-loc-enable {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 20px;
+  border: 0;
+  border-radius: 28px;
+  background: linear-gradient(120deg, #0b8cff 0%, #0b63e6 55%, #0a4fc4 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18), 0 10px 26px rgba(11, 118, 255, .3), 0 2px 6px rgba(11, 99, 230, .2);
+  color: #fff;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: -.01em;
+  cursor: pointer;
+  transition: transform 160ms ease, filter 160ms ease;
+}
+.pq-loc-enable svg { width: 20px; height: 20px; flex: none; stroke-width: 2.3; }
+.pq-loc-enable:active:not(:disabled) { transform: scale(.985); filter: brightness(1.06); }
+.pq-loc-skip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 48px;
+  border: 0;
+  border-radius: 24px;
+  background: transparent;
+  color: #d6e3f4;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.pq-loc-enable:disabled, .pq-loc-skip:disabled { opacity: .62; cursor: wait; }
+.pq-loc-enable:focus-visible, .pq-loc-skip:focus-visible { outline: 3px solid var(--pq-loc-focus); outline-offset: 3px; }
+.pq-loc-reassurance {
+  margin: 6px auto 0;
+  max-width: 34ch;
+  color: var(--pq-loc-text-3);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: center;
+}
+/* inline so the icon stays with the first word when the line wraps */
+.pq-loc-reassurance svg { display: inline-block; width: 14px; height: 14px; margin: 0 6px 0 0; vertical-align: -2px; }
+
+/* ---------- motion (transform and opacity only; nothing loops forever) ---------- */
+.pq-loc-focus { transform-box: fill-box; transform-origin: center; animation: pq-loc-frame 640ms cubic-bezier(.2, .8, .2, 1) 450ms both; }
+.pq-loc-dot { transform-box: fill-box; transform-origin: center; animation: pq-loc-pop 460ms cubic-bezier(.3, 1.45, .5, 1) 260ms both; }
+.pq-loc-pulse { transform-box: fill-box; transform-origin: center; opacity: 0; vector-effect: non-scaling-stroke; animation: pq-loc-pulse 2.4s ease-out 900ms 3; }
+.pq-loc-ping { animation: pq-loc-ping-in 440ms cubic-bezier(.2, .9, .3, 1.25) both; animation-delay: calc(1000ms + var(--i, 0) * 140ms); }
+/* text and buttons never wait on the art: the panel settles within ~0.6 s, independent of the scene */
+.pq-loc-rise { animation: pq-loc-rise 320ms cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc(80ms + var(--d, 0) * 50ms); }
+
+@keyframes pq-loc-settle { from { opacity: 0; transform: scale(1.08); } to { opacity: 1; transform: none; } }
+@keyframes pq-loc-frame { from { opacity: 0; transform: scale(1.36); } to { opacity: 1; transform: none; } }
+@keyframes pq-loc-pop { from { opacity: 0; transform: scale(.4); } to { opacity: 1; transform: none; } }
+@keyframes pq-loc-pulse { 0% { opacity: .85; transform: scale(1); } 100% { opacity: 0; transform: scale(6.8); } }
+@keyframes pq-loc-ping-in { from { opacity: 0; transform: translateY(-12px); } to { opacity: 1; transform: none; } }
+@keyframes pq-loc-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes pq-loc-fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* ---------- short phones (320 x 568 and similar): the panel has priority ---------- */
+@media (max-height: 680px) {
+  .pq-loc-hero { flex-basis: 214px; min-height: 196px; }
+  .pq-loc-title { font-size: clamp(27px, 8vw, 34px); }
+  .pq-loc-body { margin-top: 9px; font-size: 14.5px; }
+  .pq-loc-actions { margin-top: 16px; }
+  .pq-loc-eyebrow { margin-bottom: 8px; }
+}
+@media (max-height: 680px) and (orientation: portrait) {
+  /* a retry / services-off hint takes room from the art, so the Enable button stays on screen */
+  .pq-loc:has(.pq-loc-hint) .pq-loc-hero { flex-basis: 132px; min-height: 132px; }
+  .pq-loc:has(.pq-loc-hint) .pq-loc-legend { display: none; }
+  .pq-loc-hint { margin-top: 10px; padding: 9px 12px; font-size: 13.5px; }
+}
+@media (max-height: 600px) {
+  .pq-loc-legend { display: none; }
+  .pq-loc-brand img { height: 42px; }
+  .pq-loc-brand span { font-size: 17px; }
+}
+
+/* ---------- landscape: art left, panel right ---------- */
+@media (orientation: landscape) and (max-height: 520px) {
+  .pq-loc { flex-direction: row; overflow: hidden; }
+  .pq-loc-hero { flex: 1 1 auto; min-height: 0; }
+  .pq-loc-hero::after { inset: 0 0 0 auto; width: 30%; height: auto; background: linear-gradient(90deg, rgba(5, 13, 28, 0), var(--pq-loc-bg)); }
+  .pq-loc-panel {
+    flex: 0 0 min(420px, 50%);
+    align-self: stretch;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    justify-content: safe center;
+    padding: max(16px, env(safe-area-inset-top, 0px)) max(24px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom, 0px)) 24px;
+  }
+  .pq-loc-legend { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pq-loc-art, .pq-loc-focus, .pq-loc-dot, .pq-loc-ping, .pq-loc-rise, .pq-loc-legend { animation: none; }
+  .pq-loc-pulse { animation: none; opacity: 0; }
+  .pq-loc-enable { transition: none; }
+}

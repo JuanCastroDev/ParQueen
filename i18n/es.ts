@@ -70,7 +70,7 @@ const es: Record<string, string> = {
     'location_prompt.requesting': 'Solicitando acceso…',
     'location_prompt.skip': 'Ahora no',
     'location_prompt.reassurance': 'Puedes cambiar esto cuando quieras en los ajustes de tu dispositivo.',
-    'location_prompt.map_desc': 'Calle ilustrada con un punto de ubicación y Pings de ejemplo',
+    'location_prompt.map_desc': 'Ilustración de una cuadra vista desde arriba, centrada en un punto de ubicación de ejemplo con Pings de ejemplo cerca',
     'location_prompt.services_off': 'Los servicios de ubicación están desactivados. Actívalos en la configuración del dispositivo e inténtalo de nuevo.',
     'location_prompt.try_again': 'Aún no se pudo obtener la ubicación. El acceso no fue bloqueado — inténtalo de nuevo.',
 

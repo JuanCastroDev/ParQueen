@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Navigation, Info } from 'lucide-react';
-import { LocationPromptArtwork } from './LocationPromptArtwork';
-import './locationPrompt.css';
+import React, { useState, useEffect, useCallback, type CSSProperties } from 'react';
+import { Info, LocateFixed, Settings } from 'lucide-react';
+import Logo from '../assets/Parqueen_Logo.png';
+import { LocationNeighborhoodArt } from './location-prompt/LocationNeighborhoodArt';
+import { PARQUEEN_MARK_PATH, PARQUEEN_MARK_TRANSFORM, PIN_PATH, PIN_VIEWBOX } from './street-parking/parqueenMark';
+import './location-prompt/locationPrompt.css';
 import { t, useLang } from '../i18n';
 import { readPersistedAccess, reconcileLocationAccess } from '../utils/locationAccess';
 import { checkLocationPermission, requestLocationPermission } from '../utils/geolocation';
@@ -12,6 +14,9 @@ interface LocationPromptViewProps {
     /** Authenticated Android visual preview: never read or request OS permissions. */
     previewMode?: boolean;
 }
+
+/** Staggered entrance order for the panel's children (CSS reads --d; reduced motion ignores it). */
+const rise = (d: number) => ({ '--d': d } as CSSProperties);
 
 export const LocationPromptView: React.FC<LocationPromptViewProps> = ({ onComplete, previewMode = false }) => {
     useLang();
@@ -67,54 +72,74 @@ export const LocationPromptView: React.FC<LocationPromptViewProps> = ({ onComple
     }, [onComplete]);
 
     return (
-        <div className="pq-location-screen" data-testid="location-permission-screen">
-            <div className="pq-location-hero">
-                <LocationPromptArtwork description={t('location_prompt.map_desc')} />
-                <div className="pq-location-hero-legend" aria-hidden="true">
-                    <span className="pq-location-legend-dot" />
-                    <span>{t('location_prompt.you_label')}</span>
-                    <span className="pq-location-legend-separator" />
-                    <span className="pq-location-legend-ping" />
-                    <span>{t('location_prompt.pings_label')}</span>
+        <div className="pq-loc" data-testid="location-permission-screen">
+            <div className="pq-loc-hero">
+                <LocationNeighborhoodArt label={t('location_prompt.map_desc')} />
+
+                <div className="pq-loc-brand" aria-hidden="true">
+                    <img src={Logo} alt="" draggable={false} />
+                    <span>ParQueen</span>
+                </div>
+
+                <div className="pq-loc-legend" aria-hidden="true">
+                    <span className="pq-loc-legend-item">
+                        <span className="pq-loc-legend-dot" />
+                        {t('location_prompt.you_label')}
+                    </span>
+                    <span className="pq-loc-legend-rule" />
+                    <span className="pq-loc-legend-item">
+                        <svg className="pq-loc-legend-pin" viewBox={PIN_VIEWBOX} focusable="false">
+                            <path d={PIN_PATH} fill="#1e75ff" />
+                            <g transform={PARQUEEN_MARK_TRANSFORM}><path d={PARQUEEN_MARK_PATH} fill="#fff" fillRule="evenodd" /></g>
+                        </svg>
+                        {t('location_prompt.pings_label')}
+                    </span>
                 </div>
             </div>
 
-            <section className="pq-location-content" aria-labelledby="pq-location-heading">
-                <p className="pq-location-eyebrow">{t('location_prompt.eyebrow')}</p>
-                <h1 id="pq-location-heading" className="pq-location-heading">
-                    {t('location_prompt.headline')} <span>{t('location_prompt.headline_accent')}</span>
+            <section className="pq-loc-panel" aria-labelledby="pq-loc-heading">
+                <p className="pq-loc-eyebrow pq-loc-rise" style={rise(0)}>
+                    <LocateFixed aria-hidden="true" />
+                    <span>{t('location_prompt.eyebrow')}</span>
+                </p>
+                <h1 id="pq-loc-heading" className="pq-loc-title pq-loc-rise" style={rise(1)}>
+                    {t('location_prompt.headline')}{' '}
+                    <span className="pq-loc-title-accent">{t('location_prompt.headline_accent')}</span>
                 </h1>
-                <p className="pq-location-description">{t('location_prompt.body')}</p>
+                <p className="pq-loc-body pq-loc-rise" style={rise(2)}>{t('location_prompt.body')}</p>
 
-                {hint && (
-                    <p role="status" aria-live="polite" className="pq-location-hint">
-                        <Info size={17} aria-hidden="true" />
-                        <span>{hint === 'services_off' ? t('location_prompt.services_off') : t('location_prompt.try_again')}</span>
-                    </p>
-                )}
+                <div className="pq-loc-status" aria-live="polite">
+                    {hint && (
+                        <p className="pq-loc-hint">
+                            <Info aria-hidden="true" />
+                            <span>{hint === 'services_off' ? t('location_prompt.services_off') : t('location_prompt.try_again')}</span>
+                        </p>
+                    )}
+                </div>
 
-                <div className="pq-location-actions">
+                <div className="pq-loc-actions pq-loc-rise" style={rise(3)}>
                     <button
                         type="button"
-                        className="pq-location-enable"
+                        className="pq-loc-enable"
                         onClick={handleEnable}
                         disabled={requesting}
                         aria-busy={requesting}
                     >
-                        <Navigation size={20} aria-hidden="true" />
-                        {requesting ? t('location_prompt.requesting') : t('location_prompt.enable')}
+                        <LocateFixed aria-hidden="true" />
+                        <span>{requesting ? t('location_prompt.requesting') : t('location_prompt.enable')}</span>
                     </button>
                     <button
                         type="button"
-                        className="pq-location-skip"
+                        className="pq-loc-skip"
                         onClick={handleSkip}
                         disabled={requesting}
                     >
                         {t('location_prompt.skip')}
                     </button>
                 </div>
-                <p className="pq-location-reassurance">
-                    <Info size={15} aria-hidden="true" />
+
+                <p className="pq-loc-reassurance pq-loc-rise" style={rise(4)}>
+                    <Settings aria-hidden="true" />
                     <span>{t('location_prompt.reassurance')}</span>
                 </p>
             </section>
