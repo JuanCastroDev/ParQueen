@@ -49,6 +49,9 @@ describe('Onboarding 2.0 location permission continuation', () => {
     expect(styles).toContain('overflow-y: auto');
     expect(styles).toContain('@media (prefers-reduced-motion: reduce)');
     expect(styles).toContain('@media (max-height: 680px)');
+    // The S20 WebView is 726px high: with a services-off hint the art must yield.
+    expect(styles).toContain('@media (max-height: 760px) and (orientation: portrait)');
+    expect(styles).toContain('.pq-loc:has(.pq-loc-hint) .pq-loc-hero { flex-basis: 132px; min-height: 132px; }');
     expect(styles).toContain('@media (orientation: landscape)');
     // only transform/opacity animate, and no animation repeats forever
     expect(styles).not.toMatch(/infinite/);

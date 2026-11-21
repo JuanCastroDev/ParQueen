@@ -257,7 +257,7 @@
   .pq-loc-actions { margin-top: 16px; }
   .pq-loc-eyebrow { margin-bottom: 8px; }
 }
-@media (max-height: 680px) and (orientation: portrait) {
+@media (max-height: 760px) and (orientation: portrait) {
   /* a retry / services-off hint takes room from the art, so the Enable button stays on screen */
   .pq-loc:has(.pq-loc-hint) .pq-loc-hero { flex-basis: 132px; min-height: 132px; }
   .pq-loc:has(.pq-loc-hint) .pq-loc-legend { display: none; }
