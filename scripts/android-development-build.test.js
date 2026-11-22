@@ -38,11 +38,16 @@ describe('Android Onboarding 2.0 development build', () => {
       .toThrow('test-only Vite environment override');
   });
 
-  it('never executes an environment-selected Windows shell', () => {
+  it('invokes only fixed build commands without an indirect command wrapper', () => {
     const runner = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'android-development-build.mjs'), 'utf8');
-    expect(runner).toContain("run('cmd.exe', ['/d', '/c', 'gradlew.bat', ':app:assembleDebug']");
+    expect(runner).toContain("spawnSync('cmd.exe', ['/d', '/c', 'npm.cmd', 'run', 'cap:sync:android']");
+    expect(runner).toContain("spawnSync('npm', ['run', 'cap:sync:android']");
+    expect(runner).toContain("spawnSync('cmd.exe', ['/d', '/c', 'gradlew.bat', ':app:assembleDebug']");
+    expect(runner).toContain("spawnSync('./gradlew', [':app:assembleDebug']");
     expect(runner).not.toContain('process.env.ComSpec');
+    expect(runner).not.toContain('process.env.npm_execpath');
     expect(runner).not.toContain('shell: true');
+    expect(runner).not.toContain('run(command, args');
   });
 
   it('leaves the existing production and Android sync commands unchanged', () => {
