@@ -33,10 +33,9 @@ export function androidDevelopmentEnvironment(inherited = process.env) {
   return { ...inherited, ...ANDROID_DEV_FLAGS };
 }
 
-function run(command, args, cwd, env) {
-  const result = spawnSync(command, args, { cwd, env, stdio: 'inherit' });
+function requireSuccess(result, stage) {
   if (result.error) {
-    console.error(`Android development build blocked: failed to start ${command}.`);
+    console.error(`Android development build blocked: ${stage} could not start.`);
     process.exit(1);
   }
   if (result.status !== 0) {
@@ -50,14 +49,26 @@ function main() {
     throw new Error('Usage: npm run android:dev:apk or npm run android:dev:sync');
   }
 
-  // npm_execpath is provided by npm run; invoking its JS entry through Node
-  // works on both Windows and macOS/Linux without an npm.cmd shell fallback.
-  const npmCli = process.env.npm_execpath;
-  if (!npmCli) throw new Error('Run via npm, not directly with node.');
   const env = androidDevelopmentEnvironment();
 
   console.log('Android development build: Onboarding 2.0 ON, founder preview ON, QA auth/diagnostics/PostHog OFF.');
-  run(process.execPath, [npmCli, 'run', 'cap:sync:android'], ROOT, env);
+  // Use constant executable/argument arrays rather than passing through a generic
+  // command-running wrapper or executable path supplied by the environment.
+  if (process.platform === 'win32') {
+    requireSuccess(
+      spawnSync('cmd.exe', ['/d', '/c', 'npm.cmd', 'run', 'cap:sync:android'], {
+        cwd: ROOT, env, stdio: 'inherit',
+      }),
+      'Capacitor Android sync',
+    );
+  } else {
+    requireSuccess(
+      spawnSync('npm', ['run', 'cap:sync:android'], {
+        cwd: ROOT, env, stdio: 'inherit',
+      }),
+      'Capacitor Android sync',
+    );
+  }
 
   if (args[0] === '--sync-only') {
     console.log('Android development sync complete. No APK was packaged or installed.');
@@ -65,10 +76,19 @@ function main() {
   }
 
   if (process.platform === 'win32') {
-    // Use the fixed system command name, never an executable supplied by ComSpec.
-    run('cmd.exe', ['/d', '/c', 'gradlew.bat', ':app:assembleDebug'], ANDROID_ROOT, env);
+    requireSuccess(
+      spawnSync('cmd.exe', ['/d', '/c', 'gradlew.bat', ':app:assembleDebug'], {
+        cwd: ANDROID_ROOT, env, stdio: 'inherit',
+      }),
+      'Gradle debug APK',
+    );
   } else {
-    run('./gradlew', [':app:assembleDebug'], ANDROID_ROOT, env);
+    requireSuccess(
+      spawnSync('./gradlew', [':app:assembleDebug'], {
+        cwd: ANDROID_ROOT, env, stdio: 'inherit',
+      }),
+      'Gradle debug APK',
+    );
   }
 
   console.log('Android debug APK assembled. No device installation or publication was performed.');
