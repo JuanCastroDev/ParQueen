@@ -65,7 +65,8 @@ function main() {
   }
 
   if (process.platform === 'win32') {
-    run(process.env.ComSpec || 'cmd.exe', ['/d', '/c', 'gradlew.bat', ':app:assembleDebug'], ANDROID_ROOT, env);
+    // Use the fixed system command name, never an executable supplied by ComSpec.
+    run('cmd.exe', ['/d', '/c', 'gradlew.bat', ':app:assembleDebug'], ANDROID_ROOT, env);
   } else {
     run('./gradlew', [':app:assembleDebug'], ANDROID_ROOT, env);
   }
