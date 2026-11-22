@@ -38,6 +38,13 @@ describe('Android Onboarding 2.0 development build', () => {
       .toThrow('test-only Vite environment override');
   });
 
+  it('never executes an environment-selected Windows shell', () => {
+    const runner = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'android-development-build.mjs'), 'utf8');
+    expect(runner).toContain("run('cmd.exe', ['/d', '/c', 'gradlew.bat', ':app:assembleDebug']");
+    expect(runner).not.toContain('process.env.ComSpec');
+    expect(runner).not.toContain('shell: true');
+  });
+
   it('leaves the existing production and Android sync commands unchanged', () => {
     const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8'));
     expect(pkg.scripts['android:dev:sync']).toBe('node scripts/android-development-build.mjs --sync-only');
