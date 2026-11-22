@@ -42,7 +42,11 @@ describe('Android Onboarding 2.0 development build', () => {
     const runner = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'android-development-build.mjs'), 'utf8');
     expect(runner).toContain("spawnSync('cmd.exe', ['/d', '/c', 'npm.cmd', 'run', 'cap:sync:android']");
     expect(runner).toContain("spawnSync('npm', ['run', 'cap:sync:android']");
-    expect(runner).toContain("spawnSync('cmd.exe', ['/d', '/c', 'gradlew.bat', ':app:assembleDebug']");
+    expect(runner).toContain("spawnSync('cmd.exe', ['/d', '/c', '.\\gradlew.bat', ':app:assembleDebug']");
+    // An explicit relative path must work even when cmd.exe excludes CWD from executable lookup.
+    expect(runner).not.toContain("['/d', '/c', 'gradlew.bat', ':app:assembleDebug']");
+    expect(runner).not.toContain("delete env.NoDefaultCurrentDirectoryInExePath");
+    expect(runner).not.toContain("NoDefaultCurrentDirectoryInExePath =");
     expect(runner).toContain("spawnSync('./gradlew', [':app:assembleDebug']");
     expect(runner).not.toContain('process.env.ComSpec');
     expect(runner).not.toContain('process.env.npm_execpath');
