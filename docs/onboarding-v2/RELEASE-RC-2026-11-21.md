@@ -41,7 +41,7 @@ try { .\gradlew.bat :app:assembleDebug } finally { Pop-Location }
 
 - [x] Source `170b05f` debug location screen + S20 hint/regular layout evidence reported by founder
 - [x] Compiled `VITE_ONBOARDING_V2=1` and disabled diagnostic/QA auth/PostHog flags reported by founder; store candidate's compiled assets separately passed pre-signing checks
-- [ ] Confirm Onboarding 2.0 welcome, neighborhood story, Replay/Skip, EN/ES, and three intentions **on the actual installed debug build** (Settings preview may be used without changing auth)
+- [x] Confirm Onboarding 2.0 welcome, neighborhood story, Replay/Skip, EN/ES, and three intentions **on the actual installed debug build** (non-destructive Settings preview only; not an end-to-end signup)
 - [ ] Test the true first-time welcome → intention → OTP/username → new location screen → map journey on an **isolated development account/profile or emulator** only after an explicit test plan; never clear the founder's S20 account or sign out unexpectedly
 - [ ] Verify location Allow/Deny/Not Now, services-off hint, reduced motion, TalkBack, increased font size, and Back routing without unintended Pings or production writes
 - [ ] Keep exact source, APK/asset hashes, signing check, redacted device screenshots and permission snapshots in durable local evidence storage rather than temporary scratchpads
@@ -93,3 +93,13 @@ This draft changes documentation only. It does not install anything, build on th
 - Report distinct `PASS` / `FAIL` / `NOT_TESTED` / `BLOCKED` for Test A and Test B; list exact viewport and remaining accessibility checks. Do not mark the full new-user journey verified based on preview.
 
 **Follow-up, not part of this pass:** Full first-time onboarding → signup → real location permission must use a separately approved development identity/environment. An Android emulator with its own app storage is **not** automatically an isolated Firebase backend; check project, Auth and App Check config before entering or generating phone credentials. Existing S7/A5 NO_GO dispositions remain unchanged.
+
+## S20 physical preview execution result — 2026-11-21
+
+**Test A: PASS — Onboarding 2.0 founder preview.** Actual installed `app.parqueen` debug APK from source `170b05f`; APK SHA-256 reported as `911510df…3208`, debug signing SHA-256 `269fd3fd…27af`; viewport `360×726` CSS px. No reinstall. Branded welcome without legacy carousel, one-tap story progression with three captions (~0.5s, ~2.8s, ~6.5s), choices by ~8.2s, Replay/Skip, in-app Back, Android Back and X exit confirmed. All three intention selections **exit preview only**, without signup/Ping/composer or local intention storage mutation. Spanish visual pass had no clipping/overflow; original English restored. **D21 copy-review note:** `BIENVENIDA A` is feminine phrasing; determine whether intentional or replace with an inclusive alternative after review. It is not a verified translation defect.
+
+**Test B: PASS — Location founder preview.** Artwork, example location dot/radius, three illustrative Pings, legend, controls and reassurance agree with previously accepted S20 layout; normal-screen overflow 0. Enable location, Not now, X and Android Back close preview to Settings without Android permission UI. Previous services-off hint regression PASS remains applicable to this exact installed APK; hint was not re-injected in this execution.
+
+**Post-test: PASS.** Existing signed-in session, app package/signer/install timestamps, English language, local storage and Android location permissions unchanged. No install, sign-out, account creation, Ping publish, Firebase writes, or permission request. Safe screenshots (status bars redacted), package/permission snapshots and `RESULTS.md` in the founder's local `C:\Users\jayca\ParQueen-QA-Evidence\s20-preview-qa-20261121\` directory; private local evidence was **not** uploaded to GitHub.
+
+**Remaining NOT_TESTED:** genuine first-user flow (OTP, username, location consent, map), 320×568 physical viewport, Spanish location screen, TalkBack, largest font and reduced motion. Full user-flow QA can use a debug build, not a signed release AAB. A fresh Android profile/emulator isolates *local app state* only; before any signup, verify its Firebase project and use an approved separate development identity/backend. Do not clear or log out the founder's S20 session. S7/A5 remain NO_GO and no public release is authorized.
