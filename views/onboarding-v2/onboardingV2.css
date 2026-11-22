@@ -227,6 +227,17 @@
 .pq-obv2.tiny .brand-hero img { height: 80px; }
 .pq-obv2.tiny .brand-hero .wm { font-size: calc(28px * var(--ts, 1)); }
 .pq-obv2.tiny .p-arrive h1 { font-size: calc(26px * var(--ts, 1)); line-height: calc(31px * var(--ts, 1)); }
+/* tiny portrait (e.g. 320x568): the camera keeps the story band visible, which leaves about 245px for the chooser.
+   Compact it so all three intentions (and, in English, the disclosure) are in view without scrolling; the account link
+   stays reachable by scrolling. Rows keep a 44px touch target; the kicker goes, as in landscape. */
+.pq-obv2.tiny .p-choose { padding-bottom: calc(var(--ib) + 4px); }
+.pq-obv2.tiny .p-choose .kicker { display: none; }
+.pq-obv2.tiny .p-choose h1 { font-size: calc(21px * var(--ts, 1)); line-height: calc(25px * var(--ts, 1)); }
+.pq-obv2.tiny .opts { gap: 4px; margin-top: 8px; }
+.pq-obv2.tiny .opt { min-height: 44px; padding-block: 4px; }
+.pq-obv2.tiny .opt .ic { width: 32px; height: 32px; }
+.pq-obv2.tiny .trust-line { margin-top: 8px; font-size: calc(13px * var(--ts, 1)); line-height: calc(18px * var(--ts, 1)); }
+.pq-obv2.tiny .p-choose .row1 { margin-top: 2px; }
 
 .pq-obv2.arrive-tight .p-arrive .sub { display: none; }
 .pq-obv2.scroll-panel .panel:not(.p-arrive) { max-height: var(--pmax); overflow-y: auto; overscroll-behavior: contain; padding-top: 4px; scrollbar-width: none;
