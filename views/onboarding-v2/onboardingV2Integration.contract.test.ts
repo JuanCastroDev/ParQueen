@@ -191,6 +191,16 @@ describe('founder S20 QA fixes (welcome dots, transition, lower composition)', (
     expect(fore.startsWith('<svg')).toBe(true); expect(fore).toContain('viewBox="0 600 390 300"');
   });
 
+  it('tiny portrait screens compact the chooser so all three intentions fit, with 44px touch targets', () => {
+    const tiny = css.slice(css.indexOf('/* tiny portrait (e.g. 320x568)'), css.indexOf('.pq-obv2.arrive-tight'));
+    expect(tiny).toContain('.pq-obv2.tiny .p-choose .kicker { display: none; }');
+    expect(tiny).toContain('.pq-obv2.tiny .opt { min-height: 44px;');
+    expect(tiny).toContain('.pq-obv2.tiny .trust-line {');
+    // only the tiny class changes: short (e.g. 360x726) and full-size screens keep the approved chooser
+    expect(tiny.match(/^\.pq-obv2[^{]*\{/gm)?.every(sel => sel.startsWith('.pq-obv2.tiny '))).toBe(true);
+    expect(css).toContain('.pq-obv2.short .opt { min-height: 50px; padding-block: 6px; }');
+  });
+
   it('the caption block keeps the longest caption height, so nothing jumps when captions change', () => {
     expect(css).toContain('.pq-obv2 > .p-demo .caption { min-height: max(calc(62px * var(--ts, 1)), var(--cap-h, 0px)); }');
     expect(view).toContain("'--cap-h'");
