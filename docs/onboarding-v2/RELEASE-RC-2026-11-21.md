@@ -1,33 +1,16 @@
-# Onboarding 2.0 + Location Screen: release-candidate execution
+# Onboarding 2.0 + New Location Screen — development rollout
 
-**Disposition: PREPARATION ONLY — NOT DEPLOYED.** Prepared 2026-11-21 from `main` commit `170b05f1a34f30fc827d3d3b9d47badb7bf0cc28` (merged PRs #314, #356, #357). This document neither authorizes bypassing security gates nor makes a production change.
+**Status: DEV-ONLY, no app-store submission, no live Hosting publish.** Updated 2026-11-21 after founder clarification: ParQueen has **never** been uploaded to Google Play or the Apple App Store and is still in development. Source baseline: `170b05f1a34f30fc827d3d3b9d47badb7bf0cc28` (merged #314, #356, #357).
 
-## Objective and scope
+## Corrected deployment target
 
-Ship the **existing** Onboarding 2.0 and redesigned Enable Location screen *before* further optional visual work. The location hint overflow fix was confirmed on a physical Galaxy S20: 360×726 usable CSS pixels, 0 vertical overflow (previously 22px), regular screen unchanged, no location-permission changes. This is targeted device evidence, not full release QA.
+The immediate goal is to use the real new screens in the **Android development build** (Galaxy S20), and optionally a separate web development preview — **not** to create a signed store-release AAB. The existing `app.parqueen` debug keystore/signature is suitable for local development; **release signing is not a blocker**.
 
-- **In scope:** Opt in to `VITE_ONBOARDING_V2=1` at build time, produce separate Android and web/PWA candidates, verify real first-time onboarding and location transition, then publish only after required gates are cleared.
-- **Out of scope:** Firebase Functions, Firestore/Storage rules, IAM, App Check configuration, production data writes, S7, A5, account creation/deletion for QA, changes to preview behavior, and any Google Play or Hosting publication without a release gate.
-- **Rollback:** Rebuild the relevant client with `VITE_ONBOARDING_V2` unset. This is a build-time switch, not a live remote toggle. Android store rollback requires a new versionCode and republishing, not uninstalling users' apps.
+**Existing evidence (not a new install in this PR):** the Android debug build from `170b05f` was previously installed in place with `VITE_ONBOARDING_V2=1` and `VITE_OBV2_PREVIEW=1`. The actual location screen preview passed on the physical S20 (360×726 usable viewport, services-off overflow 22px → 0, regular layout unchanged, permissions unchanged). That already makes the redesigned location screen available in the development build. An authenticated account naturally bypasses first-time onboarding, so a separate clean test identity/environment is needed to exercise the **real first-run flow**; using Settings Preview is non-destructive but does not test all signup transitions.
 
-## Release flags (both candidate builds)
+## Android debug build only
 
-| Variable | Value | Reason |
-| --- | --- | --- |
-| `VITE_ONBOARDING_V2` | `1` | Opts into the integrated new-user path |
-| `VITE_OBV2_PREVIEW` | `0` | Disable Android Settings preview entry |
-| `VITE_OBV2_DIAG` | `0` | Disable development-only diagnostics |
-| `VITE_QA_AUTH` | `false` | Keep QA auth bypass off |
-| `VITE_PARQUEEN_APPCHECK_QA` | `false` | Keep App Check QA panel off |
-| `VITE_POSTHOG_ENABLED` | `false` | Maintain release analytics freeze |
-
-`VITE_POSTHOG_PROJECT_TOKEN` must remain **unset**: the existing build guard is fail-closed. Use already-approved local environment/configuration for Mapbox and Firebase. Never commit, print, transmit, or regenerate token, signing, or `google-services.json` values.
-
-## Execution from the approved clean source worktree
-
-Use the exact verified commit for the candidate; **do not reset, clean, or overwrite** a working directory with unrelated changes. The working tree and branch identity must be recorded before any build. The commands below package candidates only.
-
-PowerShell environment in a dedicated terminal:
+From a clean source worktree at the pinned source commit, with the *existing* approved local Mapbox/Firebase configuration and `google-services.json` (never print or commit values):
 
 ```powershell
 $expected = '170b05f1a34f30fc827d3d3b9d47badb7bf0cc28'
@@ -35,65 +18,42 @@ if ((git rev-parse HEAD).Trim() -ne $expected) { throw 'Wrong source revision: s
 if (git status --porcelain) { throw 'Dirty worktree: stop' }
 
 $env:VITE_ONBOARDING_V2 = '1'
-$env:VITE_OBV2_PREVIEW = '0'
+# Founder-only Settings previews are appropriate on the development S20.
+$env:VITE_OBV2_PREVIEW = '1'
 $env:VITE_OBV2_DIAG = '0'
 $env:VITE_QA_AUTH = 'false'
 $env:VITE_PARQUEEN_APPCHECK_QA = 'false'
 $env:VITE_POSTHOG_ENABLED = 'false'
-if ($env:VITE_POSTHOG_PROJECT_TOKEN) { throw 'PostHog release token is present: stop' }
+if ($env:VITE_POSTHOG_PROJECT_TOKEN) { throw 'PostHog token present: stop' }
+
+npm ci
+npm run cap:sync:android
+Push-Location android
+try { .\gradlew.bat :app:assembleDebug } finally { Pop-Location }
 ```
 
-### Android (first priority)
+- `cap:sync:android` must use the native-specific build path with both approved `VITE_MAPBOX_TOKEN` and `VITE_MAPBOX_ANDROID_TOKEN`. Android-generated `dist/` must **never** be deployed to web Hosting.
+- `assembleDebug` is sufficient. **Do not** run `bundleRelease`, request an upload keystore, generate a replacement keystore, use an upload key, or bump `versionCode` for local QA.
+- Check artifact SHA-256, package `app.parqueen`, compiled flags, and the debug APK signer SHA-256 against the installed app before considering `adb install -r`. Stop on a signer mismatch. Do not uninstall or clear app data. If the exact candidate is already installed and evidence is current, do not reinstall just to repeat the step.
+- The Settings preview is restricted to explicitly opted-in Android development builds. It demonstrates the real Onboarding 2.0 story and location art, but it does not prove live new-account signup or actual permission transitions. The location hint preview must not request OS location permissions or write Firebase data.
 
-1. Preserve the existing `app.parqueen` application ID, release signing configuration, local `google-services.json`, and approved Android Mapbox token. Do **not** switch on `VITE_OBV2_PREVIEW` or diagnostic flags.
-2. Execute from repository root:
+## Acceptance on S20
 
-   ```powershell
-   npm ci
-   npm run cap:sync:android
-   Push-Location android
-   try { .\gradlew.bat :app:bundleRelease } finally { Pop-Location }
-   ```
+- [x] Source `170b05f` debug location screen + S20 hint/regular layout evidence reported by founder
+- [x] Compiled `VITE_ONBOARDING_V2=1` and disabled diagnostic/QA auth/PostHog flags reported by founder; store candidate's compiled assets separately passed pre-signing checks
+- [ ] Confirm Onboarding 2.0 welcome, neighborhood story, Replay/Skip, EN/ES, and three intentions **on the actual installed debug build** (Settings preview may be used without changing auth)
+- [ ] Test the true first-time welcome → intention → OTP/username → new location screen → map journey on an **isolated development account/profile or emulator** only after an explicit test plan; never clear the founder's S20 account or sign out unexpectedly
+- [ ] Verify location Allow/Deny/Not Now, services-off hint, reduced motion, TalkBack, increased font size, and Back routing without unintended Pings or production writes
+- [ ] Keep exact source, APK/asset hashes, signing check, redacted device screenshots and permission snapshots in durable local evidence storage rather than temporary scratchpads
 
-3. The `cap:sync:android` command uses the native-only Vite build path and enforces both `VITE_MAPBOX_TOKEN` and `VITE_MAPBOX_ANDROID_TOKEN`. The existing PostHog release check must pass. The Gradle release signing guard must use the approved external upload key; missing/malformed release keys must fail closed.
-4. Record source SHA, build logs (redacted), AAB SHA-256, package ID, versionCode, upload certificate fingerprint, and whether the Play App Signing certificate is registered for Firebase Auth/App Check. An AAB is **not** a device-installed APK; do not call `adb install -r` on it or replace the authenticated S20 debug build with a differently signed APK.
-5. Only after release gates pass: upload the verified artifact to the intended Google Play test track through the authenticated founder-controlled console; verify a genuinely fresh user's welcome → story → intention → signup → location prompt → map flow. Existing-account S20 preview evidence does not substitute for that test.
+## Optional web development preview (separate from Android)
 
-### Web/PWA (separate artifact)
+Build a **browser** artifact separately with `VITE_ONBOARDING_V2=1`, `VITE_OBV2_PREVIEW=0` and the approved browser Mapbox token. Use a local Vite preview first, or a private Firebase Hosting **preview channel** with explicit permission. If a preview channel uses the current production Firebase project it can still connect to the production backend; it is **not an isolated staging backend**. Prefer a separately configured staging Firebase project for first-time signup/permission testing. Do not run an unscoped `firebase deploy`, do not deploy native `dist/` to Hosting, and do not modify Functions/rules/IAM/App Check.
 
-Never deploy the Android-specific `dist/` to Hosting. Build web assets separately, with the same release flags and the existing browser Mapbox/App Check configuration:
+## Later milestone, not a current blocker
 
-```powershell
-npm run build
-npm run verify:posthog:release
-```
+Before a **first Google Play upload**, confirm Play Console app state and generate/secure an **initial upload key** if no key was ever registered; verify versionCode, release signing and Play App Signing. That process is separate from getting the UI into a local debug build. A new store release or production Hosting publish still requires its own release plan and applicable S7/A5 gates; both remain NO_GO, untouched here.
 
-Record an independent web `dist/` digest/manifest and review the new-user routing, location prompt, Spanish copy and access behavior. **Do not run a Hosting deployment until release gates pass.** The final approved command must be scoped only to Hosting, with explicit project `parkqueen-46475363-ccf36`:
+## Boundaries
 
-```powershell
-# GATED PUBLICATION STEP — NOT YET AUTHORIZED FOR EXECUTION
-firebase deploy --only hosting --project parkqueen-46475363-ccf36
-```
-
-Never use an unscoped `firebase deploy`: it could publish Functions or rules. Confirm the currently deployed Hosting version and preserve a rollback artifact before any publish.
-
-## Release gates — fail closed
-
-- [ ] **Source/provenance:** exact source SHA pinned; clean worktree; required CI passes; no unreviewed changes or changed release-sensitive paths
-- [ ] **Product reviews:** D21 Spanish native-speaker pass for all Onboarding 2.0 and location copy; D27 review of the Ping availability/non-reservation disclosure
-- [ ] **Accessibility:** on-device TalkBack, largest system font, reduced motion; compact viewport with permission hint and EN/ES; verify actual CTA and text remain reachable
-- [ ] **Real path:** fresh eligible user journey, all three intentions, OTP/username, permission allow/deny/decline/services-off, map/Ping, Android Back, and re-entry without deleting the founder's account
-- [ ] **Binary safety:** flag state verified from produced build; no preview/diag/QA auth or PostHog enabled; correct package/signing; native Mapbox/App Check checks
-- [ ] **Backend boundaries:** no Functions, rules, IAM, App Check setting changes; confirm S7/A5 NO_GO release constraints have been explicitly resolved or a separate, documented UI-only release authorization exists that does not bypass them
-- [ ] **Publication:** founder approval of exact tested artifact, destination track/site, rollback path and expected affected users; postpublish smoke evidence
-
-## Evidence already available, but not promoted to full release approval
-
-- **PASS:** physical S20 location hint at 360×726 after PR #357, 22px → 0 overflow, no regular-screen/layout or location permission regression, `adb install -r` preserved account.
-- **PASS previously:** Onboarding 2.0 visual story, transition, and Android Back smoke testing (see `docs/onboarding-v2/INTEGRATION-QA.md`).
-- **NOT VERIFIED for this release:** clean signed distributable AAB, new user end-to-end on release artifact, current D21/D27/A12 signoffs, Play track upload, Firebase Hosting publication, and post-deploy verification.
-- **UNCHANGED:** S7 and A5 have outstanding NO_GO dispositions. No release is represented as approved by this document.
-
-## Stop criteria
-
-Stop immediately if source identity differs, worktree is dirty, required environment/signing is missing, forbidden QA/analytics tooling appears, CI or legal/accessibility gates fail, the account/session or signing identity would be destroyed, or any instruction tries to broaden publication beyond client assets. Preserve evidence and report a precise blocked status; do not work around the gate.
+This draft changes documentation only. It does not install anything, build on the founder's PC, change credentials, upload to a store, publish Hosting, create accounts, change authorization rules, alter S7/A5 gates, or merge into `main`. 
