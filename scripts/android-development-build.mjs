@@ -76,8 +76,10 @@ function main() {
   }
 
   if (process.platform === 'win32') {
+    // Explicit relative path avoids cmd.exe's PATH/current-directory executable search,
+    // including when NoDefaultCurrentDirectoryInExePath=1 is set by an agent shell.
     requireSuccess(
-      spawnSync('cmd.exe', ['/d', '/c', 'gradlew.bat', ':app:assembleDebug'], {
+      spawnSync('cmd.exe', ['/d', '/c', '.\\gradlew.bat', ':app:assembleDebug'], {
         cwd: ANDROID_ROOT, env, stdio: 'inherit',
       }),
       'Gradle debug APK',
