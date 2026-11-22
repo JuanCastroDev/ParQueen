@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ANDROID_DEV_FLAGS, androidDevelopmentEnvironment } from './android-development-build.mjs';
 
 describe('Android Onboarding 2.0 development build', () => {
@@ -38,7 +39,7 @@ describe('Android Onboarding 2.0 development build', () => {
   });
 
   it('leaves the existing production and Android sync commands unchanged', () => {
-    const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8'));
+    const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8'));
     expect(pkg.scripts['android:dev:sync']).toBe('node scripts/android-development-build.mjs --sync-only');
     expect(pkg.scripts['android:dev:apk']).toBe('node scripts/android-development-build.mjs');
     expect(pkg.scripts['cap:sync:android']).toBe('npm run build:android && npm run verify:posthog:release && npx cap sync android');
