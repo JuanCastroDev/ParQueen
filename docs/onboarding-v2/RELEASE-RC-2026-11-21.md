@@ -56,4 +56,40 @@ Before a **first Google Play upload**, confirm Play Console app state and genera
 
 ## Boundaries
 
-This draft changes documentation only. It does not install anything, build on the founder's PC, change credentials, upload to a store, publish Hosting, create accounts, change authorization rules, alter S7/A5 gates, or merge into `main`. 
+This draft changes documentation only. It does not install anything, build on the founder's PC, change credentials, upload to a store, publish Hosting, create accounts, change authorization rules, alter S7/A5 gates, or merge into `main`.
+
+## S20 non-destructive preview QA protocol
+
+**Purpose:** Verify the installed Android development experience using an already-authenticated founder account. The agent running on the founder's Windows machine may use an attached S20 and authenticated WebView DevTools. This protocol **does not** authorize a new account, backend writes, permission changes, sign-out, app-data clear, reinstall, or Play/Hosting publish.
+
+**Preflight and stop conditions**
+
+1. Confirm Android Debug Bridge sees the Galaxy S20 and `app.parqueen` is installed. Capture installed APK signer fingerprint and a non-sensitive package/permission snapshot; do not dump application private storage, user tokens or identifying phone data.
+2. Check the installed app for both **Preview Onboarding 2.0** and **Preview location screen** under Profile → Settings. If either is absent, record `BLOCKED_PREVIEW_FLAG_OR_VERSION`; only propose a same-signer `adb install -r` after verifying the installed debug key matches the candidate. Do not uninstall or clear data.
+3. Keep notification shade closed. Never tap system Settings blindly. Prefer scoped WebView DevTools interactions; do not make screenshots of Android notifications/account panels. Do not save phone numbers, OTP, exact location or usernames in evidence.
+4. Record baseline language (English), signed-in state (boolean only), and location permission values. Do **not** change Android permissions or system accessibility settings in this pass.
+
+**Test A — Onboarding 2.0 preview (no signup)**
+
+1. Enter Settings → **Preview Onboarding 2.0**. Verify original branded welcome appears and does not show legacy carousel.
+2. Tap Get Started **once**; verify transition, NYC vector block, readable timed captions and three intentions. Record whether the expected approximately 8.3-second story progression is understandable, not just whether it plays.
+3. Exercise Replay, Skip, Back, and a normal preview exit. Use a new preview entry for each independent path when appropriate.
+4. Confirm choosing each intention, if exercised, **exits preview only**: no signup, Ping composer, publication, account change or saved intention.
+5. Use the in-app language control to inspect the Spanish layout and restore the original English setting before finishing. If language change cannot be restored, stop and report without additional changes.
+
+**Test B — redesigned location preview**
+
+1. Enter Settings → **Preview location screen**. Verify ParQueen branding, editable top-down neighborhood art, example dot/radius and three example Pings, primary Enable location and Not now, and reassurance text.
+2. Check the normal screen against the previously captured S20 baseline, including zero scroll overflow. The earlier services-off hint at 360×726 already passed; do not inject a hint again unless a regression is visible and the same non-destructive method is available.
+3. In preview, both Enable location and Not now should **close preview only** and must not display a system permission dialog. Do not use the real permission screen for this interaction.
+4. Return to Settings from inside the WebView. Verify no Android settings were changed.
+
+**Post-test reconciliation**
+
+- Signed-in account remains present; app language is restored to its baseline; installed package and signer unchanged.
+- Android location permission status matches the preflight snapshot.
+- No destructive operation, Ping publish, new account, sign-out, reinstall, or permission request was performed.
+- Capture only privacy-safe, redacted UI evidence in a **durable** directory outside temporary Claude/Codex scratchpads.
+- Report distinct `PASS` / `FAIL` / `NOT_TESTED` / `BLOCKED` for Test A and Test B; list exact viewport and remaining accessibility checks. Do not mark the full new-user journey verified based on preview.
+
+**Follow-up, not part of this pass:** Full first-time onboarding → signup → real location permission must use a separately approved development identity/environment. An Android emulator with its own app storage is **not** automatically an isolated Firebase backend; check project, Auth and App Check config before entering or generating phone credentials. Existing S7/A5 NO_GO dispositions remain unchanged.
