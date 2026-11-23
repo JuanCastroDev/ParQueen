@@ -97,6 +97,35 @@ describe('StreetParkingView canonical curb save contract', () => {
     expect(source).toContain('<CurbSideCrossSection');
   });
 
+  it('recovers from rejected or expired curb selection tokens without claiming a verified curb', () => {
+    const selection = between('const handleCanonicalCurbSelection', 'const handleSideConfirmation');
+    const confirmation = between('const handleSideConfirmation', 'const handleSideConfirmationCancel');
+
+    for (const handler of [selection, confirmation]) {
+      expect(handler).toContain('...canonicalResponseFields(response)');
+      expect(handler).toContain("status: 'unsupported'");
+      expect(handler).toContain("reason: 'source_unavailable'");
+      expect(handler).toContain('commitSpotIfCurrent(epoch, sessionId, updated)');
+      expect(handler).not.toContain("if (response.status === 'unsupported') return;");
+      expect(handler).not.toContain("if (response.status !== 'high_confidence') return;");
+    }
+
+    expect(confirmation).toContain("drivingSide: response.status === 'high_confidence'");
+    expect(confirmation).toContain('? chosen?.drivingSide ?? null : null');
+    const fields = between('const canonicalResponseFields', 'export const MapView');
+    const rejected = fields.slice(fields.lastIndexOf('return {'));
+    expect(rejected).toContain('segmentId: null');
+    expect(rejected).toContain('curbSideConfirmation: null');
+    expect(rejected).toContain('publicRules: null');
+    expect(rejected).toContain('regulationStatus: null');
+
+    const retry = between('const handleRetryStreetIntel = useCallback', 'const writeCleaningReminder');
+    expect(retry).toContain('} catch {');
+    expect(retry).toContain("reason: 'source_unavailable'");
+    expect(retry).toContain('commitSpotIfCurrent(epoch, sessionId, updated)');
+    expect(retry).toContain('retryStreetIntelInFlightRef.current = false');
+  });
+
   it('does not look up or replace a curb when My Car opens', () => {
     const migration = between('// Pre-V2 sessions', '// Live duration counter');
     expect(migration).toContain('Opening My Car does not look up or replace a curb');
