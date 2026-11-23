@@ -14,6 +14,10 @@ export const SAVED_SPOT_KEY = 'pq_saved_spot';
 
 /** Sessions older than this are dropped on read, as they always have been. */
 export const SAVED_SPOT_TTL_MS = 24 * 60 * 60 * 1000;
+// A server-issued sidec1 token lasts five minutes. Discard the persisted
+// selection earlier to avoid offering an already-expired challenge after restart.
+// This is UX expiry only; the server must still validate every token.
+export const CURB_SIDE_CONFIRMATION_LOCAL_MAX_AGE_MS = 4 * 60 * 1000;
 
 export type SideConfidence = 'high' | 'low' | 'unknown';
 export type StreetIntelStatus = 'found' | 'unavailable' | 'failed';
@@ -146,10 +150,26 @@ export function readSavedSpot(now: number = Date.now()): SavedSpot | null {
           confirmation: s.curbSideConfirmation,
         });
         s.curbSideConfirmation = parsed.status === 'side_confirmation_required' ? parsed.confirmation : null;
+        const checkedAtMs = typeof s.streetIntelCheckedAt === 'string'
+          ? Date.parse(s.streetIntelCheckedAt) : NaN;
+        if (!Number.isFinite(checkedAtMs) || checkedAtMs > now
+          || now - checkedAtMs >= CURB_SIDE_CONFIRMATION_LOCAL_MAX_AGE_MS) {
+          throw new Error('side_confirmation_expired');
+        }
       } catch {
         s.curbResolutionStatus = 'unsupported';
         s.curbSideConfirmation = null;
+        s.curbSelector = null;
+        s.segmentId = null;
+        s.parkingSide = null;
+        s.restrictionVersionId = null;
+        s.segmentStreetName = null;
+        s.sideConfidence = 'unknown';
         s.confirmedParkingSide = null;
+        s.drivingSide = null;
+        s.publicRules = null;
+        s.publicSchedules = null;
+        s.regulationStatus = null;
         s.streetIntelStatus = 'unavailable';
         s.streetIntelReason = 'candidate_incomplete';
         changed = true;
