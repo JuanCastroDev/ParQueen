@@ -23,10 +23,23 @@ npm ci
 npm run build          # production Vite build; requires VITE_MAPBOX_TOKEN
 npm run cap:sync       # build + copy web assets into ios/ and android/
 npm run cap:sync:android # Android build + sync; also requires VITE_MAPBOX_ANDROID_TOKEN
+npm run android:dev:sync # local Android sync with Onboarding 2.0 + Settings previews ON
+npm run android:dev:apk  # same flags, then assembleDebug; never installs or publishes
 npm run cap:copy       # build + copy only
 npm run cap:open:android
 npm run cap:open:ios   # macOS only
 ```
+
+
+## Local Android development (Onboarding 2.0)
+
+**Use `npm run android:dev:apk` for normal Android debug APK builds.** It opts in to the already-integrated live Onboarding 2.0 and the redesigned Enable Location view, with the optional Settings founder previews enabled. `npm run android:dev:sync` only builds/syncs the native project.
+
+The scripts force `VITE_ONBOARDING_V2=1` and `VITE_OBV2_PREVIEW=1`, while disabling diagnostics, QA auth, demo-Firebase, Street Intelligence QA package mode and PostHog; approved Mapbox/Firebase config stays inherited. The usual `cap:sync:android` and release commands are unchanged; they **do not** default to V2. Use the dedicated dev command intentionally.
+
+This is an **Android debug build**, using Gradle `assembleDebug`. There is no upload keystore, Google Play AAB, iOS packaging, Firebase deployment, data clear, sign-out or ADB installation. If a developer later elects to install on the already-authenticated S20, compare the APK signer with the installed `app.parqueen` package first; do not uninstall or clear data to make signatures match.
+
+Release/store builds must keep the opt-in V2 decision explicit and must not accidentally include founder-only preview tooling. A future public release remains subject to its separate gates (including S7/A5); this debug convenience does not authorize one.
 
 ## Invariants
 

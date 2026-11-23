@@ -6932,6 +6932,11 @@ const WAITLIST_HTTP_OPTIONS = {
   invoker: "public",
   memory: "256MiB",
   serviceAccount: 'parqueen-email@parkqueen-46475363-ccf36.iam.gserviceaccount.com',
+  // The deployed value, written down so a deploy cannot drift from it: these run at 20
+  // instances with concurrency 80 and 1 vCPU (read-only metadata, 2026-11-15), set nowhere
+  // in source. That is 1,600 requests in flight, far above GLOBAL_JOIN_LIMIT's 0.5 joins/s;
+  // past it Cloud Run answers 429 instead of starting more instances (a ceiling on cost).
+  maxInstances: 20,
 };
 
 exports.joinWaitlist = onRequest(

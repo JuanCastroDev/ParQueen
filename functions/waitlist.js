@@ -50,6 +50,11 @@ const PENDING_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const RESEND_COOLDOWN_MS = 60 * 1000;
 
 const JOIN_LIMIT = { limit: 5, windowSec: 600 };
+// Every verified join from every client, counted together: the one limit a caller cannot split by sending a different
+// Fastly-Client-IP, or none. 300 per 10 minutes is 0.5 writes/s on one counter document, under Firestore's sustained
+// one write per second per document, and far above a pre-launch waitlist's normal rate. Reaching it answers 429.
+const GLOBAL_JOIN_LIMIT = { limit: 300, windowSec: 600 };
+const GLOBAL_JOIN_KEY = 'all';
 const CONFIRM_LIMIT = { limit: 20, windowSec: 600 };
 const UNSUBSCRIBE_LIMIT = { limit: 20, windowSec: 600 };
 
@@ -91,15 +96,20 @@ function isWellFormedToken(token) {
  * overwrites a value the client sent. It is still not an identity and not a
  * security boundary: a request sent straight to the function URL (bypassing
  * Hosting) can set it to anything. The controls that hold regardless are, in
- * order: Turnstile verification, then the per-address confirmation-email
- * limit. This throttle only raises the cost of bursts from one client.
+ * order: Turnstile verification, the global join limit (GLOBAL_JOIN_LIMIT),
+ * then the per-address confirmation-email limit. This throttle only raises
+ * the cost of bursts from one client.
  *
  * - X-Forwarded-For (or any other forwarded header) is never consulted: on
  *   this path its visible entry is a Google front-end address, and anywhere
  *   else it is caller-controlled.
  * - An absent or malformed header returns null and the caller skips this
- *   throttle. It must not collapse everyone into one shared bucket, which
- *   would let a header change on Hosting's side throttle every real visitor.
+ *   throttle. It must not collapse everyone into one small shared bucket,
+ *   which would let a header change on Hosting's side throttle every real
+ *   visitor. Such a request is still counted by the global join limit.
+ * - IPv6 is keyed by its /64 (clientNetwork): one host usually holds a whole
+ *   /64, so a per-address key would give it a fresh bucket per address.
+ *   IPv4-mapped IPv6 is keyed as the IPv4 address.
  * - The IP is HMAC'd immediately with the dedicated rate-limit secret. Only
  *   that digest is used, and only as part of an expiring rateLimits counter
  *   ID. The raw IP is never logged, returned or stored.
@@ -109,7 +119,23 @@ function clientRateLimitKey(headers, pepper) {
     const raw = headers?.['fastly-client-ip'];
     const ip = typeof raw === 'string' ? raw.trim() : '';
     if (!ip || isIP(ip) === 0) return null;
-    return createHmac('sha256', pepper).update(ip).digest('hex');
+    return createHmac('sha256', pepper).update(clientNetwork(ip)).digest('hex');
+}
+
+/**
+ * The network a valid IP is throttled as: an IPv4 address itself, or an IPv6 /64.
+ * ponytail: expands '::' by counting groups; a trailing dotted IPv4 (64:ff9b::1.2.3.4)
+ * miscounts by one, which only adds a zero group after the /64 it returns.
+ */
+function clientNetwork(ip) {
+    if (isIP(ip) === 4) return ip;
+    const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip);
+    if (mapped) return mapped[1];
+    const [head, tail] = ip.toLowerCase().split('::');
+    const h = head ? head.split(':') : [];
+    const t = tail === undefined || tail === '' ? [] : tail.split(':');
+    const groups = tail === undefined ? h : [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t];
+    return `${groups.slice(0, 4).map(g => parseInt(g, 16).toString(16)).join(':')}::/64`;
 }
 
 /** Applies the per-client throttle only when a usable client key exists. */
@@ -302,15 +328,24 @@ async function handleJoin({ body, headers }, deps) {
         return reply(400, { status: 'invalid_email' });
     }
 
-    // 3rd layer, best effort (see clientRateLimitKey). Checked before Turnstile
-    // only so an obvious burst does not spend a siteverify call per request.
+    // 1st layer: Turnstile, before anything is written. A counter checked first
+    // was keyed on a header the caller chooses, so a new value per request made
+    // a new Firestore document per request without ever passing Turnstile. Now
+    // every write below costs the caller a solved, single-use token.
+    if (!await deps.verifyTurnstile(body?.turnstileToken)) {
+        return reply(400, { status: 'verification_failed' });
+    }
+
+    // Best effort, per client (see clientRateLimitKey); skipped without a usable header.
     if (!await withinClientLimit(deps.checkRateLimit, headers, deps.rateLimitPepper, 'waitlistJoin', JOIN_LIMIT)) {
         return reply(429, { status: 'rate_limited' });
     }
 
-    // 1st layer: Turnstile.
-    if (!await deps.verifyTurnstile(body?.turnstileToken)) {
-        return reply(400, { status: 'verification_failed' });
+    // Every client together, whatever its headers. A circuit breaker: reaching it turns real visitors away
+    // until the window ends, so it logs one line (no address, token or IP) for an alert to watch.
+    if (!await withinLimit(deps.checkRateLimit, GLOBAL_JOIN_KEY, 'waitlistJoinAll', GLOBAL_JOIN_LIMIT)) {
+        console.warn('Waitlist global join limit reached');
+        return reply(429, { status: 'rate_limited' });
     }
 
     const docId = waitlistDocId(email, deps.idPepper);
@@ -398,10 +433,10 @@ async function handleConfirm({ body, headers }, deps) {
     const token = body?.token;
     if (!isWellFormedToken(token)) return INVALID_OR_EXPIRED;
 
-    if (!await withinClientLimit(deps.checkRateLimit, headers, deps.rateLimitPepper, 'waitlistConfirm', CONFIRM_LIMIT)) {
-        return reply(429, { status: 'rate_limited' });
-    }
-
+    // The link is checked before anything is written. An unknown, used or
+    // expired token costs one indexed read and nothing else, whatever
+    // Fastly-Client-IP says (the throttle below is keyed on it, and a caller
+    // can choose it on the direct function URL). The transaction re-checks.
     const tokenHash = hashConfirmToken(token);
     const matches = await deps.db.collection(WAITLIST_COLLECTION)
         .where('confirmTokenHash', '==', tokenHash)
@@ -411,6 +446,12 @@ async function handleConfirm({ body, headers }, deps) {
 
     const ref = matches.docs[0].ref;
     const nowMs = deps.now();
+    const seen = matches.docs[0].data();
+    if (seen.status !== STATUS.PENDING || (seen.confirmTokenExpiresAt?.toMillis?.() ?? 0) <= nowMs) return INVALID_OR_EXPIRED;
+
+    if (!await withinClientLimit(deps.checkRateLimit, headers, deps.rateLimitPepper, 'waitlistConfirm', CONFIRM_LIMIT)) {
+        return reply(429, { status: 'rate_limited' });
+    }
 
     const confirmed = await deps.db.runTransaction(async tx => {
         const snap = await tx.get(ref);
@@ -527,13 +568,32 @@ async function handleUnsubscribe({ body, headers }, deps) {
     // Malformed tokens are rejected before any read, so they cost nothing.
     if (!isWellFormedToken(token)) return INVALID_OR_EXPIRED;
 
+    // Unknown or expired tokens are rejected before anything is written (see
+    // handleConfirm); unsubscribeWithToken re-checks inside its transaction.
+    const grant = await deps.db.collection(UNSUBSCRIBE_TOKEN_COLLECTION).doc(hashConfirmToken(token)).get();
+    if (!grant.exists || (grant.data().validUntil?.toMillis?.() ?? 0) <= deps.now()) return INVALID_OR_EXPIRED;
+
     if (!await withinClientLimit(deps.checkRateLimit, headers, deps.rateLimitPepper, 'waitlistUnsubscribe', UNSUBSCRIBE_LIMIT)) {
         return reply(429, { status: 'rate_limited' });
     }
 
-    return await unsubscribeWithToken(token, deps)
-        ? reply(200, { status: 'unsubscribed' })
-        : INVALID_OR_EXPIRED;
+    let unsubscribed;
+    try {
+        unsubscribed = await unsubscribeWithToken(token, deps);
+    } catch (err) {
+        if (!isClosedTransactionError(err)) throw err;
+        // Issue #354: a contended transaction can be closed (gRPC 3) instead
+        // of ABORTED, and the SDK does not retry that. Retry once: the
+        // transaction re-reads the token, so a token another request already
+        // used still gets the generic 410. A second failure propagates (500).
+        unsubscribed = await unsubscribeWithToken(token, deps);
+    }
+    return unsubscribed ? reply(200, { status: 'unsubscribed' }) : INVALID_OR_EXPIRED;
+}
+
+// Only the exact closed-transaction error; never broad INVALID_ARGUMENT.
+function isClosedTransactionError(err) {
+    return err?.code === 3 && /Transaction is invalid or closed/.test(String(err.message));
 }
 
 /**
@@ -611,6 +671,7 @@ module.exports = {
     PENDING_RETENTION_MS,
     RESEND_COOLDOWN_MS,
     JOIN_LIMIT,
+    GLOBAL_JOIN_LIMIT,
     CONFIRM_LIMIT,
     UNSUBSCRIBE_LIMIT,
     UNSUBSCRIBE_TOKEN_COLLECTION,
@@ -622,6 +683,7 @@ module.exports = {
     hashConfirmToken,
     isWellFormedToken,
     clientRateLimitKey,
+    clientNetwork,
     buildConfirmUrl,
     buildUnsubscribeUrl,
     confirmationEmail,
