@@ -29,7 +29,7 @@ const spot = (): SavedSpot => ({
   segmentStreetName: null,
   streetIntelStatus: null,
   streetIntelReason: null,
-  streetIntelCheckedAt: null,
+  streetIntelCheckedAt: new Date().toISOString(),
   curbProtocolVersion: 2,
   curbResolutionStatus: 'side_confirmation_required',
   curbSelector: null,
@@ -151,6 +151,51 @@ describe('CurbSideCrossSection', () => {
     const fields = view.slice(view.indexOf('const canonicalResponseFields'), view.indexOf('const segmentRetrySessionRef'));
     expect(fields).toContain('parkingSide: response.sideLabel');
     expect(fields).toContain('segmentId: response.segmentId');
+  });
+
+  it('expires persisted confirmation tokens before five minutes, without inventing a curb', () => {
+    const data = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => { data.set(key, value); },
+      removeItem: (key: string) => { data.delete(key); },
+    });
+    const now = Date.now();
+    const pending = {
+      ...spot(),
+      savedAt: now,
+      segmentId: 'stale-identity',
+      parkingSide: 'East',
+      sideConfidence: 'high' as const,
+      confirmedParkingSide: 'East',
+      publicRules: [],
+      regulationStatus: 'verified' as const,
+    };
+
+    writeSavedSpot({ ...pending, streetIntelCheckedAt: new Date(now - 4 * 60_000 + 1).toISOString() });
+    expect(readSavedSpot(now)?.curbResolutionStatus).toBe('side_confirmation_required');
+
+    for (const checkedAt of [
+      new Date(now - 4 * 60_000).toISOString(),
+      new Date(now + 1000).toISOString(),
+      null,
+    ]) {
+      writeSavedSpot({ ...pending, streetIntelCheckedAt: checkedAt });
+      const expired = readSavedSpot(now);
+      expect(expired).toMatchObject({
+        curbResolutionStatus: 'unsupported',
+        streetIntelStatus: 'unavailable',
+        streetIntelReason: 'candidate_incomplete',
+        segmentId: null,
+        parkingSide: null,
+        sideConfidence: 'unknown',
+        confirmedParkingSide: null,
+        publicRules: null,
+        regulationStatus: null,
+        curbSideConfirmation: null,
+      });
+      expect(readSavedSpot(now)?.curbResolutionStatus).toBe('unsupported');
+    }
   });
 
   it('draws a diagonal road at its bearing and submits the matching token', () => {
