@@ -185,6 +185,7 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
         drivingSide: null,
         publicRules: null,
         publicSchedules: null,
+        regulationStatus: null,
     };
 };
 
@@ -1079,7 +1080,7 @@ export const MapView: React.FC<MapViewProps> = ({
         setCurbSelectionLoading(true);
         try {
             const response = await requestCanonicalCurb(savedSpot.lat, savedSpot.lng, candidateToken);
-            if (response.status === 'unsupported') return;
+            // A rejected or expired token must not leave a stale selector active.
             const updated: SavedSpot = {
                 ...savedSpot,
                 ...canonicalResponseFields(response),
@@ -1087,7 +1088,16 @@ export const MapView: React.FC<MapViewProps> = ({
             };
             commitSpotIfCurrent(epoch, sessionId, updated);
         } catch {
-            return;
+            const updated: SavedSpot = {
+                ...savedSpot,
+                ...canonicalResponseFields({
+                    protocolVersion: 2,
+                    status: 'unsupported',
+                    reason: 'source_unavailable',
+                }),
+                curbRefreshAttempted: true,
+            };
+            commitSpotIfCurrent(epoch, sessionId, updated);
         } finally {
             setCurbSelectionLoading(false);
         }
@@ -1101,18 +1111,28 @@ export const MapView: React.FC<MapViewProps> = ({
         setCurbSelectionLoading(true);
         try {
             const response = await requestCanonicalCurb(savedSpot.lat, savedSpot.lng, candidateToken);
-            if (response.status !== 'high_confidence') return;
+            // A fresh challenge replaces the old one; rejection becomes Check again.
             const chosen = savedSpot.curbSideConfirmation.curbs.find(curb => curb.token === candidateToken);
             const updated: SavedSpot = {
                 ...savedSpot,
                 ...canonicalResponseFields(response),
                 curbRefreshAttempted: true,
                 confirmedParkingSide: null,
-                drivingSide: chosen?.drivingSide ?? null,
+                drivingSide: response.status === 'high_confidence'
+                    ? chosen?.drivingSide ?? null : null,
             };
             commitSpotIfCurrent(epoch, sessionId, updated);
         } catch {
-            return;
+            const updated: SavedSpot = {
+                ...savedSpot,
+                ...canonicalResponseFields({
+                    protocolVersion: 2,
+                    status: 'unsupported',
+                    reason: 'source_unavailable',
+                }),
+                curbRefreshAttempted: true,
+            };
+            commitSpotIfCurrent(epoch, sessionId, updated);
         } finally {
             setCurbSelectionLoading(false);
         }
@@ -1156,6 +1176,17 @@ export const MapView: React.FC<MapViewProps> = ({
                 ...canonicalResponseFields(response),
                 curbRefreshAttempted: true,
                 gpsAccuracyMeters: lastGpsAccuracyRef.current ?? null,
+            };
+            commitSpotIfCurrent(epoch, sessionId, updated);
+        } catch {
+            const updated: SavedSpot = {
+                ...savedSpot,
+                ...canonicalResponseFields({
+                    protocolVersion: 2,
+                    status: 'unsupported',
+                    reason: 'source_unavailable',
+                }),
+                curbRefreshAttempted: true,
             };
             commitSpotIfCurrent(epoch, sessionId, updated);
         } finally {
