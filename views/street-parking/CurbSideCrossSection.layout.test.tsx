@@ -221,6 +221,7 @@ describe('curb cross-section rendered layout', () => {
     );
     for (const viewport of [
       { width: 360, height: 800, label: 'portrait' },
+      { width: 320, height: 568, label: 'small' },
       { width: 800, height: 360, label: 'landscape' },
     ]) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
