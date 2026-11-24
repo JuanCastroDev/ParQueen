@@ -47,6 +47,11 @@ Every loading state comes from `components/LoadingScreen.tsx`:
    first paint (the Hosting CSP forbids inline scripts). It applies the saved
    `dark`/`light` class, so the boot frame never flashes the wrong background.
    It skips the public legal pages, which have always rendered light.
+   It also runs a boot watchdog. If the app bundle fails to load, or throws
+   before React renders, the logo is replaced with the same "couldn't finish
+   starting / Try again" recovery that `AuthStartupRecovery` shows. This
+   happens at once on a script load error, or after 15 s. A late load still
+   replaces it normally. The logo can never pulse forever.
 4. **React's first commit.** React replaces the boot frame with
    `<LoadingScreen />` (auth restore, lazy routes). The logo, size and position
    are identical, and the pulse stays in phase.

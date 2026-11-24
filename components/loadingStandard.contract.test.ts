@@ -107,7 +107,9 @@ describe('index.html branded boot frame', () => {
     // and React's first frame reuses the already-decoded image.
     expect(boot).toContain('src="/assets/Parqueen_Logo.png"');
     expect(loader).toContain("import ParQueenLogo from '../assets/Parqueen_Logo.png'");
-    expect(boot).toContain('width="160"');
+    // Same box as the React logo (818x669 asset at 160 px wide), so nothing shifts on decode.
+    expect(boot).toContain('width="160" height="131"');
+    expect(loader).toContain('const LOGO_ASPECT = 669 / 818;');
     expect(loader).toContain('<BrandedLogoMark size={160} />');
     expect(boot).toContain('pq-brand-pulse');
     expect(loader).toContain("const DEFAULT_LABEL = 'Loading ParQueen'");
@@ -135,29 +137,68 @@ describe('index.html branded boot frame', () => {
 describe('public/theme-boot.js', () => {
   const script = read('public/theme-boot.js');
 
-  const run = ({ path = '/', stored = null as string | null, storageThrows = false } = {}) => {
+  // A tiny fake of the DOM/timer surface the script touches.
+  const boot = ({
+    path = '/',
+    theme = null as string | null,
+    lang = null as string | null,
+    storageThrows = false,
+    reactMounted = false,
+  } = {}) => {
     const classes = new Set<string>();
+    const timers: Array<() => void> = [];
+    let timeoutMs = 0;
+    const errorListeners: Array<(event: unknown) => void> = [];
+    let reloads = 0;
+    type FakeEl = { tag: string; className: string; textContent: string; type?: string;
+      attrs: Record<string, string>; children: FakeEl[]; listeners: Record<string, () => void>;
+      setAttribute(k: string, v: string): void; appendChild(c: FakeEl): void;
+      addEventListener(t: string, fn: () => void): void };
+    const el = (tag: string): FakeEl => ({
+      tag, className: '', textContent: '', attrs: {}, children: [], listeners: {},
+      setAttribute(k, v) { this.attrs[k] = v; },
+      appendChild(c) { this.children.push(c); },
+      addEventListener(t, fn) { this.listeners[t] = fn; },
+    });
+    const root = { child: reactMounted ? 'react-ui' as unknown : 'boot-frame' as unknown };
+    const bootFrame = { parentNode: { replaceChild: (next: unknown) => { root.child = next; } } };
     runInNewContext(script, {
       window: {
-        location: { pathname: path },
+        location: { pathname: path, reload: () => { reloads += 1; } },
         localStorage: {
           getItem: (key: string) => {
             if (storageThrows) throw new Error('blocked');
-            return key === 'theme' ? stored : null;
+            return key === 'theme' ? theme : key === 'parqueen_lang' ? lang : null;
           },
         },
+        addEventListener: (type: string, fn: (event: unknown) => void, capture: boolean) => {
+          if (type === 'error' && capture) errorListeners.push(fn);
+        },
+        setTimeout: (fn: () => void, ms: number) => { timers.push(fn); timeoutMs = ms; },
       },
-      document: { documentElement: { classList: { add: (c: string) => classes.add(c) } } },
+      document: {
+        documentElement: { classList: { add: (c: string) => classes.add(c) } },
+        createElement: el,
+        querySelector: (selector: string) =>
+          selector === '#root > [data-pq-boot]' && root.child === 'boot-frame' ? bootFrame : null,
+      },
     });
-    return classes.has('dark');
+    return {
+      dark: classes.has('dark'),
+      timeoutMs,
+      fireTimeout: () => timers.forEach(fn => fn()),
+      fireError: (tagName: string) => errorListeners.forEach(fn => fn({ target: { tagName } })),
+      recovery: () => (typeof root.child === 'object' ? root.child as FakeEl : null),
+      reloads: () => reloads,
+    };
   };
 
   it("mirrors App.tsx: dark unless the user saved 'light'", () => {
     expect(read('App.tsx')).toContain("return localStorage.getItem('theme') || 'dark';");
-    expect(run()).toBe(true);
-    expect(run({ stored: 'dark' })).toBe(true);
-    expect(run({ stored: 'light' })).toBe(false);
-    expect(run({ storageThrows: true })).toBe(true);
+    expect(boot().dark).toBe(true);
+    expect(boot({ theme: 'dark' }).dark).toBe(true);
+    expect(boot({ theme: 'light' }).dark).toBe(false);
+    expect(boot({ storageThrows: true }).dark).toBe(true);
   });
 
   it('leaves public legal pages light, exactly as before (they never mount App)', () => {
@@ -169,8 +210,61 @@ describe('public/theme-boot.js', () => {
     expect(routeKeys.length).toBeGreaterThan(0);
     expect(listed).toEqual(routeKeys);
     for (const path of routeKeys) {
-      expect(run({ path })).toBe(false);
-      expect(run({ path: `${path}/` })).toBe(false);
+      expect(boot({ path }).dark).toBe(false);
+      expect(boot({ path: `${path}/` }).dark).toBe(false);
+    }
+  });
+
+  it('never leaves users behind the logo: a stalled boot becomes the startup recovery', () => {
+    const run = boot();
+    expect(run.timeoutMs).toBe(15000);
+    expect(run.recovery()).toBeNull();
+    run.fireTimeout();
+    const panel = run.recovery()!;
+    expect(panel.attrs.role).toBe('alert');
+    expect(panel.children.map(c => c.textContent)).toEqual([
+      'ParQueen couldn’t finish starting.',
+      'Check your connection and try again.',
+      'Try Again',
+    ]);
+    panel.children[2].listeners.click();
+    expect(run.reloads()).toBe(1);
+  });
+
+  it('shows the recovery at once when the app bundle fails to load, but ignores image errors', () => {
+    const run = boot();
+    run.fireError('IMG');
+    expect(run.recovery()).toBeNull();
+    run.fireError('SCRIPT');
+    expect(run.recovery()?.attrs.role).toBe('alert');
+  });
+
+  it('does nothing once React has replaced the boot frame', () => {
+    const run = boot({ reactMounted: true });
+    run.fireTimeout();
+    run.fireError('SCRIPT');
+    expect(run.recovery()).toBeNull();
+  });
+
+  it('uses the saved language and the same copy and classes as AuthStartupRecovery', () => {
+    const es = boot({ lang: 'es' });
+    es.fireTimeout();
+    expect(es.recovery()!.children.map(c => c.textContent)).toEqual([
+      'ParQueen no pudo terminar de iniciarse.',
+      'Revisa tu conexión e inténtalo de nuevo.',
+      'Intentar de nuevo',
+    ]);
+    const en = read('i18n/en.ts');
+    const esDict = read('i18n/es.ts');
+    expect(en).toContain("'startup.auth_timeout_title': 'ParQueen couldn’t finish starting.'");
+    expect(esDict).toContain("'startup.auth_timeout_body': 'Revisa tu conexión e inténtalo de nuevo.'");
+    // Tailwind does not scan public/, so every class must also appear in source it does scan.
+    const recovery = read('components/AuthStartupRecovery.tsx');
+    const panel = boot();
+    panel.fireTimeout();
+    const node = panel.recovery()!;
+    for (const className of [node.className, ...node.children.map(c => c.className)]) {
+      expect(recovery).toContain(className);
     }
   });
 });
