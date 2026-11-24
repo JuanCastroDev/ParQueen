@@ -286,6 +286,14 @@ describe('native launch screen (Android)', () => {
     }
   });
 
+  it('keeps the launch resources well-formed XML ("--" is illegal inside an XML comment)', () => {
+    for (const file of ['values/styles.xml', 'values/pq_launch.xml']) {
+      const comments = [...read(`${res}/${file}`).matchAll(/<!--([\s\S]*?)-->/g)].map(m => m[1]);
+      expect(comments.length, file).toBeGreaterThan(0);
+      for (const body of comments) expect(body, `${file} comment`).not.toContain('--');
+    }
+  });
+
   it('uses the dark app background everywhere before the first web frame', () => {
     expect(darkBg).toBe('#050d1c');
     expect(read(`${res}/values/pq_launch.xml`).toLowerCase()).toContain(`<color name="pq_launch_background">${darkBg}</color>`);
