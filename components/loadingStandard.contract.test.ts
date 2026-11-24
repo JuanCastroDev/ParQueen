@@ -268,3 +268,30 @@ describe('public/theme-boot.js', () => {
     }
   });
 });
+
+describe('native launch screen (Android)', () => {
+  const res = 'android/app/src/main/res';
+  const styles = read(`${res}/values/styles.xml`);
+  const darkBg = read('index.css').match(/\.dark \{[^}]*--color-bg:\s*(#[0-9a-fA-F]{6})/)?.[1]?.toLowerCase();
+
+  it('shows the ParQueen logo on the app background via AndroidX core-splashscreen, not the Capacitor placeholder', () => {
+    const launch = styles.match(/<style name="AppTheme\.NoActionBarLaunch"[^>]*>([\s\S]*?)<\/style>/)?.[1] ?? '';
+    expect(launch).toContain('<item name="windowSplashScreenAnimatedIcon">@drawable/pq_splash_logo</item>');
+    expect(launch).toContain('<item name="windowSplashScreenBackground">@color/pq_launch_background</item>');
+    expect(launch).toContain('<item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>');
+    expect(launch).not.toContain('@drawable/splash');
+    expect(statSync(join(ROOT, `${res}/drawable-nodpi/pq_splash_logo.png`)).size).toBeGreaterThan(1000);
+    for (const dir of readdirSync(join(ROOT, res))) {
+      expect(readdirSync(join(ROOT, res, dir)), `${dir} still ships Capacitor's placeholder splash.png`).not.toContain('splash.png');
+    }
+  });
+
+  it('uses the dark app background everywhere before the first web frame', () => {
+    expect(darkBg).toBe('#050d1c');
+    expect(read(`${res}/values/pq_launch.xml`).toLowerCase()).toContain(`<color name="pq_launch_background">${darkBg}</color>`);
+    const app = styles.match(/<style name="AppTheme\.NoActionBar"[^>]*>([\s\S]*?)<\/style>/)?.[1] ?? '';
+    expect(app).toContain('<item name="android:windowBackground">@color/pq_launch_background</item>');
+    const capacitor = read('capacitor.config.ts').toLowerCase().replace(/\s+/g, ' ');
+    expect(capacitor).toContain(`android: { backgroundcolor: '${darkBg}', }`);
+  });
+});

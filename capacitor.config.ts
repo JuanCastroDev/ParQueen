@@ -19,6 +19,11 @@ const config: CapacitorConfig = {
   ...(streetIntelQa
     ? { server: { androidScheme: 'http' as const, cleartext: true, hostname: 'localhost' } }
     : {}),
+  // Before the first web frame the WebView paints this, not white. Equals the
+  // dark --color-bg and the native launch background (pq_launch_background).
+  android: {
+    backgroundColor: '#050d1c',
+  },
   plugins: {
     PushNotifications: {
       presentationOptions: [],

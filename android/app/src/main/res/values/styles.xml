@@ -13,10 +13,19 @@
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@null</item>
+        <!-- Behind the WebView until its first frame: the app's default (dark)
+             background, not the platform white, so splash -> web never flashes. -->
+        <item name="android:windowBackground">@color/pq_launch_background</item>
     </style>
 
-
+    <!-- Launch screen (AndroidX core-splashscreen; the platform splash on
+         Android 12+, the compat window background below that). The ParQueen
+         logo on the app's dark background, at the same size and centering as
+         the web loader (docs/LOADING_STATES.md), replacing Capacitor's
+         placeholder splash. -->
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
-        <item name="android:background">@drawable/splash</item>
+        <item name="windowSplashScreenBackground">@color/pq_launch_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/pq_splash_logo</item>
+        <item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>
     </style>
 </resources>
