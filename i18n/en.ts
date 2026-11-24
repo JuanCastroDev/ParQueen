@@ -20,6 +20,7 @@ const en: Record<string, string> = {
     // Common labels
     'common.search_placeholder': 'Search a neighborhood',
     'common.searching': 'Searching…',
+    'common.loading': 'Loading…',
     'common.cancel_search': 'Cancel Search',
     'common.close': 'Close',
     'common.ping_your_spot': 'Ping Your Spot',
@@ -228,6 +229,7 @@ const en: Record<string, string> = {
     'map.free_spots_plural': '{count} free spots nearby',
     'map.no_spots_nearby': 'No active spots nearby',
     'map.no_spots_available_now': 'No spots available right now.',
+    'map.loading': 'Loading map',
     'map.load_failed': 'The map could not load.',
     'map.load_retry': 'Try again',
     'map.view_nearby_spot': 'View nearby parking spot',

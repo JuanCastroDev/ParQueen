@@ -3,6 +3,7 @@ import { ChevronLeft, MapPin, Clock, ChevronDown, Handshake, ParkingSquare } fro
 import { db } from '../firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { t, useLang, getLang } from '../i18n';
+import { InlineLoader, SectionLoader } from '../components/LoadingScreen';
 
 interface HistoryItem {
   id: string;
@@ -113,9 +114,7 @@ export const ActivitiesView = ({ user, onBack }: { user: any; onBack: () => void
       </div>
 
       {loading ? (
-        <div className="flex justify-center p-10">
-          <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full" />
-        </div>
+        <SectionLoader label={t('common.loading')} className="p-10" />
       ) : items.length === 0 ? (
         <div className="text-center p-10 text-[var(--color-text-secondary)] bg-[var(--color-card)] border border-[var(--color-border)] backdrop-blur-md rounded-2xl">
           <MapPin className="mx-auto mb-3.5 opacity-80" size={32} />
@@ -153,10 +152,11 @@ export const ActivitiesView = ({ user, onBack }: { user: any; onBack: () => void
             <button
               onClick={handleLoadMore}
               disabled={loadingMore}
+              aria-busy={loadingMore}
               className="w-full py-2.5 rounded-xl text-xs font-semibold bg-white/5 border border-[var(--color-border)] hover:bg-white/10 transition-all text-[var(--color-text-secondary)] flex items-center justify-center gap-1.5"
             >
               {loadingMore ? (
-                <div className="animate-spin w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full" />
+                <InlineLoader size={16} label={t('common.loading')} className="text-[var(--color-brand)]" />
               ) : (
                 <>
                   <ChevronDown size={14} />

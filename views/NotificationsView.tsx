@@ -11,6 +11,7 @@ import { derivePingLifecycle } from '../utils/pingLifecycle';
 import { buildGeoQueryRanges } from './street-parking/geoQuery';
 import { GeoRegionSubscription } from './street-parking/geoRegionSubscription';
 import { NotificationEnableCard } from '../components/NotificationEnableCard';
+import { SectionLoader } from '../components/LoadingScreen';
 import type { NotificationRuntimeState } from '../utils/notificationRegistration';
 import { AppView } from '../types';
 import { NavigationBar } from './street-parking/NavigationBar';
@@ -392,15 +393,14 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
 
                 {/* ── locating ────────────────────────────────────────────── */}
                 {renderState === 'locating' && (
-                    <div aria-live="polite" role="status" className="flex flex-col items-center justify-center gap-4 h-48">
-                        <div className="w-7 h-7 rounded-full border-2 border-[#1e75ff] border-t-transparent animate-spin" />
+                    <SectionLoader size={48} className="gap-4 h-48">
                         <p className="text-[14px] font-semibold text-[var(--color-text)]">
                             {t('nearby_activity.locating_headline')}
                         </p>
                         <p className="text-[13px] text-[var(--color-text-secondary)]">
                             {t('nearby_activity.locating_body')}
                         </p>
-                    </div>
+                    </SectionLoader>
                 )}
 
                 {/* ── location_error ──────────────────────────────────────── */}
@@ -428,12 +428,11 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
 
                 {/* ── pings_loading ───────────────────────────────────────── */}
                 {renderState === 'pings_loading' && (
-                    <div aria-live="polite" role="status" className="flex flex-col items-center justify-center gap-4 h-48">
-                        <div className="w-7 h-7 rounded-full border-2 border-[#1e75ff] border-t-transparent animate-spin" />
+                    <SectionLoader size={48} className="gap-4 h-48">
                         <p className="text-[14px] font-semibold text-[var(--color-text)]">
                             {t('nearby_activity.loading_headline')}
                         </p>
-                    </div>
+                    </SectionLoader>
                 )}
 
                 {/* ── empty ───────────────────────────────────────────────── */}

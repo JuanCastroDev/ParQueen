@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Must equal the dark color-bg token in index.css (the app default theme). -->
+    <color name="pq_launch_background">#050D1C</color>
+</resources>
