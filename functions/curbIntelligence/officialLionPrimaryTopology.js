@@ -302,6 +302,7 @@ function writeVrt(directory, name, sql) {
 const GDAL_PACKAGE_MARKER = 'node_modules/gdal3.js/dist/package/';
 const GDAL_RESOURCE_NAMES = Object.freeze(['gdal3WebAssembly.data', 'gdal3WebAssembly.wasm']);
 let gdalResourceDirectory = null;
+let gdalModuleFile = null;
 let gdalReadOriginals = null;
 let gdalOpenChain = Promise.resolve();
 
@@ -309,8 +310,15 @@ function restoreWorkingDirectory(previous) {
   if (process.cwd() !== previous) process.chdir(previous);
 }
 
+function calledByConfiguredGdalModule() {
+  if (!gdalModuleFile) return false;
+  const stack = String(new Error().stack || '').replaceAll('\\', '/').toLowerCase();
+  const needle = gdalModuleFile.replaceAll('\\', '/').toLowerCase();
+  return stack.includes(needle);
+}
+
 function mapGdalResource(target) {
-  if (!gdalResourceDirectory || typeof target !== 'string') return target;
+  if (!gdalResourceDirectory || !calledByConfiguredGdalModule() || typeof target !== 'string') return target;
   const normalized = target.replaceAll('\\', '/');
   const markerAt = normalized.lastIndexOf(GDAL_PACKAGE_MARKER);
   if (markerAt === -1) return target;
@@ -338,6 +346,7 @@ function restoreGdalResourceRedirect() {
   fs.readFileSync = gdalReadOriginals.readFileSync;
   gdalReadOriginals = null;
   gdalResourceDirectory = null;
+  gdalModuleFile = null;
 }
 
 function resolveGdalResourceDirectory(modulePath) {
@@ -396,11 +405,12 @@ async function openGdalSessionOnce(env = process.env) {
   const previous = process.cwd();
   const directory = resolveGdalResourceDirectory(env?.CURB_LION_GDAL_MODULE);
   if (!directory) return null;
+  gdalModuleFile = fs.realpathSync(env.CURB_LION_GDAL_MODULE);
   gdalResourceDirectory = directory;
   installGdalResourceRedirect();
   let session = null;
   try {
-    const initGdalJs = require(path.join(directory, path.basename(fs.realpathSync(env.CURB_LION_GDAL_MODULE))));
+    const initGdalJs = require(gdalModuleFile);
     if (typeof initGdalJs !== 'function') return null;
     const gdal = await initGdalJs({
       useWorker: false,

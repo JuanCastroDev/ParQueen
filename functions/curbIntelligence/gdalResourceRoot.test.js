@@ -129,6 +129,41 @@ describe('gdal3.js resource resolution', () => {
     }
   });
 
+  it('does not redirect unrelated reads while initialization is in flight', async () => {
+    const previous = process.cwd();
+    const installed = layout({
+      source: `
+        const fs = require('fs');
+        module.exports = async function initGdalJs() {
+          const own = fs.readFileSync('node_modules/gdal3.js/dist/package/gdal3WebAssembly.wasm', 'utf8');
+          await new Promise(resolve => setTimeout(resolve, 40));
+          if (own !== 'wasm-bytes') throw new Error('configured module resource was not readable');
+          return {
+            open() { return { datasets: [{}] }; },
+            async ogrinfo() { return { layers: [] }; },
+            async close() {},
+          };
+        };
+      `,
+    });
+    const decoyRoot = mkdtempSync(join(tmpdir(), 'gdal-decoy-'));
+    const decoy = join(decoyRoot, 'node_modules', 'gdal3.js', 'dist', 'package', 'gdal3WebAssembly.wasm');
+    mkdirSync(join(decoyRoot, 'node_modules', 'gdal3.js', 'dist', 'package'), { recursive: true });
+    writeFileSync(decoy, 'decoy-bytes');
+    try {
+      const pending = openGdalSession({ CURB_LION_GDAL_MODULE: installed.modulePath });
+      await new Promise(resolve => setTimeout(resolve, 10));
+      expect(readFileSync(decoy, 'utf8')).toBe('decoy-bytes');
+      expect(await pending).not.toBeNull();
+      expect(readFileSync(decoy, 'utf8')).toBe('decoy-bytes');
+      expect(process.cwd()).toBe(previous);
+    } finally {
+      process.chdir(previous);
+      rmSync(installed.root, { recursive: true, force: true });
+      rmSync(decoyRoot, { recursive: true, force: true });
+    }
+  });
+
   it.skipIf(!liveGdal)('reads Melville Street from the approved LION 26B archive through gdal3.js', async () => {
     const bytes = readFileSync(ARCHIVE);
     const digest = createHash('sha256').update(bytes).digest('hex');
