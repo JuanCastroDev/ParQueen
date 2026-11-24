@@ -47,8 +47,9 @@ Every loading state comes from `components/LoadingScreen.tsx`:
    the Capacitor WebView (`android.backgroundColor`) use the same color until
    the first web frame, so there is no white flash. `MainActivity` holds the
    launch screen (`setKeepOnScreenCondition`) until the WebView has painted and
-   the boot logo image has loaded (polled after `onPageCommitVisible`), capped at 2.5 s. It then cross-fades out (100 ms + 200 ms)
-   over the identical web boot logo, with no logo-less frame. The system
+   the boot logo image has loaded (polled after `onPageCommitVisible`), capped at 2.5 s. The exit view then stays until the
+   WebView reports a frame ready to draw (`postVisualStateCallback`, capped at
+   1 s), and cross-fades out (200 ms) over the identical web boot logo. The system
    splash is centered on the whole screen, while the WebView starts below the
    status bar. So the logo settles about half a status bar (13 dp on a
    24 dp bar) at the hand-off. The platform draws its exit view before app
