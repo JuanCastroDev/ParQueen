@@ -161,6 +161,7 @@ describe('StreetParkingView canonical curb save contract', () => {
     expect(commit).toContain('selectionMayCommit');
     expect(commit).toContain('if (epoch !== spotEpochRef.current) return false');
     expect(selectionSource).toContain("input.stored?.curbResolutionStatus === 'high_confidence' && input.nextStatus !== 'high_confidence'");
+    expect(selectionSource).toContain("if (!input.stored) return input.nextStatus === 'resolving'");
     const retry = between('const handleRetryStreetIntel = useCallback', 'const writeCleaningReminder');
     expect(retry).toContain('commitSpotIfCurrent(epoch, sessionId, updated)');
   });

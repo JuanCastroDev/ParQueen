@@ -377,6 +377,89 @@ describe('curb selection session', () => {
       stored: null,
       nextStatus: 'resolving',
     })).toBe(true);
+    expect(selectionMayCommit({
+      startedEpoch: 1,
+      currentEpoch: 1,
+      sessionId: 'session-a',
+      stored: null,
+      nextStatus: 'high_confidence',
+    })).toBe(false);
+    expect(selectionMayCommit({
+      startedEpoch: 1,
+      currentEpoch: 1,
+      sessionId: 'session-a',
+      stored: null,
+      nextStatus: 'unsupported',
+    })).toBe(false);
+  });
+
+  it('does not recreate a session deleted during an in-flight selection', async () => {
+    const now = Date.parse('2026-11-23T15:00:00.000Z');
+    const spot = pending(new Date(now).toISOString());
+    const session = harness(spot);
+    let finish: (response: CanonicalCurbResponse) => void = () => {};
+    const attempt = runCurbSelectionAttempt({
+      spot,
+      candidateToken: leftToken,
+      mode: 'side',
+      now,
+      gate: session.gate,
+      currentEpoch: () => session.epoch.current,
+      bumpEpoch: () => ++session.epoch.current,
+      commit: session.commit,
+      request: () => new Promise(resolve => { finish = resolve; }),
+    });
+    session.replaceStored(null);
+    finish(verifiedResponse);
+    await expect(attempt).resolves.toBe('dropped');
+    expect(session.epoch.current).toBe(1);
+    expect(session.commits).toHaveLength(0);
+    expect(session.stored()).toBeNull();
+  });
+
+  it('does not write an expiry or retry result over a deleted session', async () => {
+    const now = Date.parse('2026-11-23T15:00:00.000Z');
+    const spot = pending(new Date(now - CURB_SIDE_CONFIRMATION_LOCAL_MAX_AGE_MS).toISOString());
+    const session = harness(spot);
+    session.replaceStored(null);
+    const expired = await runCurbSelectionAttempt({
+      spot,
+      candidateToken: leftToken,
+      mode: 'side',
+      now,
+      gate: session.gate,
+      currentEpoch: () => session.epoch.current,
+      bumpEpoch: () => ++session.epoch.current,
+      commit: session.commit,
+      request: vi.fn(),
+    });
+    expect(expired).toBe('dropped');
+    expect(session.commits).toHaveLength(0);
+    expect(session.stored()).toBeNull();
+
+    const retry = session.commit(session.epoch.current, spot.sessionId, {
+      ...spot,
+      curbResolutionStatus: 'unsupported',
+      streetIntelStatus: 'unavailable',
+    });
+    expect(retry).toBe(false);
+    expect(session.stored()).toBeNull();
+  });
+
+  it('still creates the first resolving session when storage is empty', () => {
+    const now = Date.parse('2026-11-23T15:00:00.000Z');
+    const spot = pending(new Date(now).toISOString());
+    const session = harness(spot);
+    session.replaceStored(null);
+    session.epoch.current = 1;
+    const created = session.commit(1, 'session-new', {
+      ...spot,
+      sessionId: 'session-new',
+      curbResolutionStatus: 'resolving',
+    });
+    expect(created).toBe(true);
+    expect(session.stored()?.sessionId).toBe('session-new');
+    expect(session.stored()?.curbResolutionStatus).toBe('resolving');
   });
 
   it('refreshes a saved session after foreground only when no curb request is in flight', () => {

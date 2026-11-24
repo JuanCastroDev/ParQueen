@@ -163,7 +163,10 @@ export function selectionMayCommit(input: {
   nextStatus: string | null;
 }): boolean {
   if (input.startedEpoch !== input.currentEpoch) return false;
-  if (input.stored && input.stored.sessionId !== input.sessionId) return false;
+  // An empty record may receive the first resolving session. A later selection,
+  // retry, or expiry must not recreate a session that disappeared in flight.
+  if (!input.stored) return input.nextStatus === 'resolving';
+  if (input.stored.sessionId !== input.sessionId) return false;
   if (input.stored?.curbResolutionStatus === 'high_confidence' && input.nextStatus !== 'high_confidence') return false;
   return true;
 }
@@ -203,8 +206,7 @@ export async function runCurbSelectionAttempt(input: {
     const expired = mode === 'side' ? expiredSideConfirmationReplacement(spot, input.now) : null;
     if (expired) {
       const epoch = input.bumpEpoch();
-      input.commit(epoch, spot.sessionId, expired);
-      return 'expired';
+      return input.commit(epoch, spot.sessionId, expired) ? 'expired' : 'dropped';
     }
     const epoch = input.bumpEpoch();
     const checkedAt = new Date(input.now).toISOString();
