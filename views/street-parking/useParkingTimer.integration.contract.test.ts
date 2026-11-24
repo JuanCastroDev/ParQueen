@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const map = readFileSync('views/StreetParkingView.tsx', 'utf8');
-const assistant = readFileSync('views/AssistantView.tsx', 'utf8');
+const scanner = readFileSync('views/sign-scanner/SignScannerView.tsx', 'utf8');
 
 describe('parking timer integration contract', () => {
   it('derives the timer chip from live hook state, so expiry restores the contextual chip', () => {
@@ -18,10 +18,10 @@ describe('parking timer integration contract', () => {
     expect(map).not.toMatch(/isHandoffRecoveryCardRendered\([^)]*parkingTimer/);
   });
 
-  it('keeps the existing management actions and the AssistantView contract', () => {
+  it('keeps the existing management actions and the Sign Scanner contract', () => {
     expect(map).toContain('onClick={parkingTimer.clearTimer}');
     expect(map).toMatch(/parkingTimer\.startTimer\(/);
-    expect(assistant).toContain('const { startTimer, timer } = useParkingTimer();');
+    expect(scanner).toContain('const { startTimer, timer } = useParkingTimer();');
   });
 });
 

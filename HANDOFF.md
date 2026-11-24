@@ -691,7 +691,7 @@ Several `AppView` enum values and their views exist in the codebase but are **no
 
 | View | File | Status |
 |---|---|---|
-| `AI_ASSISTANT` | `views/AssistantView.tsx` | Routed in App.tsx, accessible via nav. Calls `analyzeSign` Firebase Cloud Function for parking sign analysis. No client-side API key required. |
+| `AI_ASSISTANT` | `views/sign-scanner/SignScannerView.tsx` | Sign Scanner, opened from the map header's Scan button. Camera-only capture; calls the `analyzeSign` Firebase Cloud Function. No client-side API key required. Replaced the Parking Tools hub (see `docs/SIGN_SCANNER.md`). |
 | `GARAGE_LIST` | `views/GarageRentalView.tsx` | Routed. Legacy garage rental feature with un-converted dark-mode classes. Hidden from main nav. |
 | `HOST_DASHBOARD` | `views/HostDashboardView.tsx` | Routed. Companion to garage rentals. Not actively used. |
 | `ADMIN_DASHBOARD` | `views/AdminDashboardView.tsx` | Routed. Only shown when `isAdmin` custom claim is true. No admin users currently exist. |
@@ -701,7 +701,7 @@ Several `AppView` enum values and their views exist in the codebase but are **no
 
 ### Gemini AI Usage
 - **Smart replies in chat** (`services/geminiService.ts`) — calls `generateSmartReplies` Firebase Cloud Function when the last message in a conversation is from the other user. Used in `MessagesView.tsx`. No client-side API key.
-- **Parking sign analysis** (`AssistantView.tsx`) — calls `analyzeSign` Firebase Cloud Function. Supports image + text input via `gemini-3.5-flash`.
+- **Parking sign analysis** (`views/sign-scanner/SignScannerView.tsx`) — calls `analyzeSign` Firebase Cloud Function. Supports image + text input via `gemini-3.5-flash`.
 - **Listing description** (`views/HostDashboardView.tsx`) — calls `generateListingDescription` Cloud Function. Backend-deployed, UI surface is the host dashboard.
 - Gemini API key is stored in Firebase Secret Manager (version 3). The frontend uses `httpsCallable` only — no SDK, no key in the browser bundle.
 - Model: `gemini-3.5-flash` (centralized in `functions/index.js` as `GEMINI_MODEL`).

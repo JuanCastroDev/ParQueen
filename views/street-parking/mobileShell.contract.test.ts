@@ -106,7 +106,8 @@ describe('mobile shell layout contract', () => {
     expect(header).toContain('map-header-search-row');
     expect(header).toContain('map-search-shell');
     expect(header).toContain('map-ai-action');
-    expect(header).toContain('Scan');
+    expect(header).toContain("{t('scanner.entry_label')}");
+    expect(header).toContain("aria-label={t('scanner.entry_aria')}");
     expect(map).toContain('map-status-chip');
     expect(map).toContain('map-control-button');
     expect(map).not.toContain('map-primary-cta');
