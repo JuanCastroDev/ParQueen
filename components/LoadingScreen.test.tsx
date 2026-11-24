@@ -1,7 +1,7 @@
 import React from 'react';
 import TestRenderer from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { InlineLoader, LoadingScreen, SectionLoader } from './LoadingScreen';
+import { InlineLoader, LoadingScreen, SectionLoader, resetPulseOriginForTests } from './LoadingScreen';
 
 const render = (element: React.ReactElement) => TestRenderer.create(element).root;
 
@@ -9,7 +9,11 @@ const isLogo = (node: TestRenderer.ReactTestInstance) =>
   node.type === 'img' && node.props['data-pq-loader'] === 'logo';
 
 describe('LoadingScreen (canonical app-level loader)', () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    resetPulseOriginForTests();
+  });
 
   it('renders the ParQueen logo from a bundled asset inside a labelled status region', () => {
     const root = render(<LoadingScreen />);
@@ -23,6 +27,8 @@ describe('LoadingScreen (canonical app-level loader)', () => {
     // Bundled with the app: never a remote URL that could leave a blank frame.
     expect(String(logo.props.src)).not.toMatch(/^https?:/);
     expect(logo.props.width).toBe(160);
+    // The asset's real 818x669 aspect, matching index.html, so decode never shifts layout.
+    expect(logo.props.height).toBe(131);
     expect(logo.props['aria-hidden']).toBe('true');
   });
 
@@ -38,6 +44,20 @@ describe('LoadingScreen (canonical app-level loader)', () => {
     expect(logo.props.style.animationDelay).toBe('-345ms');
     const inline = render(<InlineLoader />).find(node => node.props['data-pq-loader'] === 'inline');
     expect(inline.props.style.animationDelay).toBe('-345ms');
+  });
+
+  it('continues the index.html boot logo pulse exactly instead of restarting it', () => {
+    // React renders while the boot frame is still in the DOM (it is replaced on commit).
+    const bootLogo = { getAnimations: () => [{ currentTime: 700 }] };
+    vi.stubGlobal('document', {
+      querySelector: (selector: string) => (selector === '[data-pq-boot] [data-pq-loader]' ? bootLogo : null),
+    });
+    vi.spyOn(performance, 'now').mockReturnValue(12_345);
+    expect(render(<LoadingScreen />).find(isLogo).props.style.animationDelay).toBe('-700ms');
+    // Later loaders stay on that adopted clock after the boot frame is gone.
+    vi.stubGlobal('document', { querySelector: () => null });
+    vi.spyOn(performance, 'now').mockReturnValue(13_345);
+    expect(render(<LoadingScreen />).find(isLogo).props.style.animationDelay).toBe('-1700ms');
   });
 
   it('accepts a contextual label and overlay classes', () => {

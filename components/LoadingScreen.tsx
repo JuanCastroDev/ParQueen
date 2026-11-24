@@ -24,13 +24,46 @@ import ParQueenPin from '../assets/Parqueen_Pin.png';
 // Must match the pq-brand-pulse duration in index.css.
 const PULSE_PERIOD_MS = 2000;
 
+let pulseOrigin: number | null = null;
+
+/**
+ * performance.now() value at which the shared pulse started. The first
+ * loader React renders adopts the index.html boot logo's running animation
+ * (it is still in the DOM until React commits), so the boot → React hand-off
+ * continues the pulse exactly. Without a boot logo it falls back to 0.
+ */
+function resolvePulseOrigin(now: number): number {
+  if (pulseOrigin !== null) return pulseOrigin;
+  pulseOrigin = 0;
+  try {
+    const bootLogo = typeof document !== 'undefined'
+      ? document.querySelector('[data-pq-boot] [data-pq-loader]')
+      : null;
+    const running = bootLogo?.getAnimations?.()[0]?.currentTime;
+    if (typeof running === 'number') pulseOrigin = now - running;
+  } catch {
+    // Web Animations API unavailable: the document-clock phase is close enough.
+  }
+  return pulseOrigin;
+}
+
+/** Test-only: forget the adopted pulse origin. */
+export function resetPulseOriginForTests(): void {
+  pulseOrigin = null;
+}
+
 function usePulsePhase(): React.CSSProperties {
   const [style] = useState<React.CSSProperties>(() => {
     const now = typeof performance !== 'undefined' ? performance.now() : 0;
-    return { animationDelay: `-${Math.round(now % PULSE_PERIOD_MS)}ms` };
+    const elapsed = now - resolvePulseOrigin(now);
+    const phase = ((elapsed % PULSE_PERIOD_MS) + PULSE_PERIOD_MS) % PULSE_PERIOD_MS;
+    return { animationDelay: `-${Math.round(phase)}ms` };
   });
   return style;
 }
+
+// Parqueen_Logo.png is 818×669; size the box to it so nothing shifts on decode.
+const LOGO_ASPECT = 669 / 818;
 
 const DEFAULT_LABEL = 'Loading ParQueen';
 
@@ -43,7 +76,7 @@ const BrandedLogoMark = ({ size }: { size: number }) => {
       alt=""
       aria-hidden="true"
       width={size}
-      height={size}
+      height={Math.round(size * LOGO_ASPECT)}
       decoding="sync"
       className="pq-brand-pulse select-none pointer-events-none"
       style={{ width: size, height: 'auto', ...phase }}
