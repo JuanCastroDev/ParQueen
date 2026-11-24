@@ -435,13 +435,6 @@ const errArt = {
 
 /* ── time helpers ── */
 const fmtTime = d => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-function fmtWhen(d) {
-  const now = new Date();
-  const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1);
-  if (d.toDateString() === now.toDateString()) return fmtTime(d);
-  if (d.toDateString() === tomorrow.toDateString()) return `Tomorrow ${fmtTime(d)}`;
-  return d.toLocaleDateString([], { weekday: 'short' }) + ' ' + fmtTime(d);
-}
 function dayWord(d) {
   const now = new Date(), tm = new Date(now); tm.setDate(now.getDate() + 1);
   if (d.toDateString() === now.toDateString()) return '';

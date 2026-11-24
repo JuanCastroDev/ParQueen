@@ -439,9 +439,12 @@ describe('Sign Scanner errors', () => {
   });
 
   it('the dev preview mock mirrors the real error texts exactly', async () => {
-    const mock = readFileSync(new URL('../../docs/previews/sign-scanner/mockGeminiService.ts', import.meta.url), 'utf8');
-    expect(mock).toContain(SIGN_ANALYSIS_UNAVAILABLE_EXPLANATION.replace('\n', '\\n'));
-    expect(mock).toContain(SIGN_ANALYSIS_UNREADABLE_EXPLANATION.replace('\n', '\\n'));
+    // Compare the exported values themselves (no source-text escaping), so any difference fails.
+    const mock = await import('../../docs/previews/sign-scanner/mockGeminiService');
+    expect(mock.SIGN_ANALYSIS_UNAVAILABLE_EXPLANATION).toBe(SIGN_ANALYSIS_UNAVAILABLE_EXPLANATION);
+    expect(mock.SIGN_ANALYSIS_UNREADABLE_EXPLANATION).toBe(SIGN_ANALYSIS_UNREADABLE_EXPLANATION);
+    expect(mock.isSignAnalysisUnavailable({ status: 'ERROR', explanation: SIGN_ANALYSIS_UNAVAILABLE_EXPLANATION })).toBe(true);
+    expect(mock.isSignAnalysisUnavailable({ status: 'ERROR', explanation: SIGN_ANALYSIS_UNREADABLE_EXPLANATION })).toBe(false);
   });
 
   it('never shows the service’s English error text in the UI', async () => {
