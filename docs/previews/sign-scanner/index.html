@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Sign Scanner · implementation preview (dev only)</title>
+    <style>
+      #preview-note {
+        position: fixed; z-index: 99; left: 50%; top: 12px; transform: translateX(-50%);
+        padding: 8px 12px; border-radius: 10px; font: 600 13px/1.3 system-ui, sans-serif;
+        background: #ffd79a; color: #1b1300;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <div id="preview-note" hidden></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

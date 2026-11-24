@@ -9,7 +9,10 @@ vi.mock('firebase/functions', () => ({
 }));
 vi.mock('firebase/app', () => ({ getApp: vi.fn(() => ({})) }));
 
-import { analyzeParkingSign, generateSmartReplies, generateListingDescription, createSmartReplyRequestKey } from './geminiService';
+import {
+  analyzeParkingSign, generateSmartReplies, generateListingDescription, createSmartReplyRequestKey,
+  isSignAnalysisUnavailable, SIGN_ANALYSIS_UNAVAILABLE_EXPLANATION, SIGN_ANALYSIS_UNREADABLE_EXPLANATION,
+} from './geminiService';
 import { httpsCallable } from 'firebase/functions';
 
 beforeEach(() => {
@@ -92,6 +95,22 @@ describe('analyzeParkingSign response shape', () => {
 
 describe('analyzeParkingSign error mapping', () => {
   const makeError = (code: string) => Object.assign(new Error('provider error'), { code });
+
+  it('marks only service-side failures as unavailable (scanner leads with Try again)', async () => {
+    for (const code of ['resource-exhausted', 'failed-precondition', 'unavailable', 'internal']) {
+      mockCallable.mockRejectedValue(makeError(code));
+      const result = await analyzeParkingSign('img');
+      expect(result.explanation).toBe(SIGN_ANALYSIS_UNAVAILABLE_EXPLANATION);
+      expect(isSignAnalysisUnavailable(result)).toBe(true);
+    }
+    mockCallable.mockRejectedValue(makeError('invalid-argument'));
+    const bad = await analyzeParkingSign('img');
+    expect(bad.explanation).toBe(SIGN_ANALYSIS_UNREADABLE_EXPLANATION);
+    expect(isSignAnalysisUnavailable(bad)).toBe(false);
+    // A model-reported ERROR is about the photo, never "unavailable".
+    expect(isSignAnalysisUnavailable({ status: 'ERROR', explanation: 'Not a sign.' })).toBe(false);
+    expect(isSignAnalysisUnavailable({ status: 'YES', explanation: SIGN_ANALYSIS_UNAVAILABLE_EXPLANATION })).toBe(false);
+  });
 
   it('resource-exhausted → "Assistant temporarily unavailable"', async () => {
     mockCallable.mockRejectedValue(makeError('resource-exhausted'));

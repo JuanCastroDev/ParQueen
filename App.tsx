@@ -21,7 +21,7 @@ const AppCheckQaPanel = import.meta.env.VITE_PARQUEEN_APPCHECK_QA === 'true'
 // leaflet, recharts, the Gemini-backed assistant, the admin dashboard, etc.)
 // out of the critical path for users who never visit those screens.
 const MapView = lazy(() => import('./views/StreetParkingView').then(m => ({ default: m.MapView })));
-const AssistantView = lazy(() => import('./views/AssistantView').then(m => ({ default: m.AssistantView })));
+const SignScannerView = lazy(() => import('./views/sign-scanner/SignScannerView').then(m => ({ default: m.SignScannerView })));
 const MessagesView = lazy(() => import('./views/MessagesView').then(m => ({ default: m.MessagesView })));
 const ProfileView = lazy(() => import('./views/ProfileView').then(m => ({ default: m.ProfileView })));
 const NotificationsView = lazy(() => import('./views/NotificationsView').then(m => ({ default: m.NotificationsView })));
@@ -78,7 +78,7 @@ import { androidBackOverlayCount, dismissTopAndroidBackOverlay } from './utils/a
 import { OBV2_DIAG, diag } from './utils/obv2Diag';
 import type { MessagesAndroidBackHandle } from './views/MessagesView';
 import type { OnboardingAndroidBackHandle } from './views/OnboardingView';
-import type { AssistantAndroidBackHandle } from './views/AssistantView';
+import type { SignScannerAndroidBackHandle } from './views/sign-scanner/SignScannerView';
 import { App as CapacitorApp } from '@capacitor/app';
 import { legalViewFor } from './utils/inAppLegalNavigation';
 import type { PhoneVerificationSession } from './utils/phoneAuth';
@@ -158,7 +158,7 @@ export default function App() {
   const { setViewWithLegalReturn, closeLegal } = useInAppLegalNavigation(currentView, setCurrentView);
   const messagesAndroidBackRef = useRef<MessagesAndroidBackHandle | null>(null);
   const onboardingAndroidBackRef = useRef<OnboardingAndroidBackHandle | OnboardingV2AndroidBackHandle | null>(null);
-  const assistantAndroidBackRef = useRef<AssistantAndroidBackHandle | null>(null);
+  const signScannerAndroidBackRef = useRef<SignScannerAndroidBackHandle | null>(null);
   const androidBackStateRef = useRef({
     currentView,
     vehicleOnboarding,
@@ -221,7 +221,7 @@ export default function App() {
             }
           },
           delegateAssistant: () => {
-            const result = assistantAndroidBackRef.current?.handleAndroidBack();
+            const result = signScannerAndroidBackRef.current?.handleAndroidBack();
             if (result !== 'handled') {
               setCurrentView(AppView.MAP);
             }
@@ -1222,15 +1222,13 @@ export default function App() {
       case AppView.EDIT_PROFILE:
         return <EditProfileView onBack={() => setCurrentView(AppView.SETTINGS)} />;
       case AppView.AI_ASSISTANT:
-        // AssistantView owns its own header. The app-level bar used to render a
-        // second title, subtitle and back button directly above the view's own,
-        // which is what made the screen read as stacked and crowded.
+        // The Sign Scanner owns its header and Back. It replaced the Parking Tools hub, so the
+        // map's Scan entry point opens the scanner directly.
         return (
           <div className="h-full flex flex-col bg-[var(--color-bg)]">
-            <AssistantView
+            <SignScannerView
               onBack={() => setCurrentView(AppView.MAP)}
-              onOpenMyCar={() => { setPendingMyCarOpen(true); setCurrentView(AppView.MAP); }}
-              androidBackRef={assistantAndroidBackRef}
+              androidBackRef={signScannerAndroidBackRef}
             />
           </div>
         );

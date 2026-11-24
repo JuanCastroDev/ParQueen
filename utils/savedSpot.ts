@@ -68,17 +68,6 @@ function storage(): MinStorage | null {
 }
 
 /**
- * The side actually safe to evaluate against.
- *
- * A GPS-derived side is only trusted at high confidence; otherwise the user has
- * to confirm it. Returning null means "we do not know which side of the street
- * this car is on", which callers must treat as uncertainty rather than guessing.
- */
-export function effectiveParkingSide(spot: Pick<SavedSpot, 'parkingSide' | 'sideConfidence' | 'confirmedParkingSide'>): string | null {
-  return spot.confirmedParkingSide || (spot.sideConfidence === 'high' ? spot.parkingSide : null);
-}
-
-/**
  * Reads and repairs the saved spot, or returns null.
  *
  * localStorage is untrusted input: anything the app cannot rely on (a
