@@ -299,55 +299,131 @@ function writeVrt(directory, name, sql) {
   return file;
 }
 
-function gdalRoot() {
-  const configured = process.env.CURB_LION_GDAL_MODULE;
-  if (typeof configured !== 'string' || !configured) return null;
-  return path.resolve(configured, '..', '..', '..');
+const GDAL_PACKAGE_MARKER = 'node_modules/gdal3.js/dist/package/';
+const GDAL_RESOURCE_NAMES = Object.freeze(['gdal3WebAssembly.data', 'gdal3WebAssembly.wasm']);
+let gdalResourceDirectory = null;
+let gdalReadOriginals = null;
+let gdalOpenChain = Promise.resolve();
+
+function restoreWorkingDirectory(previous) {
+  if (process.cwd() !== previous) process.chdir(previous);
 }
 
-async function openGdalSession() {
-  const root = gdalRoot();
-  const configured = process.env.CURB_LION_GDAL_MODULE;
-  if (!root || !configured) return null;
-  const previous = process.cwd();
-  process.chdir(root);
+function mapGdalResource(target) {
+  if (!gdalResourceDirectory || typeof target !== 'string') return target;
+  const normalized = target.replaceAll('\\', '/');
+  const markerAt = normalized.lastIndexOf(GDAL_PACKAGE_MARKER);
+  if (markerAt === -1) return target;
+  const name = normalized.slice(markerAt + GDAL_PACKAGE_MARKER.length);
+  if (!GDAL_RESOURCE_NAMES.includes(name)) return target;
+  return path.join(gdalResourceDirectory, name);
+}
+
+function installGdalResourceRedirect() {
+  if (gdalReadOriginals) return;
+  gdalReadOriginals = { readFile: fs.readFile, readFileSync: fs.readFileSync };
+  const readFile = fs.readFile;
+  const readFileSync = fs.readFileSync;
+  fs.readFile = function readGdalResource(target, ...args) {
+    return readFile.call(this, mapGdalResource(target), ...args);
+  };
+  fs.readFileSync = function readGdalResourceSync(target, ...args) {
+    return readFileSync.call(this, mapGdalResource(target), ...args);
+  };
+}
+
+function restoreGdalResourceRedirect() {
+  if (!gdalReadOriginals) return;
+  fs.readFile = gdalReadOriginals.readFile;
+  fs.readFileSync = gdalReadOriginals.readFileSync;
+  gdalReadOriginals = null;
+  gdalResourceDirectory = null;
+}
+
+function resolveGdalResourceDirectory(modulePath) {
+  if (typeof modulePath !== 'string' || modulePath.trim() === '') return null;
+  let resolved;
   try {
-    const initGdalJs = require(configured);
+    resolved = fs.realpathSync(modulePath);
+    if (!fs.statSync(resolved).isFile()) return null;
+  } catch {
+    return null;
+  }
+  const normalized = resolved.replaceAll('\\', '/');
+  if (!normalized.includes(GDAL_PACKAGE_MARKER)) return null;
+  const directory = path.dirname(resolved);
+  for (const name of GDAL_RESOURCE_NAMES) {
+    let stat;
+    try {
+      stat = fs.lstatSync(path.join(directory, name));
+    } catch {
+      return null;
+    }
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0) return null;
+  }
+  return directory;
+}
+
+function gdalSession(gdal) {
+  const queryCache = new Map();
+  return {
+    async query(directory, name, sql) {
+      const key = `${directory}\n${name}\n${sql}`;
+      if (queryCache.has(key)) return queryCache.get(key);
+      const pending = (async () => {
+        const opened = await gdal.open(writeVrt(directory, name, sql));
+        if (!opened.datasets || !opened.datasets[0]) return null;
+        const info = await gdal.ogrinfo(opened.datasets[0], ['-features']);
+        await gdal.close(opened.datasets[0]);
+        const layer = (info.layers || [])[0] || {};
+        return (layer.features || []).map(feature => ({
+          attributes: feature.properties || {},
+          geometry: feature.geometry || null,
+        }));
+      })();
+      queryCache.set(key, pending);
+      try {
+        return await pending;
+      } catch (error) {
+        queryCache.delete(key);
+        throw error;
+      }
+    },
+  };
+}
+
+async function openGdalSessionOnce(env = process.env) {
+  const previous = process.cwd();
+  const directory = resolveGdalResourceDirectory(env?.CURB_LION_GDAL_MODULE);
+  if (!directory) return null;
+  gdalResourceDirectory = directory;
+  installGdalResourceRedirect();
+  let session = null;
+  try {
+    const initGdalJs = require(path.join(directory, path.basename(fs.realpathSync(env.CURB_LION_GDAL_MODULE))));
+    if (typeof initGdalJs !== 'function') return null;
     const gdal = await initGdalJs({
       useWorker: false,
       errorHandler: () => {},
       logHandler: () => {},
     });
-    process.chdir(previous);
-    const queryCache = new Map();
-    return {
-      async query(directory, name, sql) {
-        const key = `${directory}\n${name}\n${sql}`;
-        if (queryCache.has(key)) return queryCache.get(key);
-        const pending = (async () => {
-          const opened = await gdal.open(writeVrt(directory, name, sql));
-          if (!opened.datasets || !opened.datasets[0]) return null;
-          const info = await gdal.ogrinfo(opened.datasets[0], ['-features']);
-          await gdal.close(opened.datasets[0]);
-          const layer = (info.layers || [])[0] || {};
-          return (layer.features || []).map(feature => ({
-            attributes: feature.properties || {},
-            geometry: feature.geometry || null,
-          }));
-        })();
-        queryCache.set(key, pending);
-        try {
-          return await pending;
-        } catch (error) {
-          queryCache.delete(key);
-          throw error;
-        }
-      },
-    };
+    if (!gdal || typeof gdal.open !== 'function' || typeof gdal.ogrinfo !== 'function' || typeof gdal.close !== 'function') {
+      return null;
+    }
+    session = gdalSession(gdal);
+    return session;
   } catch {
-    process.chdir(previous);
     return null;
+  } finally {
+    restoreWorkingDirectory(previous);
+    restoreGdalResourceRedirect();
   }
+}
+
+function openGdalSession(env = process.env) {
+  const run = gdalOpenChain.then(() => openGdalSessionOnce(env));
+  gdalOpenChain = run.then(() => {}, () => {});
+  return run;
 }
 
 function sqlNode(value) {
@@ -533,6 +609,8 @@ module.exports = {
   evaluateOfficialLionRelationship,
   extractVerifiedBytes,
   loadOfficialLionPrimary,
+  openGdalSession,
+  resolveGdalResourceDirectory,
   officialEndpointGeometry,
   openApprovedLionArchive,
   readOfficialLionPrimary,
