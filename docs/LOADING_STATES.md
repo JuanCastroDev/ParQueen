@@ -39,7 +39,14 @@ Every loading state comes from `components/LoadingScreen.tsx`:
 
 ## Boot sequence (cold start)
 
-1. **Native splash.** Android and iOS draw the launch screen.
+1. **Native splash.** On Android, AndroidX core-splashscreen (`AppTheme.NoActionBarLaunch`
+   in `android/app/src/main/res/values/styles.xml`) draws the ParQueen logo
+   (`drawable-nodpi/pq_splash_logo.png`, rendered from `assets/Parqueen_Logo.png`
+   at the same 160 dp width and centering as the web loader) on
+   `pq_launch_background` (#050d1c, the dark `--color-bg`). The app window and
+   the Capacitor WebView (`android.backgroundColor`) use the same color until
+   the first web frame, so there is no white flash. iOS still uses its
+   storyboard launch screen.
 2. **`index.html` boot frame.** `#root` contains the same markup as
    `<LoadingScreen />`. The logo is the same bundled asset, so it is painted
    before the JS bundle downloads or runs. There's no blank frame.
@@ -63,7 +70,7 @@ Every loading state comes from `components/LoadingScreen.tsx`:
 
 The OS draws some loading UI itself. These stay as they are:
 
-- the Android 12+ system splash (launcher icon)
+- the Android 12+ system splash animation (we only supply its icon and color)
 - the Google reCAPTCHA widget used by web phone sign-in
 - the browser's own page-load indicator
 - the OS location and notification permission sheets
