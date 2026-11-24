@@ -9,6 +9,7 @@
  */
 
 import { parseCanonicalCurbResponse } from './canonicalCurbClient';
+import { isRegulationCoverage } from './regulationCoverage';
 
 export const SAVED_SPOT_KEY = 'pq_saved_spot';
 
@@ -49,6 +50,7 @@ export interface SavedSpot {
   publicRules?: import('./canonicalCurbClient').CanonicalPublicRule[] | null;
   publicSchedules?: import('./canonicalCurbClient').CanonicalPublicSchedules | null;
   regulationStatus?: 'verified' | 'partial' | 'unknown' | 'verified_empty' | null;
+  regulationCoverage?: import('./regulationCoverage').RegulationCoverage | null;
 }
 
 interface MinStorage {
@@ -156,6 +158,10 @@ export function readSavedSpot(now: number = Date.now()): SavedSpot | null {
       }
     }
     if (typeof s.curbRefreshAttempted !== 'boolean') { s.curbRefreshAttempted = false; changed = true; }
+    if (s.regulationCoverage != null && !isRegulationCoverage(s.regulationCoverage)) {
+      s.regulationCoverage = null;
+      changed = true;
+    }
     if (s.drivingSide !== undefined && s.drivingSide !== 'left' && s.drivingSide !== 'right' && s.drivingSide !== null) {
       s.drivingSide = null; changed = true;
     }

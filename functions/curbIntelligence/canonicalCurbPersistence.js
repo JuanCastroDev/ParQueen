@@ -8,6 +8,7 @@ const {
   evaluateWriteAuthority,
   associateDocumentAuthorities,
 } = require('./writeAuthority');
+const { isRegulationCoverage } = require('./regulationCoverage');
 
 const PUBLIC_KEY = /^curb2_[a-f0-9]{32}$/;
 const RULE_SET_VERSION = /^curbrules2_[a-f0-9]{20}$/;
@@ -354,6 +355,8 @@ async function persistCanonicalCurb(input = {}) {
         cleaningAvailable: Boolean(selectedRules?.cleaning),
         rulesResolved: selectedRules?.rulesResolved === true,
       },
+      ...(isRegulationCoverage(selectedRules?.regulationCoverage)
+        ? { regulationCoverage: selectedRules.regulationCoverage } : {}),
       updatedAt: now,
     }],
     ...rules.map((rule, index) => [db.doc(`streetSegments/${key}/streetRules/${ruleSetVersion}_${index}`), {

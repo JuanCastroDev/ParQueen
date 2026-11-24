@@ -16,6 +16,7 @@ import {
 } from './hydrantDistance';
 import { evaluateParkingCheck, evaluateStreetRules } from './parkingCheck';
 import { readSavedSpot, writeSavedSpot, clearSavedSpot, effectiveParkingSide, SAVED_SPOT_KEY, SAVED_SPOT_TTL_MS } from './savedSpot';
+import { coverageForDisplayedRules } from './regulationCoverage';
 import type { SafeUntilResult } from './streetIntelligence';
 
 /** Feet expressed as metres, so the tests read in the units of the actual rule. */
@@ -135,11 +136,24 @@ const uncertainHydrant = assessHydrantDistance({ distanceMeters: ft(22), accurac
 const failedHydrant = assessHydrantDistance({ distanceMeters: null, failed: true });
 
 const supported = { presentation: 'supported' as const, effectiveSide: 'North' };
+const completeCoverage = {
+  cleaning: 'verified' as const,
+  restrictions: 'verified_empty' as const,
+  timeLimits: 'verified_empty' as const,
+  meters: 'verified_empty' as const,
+};
+const cleaningOnlyCoverage = {
+  cleaning: 'verified' as const,
+  restrictions: 'unknown' as const,
+  timeLimits: 'unknown' as const,
+  meters: 'unknown' as const,
+};
 
 describe('evaluateStreetRules', () => {
   it('classifies each input', () => {
     expect(evaluateStreetRules({ ...supported, safeUntil: activeRules })).toBe('active_restriction');
-    expect(evaluateStreetRules({ ...supported, safeUntil: clearRules })).toBe('clear');
+    expect(evaluateStreetRules({ ...supported, safeUntil: clearRules, regulationCoverage: completeCoverage })).toBe('clear');
+    expect(evaluateStreetRules({ ...supported, safeUntil: clearRules, regulationCoverage: cleaningOnlyCoverage })).toBe('coverage_incomplete');
     expect(evaluateStreetRules({ ...supported, safeUntil: clearRules, effectiveSide: null })).toBe('side_unknown');
     expect(evaluateStreetRules({ presentation: 'unknown', safeUntil: null, effectiveSide: 'North' })).toBe('unavailable');
     expect(evaluateStreetRules({ ...supported, safeUntil: clearRules, failed: true })).toBe('unavailable');
@@ -199,16 +213,41 @@ describe('evaluateParkingCheck — check this spot', () => {
 });
 
 describe('evaluateParkingCheck — no known issue', () => {
-  it('only when every check ParQueen can run came back clean', () => {
-    const r = evaluateParkingCheck({ street: { ...supported, safeUntil: clearRules }, hydrant: farHydrant });
+  it('only when every modeled category is settled and the hydrant check is clear', () => {
+    const r = evaluateParkingCheck({
+      street: { ...supported, safeUntil: clearRules, regulationCoverage: completeCoverage },
+      hydrant: farHydrant,
+    });
     expect(r.overall).toBe('no_known_issue');
     expect(r.confidence).toBe('high');
     expect(r.reasons).toEqual([]);
   });
 
+  it('does not treat a cleaning schedule plus a clear hydrant as an all-clear', () => {
+    const r = evaluateParkingCheck({
+      street: { ...supported, safeUntil: clearRules, regulationCoverage: cleaningOnlyCoverage },
+      hydrant: farHydrant,
+    });
+    expect(r.overall).toBe('check');
+    expect(r.street).toBe('coverage_incomplete');
+    expect(r.reasons).toContain('regulation_coverage_incomplete');
+  });
+
+  it('still reports an active restriction when other categories are unknown', () => {
+    const r = evaluateParkingCheck({
+      street: { ...supported, safeUntil: activeRules, regulationCoverage: cleaningOnlyCoverage },
+      hydrant: farHydrant,
+    });
+    expect(r.overall).toBe('move');
+    expect(r.street).toBe('active_restriction');
+  });
+
   it('accepts no hydrant in the searched radius as no known hydrant problem', () => {
     const none = assessHydrantDistance({ distanceMeters: null });
-    const r = evaluateParkingCheck({ street: { ...supported, safeUntil: clearRules }, hydrant: none });
+    const r = evaluateParkingCheck({
+      street: { ...supported, safeUntil: clearRules, regulationCoverage: completeCoverage },
+      hydrant: none,
+    });
     expect(r.overall).toBe('no_known_issue');
   });
 
@@ -302,6 +341,27 @@ describe('readSavedSpot', () => {
   it('back-fills unknown confidence when there was no side either', () => {
     localStorage.setItem(SAVED_SPOT_KEY, JSON.stringify({ lat: 40.7, lng: -74, address: 'x', savedAt: Date.now() }));
     expect(readSavedSpot()!.sideConfidence).toBe('unknown');
+  });
+
+  it('does not turn a missing or partial coverage object into complete regulation coverage', () => {
+    writeSavedSpot({
+      ...baseSpot,
+      segmentId: 'curb2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      regulationStatus: null,
+      publicRules: [{ category: 'cleaning', type: 'streetCleaning', source: 'nyc_open_data', schedules: [] }],
+    });
+    const missing = readSavedSpot()!;
+    expect(missing.regulationCoverage ?? null).toBeNull();
+    expect(coverageForDisplayedRules(missing)).toEqual({
+      cleaning: 'unknown', restrictions: 'unknown', timeLimits: 'unknown', meters: 'unknown',
+    });
+
+    localStorage.setItem(SAVED_SPOT_KEY, JSON.stringify({
+      ...baseSpot,
+      savedAt: Date.now(),
+      regulationCoverage: { cleaning: 'verified' },
+    }));
+    expect(readSavedSpot()!.regulationCoverage).toBeNull();
   });
 
   it('rejects untrusted payloads instead of handing out unusable coordinates', () => {

@@ -13,6 +13,10 @@ import {
 } from '../../utils/streetIntelligencePresentation';
 import { evaluateParkingCheck, type ParkingCheckResult } from '../../utils/parkingCheck';
 import { filterAuthoritativeRules } from '../../utils/canonicalCurbWriteAuthority';
+import {
+  coverageForDisplayedRules,
+  regulationCategoryOf,
+} from '../../utils/regulationCoverage';
 import { assessHydrantDistance, type HydrantAssessment } from '../../utils/hydrantDistance';
 import { lookupNearestHydrant } from './HydrantDistanceTool';
 import { HydrantIcon } from './HydrantIcon';
@@ -22,6 +26,7 @@ interface StreetOutcome {
   safeUntil: SafeUntilResult | null;
   effectiveSide: string | null;
   failed: boolean;
+  regulationCoverage: import('../../utils/regulationCoverage').RegulationCoverage | null;
 }
 
 /**
@@ -34,7 +39,7 @@ interface StreetOutcome {
 async function loadStreetOutcome(spot: SavedSpot): Promise<StreetOutcome> {
   const effectiveSide = effectiveParkingSide(spot);
   if (!spot.segmentId && !spot.publicRules?.length) {
-    return { presentation: 'unknown', safeUntil: null, effectiveSide, failed: false };
+    return { presentation: 'unknown', safeUntil: null, effectiveSide, failed: false, regulationCoverage: null };
   }
   try {
     const todayKey = toNYCDateKey(new Date());
@@ -47,30 +52,30 @@ async function loadStreetOutcome(spot: SavedSpot): Promise<StreetOutcome> {
     ));
     let rules: StreetRuleDoc[] = [];
     let segment: Record<string, unknown> | null = null;
-    const resolvedAreVerified = Array.isArray(spot.publicRules)
-      && (spot.regulationStatus == null || spot.regulationStatus === 'verified');
-    if (resolvedAreVerified) {
-      rules = spot.publicRules.map((rule, index) => ({ id: `response_${index}`, ...(rule as StreetRuleDoc) }));
-      const source = typeof rules[0]?.source === 'string' ? rules[0].source : 'nyc_open_data';
-      segment = {
+    const regulationCoverage = coverageForDisplayedRules(spot);
+    const canonicalSpot = spot.curbProtocolVersion === 2
+      || (spot.segmentId || '').startsWith('curb2_')
+      || spot.regulationStatus != null;
+    if (Array.isArray(spot.publicRules) && regulationCoverage) {
+      rules = spot.publicRules
+        .map((rule, index) => ({ id: `response_${index}`, ...(rule as StreetRuleDoc) }))
+        .filter(rule => {
+          const category = regulationCategoryOf(rule);
+          return category != null && regulationCoverage[category] === 'verified';
+        });
+      segment = rules.length ? {
         segmentId: spot.segmentId,
         streetName: spot.segmentStreetName,
         status: 'active',
-        source,
-        provenance: { provider: source },
-        confidenceScore: 1,
-      };
-    } else if (Array.isArray(spot.publicRules) && spot.regulationStatus && spot.regulationStatus !== 'verified') {
-      rules = [];
-      segment = {
-        segmentId: spot.segmentId,
-        streetName: spot.segmentStreetName,
-        status: 'active',
-        source: 'nyc_open_data',
-        provenance: { provider: 'nyc_open_data' },
-        confidenceScore: 1,
         protocolVersion: 2,
-      };
+        activeRuleSetVersion: 'response',
+      } : null;
+      if (segment) {
+        rules = rules.map(rule => ({ ...rule, protocolVersion: 2, ruleSetVersion: 'response' }));
+      }
+    } else if (Array.isArray(spot.publicRules) && !canonicalSpot) {
+      rules = spot.publicRules.map((rule, index) => ({ id: `response_${index}`, ...(rule as StreetRuleDoc) }));
+      segment = rules.length ? { status: 'active', legacyResponseRules: true } : null;
     } else if (spot.segmentId) {
       const [legacySnap, legacyRulesSnap] = await Promise.all([
         getDoc(doc(db, 'streetSegments', spot.segmentId)),
@@ -85,18 +90,26 @@ async function loadStreetOutcome(spot: SavedSpot): Promise<StreetOutcome> {
       rules = selected.ok ? selected.rules : [];
       segment = selected.ok ? segment : null;
     }
-    const presentation = classifyStreetIntelligence(segment, rules).state;
+    const presentation = (segment?.protocolVersion === 2 || segment?.legacyResponseRules === true) && rules.length
+      ? 'supported' as const
+      : classifyStreetIntelligence(segment, rules).state;
     if (presentation === 'unknown' || !effectiveSide) {
-      return { presentation, safeUntil: null, effectiveSide, failed: false };
+      return { presentation, safeUntil: null, effectiveSide, failed: false, regulationCoverage };
     }
     const suspensions = suspSnap.docs
       .map(d => ({ id: d.id, ...d.data() } as SuspensionDoc))
       .filter(s => s.status !== 'archived');
     const schedules: CleaningSchedule[] = rules.flatMap(r => r.schedules || []);
-    return { presentation, safeUntil: computeSafeUntil(schedules, effectiveSide, suspensions), effectiveSide, failed: false };
+    return {
+      presentation,
+      safeUntil: computeSafeUntil(schedules, effectiveSide, suspensions),
+      effectiveSide,
+      failed: false,
+      regulationCoverage,
+    };
   } catch {
     // Never surface a raw Firestore error; an unreadable check is uncertainty.
-    return { presentation: 'unknown', safeUntil: null, effectiveSide, failed: true };
+    return { presentation: 'unknown', safeUntil: null, effectiveSide, failed: true, regulationCoverage: null };
   }
 }
 
@@ -130,7 +143,10 @@ export const ParkingCheckTool = ({
         failed: hydrantLookup.status === 'unavailable' || hydrantLookup.status === 'out_of_area',
       });
       setStreet(streetOutcome);
-      setResult(evaluateParkingCheck({ street: streetOutcome, hydrant }));
+      setResult(evaluateParkingCheck({
+        street: { ...streetOutcome, regulationCoverage: streetOutcome.regulationCoverage },
+        hydrant,
+      }));
     } finally {
       inFlight.current = false;
       setRunning(false);
@@ -217,12 +233,13 @@ export const ParkingCheckTool = ({
         headline={{
           active_restriction: t('check.street_active'),
           clear: t('check.street_clear'),
+          coverage_incomplete: t('check.street_coverage'),
           side_unknown: t('check.street_side_unknown'),
           unavailable: t('check.street_unavailable'),
         }[result.street]}
         detail={
-          result.street === 'clear' && street?.safeUntil?.nextDay
-            ? t('check.street_next')
+          (result.street === 'clear' || result.street === 'coverage_incomplete') && street?.safeUntil?.nextDay
+            ? t(result.street === 'coverage_incomplete' ? 'check.street_next_cleaning' : 'check.street_next')
                 .replace('{day}', street.safeUntil.nextDay)
                 .replace('{time}', street.safeUntil.nextTime ?? '')
             : result.street === 'active_restriction' && street?.safeUntil?.scheduleDescription

@@ -246,6 +246,44 @@ describe('A1 response-only user resolution', () => {
     expect(empty.ruleSummary.cleaningAvailable).toBe(false);
   });
 
+  it('does not reuse a responseVersion 2 cache entry that has no category coverage', async () => {
+    const cachedRules = [{ category: 'cleaning', type: 'streetCleaning', source: 'nyc_open_data', schedules: [{ days: ['Mon'], startTime: '08:00', endTime: '09:30' }] }];
+    const cacheDeps = dependencies({
+      readCanonicalCache: vi.fn(async () => ({
+        hit: true,
+        publicSegment: { ...toPublicCurb(identity), ruleSummary: { cleaningAvailable: true, rulesResolved: true } },
+        publicRules: cachedRules,
+      })),
+    });
+    const reloaded = await runCanonicalCurbOrchestrator({ protocolVersion: 2, responseVersion: 2, location }, cacheDeps);
+    expect(cacheDeps.loadCanonicalRules).toHaveBeenCalledOnce();
+    expect(reloaded.responseVersion).toBe(2);
+    expect(reloaded.regulationCoverage.cleaning).toBe('verified');
+    expect(reloaded.regulationCoverage.meters).toBe('unknown');
+    expect(reloaded.publicRules.length).toBeGreaterThan(0);
+
+    const coverage = {
+      cleaning: 'verified', restrictions: 'unknown', timeLimits: 'unknown', meters: 'unknown',
+    };
+    const hitDeps = dependencies({
+      readCanonicalCache: vi.fn(async () => ({
+        hit: true,
+        publicSegment: {
+          ...toPublicCurb(identity),
+          ruleSummary: { cleaningAvailable: true, rulesResolved: true },
+          regulationCoverage: coverage,
+        },
+        publicRules: cachedRules,
+      })),
+    });
+    const hit = await runCanonicalCurbOrchestrator({ protocolVersion: 2, responseVersion: 2, location }, hitDeps);
+    expect(hitDeps.loadCanonicalRules).not.toHaveBeenCalled();
+    expect(hit.cacheHit).toBe(true);
+    expect(hit.regulationStatus).toBe('partial');
+    expect(hit.regulationCoverage).toEqual(coverage);
+    expect(hit.publicRules[0].type).toBe('streetCleaning');
+  });
+
   it('restores main publication only when publishUserResolution is explicitly enabled', async () => {
     const publishDeps = dependencies({ publishUserResolution: true });
     const published = await runCanonicalCurbOrchestrator({ protocolVersion: 2, location }, publishDeps);

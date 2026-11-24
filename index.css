@@ -3748,6 +3748,16 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   margin-bottom: 8px;
   min-width: 0;
 }
+.pq-mycar-intel-street p.pq-mycar-intel-claim {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  text-transform: none;
+  line-height: 1.35;
+  color: var(--color-text);
+  overflow: visible;
+  white-space: normal;
+}
 .pq-mycar-intel-street p {
   font-size: 10px;
   font-weight: 550;
@@ -3756,9 +3766,8 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   color: color-mix(in srgb, var(--color-text-secondary) 68%, transparent);
   line-height: 1.25;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow: visible;
+  white-space: normal;
 }
 .pq-mycar-intel-hero {
   display: flex;
@@ -3807,7 +3816,8 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   letter-spacing: -0.025em;
   line-height: 1.15;
   color: var(--color-text);
-  text-shadow: 0 0 24px rgba(52, 211, 153, 0.12);
+  overflow-wrap: anywhere;
+  text-shadow: none;
 }
 .pq-mycar-intel-datetime.is-danger { color: #fca5a5; text-shadow: none; }
 .pq-mycar-intel-datetime.is-caution { color: #fde68a; text-shadow: none; }
