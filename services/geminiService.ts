@@ -40,7 +40,9 @@ export const analyzeParkingSign = async (imageBase64: string): Promise<SignAnaly
     return result.data;
   } catch (error: any) {
     console.error("Gemini Vision Error:", error);
-    const code = error?.code ?? error?.details?.code ?? "";
+    // The Firebase SDK reports callable failures as "functions/<code>"; a dropped
+    // connection arrives as "functions/internal".
+    const code = String(error?.code ?? error?.details?.code ?? "").replace(/^functions\//, "");
     if (code === "resource-exhausted" || code === "failed-precondition" || code === "unavailable" || code === "internal") {
       return { status: "ERROR", explanation: SIGN_ANALYSIS_UNAVAILABLE_EXPLANATION };
     }

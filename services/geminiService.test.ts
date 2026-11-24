@@ -112,6 +112,21 @@ describe('analyzeParkingSign error mapping', () => {
     expect(isSignAnalysisUnavailable({ status: 'YES', explanation: SIGN_ANALYSIS_UNAVAILABLE_EXPLANATION })).toBe(false);
   });
 
+  it('classifies the Firebase SDK\'s real "functions/<code>" errors the same way', async () => {
+    // FunctionsError prefixes its code ("functions/unavailable"); a dropped
+    // connection surfaces as "functions/internal". Seen on a Galaxy S20 with the
+    // backend unreachable: before this mapping, outages told users to retake.
+    for (const code of ['resource-exhausted', 'failed-precondition', 'unavailable', 'internal']) {
+      mockCallable.mockRejectedValue(makeError(`functions/${code}`));
+      expect(isSignAnalysisUnavailable(await analyzeParkingSign('img'))).toBe(true);
+    }
+    for (const code of ['functions/invalid-argument', 'functions/unauthenticated', 'functions/not-found']) {
+      mockCallable.mockRejectedValue(makeError(code));
+      const result = await analyzeParkingSign('img');
+      expect(result.explanation).toBe(SIGN_ANALYSIS_UNREADABLE_EXPLANATION);
+    }
+  });
+
   it('resource-exhausted → "Assistant temporarily unavailable"', async () => {
     mockCallable.mockRejectedValue(makeError('resource-exhausted'));
     const result = await analyzeParkingSign('img');
