@@ -187,15 +187,26 @@ describe('gdal3.js resource resolution', () => {
     writeFileSync(join(installed.directory, 'gdal3WebAssembly.wasm.extra'), 'extra-bytes');
     const packageDir = installed.directory.replaceAll('\\', '/');
     const traversedPath = `${packageDir}/gdal3WebAssembly.wasm/../secret.txt`;
+    const lexicalPath = `${packageDir}/../package/secret.txt`;
     const suffixedPath = `${packageDir}/gdal3WebAssembly.wasm.extra`;
     writeFileSync(installed.modulePath, `
       const fs = require('fs');
       module.exports = async function initGdalJs() {
-        const traversed = fs.readFileSync(${JSON.stringify(traversedPath)}, 'utf8');
+        const exact = fs.readFileSync('node_modules/gdal3.js/dist/package/gdal3WebAssembly.wasm', 'utf8');
         const suffixed = fs.readFileSync(${JSON.stringify(suffixedPath)}, 'utf8');
-        if (traversed !== 'secret-bytes' || suffixed !== 'extra-bytes') {
-          throw new Error('resource redirect escaped the two WebAssembly filenames');
+        const lexical = fs.readFileSync(${JSON.stringify(lexicalPath)}, 'utf8');
+        let traversed = null;
+        let traversedCode = null;
+        try {
+          traversed = fs.readFileSync(${JSON.stringify(traversedPath)}, 'utf8');
+        } catch (error) {
+          traversedCode = error.code;
         }
+        if (exact !== 'wasm-bytes') throw new Error('authorized GDAL filename was not readable');
+        if (suffixed !== 'extra-bytes') throw new Error('suffixed filename was redirected');
+        if (lexical !== 'secret-bytes') throw new Error('directory traversal was redirected');
+        const preserved = traversedCode === 'ENOTDIR' || traversed === 'secret-bytes';
+        if (!preserved || traversed === 'wasm-bytes') throw new Error('file traversal was redirected');
         return {
           open() { return { datasets: [{}] }; },
           async ogrinfo() { return { layers: [] }; },
@@ -207,6 +218,7 @@ describe('gdal3.js resource resolution', () => {
       expect(await openGdalSession({ CURB_LION_GDAL_MODULE: installed.modulePath })).not.toBeNull();
       expect(process.cwd()).toBe(previous);
       expect(readFileSync(join(installed.directory, 'secret.txt'), 'utf8')).toBe('secret-bytes');
+      expect(readFileSync(join(installed.directory, 'gdal3WebAssembly.wasm.extra'), 'utf8')).toBe('extra-bytes');
     } finally {
       process.chdir(previous);
       rmSync(installed.root, { recursive: true, force: true });
