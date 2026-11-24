@@ -303,3 +303,23 @@ describe('native launch screen (Android)', () => {
     expect(capacitor).toContain(`android: { backgroundcolor: '${darkBg}', }`);
   });
 });
+
+describe('native launch screen hand-off (Android)', () => {
+  const activity = read('android/app/src/main/java/app/parqueen/MainActivity.java');
+
+  it('holds the launch screen until the WebView paints the boot logo, never longer than the cap', () => {
+    const install = activity.indexOf('SplashScreen.installSplashScreen(this)');
+    const superCreate = activity.indexOf('super.onCreate(savedInstanceState)');
+    expect(install).toBeGreaterThan(-1);
+    expect(install).toBeLessThan(superCreate);
+    expect(activity).toContain('setKeepOnScreenCondition(');
+    expect(activity).toMatch(/!webFirstFrameCommitted && SystemClock\.uptimeMillis\(\) - holdStart < MAX_LAUNCH_SCREEN_HOLD_MS/);
+    expect(activity).toContain('public void onPageCommitVisible(WebView view, String url)');
+    const cap = Number(activity.match(/MAX_LAUNCH_SCREEN_HOLD_MS = (\d+);/)?.[1]);
+    expect(cap).toBeGreaterThan(0);
+    expect(cap).toBeLessThanOrEqual(3000);
+    // The plugins the app registers stay registered.
+    expect(activity).toContain('registerPlugin(PhoneAuthPlugin.class);');
+    expect(activity).toContain('registerPlugin(AppCheckBridgePlugin.class);');
+  });
+});
