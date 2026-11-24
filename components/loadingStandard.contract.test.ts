@@ -307,17 +307,26 @@ describe('native launch screen (Android)', () => {
 describe('native launch screen hand-off (Android)', () => {
   const activity = read('android/app/src/main/java/app/parqueen/MainActivity.java');
 
-  it('holds the launch screen until the WebView paints the boot logo, never longer than the cap', () => {
+  it('holds the launch screen until the web boot logo has loaded, never longer than the cap', () => {
     const install = activity.indexOf('SplashScreen.installSplashScreen(this)');
     const superCreate = activity.indexOf('super.onCreate(savedInstanceState)');
     expect(install).toBeGreaterThan(-1);
     expect(install).toBeLessThan(superCreate);
-    expect(activity).toContain('setKeepOnScreenCondition(');
-    expect(activity).toMatch(/!webFirstFrameCommitted && SystemClock\.uptimeMillis\(\) - holdStart < MAX_LAUNCH_SCREEN_HOLD_MS/);
+    expect(activity).toContain('setKeepOnScreenCondition(() -> !webLogoReady && !launchHoldExpired())');
     expect(activity).toContain('public void onPageCommitVisible(WebView view, String url)');
     const cap = Number(activity.match(/MAX_LAUNCH_SCREEN_HOLD_MS = (\d+);/)?.[1]);
     expect(cap).toBeGreaterThan(0);
     expect(cap).toBeLessThanOrEqual(3000);
+    // The probe must find the index.html boot frame and its logo img, and fail open without them.
+    const probe = activity.match(/WEB_LOGO_READY_JS =\s*"([^"]*)"\s*\+\s*"([^"]*)"/);
+    expect(probe).not.toBeNull();
+    const js = probe![1] + probe![2];
+    expect(js).toContain("document.querySelector('[data-pq-boot]')");
+    expect(js).toContain('if(!b)return true;');
+    expect(js).toContain("b.querySelector('img')");
+    expect(js).toContain('i.complete&&i.naturalWidth>0');
+    const html = read('index.html');
+    expect(html).toMatch(/data-pq-boot[^>]*>\s*<img/);
     // The plugins the app registers stay registered.
     expect(activity).toContain('registerPlugin(PhoneAuthPlugin.class);');
     expect(activity).toContain('registerPlugin(AppCheckBridgePlugin.class);');
