@@ -134,7 +134,7 @@ describe('old and new curb clients', () => {
       segmentId: key,
       curbProtocolVersion: 2 as const,
       regulationStatus: 'verified' as const,
-      publicRules: [{ type: 'streetCleaning', source: 'nyc_open_data', schedules: cleaningRule.schedules }],
+      publicRules: [{ type: 'streetCleaning' }],
     };
     const fromType = coverageForDisplayedRules(stored);
     expect(fromType?.cleaning).toBe('verified');
@@ -142,7 +142,7 @@ describe('old and new curb clients', () => {
 
     const missingCategory = coverageForDisplayedRules({
       ...stored,
-      publicRules: [{ source: 'admin', schedules: cleaningRule.schedules }],
+      publicRules: [{}],
     });
     expect(missingCategory).toEqual(unknownRegulationCoverage());
 
