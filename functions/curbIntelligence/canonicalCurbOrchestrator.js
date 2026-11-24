@@ -360,7 +360,7 @@ async function boundedExecute(request, dependencies) {
   const timer = setTimeout(abort, remaining);
   try {
     if (closed) return unsupported('source_unavailable');
-    return await Promise.race([
+    const result = await Promise.race([
       execute(request, {
         ...dependencies,
         signal: controller.signal,
@@ -368,6 +368,10 @@ async function boundedExecute(request, dependencies) {
       }),
       aborted,
     ]);
+    // A native answer can arrive in the same turn the deadline aborts.
+    // The client must not receive that answer, and persistence stays closed.
+    if (closed || controller.signal.aborted) return unsupported('source_unavailable');
+    return result;
   } finally {
     clearTimeout(timer);
     dependencies.signal?.removeEventListener('abort', abort);

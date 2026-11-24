@@ -1,6 +1,9 @@
 'use strict';
 
-const { existsSync } = require('node:fs');
+const { existsSync, mkdtempSync, readFileSync, rmSync } = require('node:fs');
+const { tmpdir } = require('node:os');
+const { join } = require('node:path');
+const { performance } = require('node:perf_hooks');
 const DEMO_PROJECT_ID = 'demo-parkqueen-functions-test';
 const LOCAL_LOGICAL_FUNCTION3C_URL = 'http://127.0.0.1:9';
 const LOCAL_LOOKUP_TIMEOUT_MS = 20000;
@@ -71,9 +74,84 @@ function killTree(child) {
   killer.unref?.();
 }
 
+function notePhase(env, phase, elapsedMs) {
+  if (env?.FUNCTIONS_EMULATOR !== 'true' || env?.GCLOUD_PROJECT !== DEMO_PROJECT_ID) return;
+  try {
+    console.log(JSON.stringify({
+      record: 'parqueen_local_function3c_phase',
+      phase,
+      elapsedMs: Math.max(0, Math.round(elapsedMs)),
+    }));
+  } catch { /* timing never changes the lookup */ }
+}
+
+function readContainerId(cidFile) {
+  try {
+    const id = readFileSync(cidFile, 'utf8').trim();
+    return /^[a-f0-9]{12,64}$/i.test(id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+function runDocker(bin, args) {
+  return new Promise(resolve => {
+    let child;
+    try {
+      child = require('node:child_process').spawn(bin, args, {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      resolve({ status: 127, stdout: '', stderr: error.message });
+      return;
+    }
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk.toString('utf8'); });
+    child.stderr.on('data', chunk => { stderr += chunk.toString('utf8'); });
+    const timer = setTimeout(() => {
+      killTree(child);
+      resolve({ status: 124, stdout, stderr });
+    }, 10000);
+    child.on('error', error => {
+      clearTimeout(timer);
+      resolve({ status: 127, stdout, stderr: error.message });
+    });
+    child.on('exit', status => {
+      clearTimeout(timer);
+      resolve({ status: status ?? 1, stdout, stderr });
+    });
+  });
+}
+
+async function readContainerIdSoon(cidFile) {
+  const started = Date.now();
+  let id = readContainerId(cidFile);
+  while (!id && Date.now() - started < 1000) {
+    await new Promise(resolve => { setTimeout(resolve, 50); });
+    id = readContainerId(cidFile);
+  }
+  return id;
+}
+
+async function releaseOwnedContainer(bin, child, cidFile) {
+  killTree(child);
+  const id = await readContainerIdSoon(cidFile);
+  if (!id) {
+    rmSync(join(cidFile, '..'), { recursive: true, force: true });
+    return { ok: true, id: null };
+  }
+  await runDocker(bin, ['rm', '-f', id]);
+  const inspect = await runDocker(bin, ['inspect', '-f', '{{.State.Running}}', id]);
+  const running = inspect.status === 0 && inspect.stdout.trim() === 'true';
+  rmSync(join(cidFile, '..'), { recursive: true, force: true });
+  return { ok: !running, id };
+}
+
 let geosupport = null;
 
-function startGeosupport(image, service) {
+function startGeosupport(image, service, env) {
   const script = [
     'import json, sys',
     'from resolver_service.native_adapter import Geosupport26CAdapter',
@@ -86,23 +164,57 @@ function startGeosupport(image, service) {
     '    sys.stdout.write("PARQUEEN_GEO " + json.dumps({"status": result.status_code, "payload": result.payload}) + "\\n")',
     '    sys.stdout.flush()',
   ].join('\n');
-  const child = require('node:child_process').spawn(dockerBin(), [
-    'run', '-i', '--rm', '-v', `${service}:/app`, '-w', '/app', image,
+  const startedAt = performance.now();
+  const cidDirectory = typeof env?.CURB_LOCAL_CID_DIRECTORY === 'string' && env.CURB_LOCAL_CID_DIRECTORY.trim()
+    ? env.CURB_LOCAL_CID_DIRECTORY.trim() : tmpdir();
+  const runDirectory = mkdtempSync(join(cidDirectory, 'parqueen-f3c-'));
+  const cidFile = join(runDirectory, 'cid');
+  const bin = dockerBin(env);
+  const child = require('node:child_process').spawn(bin, [
+    'run', '-i', '--rm', '--cidfile', cidFile,
+    '-v', `${service}:/app`, '-w', '/app', image,
     'python', '-u', '-c', script,
   ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  notePhase(env, 'cli_spawn', performance.now() - startedAt);
   let buffer = '';
   let stderr = '';
+  let containerNoted = false;
   const waiters = [];
-  const session = { stopped: false, lookup: null };
+  const listeners = [];
+  const session = { stopped: false, lookup: null, failure: null };
   const finish = error => {
-    if (session.stopped) return;
+    if (session.stopped) return session.failure;
     session.stopped = true;
     if (geosupport === session) geosupport = null;
+    for (const [signal, onAbort] of listeners) signal.removeEventListener('abort', onAbort);
     const pending = waiters.splice(0);
-    for (const waiter of pending) waiter.reject(error);
-    killTree(child);
+    session.failure = releaseOwnedContainer(bin, child, cidFile).then(result => {
+      if (result.ok) return error;
+      const orphan = namedError('Error', `${error.message} Container ${result.id} remained running.`);
+      orphan.containerId = result.id;
+      orphan.cause = error;
+      return orphan;
+    });
+    for (const waiter of pending) {
+      session.failure.then(reason => waiter.reject(reason));
+    }
+    return session.failure;
+  };
+  const watchContainer = () => {
+    if (containerNoted || session.stopped) return;
+    if (!readContainerId(cidFile)) return;
+    containerNoted = true;
+    clearInterval(containerWatch);
+    notePhase(env, 'container_created', performance.now() - startedAt);
+  };
+  const containerWatch = setInterval(watchContainer, 50);
+  const originalFinish = finish;
+  session.finish = error => {
+    clearInterval(containerWatch);
+    return originalFinish(error);
   };
   child.stdout.on('data', chunk => {
+    if (session.stopped) return;
     buffer += chunk.toString('utf8');
     let newline = buffer.indexOf('\n');
     while (newline !== -1) {
@@ -110,7 +222,14 @@ function startGeosupport(image, service) {
       buffer = buffer.slice(newline + 1);
       if (line.startsWith('PARQUEEN_GEO ')) {
         const waiter = waiters.shift();
-        if (waiter) waiter.resolve(JSON.parse(line.slice('PARQUEEN_GEO '.length)));
+        if (waiter && !session.stopped) {
+          notePhase(env, 'native_result', performance.now() - startedAt);
+          try {
+            waiter.resolve(JSON.parse(line.slice('PARQUEEN_GEO '.length)));
+          } catch (error) {
+            session.finish(error);
+          }
+        }
       }
       newline = buffer.indexOf('\n');
     }
@@ -118,15 +237,18 @@ function startGeosupport(image, service) {
   child.stderr.on('data', chunk => {
     stderr = `${stderr}${chunk.toString('utf8')}`.slice(-2000);
   });
-  child.on('exit', code => finish(new Error(`Function 3C exited ${code}: ${stderr.slice(-200)}`)));
-  child.on('error', error => finish(error));
+  child.on('exit', code => session.finish(new Error(`Function 3C exited ${code}: ${stderr.slice(-200)}`)));
+  child.on('error', error => session.finish(error));
   let chain = Promise.resolve();
   session.lookup = (tuple, signal) => {
     const run = chain.then(() => new Promise((resolve, reject) => {
+      const deliverStopped = () => {
+        Promise.resolve(session.failure).then(reason => reject(reason));
+      };
       if (session.stopped || signal?.aborted) {
         const error = namedError('AbortError', 'The local Function 3C request was cancelled.');
-        if (!session.stopped) finish(error);
-        reject(error);
+        if (!session.stopped) session.finish(error);
+        deliverStopped();
         return;
       }
       let settled = false;
@@ -134,35 +256,49 @@ function startGeosupport(image, service) {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        signal?.removeEventListener('abort', onAbort);
         report(value);
       };
       const timer = setTimeout(() => {
-        finish(namedError('TimeoutError', 'Function 3C timed out'));
+        session.finish(namedError('TimeoutError', 'Function 3C timed out'));
       }, LOCAL_LOOKUP_TIMEOUT_MS);
       const onAbort = () => {
-        finish(namedError('AbortError', 'The local Function 3C request was cancelled.'));
+        session.finish(namedError('AbortError', 'The local Function 3C request was cancelled.'));
       };
-      signal?.addEventListener('abort', onAbort, { once: true });
+      if (signal) {
+        signal.addEventListener('abort', onAbort, { once: true });
+        listeners.push([signal, onAbort]);
+      }
       waiters.push({
-        resolve: value => settle(resolve, value),
-        reject: error => settle(reject, error),
+        resolve: value => {
+          queueMicrotask(() => {
+            if (settled) return;
+            if (signal?.aborted || session.stopped) {
+              const failure = session.finish(namedError(
+                'AbortError', 'The local Function 3C request was cancelled.',
+              ));
+              Promise.resolve(failure).then(reason => settle(reject, reason));
+              return;
+            }
+            settle(resolve, value);
+          });
+        },
+        reject: reason => settle(reject, reason),
       });
       try {
         child.stdin.write(`${JSON.stringify(tuple)}\n`);
       } catch (error) {
-        finish(error);
+        session.finish(error);
       }
     }));
     chain = run.then(() => {}, () => {});
     return run;
   };
-  session.stop = () => finish(namedError('AbortError', 'The local Function 3C process was stopped.'));
+  session.stop = () => session.finish(namedError('AbortError', 'The local Function 3C process was stopped.'));
   return session;
 }
 
 function stopLocalGeosupport() {
-  geosupport?.stop?.();
+  return geosupport?.stop?.() || Promise.resolve();
 }
 
 function createLocalGeosupportTransport(env = process.env) {
@@ -181,7 +317,7 @@ function createLocalGeosupportTransport(env = process.env) {
       if (request.signal?.aborted) {
         throw namedError('AbortError', 'The local Function 3C request was cancelled.');
       }
-      if (!geosupport || geosupport.stopped) geosupport = startGeosupport(image, service);
+      if (!geosupport || geosupport.stopped) geosupport = startGeosupport(image, service, env);
       const result = await geosupport.lookup(body, request.signal);
       return { status: result.status, text: async () => JSON.stringify(result.payload) };
     };

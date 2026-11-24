@@ -1,8 +1,10 @@
 import { createRequire } from 'node:module';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const require = createRequire(import.meta.url);
-const { readFileSync } = require('node:fs');
+const { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
+const { tmpdir } = require('node:os');
+const { join } = require('node:path');
 const { createPrivateBlockfaceResolver } = require('./privateBlockfaceResolver');
 const {
   createLocalGeosupportTransport,
@@ -170,84 +172,227 @@ describe('local Function 3C process cleanup', () => {
     crossStreetTwo: 'MORRIS PARK AVENUE',
     compassDirection: 'W',
   });
+  const nativeLine = `PARQUEEN_GEO ${JSON.stringify({
+    status: 200,
+    payload: { ok: true, officialBlockFaceId: '1522611401' },
+  })}\n`;
+  let cidRoot;
 
-  function dockerChild() {
-    const handlers = {};
-    return {
-      pid: 4242,
+  function helperChild(stdoutText) {
+    const data = [];
+    let onExit = () => {};
+    const child = {
+      pid: 7,
       killed: false,
       exitCode: null,
       signalCode: null,
       stdin: { write() {} },
-      stdout: { on() {} },
+      stdout: { on(event, handler) { if (event === 'data') data.push(handler); } },
+      stderr: { on() {} },
+      on(event, handler) { if (event === 'exit') onExit = handler; },
+      kill() { this.killed = true; },
+      unref() {},
+    };
+    queueMicrotask(() => {
+      for (const handler of data) handler(Buffer.from(stdoutText));
+      child.exitCode = 0;
+      onExit(0);
+    });
+    return child;
+  }
+
+  function installSpawn({
+    cid = 'abc123def4567890abc123def4567890abc123def4567890abc123def4567890',
+    writeCid = 'immediate',
+    inspectRunning = false,
+  } = {}) {
+    const calls = [];
+    const handlers = {};
+    const child = {
+      pid: 4242,
+      killed: false,
+      exitCode: null,
+      signalCode: null,
+      stdin: { write() { return true; } },
+      stdout: { on(event, handler) { if (event === 'data') handlers.stdout = handler; } },
       stderr: { on() {} },
       on(event, handler) { handlers[event] = handler; },
       kill() {
         this.killed = true;
+        if (this.exitCode !== null) return;
         this.exitCode = 1;
         handlers.exit?.(1);
       },
       unref() {},
     };
-  }
-
-  afterEach(() => {
-    stopLocalGeosupport();
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
-
-  function installSpawn() {
-    const child = dockerChild();
-    const bins = [];
-    vi.spyOn(childProcess, 'spawn').mockImplementation(bin => {
-      bins.push(String(bin));
-      if (String(bin).toLowerCase() === 'taskkill') return dockerChild();
+    vi.spyOn(childProcess, 'spawn').mockImplementation((bin, args = []) => {
+      calls.push(args);
+      if (String(bin).toLowerCase() === 'taskkill') return helperChild('');
+      if (args[0] === 'rm') return helperChild('');
+      if (args[0] === 'inspect') return helperChild(inspectRunning ? 'true\n' : 'false\n');
+      const cidFile = args[args.indexOf('--cidfile') + 1];
+      if (writeCid === 'immediate') writeFileSync(cidFile, `${cid}\n`);
+      if (writeCid === 'late') setTimeout(() => writeFileSync(cidFile, `${cid}\n`), 40);
       return child;
     });
-    return { child, bins };
+    return { child, calls, handlers, cid };
   }
 
+  function localEnv() {
+    return { ...demoEnv, CURB_LOCAL_CID_DIRECTORY: cidRoot };
+  }
+
+  function runCalls(calls) {
+    return calls.filter(args => args[0] === 'run');
+  }
+
+  beforeEach(() => {
+    cidRoot = mkdtempSync(join(tmpdir(), 'parqueen-f3c-test-'));
+  });
+
+  afterEach(async () => {
+    await stopLocalGeosupport();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    rmSync(cidRoot, { recursive: true, force: true });
+  });
+
   it('does not spawn Docker when the request is already aborted', async () => {
-    const { bins } = installSpawn();
-    const local = createLocalGeosupportTransport(demoEnv);
+    const { calls } = installSpawn();
+    const local = createLocalGeosupportTransport(localEnv());
     const controller = new AbortController();
     controller.abort();
     await expect(local.transport({
       body: requestBody,
       signal: controller.signal,
     })).rejects.toMatchObject({ name: 'AbortError' });
-    expect(bins.filter(bin => bin.toLowerCase() !== 'taskkill')).toEqual([]);
+    expect(runCalls(calls)).toEqual([]);
   });
 
-  it('kills the running Docker process when the request is cancelled and does not start another', async () => {
-    const { child, bins } = installSpawn();
-    const local = createLocalGeosupportTransport(demoEnv);
+  it('stops the owned container when the request is cancelled during startup', async () => {
+    const { child, calls, cid } = installSpawn({ writeCid: 'late' });
+    const local = createLocalGeosupportTransport(localEnv());
     const controller = new AbortController();
     const pending = local.transport({ body: requestBody, signal: controller.signal });
     const assertion = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     controller.abort();
     await assertion;
     expect(child.killed).toBe(true);
-    expect(bins.filter(bin => bin.toLowerCase() !== 'taskkill')).toHaveLength(1);
+    expect(calls.filter(args => args[0] === 'rm')).toEqual([['rm', '-f', cid]]);
+    expect(calls.filter(args => args[0] === 'inspect')).toEqual([
+      ['inspect', '-f', '{{.State.Running}}', cid],
+    ]);
+    expect(existsSync(calls.find(args => args[0] === 'run')[argsIndex(calls, 'run')])).toBe(false);
   });
 
-  it('stops the Docker process when the lookup times out', async () => {
+  it('stops the owned container while waiting for native output', async () => {
+    const { child, calls, cid } = installSpawn();
+    const local = createLocalGeosupportTransport(localEnv());
+    const controller = new AbortController();
+    const pending = local.transport({ body: requestBody, signal: controller.signal });
+    const assertion = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    controller.abort();
+    await assertion;
+    expect(child.killed).toBe(true);
+    expect(calls.filter(args => args[0] === 'rm')).toEqual([['rm', '-f', cid]]);
+    expect(runCalls(calls)).toHaveLength(1);
+  });
+
+  it('drops native output that arrives as the request is cancelled', async () => {
+    const { calls, handlers, cid } = installSpawn();
+    const local = createLocalGeosupportTransport(localEnv());
+    const controller = new AbortController();
+    const pending = local.transport({ body: requestBody, signal: controller.signal });
+    const assertion = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    handlers.stdout(Buffer.from(nativeLine));
+    controller.abort();
+    await assertion;
+    expect(calls.filter(args => args[0] === 'rm')).toEqual([['rm', '-f', cid]]);
+  });
+
+  it('stops the owned container when the lookup times out with no output', async () => {
     vi.useFakeTimers();
-    const { child, bins } = installSpawn();
-    const local = createLocalGeosupportTransport(demoEnv);
+    const { child, calls, cid } = installSpawn();
+    const local = createLocalGeosupportTransport(localEnv());
     const pending = local.transport({ body: requestBody });
     const assertion = expect(pending).rejects.toMatchObject({ name: 'TimeoutError' });
     await vi.advanceTimersByTimeAsync(20000);
     await assertion;
     expect(child.killed).toBe(true);
-    expect(bins.filter(bin => bin.toLowerCase() !== 'taskkill')).toHaveLength(1);
+    expect(calls.filter(args => args[0] === 'rm')).toEqual([['rm', '-f', cid]]);
+  });
+
+  it('reports the container when the Docker CLI exits and the container remains', async () => {
+    const { child, calls, handlers, cid } = installSpawn({ inspectRunning: true });
+    const local = createLocalGeosupportTransport(localEnv());
+    const pending = local.transport({ body: requestBody });
+    const assertion = expect(pending).rejects.toMatchObject({
+      message: expect.stringContaining(`Container ${cid} remained running.`),
+      containerId: cid,
+    });
+    child.exitCode = 0;
+    handlers.exit(0);
+    await assertion;
+    expect(child.killed).toBe(false);
+    expect(calls.filter(args => args[0] === 'rm')).toEqual([['rm', '-f', cid]]);
+  });
+
+  it('reports a cleanup failure instead of hiding an orphaned container', async () => {
+    const { calls, cid } = installSpawn({ inspectRunning: true });
+    const local = createLocalGeosupportTransport(localEnv());
+    const controller = new AbortController();
+    const pending = local.transport({ body: requestBody, signal: controller.signal });
+    const assertion = expect(pending).rejects.toMatchObject({
+      message: expect.stringContaining(`Container ${cid} remained running.`),
+      containerId: cid,
+    });
+    controller.abort();
+    await assertion;
+    expect(calls.some(args => args.includes('prune'))).toBe(false);
+  });
+
+  it('cancels a queued request with the same owned container', async () => {
+    const { calls } = installSpawn();
+    const local = createLocalGeosupportTransport(localEnv());
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    const first = local.transport({ body: requestBody, signal: firstController.signal });
+    const second = local.transport({ body: requestBody, signal: secondController.signal });
+    const firstAssertion = expect(first).rejects.toMatchObject({ name: 'AbortError' });
+    const secondAssertion = expect(second).rejects.toMatchObject({ name: 'AbortError' });
+    firstController.abort();
+    await firstAssertion;
+    await secondAssertion;
+    expect(runCalls(calls)).toHaveLength(1);
+    expect(calls.filter(args => args[0] === 'rm')).toHaveLength(1);
+  });
+
+  it('starts a fresh owned container after a failed session', async () => {
+    const { calls } = installSpawn();
+    const local = createLocalGeosupportTransport(localEnv());
+    const first = new AbortController();
+    const firstPending = local.transport({ body: requestBody, signal: first.signal });
+    const firstAssertion = expect(firstPending).rejects.toMatchObject({ name: 'AbortError' });
+    first.abort();
+    await firstAssertion;
+    const second = new AbortController();
+    const secondPending = local.transport({ body: requestBody, signal: second.signal });
+    const secondAssertion = expect(secondPending).rejects.toMatchObject({ name: 'AbortError' });
+    second.abort();
+    await secondAssertion;
+    expect(runCalls(calls)).toHaveLength(2);
+    expect(calls.filter(args => args[0] === 'rm')).toHaveLength(2);
   });
 
   it('does not spawn Docker for an unreadable request', async () => {
-    const { bins } = installSpawn();
-    const local = createLocalGeosupportTransport(demoEnv);
+    const { calls } = installSpawn();
+    const local = createLocalGeosupportTransport(localEnv());
     await expect(local.transport({ body: 'not-json' })).rejects.toThrow('unreadable request');
-    expect(bins).toEqual([]);
+    expect(calls).toEqual([]);
   });
+
+  function argsIndex(calls, command) {
+    const args = calls.find(entry => entry[0] === command);
+    return args.indexOf('--cidfile') + 1;
+  }
 });
