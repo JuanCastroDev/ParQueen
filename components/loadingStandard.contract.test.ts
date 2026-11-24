@@ -327,6 +327,12 @@ describe('native launch screen hand-off (Android)', () => {
     expect(js).toContain('i.complete&&i.naturalWidth>0');
     const html = read('index.html');
     expect(html).toMatch(/data-pq-boot[^>]*>\s*<img/);
+    // Release cross-fades the launch screen out instead of cutting to an unpainted WebView.
+    expect(activity).toContain('setOnExitAnimationListener(');
+    expect(activity).toContain('.withEndAction(provider::remove)');
+    const fade = Number(activity.match(/EXIT_FADE_DELAY_MS = (\d+);/)?.[1]) + Number(activity.match(/EXIT_FADE_MS = (\d+);/)?.[1]);
+    expect(fade).toBeGreaterThan(0);
+    expect(fade).toBeLessThanOrEqual(400);
     // The plugins the app registers stay registered.
     expect(activity).toContain('registerPlugin(PhoneAuthPlugin.class);');
     expect(activity).toContain('registerPlugin(AppCheckBridgePlugin.class);');
