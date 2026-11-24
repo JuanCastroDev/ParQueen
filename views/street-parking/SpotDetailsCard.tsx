@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { MessageSquare, MapPin, Clock, Navigation, Car, Loader2 } from 'lucide-react';
+import { MessageSquare, MapPin, Clock, Navigation, Car } from 'lucide-react';
 import { MapItem } from './types';
 import { t, useLang } from '../../i18n';
+import { InlineLoader } from '../../components/LoadingScreen';
 import { getDistance, formatTimeLeft } from './utils';
 import { getVehicleHex, VehicleIcon } from '../../utils/vehicleIcon';
 import { getTierForTitle, TIER_VISUALS } from '../../utils/crowns';
@@ -578,7 +579,7 @@ const SpotDetailsCardInner: React.FC<Omit<SpotDetailsCardProps, 'backLabel' | 'o
                             aria-busy={claiming}
                             className="flex-1 font-bold py-3.5 rounded-2xl transition-all text-sm active:scale-95 text-white flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
                             style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>
-                            {claiming && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+                            {claiming && <InlineLoader size={14} />}
                             {claiming
                                 ? t('claim_flow.confirming_claim')
                                 : departureText ? t('claim_flow.claim_for_time', { time: departureText }) : t('claim_flow.claim_this_spot')}
@@ -593,7 +594,7 @@ const SpotDetailsCardInner: React.FC<Omit<SpotDetailsCardProps, 'backLabel' | 'o
                             className="flex-1 font-bold py-3.5 rounded-2xl transition-all text-sm active:scale-95 text-white flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
                             style={{ background: 'linear-gradient(90deg, var(--color-brand), var(--color-brand-2))' }}>
                             {claiming
-                                ? <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+                                ? <InlineLoader size={14} />
                                 : <Navigation size={14} />}
                             {claiming ? t('claim_flow.confirming_claim') : t('claim_flow.im_heading_there')}
                         </button>

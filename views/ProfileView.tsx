@@ -13,6 +13,7 @@ import { getInitials } from '../utils/profileAvatar';
 import { validateAvatarUpload } from '../utils/avatarUploadValidation';
 import { deriveImpactCounts } from '../utils/profileImpact';
 import { t, useLang, getLang } from '../i18n';
+import { InlineLoader } from '../components/LoadingScreen';
 import { NavigationBar } from './street-parking/NavigationBar';
 
 // The durable per-user pingsShared counter (users/{uid}.impactStats.pingsShared)
@@ -330,7 +331,7 @@ export const ProfileView = ({ user, onBack, setView, unreadMessagesCount = 0, pe
                   )}
                   {isUploading && (
                     <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                      <div className="animate-spin motion-reduce:animate-none rounded-full h-7 w-7 border-b-2 border-white" />
+                      <InlineLoader size={28} className="text-white" />
                     </div>
                   )}
                 </div>

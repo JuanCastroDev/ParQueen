@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { resolveMessagesAndroidBack } from '../utils/androidBackNavigation';
 import { AccessibleModal } from '../components/AccessibleModal';
+import { InlineLoader, SectionLoader } from '../components/LoadingScreen';
 import { Send, ChevronLeft, MoreVertical, Sparkles, ArrowLeft, MapPin, MessageSquare, CheckCheck } from 'lucide-react';
 import { generateSmartReplies, createSmartReplyRequestKey } from '../services/geminiService';
 import { collection, query, where, onSnapshot, addDoc, doc, setDoc, orderBy, serverTimestamp, getDoc, getDocs, limit, startAfter, updateDoc } from 'firebase/firestore';
@@ -932,10 +933,9 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
           )}
 
           {!messagesReady && (
-            <div role="status" aria-live="polite" className="flex-1 flex flex-col items-center justify-center gap-3 text-[var(--color-text-secondary)]">
-              <span className="w-6 h-6 rounded-full border-2 border-[#38bdf8] border-t-transparent animate-spin" aria-hidden="true" />
+            <SectionLoader size={48} className="flex-1 gap-3 text-[var(--color-text-secondary)]">
               <p className="text-[13px] font-semibold">{t('messages.loading')}</p>
-            </div>
+            </SectionLoader>
           )}
 
           {messagesReady && messages.length === 0 && (
@@ -1065,11 +1065,12 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
             <button
               onClick={() => handleSend(inputText)}
               disabled={!inputText.trim() || sending}
+              aria-busy={sending}
               aria-label={t('messages.send_aria')}
               className="pq-send focus-visible:ring-2 focus-visible:ring-[#38bdf8] focus-visible:outline-none"
             >
               {sending
-                ? <span className="w-4 h-4 rounded-full border-2 border-current border-t-transparent animate-spin" aria-hidden="true" />
+                ? <InlineLoader size={18} />
                 : <Send size={18} aria-hidden="true" className="-ml-0.5" />}
             </button>
           </div>

@@ -84,6 +84,12 @@ describe('Firebase Hosting Cache-Control', () => {
     expect(cacheControlFor('/manifest.webmanifest')).toBe('no-cache');
   });
 
+  it('keeps the unfingerprinted theme boot script revalidating', () => {
+    // public/theme-boot.js keeps its name across builds; under the immutable js
+    // rule a stale copy could pin a returning user to an old theme-boot forever.
+    expect(cacheControlFor('/theme-boot.js')).toBe('no-cache');
+  });
+
   it('orders the no-cache overrides after the long-lived asset rules', () => {
     const idx = (src: string) => blocks.findIndex(b => b.source === src);
     expect(idx('**')).toBeLessThan(idx('**/*.@(js|css|woff2)'));

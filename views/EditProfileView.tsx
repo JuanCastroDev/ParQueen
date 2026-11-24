@@ -4,11 +4,12 @@ import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { getApp } from 'firebase/app';
 import { db } from '../firebase';
-import { ChevronLeft, ChevronRight, Check, X, Loader2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Check, X } from 'lucide-react';
 
 import { moderateUsername, moderateDisplayName } from '../utils/moderation';
 import { useFocusOnMount } from '../hooks/useFocusOnMount';
 import { t, useLang } from '../i18n';
+import { InlineLoader, LoadingScreen } from '../components/LoadingScreen';
 import { useModalAccessibility } from '../hooks/useModalAccessibility';
 import {
   isDirty,
@@ -173,11 +174,7 @@ export const EditProfileView = ({ onBack }: { onBack: () => void }) => {
   };
 
   if (loading) {
-    return (
-      <div className="min-h-full bg-[var(--color-bg)] flex items-center justify-center">
-        <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full" />
-      </div>
-    );
+    return <LoadingScreen label={t('common.loading')} />;
   }
 
   if (!uid) {
@@ -268,7 +265,7 @@ export const EditProfileView = ({ onBack }: { onBack: () => void }) => {
                   placeholder={t('edit_profile.username_placeholder')}
                 />
                 <div className="absolute right-4 top-1/2 -translate-y-1/2">
-                  {usernameAvailability === 'checking' && <Loader2 size={16} className="text-[var(--color-text-secondary)] animate-spin" />}
+                  {usernameAvailability === 'checking' && <InlineLoader size={16} className="text-[var(--color-text-secondary)]" />}
                   {usernameAvailability === 'available' && <Check size={16} className="text-[var(--color-success)]" />}
                   {(usernameAvailability === 'taken' || usernameAvailability === 'invalid') && <X size={16} className="text-[var(--color-danger)]" />}
                   {usernameAvailability === 'unchanged' && <Check size={16} className="text-[var(--color-text-secondary)]" />}

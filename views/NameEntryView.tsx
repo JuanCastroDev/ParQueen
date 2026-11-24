@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Check, X, Loader2 } from 'lucide-react';
+import { Check, X } from 'lucide-react';
 import { getApp } from 'firebase/app';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { db } from '../firebase';
 import { doc, getDoc } from 'firebase/firestore';
 import { t, useLang } from '../i18n';
 import { SignupProgress } from '../components/SignupProgress';
+import { InlineLoader } from '../components/LoadingScreen';
 import { ONBOARDING_V2_ENABLED } from '../utils/onboardingFlags';
 import { validateUsername, parseCooldownDays } from '../utils/username';
 import { moderateUsername } from '../utils/moderation';
@@ -259,7 +260,7 @@ export const NameEntryView: React.FC<NameEntryViewProps> = ({ onComplete }) => {
                     {/* Availability indicator icon */}
                     <div className="pr-4 flex items-center">
                         {availability === 'checking' && (
-                            <Loader2 size={18} className="text-[var(--color-text-secondary)] animate-spin" />
+                            <InlineLoader size={18} className="text-[var(--color-text-secondary)]" />
                         )}
                         {availability === 'available' && (
                             <Check size={18} className="text-[var(--color-success)]" />
