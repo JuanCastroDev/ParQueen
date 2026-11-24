@@ -98,7 +98,25 @@ const { haversineDistMiles, filterCandidates, buildMessages, collectStaleTokens,
 const { createHash, createHmac, randomInt: secureRandomInt, randomUUID, timingSafeEqual } = require('crypto');
 
 const canonicalV2ModuleLoader = createCanonicalV2ModuleLoader();
-onInit(() => { canonicalV2ModuleLoader.initialize(); });
+onInit(async () => {
+  canonicalV2ModuleLoader.initialize();
+  // One registration only. The SDK keeps the latest callback and awaits it
+  // before the first wrapped invocation in this process.
+  if (process.env.CURB_LOCAL_LION_PREWARM !== 'on') return;
+  try {
+    const { prewarmOfficialLionPrimary } = require('./curbIntelligence/localLionPrewarm');
+    await prewarmOfficialLionPrimary();
+  } catch {
+    try {
+      console.error(JSON.stringify({
+        record: 'parqueen_local_lion_prewarm',
+        phase: 'finish',
+        outcome: 'failed',
+        catalogReady: false,
+      }));
+    } catch { /* fail closed without an unhandled rejection */ }
+  }
+});
 
 function stableId(...parts) {
   return createHash('sha256').update(parts.map(part => String(part)).join('\u001f')).digest('hex');
