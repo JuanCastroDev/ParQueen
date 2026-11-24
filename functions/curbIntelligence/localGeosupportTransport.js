@@ -86,6 +86,24 @@ function notePhase(env, phase, elapsedMs) {
   } catch { /* timing never changes the lookup */ }
 }
 
+// The orchestrator stops waiting at its deadline, so a cleanup failure raised later would reach
+// nobody. Record every cleanup outcome here; failures go to stderr with the container identity.
+function noteCleanup(env, result, elapsedMs) {
+  if (env?.FUNCTIONS_EMULATOR !== 'true' || env?.GCLOUD_PROJECT !== DEMO_PROJECT_ID) return;
+  try {
+    const line = JSON.stringify({
+      record: 'parqueen_local_function3c_cleanup',
+      outcome: result.ok ? 'absent' : result.reason,
+      containerName: result.name,
+      containerId: result.id || null,
+      ...(result.ok ? {} : { detail: result.detail || null }),
+      elapsedMs: Math.max(0, Math.round(elapsedMs)),
+    });
+    if (result.ok) console.log(line);
+    else console.error(line);
+  } catch { /* logging never changes cleanup */ }
+}
+
 function readContainerId(cidFile) {
   try {
     const id = readFileSync(cidFile, 'utf8').trim();
@@ -265,8 +283,12 @@ function startGeosupport(image, service, env) {
     if (geosupport === session) geosupport = null;
     for (const [signal, onAbort] of listeners) signal.removeEventListener('abort', onAbort);
     const pending = waiters.splice(0);
+    const cleanupStartedAt = performance.now();
     session.failure = releaseOwnedContainer(bin, child, exited, cidFile, owner)
-      .then(result => (result.ok ? error : cleanupFailure(error, result)));
+      .then(result => {
+        noteCleanup(env, result, performance.now() - cleanupStartedAt);
+        return result.ok ? error : cleanupFailure(error, result);
+      });
     for (const waiter of pending) {
       session.failure.then(reason => waiter.reject(reason));
     }

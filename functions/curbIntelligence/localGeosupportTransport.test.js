@@ -576,6 +576,40 @@ describe('local Function 3C process cleanup', () => {
     }
   });
 
+  const cleanupRecords = spy => spy.mock.calls
+    .map(([line]) => { try { return JSON.parse(line); } catch { return null; } })
+    .filter(entry => entry?.record === 'parqueen_local_function3c_cleanup');
+
+  it('records a proven-absent cleanup for the demo log', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { cid, docker } = installSpawn();
+    await cancelOnce(createLocalGeosupportTransport(localEnv()));
+    expect(cleanupRecords(log)).toEqual([expect.objectContaining({
+      outcome: 'absent',
+      containerName: docker.owner.name,
+      containerId: cid,
+    })]);
+  });
+
+  it('reports a failed cleanup on stderr even when no caller awaits the request (deadline case)', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const docker = fakeDocker({ rmIgnored: true });
+    const { cid } = installSpawn({ docker });
+    const local = createLocalGeosupportTransport(localEnv());
+    const controller = new AbortController();
+    // The orchestrator stops awaiting at its deadline; mimic a caller that never looks again.
+    local.transport({ body: requestBody, signal: controller.signal }).catch(() => {});
+    controller.abort();
+    await vi.waitFor(() => {
+      expect(cleanupRecords(error)).toEqual([expect.objectContaining({
+        outcome: 'still_present',
+        containerName: docker.owner.name,
+        containerId: cid,
+      })]);
+    }, { timeout: 4000 });
+  });
+
   it('cancels a queued request with the same owned container', async () => {
     const { calls } = installSpawn();
     const local = createLocalGeosupportTransport(localEnv());
