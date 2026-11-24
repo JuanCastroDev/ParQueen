@@ -10,6 +10,7 @@ import {
   SIDE_CONFIRMATION_TOKEN_BODY_MIN,
   SIDE_CONFIRMATION_TOKEN_MAC_LENGTH,
 } from './sideConfirmationTokenLimits';
+import { isRegulationCoverage, type RegulationCoverage } from './regulationCoverage';
 
 export type CanonicalCurbCandidate = Readonly<{
   token: string;
@@ -81,12 +82,13 @@ export type CanonicalCurbResponse =
     streetName: string;
     sideLabel: CurbCardinal;
     ruleSummary: Readonly<{ cleaningAvailable: boolean; rulesResolved?: boolean }>;
-    responseVersion?: 1;
+    responseVersion?: 1 | 2;
     cacheHit?: boolean;
     identityConfidence?: 'high';
     regulationStatus?: 'verified' | 'partial' | 'unknown' | 'verified_empty';
     regulationCompleteness?: 'complete' | 'incomplete' | 'unknown';
     regulationAvailability?: 'available' | 'unavailable' | 'conflict';
+    regulationCoverage?: RegulationCoverage;
     publicRules?: readonly CanonicalPublicRule[];
     publicSchedules?: CanonicalPublicSchedules;
   }>
@@ -106,7 +108,7 @@ export type ResolveCurbRequestV2 = Readonly<{
   protocolVersion: 2;
   location: AggregatedLocation;
   candidateToken?: string;
-  responseVersion?: 1;
+  responseVersion?: 1 | 2;
 }>;
 
 const PUBLIC_KEY = /^curb2_[a-f0-9]{32}$/;
@@ -221,7 +223,8 @@ export function parseCanonicalCurbResponse(value: unknown): CanonicalCurbRespons
       value,
       ['protocolVersion', 'status', 'segmentId', 'streetName', 'sideLabel', 'ruleSummary'],
       ['responseVersion', 'publicRules', 'publicSchedules', 'cacheHit',
-        'identityConfidence', 'regulationStatus', 'regulationCompleteness', 'regulationAvailability'],
+        'identityConfidence', 'regulationStatus', 'regulationCompleteness', 'regulationAvailability',
+        'regulationCoverage'],
     )
       || typeof value.segmentId !== 'string' || !PUBLIC_KEY.test(value.segmentId)
       || typeof value.streetName !== 'string' || !value.streetName.trim()
@@ -229,12 +232,13 @@ export function parseCanonicalCurbResponse(value: unknown): CanonicalCurbRespons
       || !record(value.ruleSummary)
       || !allowedKeys(value.ruleSummary, ['cleaningAvailable'], ['rulesResolved'])
       || typeof value.ruleSummary.cleaningAvailable !== 'boolean') invalid();
-    if (Object.hasOwn(value, 'responseVersion') && value.responseVersion !== 1) invalid();
+    if (Object.hasOwn(value, 'responseVersion') && value.responseVersion !== 1 && value.responseVersion !== 2) invalid();
+    if (value.responseVersion !== 2 && Object.hasOwn(value, 'regulationCoverage')) invalid();
     if (Object.hasOwn(value, 'cacheHit') && typeof value.cacheHit !== 'boolean') invalid();
     if (Object.hasOwn(value, 'publicRules') && !parsePublicRules(value.publicRules)) invalid();
     if (Object.hasOwn(value, 'publicSchedules') && !parsePublicSchedules(value.publicSchedules)) invalid();
-    if (value.responseVersion === 1 && !parsePublicRules(value.publicRules)) invalid();
-    if (value.responseVersion === 1) {
+    if ((value.responseVersion === 1 || value.responseVersion === 2) && !parsePublicRules(value.publicRules)) invalid();
+    if (value.responseVersion === 1 || value.responseVersion === 2) {
       if (value.identityConfidence !== 'high') invalid();
       if (value.regulationStatus !== 'verified' && value.regulationStatus !== 'partial'
         && value.regulationStatus !== 'unknown' && value.regulationStatus !== 'verified_empty') invalid();
@@ -243,6 +247,7 @@ export function parseCanonicalCurbResponse(value: unknown): CanonicalCurbRespons
       if (value.regulationAvailability !== 'available' && value.regulationAvailability !== 'unavailable'
         && value.regulationAvailability !== 'conflict') invalid();
     }
+    if (value.responseVersion === 2 && !isRegulationCoverage(value.regulationCoverage)) invalid();
     return value as CanonicalCurbResponse;
   }
   if (value.status === 'unsupported') {
@@ -296,7 +301,7 @@ export function buildCanonicalCurbRequest(
 ): ResolveCurbRequestV2 {
   const request: ResolveCurbRequestV2 = {
     protocolVersion: 2,
-    responseVersion: 1,
+    responseVersion: 2,
     location: {
       lat: location.lat,
       lng: location.lng,

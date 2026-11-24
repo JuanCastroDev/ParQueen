@@ -2,8 +2,15 @@
 'use strict';
 
 const { toPublicRule } = require('./canonicalCurbPersistence');
+const {
+  classifyRegulationCoverage,
+  isRegulationCoverage,
+  publishableRules,
+  summarizeRegulationCoverage,
+} = require('./regulationCoverage');
 
 const PUBLIC_RESPONSE_VERSION = 1;
+const CATEGORY_RESPONSE_VERSION = 2;
 const REGULATION_STATUSES = Object.freeze(['verified', 'partial', 'unknown', 'verified_empty']);
 
 function selectedHasUnresolvedConflicts(selectedRules) {
@@ -161,6 +168,26 @@ function buildHighConfidenceResponse(publicCurb, selected, options = {}) {
     ruleSummary: { cleaningAvailable },
   };
   if (options.includeExtended !== true) return response;
+  if (options.responseVersion === CATEGORY_RESPONSE_VERSION) {
+    const coverage = isRegulationCoverage(options.regulationCoverage)
+      ? options.regulationCoverage
+      : classifyRegulationCoverage(options.sources || selected?.sources, selected);
+    const summary = summarizeRegulationCoverage(coverage);
+    const categoryRules = publishableRules(publicRules, coverage);
+    return {
+      ...response,
+      ruleSummary: { cleaningAvailable: coverage.cleaning === 'verified' },
+      responseVersion: CATEGORY_RESPONSE_VERSION,
+      cacheHit: options.cacheHit === true,
+      identityConfidence: 'high',
+      regulationStatus: summary.regulationStatus,
+      regulationCompleteness: summary.regulationCompleteness,
+      regulationAvailability: summary.regulationAvailability,
+      regulationCoverage: coverage,
+      publicRules: categoryRules,
+      publicSchedules: buildPublicSchedules(categoryRules),
+    };
+  }
   const publishRules = regulation.regulationStatus === 'verified' ? publicRules : [];
   return {
     ...response,
@@ -176,17 +203,26 @@ function buildHighConfidenceResponse(publicCurb, selected, options = {}) {
 }
 
 function requestIncludesExtendedResponse(request) {
-  return request?.responseVersion === PUBLIC_RESPONSE_VERSION;
+  return request?.responseVersion === PUBLIC_RESPONSE_VERSION
+    || request?.responseVersion === CATEGORY_RESPONSE_VERSION;
+}
+
+function requestedPublicResponseVersion(request) {
+  return request?.responseVersion === CATEGORY_RESPONSE_VERSION
+    ? CATEGORY_RESPONSE_VERSION
+    : PUBLIC_RESPONSE_VERSION;
 }
 
 module.exports = {
   PUBLIC_RESPONSE_VERSION,
+  CATEGORY_RESPONSE_VERSION,
   REGULATION_STATUSES,
   selectedHasUnresolvedConflicts,
   rulesFromSelected,
   buildPublicSchedules,
   buildHighConfidenceResponse,
   requestIncludesExtendedResponse,
+  requestedPublicResponseVersion,
   sanitizeAlreadyPublic,
   classifyRegulationStatus,
   regulationsAreAuthoritative,

@@ -42,7 +42,7 @@ import { countUsableStreetIntelligence, shouldCallEmptyCacheRefresh, shouldCallR
 function protocol2LocationRequest(lat: number, lng: number, accuracyMeters: number | null) {
     return {
         protocolVersion: 2 as const,
-        responseVersion: 1 as const,
+        responseVersion: 2 as const,
         location: {
             lat,
             lng,
@@ -102,7 +102,7 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
     | 'streetIntelStatus' | 'streetIntelReason' | 'streetIntelCheckedAt'
     | 'curbProtocolVersion' | 'curbResolutionStatus' | 'curbSelector' | 'curbSideConfirmation'
     | 'sideConfidence' | 'confirmedParkingSide' | 'drivingSide'
-    | 'publicRules' | 'publicSchedules' | 'regulationStatus'
+    | 'publicRules' | 'publicSchedules' | 'regulationStatus' | 'regulationCoverage'
 > => {
     const checkedAt = new Date().toISOString();
     if (response.status === 'high_confidence') {
@@ -124,6 +124,7 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
             publicRules: response.publicRules ? [...response.publicRules] : null,
             publicSchedules: response.publicSchedules ? { ...response.publicSchedules } : null,
             regulationStatus: response.regulationStatus ?? null,
+            regulationCoverage: response.regulationCoverage ? { ...response.regulationCoverage } : null,
         };
     }
     if (response.status === 'ambiguous') {
@@ -145,6 +146,7 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
             publicRules: null,
             publicSchedules: null,
             regulationStatus: null,
+            regulationCoverage: null,
         };
     }
     if (response.status === 'side_confirmation_required') {
@@ -166,6 +168,7 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
             publicRules: null,
             publicSchedules: null,
             regulationStatus: null,
+            regulationCoverage: null,
         };
     }
     return {
@@ -185,6 +188,8 @@ const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpo
         drivingSide: null,
         publicRules: null,
         publicSchedules: null,
+        regulationStatus: null,
+        regulationCoverage: null,
     };
 };
 
@@ -682,7 +687,7 @@ export const MapView: React.FC<MapViewProps> = ({
         const locationRequest = simulatedQa && streetIntelQaProbe
             ? {
                 protocolVersion: 2 as const,
-                responseVersion: 1 as const,
+                responseVersion: 2 as const,
                 location: {
                     lat: userLat,
                     lng: userLng,
@@ -2471,6 +2476,7 @@ export const MapView: React.FC<MapViewProps> = ({
                                 drivingSide={savedSpot.drivingSide ?? null}
                                 resolvedPublicRules={savedSpot.publicRules ?? null}
                                 resolvedRegulationStatus={savedSpot.regulationStatus ?? null}
+                                resolvedRegulationCoverage={savedSpot.regulationCoverage ?? null}
                                 onConfirmSide={handleConfirmSide}
                                 onResult={r => {
                                     setCleaningAvailable(r.cleaningAvailable);

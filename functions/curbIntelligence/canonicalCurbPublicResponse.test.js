@@ -52,6 +52,7 @@ describe('canonicalCurbPublicResponse', () => {
 
   it('recognizes the additive request contract', () => {
     expect(requestIncludesExtendedResponse({ responseVersion: 1 })).toBe(true);
+    expect(requestIncludesExtendedResponse({ responseVersion: 2 })).toBe(true);
     expect(requestIncludesExtendedResponse({ protocolVersion: 2 })).toBe(false);
   });
 
@@ -95,5 +96,82 @@ describe('canonicalCurbPublicResponse', () => {
     expect(response.ruleSummary.cleaningAvailable).toBe(false);
     expect(response.publicRules).toEqual([]);
     expect(response.publicSchedules).toEqual({ cleaning: [], restrictions: [], timeLimited: [], meters: [] });
+  });
+
+  it('publishes a verified cleaning rule on responseVersion 2 when meters are unknown', () => {
+    const cleaning = {
+      category: 'cleaning', source: 'dot',
+      schedules: [{ days: ['Mon', 'Thu'], startTime: '08:30', endTime: '10:00', side: 'West' }],
+    };
+    const response = buildHighConfidenceResponse(curb, {
+      rules: [cleaning], cleaning, restrictions: [], timeLimits: [], meter: null, conflicts: [],
+    }, {
+      includeExtended: true,
+      responseVersion: 2,
+      sources: {
+        dot: { state: 'complete', resourceId: 'nfid-uabd' },
+        parkNyc: { state: 'unavailable', reason: 'source_unavailable' },
+      },
+    });
+    expect(response.responseVersion).toBe(2);
+    expect(response.regulationStatus).toBe('partial');
+    expect(response.regulationCompleteness).toBe('incomplete');
+    expect(response.regulationCoverage).toMatchObject({
+      cleaning: 'verified', restrictions: 'verified_empty', timeLimits: 'verified_empty', meters: 'unknown',
+    });
+    expect(response.publicRules).toHaveLength(1);
+    expect(response.publicRules[0].type).toBe('streetCleaning');
+    expect(response.ruleSummary.cleaningAvailable).toBe(true);
+    expect(JSON.stringify(response)).not.toMatch(/1795288288:1744725948|live-current/);
+  });
+
+  it('still publishes a version 1 verified cleaning rule when meter coverage is unavailable', () => {
+    const cleaning = {
+      category: 'cleaning', source: 'dot',
+      schedules: [{ days: ['Mon', 'Thu'], startTime: '08:30', endTime: '10:00', side: 'West' }],
+    };
+    const response = buildHighConfidenceResponse(curb, {
+      rules: [cleaning], cleaning, restrictions: [], timeLimits: [], meter: null, conflicts: [],
+    }, {
+      includeExtended: true,
+      responseVersion: 1,
+      dotComplete: true,
+      sources: { parkNyc: { state: 'unavailable', reason: 'source_unavailable' } },
+    });
+    expect(response.responseVersion).toBe(1);
+    expect(response.regulationCoverage).toBeUndefined();
+    expect(response.regulationStatus).toBe('verified');
+    expect(response.publicRules).toHaveLength(1);
+    expect(response.ruleSummary.cleaningAvailable).toBe(true);
+  });
+
+  it('omits public rules when an older server does not open the extended response', () => {
+    const cleaning = {
+      category: 'cleaning', source: 'dot',
+      schedules: [{ days: ['Mon'], startTime: '08:30', endTime: '10:00', side: 'West' }],
+    };
+    const response = buildHighConfidenceResponse(curb, {
+      rules: [cleaning], cleaning, conflicts: [],
+    }, { includeExtended: false, dotComplete: true });
+    expect(response.publicRules).toBeUndefined();
+    expect(response.regulationStatus).toBeUndefined();
+    expect(response.regulationCoverage).toBeUndefined();
+    expect(Object.keys(response).sort()).toEqual([
+      'protocolVersion', 'ruleSummary', 'segmentId', 'sideLabel', 'status', 'streetName',
+    ].sort());
+  });
+
+  it('keeps responseVersion 1 on its original publish rule', () => {
+    const response = buildHighConfidenceResponse(curb, {
+      rules: [], cleaning: null, conflicts: [],
+    }, {
+      includeExtended: true,
+      responseVersion: 1,
+      dotComplete: false,
+      dotState: 'incomplete',
+    });
+    expect(response.responseVersion).toBe(1);
+    expect(response.regulationCoverage).toBeUndefined();
+    expect(response.publicRules).toEqual([]);
   });
 });

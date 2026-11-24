@@ -23,8 +23,10 @@ const { readCanonicalCache, persistCanonicalCurb } = require('./canonicalCurbPer
 const {
   buildHighConfidenceResponse,
   requestIncludesExtendedResponse,
+  requestedPublicResponseVersion,
   selectedHasUnresolvedConflicts,
 } = require('./canonicalCurbPublicResponse');
+const { classifyRegulationCoverage, isRegulationCoverage } = require('./regulationCoverage');
 const {
   proveCanonicalCurbIdentity,
   hasCanonicalCurbIdentityProof,
@@ -83,6 +85,9 @@ function highResponse(publicCurb, selected, options = {}) {
   return buildHighConfidenceResponse(publicCurb, selected, {
     cacheHit: options.cacheHit === true,
     includeExtended: options.includeExtended === true,
+    responseVersion: options.responseVersion,
+    regulationCoverage: options.regulationCoverage,
+    sources: options.sources,
     dotComplete: options.dotComplete,
     sourceUnavailable: options.sourceUnavailable === true,
     dotState: options.dotState,
@@ -134,6 +139,7 @@ async function loadSelectedRules(identity, dependencies) {
     rulesResolved: dotComplete,
     sources: rulesResult?.sources,
   };
+  selectedRules.regulationCoverage = classifyRegulationCoverage(rulesResult?.sources, selectedRules);
   for (const conflict of selectedRules.conflicts || []) {
     emit(dependencies.telemetry, 'source_conflict', {
       protocolVersion: 2,
@@ -275,7 +281,12 @@ async function execute(request, dependencies) {
     });
   }
   const includeExtended = requestIncludesExtendedResponse(request);
-  if (cache?.hit && cache.publicSegment) {
+  const responseVersion = includeExtended ? requestedPublicResponseVersion(request) : 1;
+  const cachedCoverage = isRegulationCoverage(cache?.publicSegment?.regulationCoverage)
+    ? cache.publicSegment.regulationCoverage : null;
+  const cacheUsable = Boolean(cache?.hit && cache.publicSegment)
+    && (responseVersion !== 2 || cachedCoverage);
+  if (cacheUsable) {
     const summary = cache.publicSegment.ruleSummary || {};
     const cachedRules = Array.isArray(cache.publicRules) ? cache.publicRules : [];
     const cacheComplete = cachedRules.length > 0
@@ -295,6 +306,9 @@ async function execute(request, dependencies) {
         return highResponse(publicCurb, loaded.selectedRules, {
           cacheHit: true,
           includeExtended,
+          responseVersion,
+          regulationCoverage: loaded.selectedRules?.regulationCoverage,
+          sources: loaded.sources,
           dotComplete: loaded.dotComplete,
           sourceUnavailable: loaded.failed === true,
           dotState: loaded.sources?.dot?.state,
@@ -310,6 +324,8 @@ async function execute(request, dependencies) {
       return highResponse(cache.publicSegment, cachedRules, {
         cacheHit: true,
         includeExtended,
+        responseVersion,
+        regulationCoverage: cachedCoverage,
         dotComplete: summary.rulesResolved === true
           || (summary.cleaningAvailable === true && cachedRules.length > 0),
       });
@@ -334,6 +350,9 @@ async function execute(request, dependencies) {
   return highResponse(publicCurb, selectedRules, {
     cacheHit: false,
     includeExtended,
+    responseVersion,
+    regulationCoverage: selectedRules.regulationCoverage,
+    sources: loaded.sources,
     dotComplete: loaded.dotComplete,
     sourceUnavailable: loaded.failed === true,
     dotState: loaded.sources?.dot?.state,

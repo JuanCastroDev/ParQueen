@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
 import { collection, getDocs, getDoc, doc, query, where, orderBy } from 'firebase/firestore';
-import { Leaf, AlertTriangle, CheckCircle } from 'lucide-react';
+import { Leaf, AlertTriangle } from 'lucide-react';
 import {
   computeSafeUntil, toNYCDateKey, addNYCDateKeyDays, MAX_FORWARD_SEARCH_DAYS_AHEAD,
   StreetRuleDoc, SuspensionDoc, SafeUntilResult, CleaningSchedule,
@@ -14,6 +14,14 @@ import {
   StreetIntelligencePresentation,
 } from '../../utils/streetIntelligencePresentation';
 import { filterAuthoritativeRules } from '../../utils/canonicalCurbWriteAuthority';
+import {
+  coverageFromPresentedRules,
+  coverageIsComplete,
+  isRegulationCoverage,
+  regulationCategoryOf,
+  unknownRegulationCoverage,
+  type RegulationCoverage,
+} from '../../utils/regulationCoverage';
 import { t, useLang } from '../../i18n';
 
 interface Props {
@@ -25,6 +33,7 @@ interface Props {
   drivingSide?: 'left' | 'right' | null;
   resolvedPublicRules?: ReadonlyArray<Record<string, unknown>> | null;
   resolvedRegulationStatus?: 'verified' | 'partial' | 'unknown' | 'verified_empty' | null;
+  resolvedRegulationCoverage?: RegulationCoverage | null;
   onConfirmSide: (side: string) => void;
   onResult?: (result: StreetIntelligenceCardResult) => void;
 }
@@ -33,6 +42,52 @@ export interface StreetIntelligenceCardResult {
   movementResult: SafeUntilResult | null;
   cleaningAvailable: boolean;
   nextCleaningAt: Date | null;
+}
+
+const WEEKDAY_KEY: Record<string, string> = {
+  Mon: 'street_intel.day_mon', Tue: 'street_intel.day_tue', Wed: 'street_intel.day_wed',
+  Thu: 'street_intel.day_thu', Fri: 'street_intel.day_fri', Sat: 'street_intel.day_sat',
+  Sun: 'street_intel.day_sun',
+};
+const FULL_DAY_KEY: Record<string, string> = {
+  Monday: 'street_intel.day_mon', Tuesday: 'street_intel.day_tue', Wednesday: 'street_intel.day_wed',
+  Thursday: 'street_intel.day_thu', Friday: 'street_intel.day_fri', Saturday: 'street_intel.day_sat',
+  Sunday: 'street_intel.day_sun',
+};
+
+function clockParts(time: string): { hour: number; minutes: string; period: 'AM' | 'PM' } | null {
+  const [hourText, minuteText] = time.split(':');
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+  return {
+    hour: hour % 12 || 12,
+    minutes: String(minute).padStart(2, '0'),
+    period: hour >= 12 ? 'PM' : 'AM',
+  };
+}
+
+function periodLabel(period: 'AM' | 'PM'): string {
+  return t(period === 'AM' ? 'street_intel.time_am' : 'street_intel.time_pm');
+}
+
+function formatCleaningDisclosure(window: CleaningSchedule): string {
+  const days = (window.days || []).map(day => WEEKDAY_KEY[day] ? t(WEEKDAY_KEY[day]) : day).join(t('street_intel.day_joiner'));
+  const start = clockParts(window.startTime || '');
+  const end = clockParts(window.endTime || '');
+  if (!start || !end) return days;
+  const range = start.period === end.period
+    ? `${start.hour}:${start.minutes}–${end.hour}:${end.minutes} ${periodLabel(start.period)}`
+    : `${start.hour}:${start.minutes} ${periodLabel(start.period)}–${end.hour}:${end.minutes} ${periodLabel(end.period)}`;
+  return `${days} · ${range}`;
+}
+
+function localizeReminder(day: string | null, time: string | null): string {
+  const dayLabel = day && FULL_DAY_KEY[day] ? t(FULL_DAY_KEY[day]) : day || '';
+  const clock = (time || '')
+    .replace(/\bAM\b/g, t('street_intel.time_am'))
+    .replace(/\bPM\b/g, t('street_intel.time_pm'));
+  return [dayLabel, clock].filter(Boolean).join(' · ');
 }
 
 const fmtSafeUntil = (d: Date) => {
@@ -52,6 +107,12 @@ export const StreetIntelligenceUnavailableCard = () => (
   </div>
 );
 
+const CURB_KEY: Record<string, string> = {
+  North: 'street_intel.curb_north',
+  South: 'street_intel.curb_south',
+  East: 'street_intel.curb_east',
+  West: 'street_intel.curb_west',
+};
 const SIDE_KEY_MAP: Record<string, string> = {
   North: 'street_intel.side_north',
   South: 'street_intel.side_south',
@@ -63,7 +124,8 @@ const SIDE_KEY_MAP: Record<string, string> = {
 
 export const StreetIntelligenceCard = ({
   segmentId, parkingSide, streetName,
-  sideConfidence, confirmedParkingSide, drivingSide, resolvedPublicRules, resolvedRegulationStatus, onConfirmSide,
+  sideConfidence, confirmedParkingSide, drivingSide, resolvedPublicRules, resolvedRegulationStatus,
+  resolvedRegulationCoverage, onConfirmSide,
   onResult,
 }: Props) => {
   useLang();
@@ -82,6 +144,8 @@ export const StreetIntelligenceCard = ({
   const [presentation, setPresentation] = useState<StreetIntelligencePresentation>({
     state: 'unknown', source: null, lastSourceSync: null, reasons: [],
   });
+  const [coverage, setCoverage] = useState<RegulationCoverage | null>(null);
+  const [dotProvenance, setDotProvenance] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [debugLines, setDebugLines] = useState<string[]>([]);
@@ -105,6 +169,8 @@ export const StreetIntelligenceCard = ({
     setTimeLimitedWindows([]);
     setCleaningWindows([]);
     setPresentation({ state: 'unknown', source: null, lastSourceSync: null, reasons: [] });
+    setCoverage(null);
+    setDotProvenance(false);
 
     const load = async () => {
       cdbg(`load — sideConfidence:${sideConfidence} hasEffectiveSide:${Boolean(effectiveSide)}`);
@@ -128,33 +194,39 @@ export const StreetIntelligenceCard = ({
 
         let rules: Array<StreetRuleDoc & { ruleSetVersion?: string }> = [];
         let authoritativeSegment: Record<string, unknown> | null = null;
-        const resolvedAreVerified = Array.isArray(resolvedPublicRules)
-          && (resolvedRegulationStatus == null || resolvedRegulationStatus === 'verified');
-        if (resolvedAreVerified) {
-          rules = resolvedPublicRules.map((rule, index) => ({
+        let nextCoverage: RegulationCoverage | null = null;
+        const responseRules = Array.isArray(resolvedPublicRules)
+          ? resolvedPublicRules.map((rule, index) => ({
             id: `response_${index}`,
             ...(rule as StreetRuleDoc),
-          }));
-          const source = typeof rules[0]?.source === 'string' ? rules[0].source : 'nyc_open_data';
-          authoritativeSegment = {
-            segmentId,
-            streetName,
-            status: 'active',
-            source,
-            provenance: { provider: source },
-            confidenceScore: 1,
-          };
-        } else if (Array.isArray(resolvedPublicRules) && resolvedRegulationStatus && resolvedRegulationStatus !== 'verified') {
-          rules = [];
-          authoritativeSegment = {
-            segmentId,
-            streetName,
-            status: 'active',
-            source: 'nyc_open_data',
-            provenance: { provider: 'nyc_open_data' },
-            confidenceScore: 1,
-            protocolVersion: 2,
-          };
+          }))
+          : null;
+        const canonicalResponse = segmentId.startsWith('curb2_')
+          || resolvedRegulationStatus != null
+          || isRegulationCoverage(resolvedRegulationCoverage);
+        if (responseRules && isRegulationCoverage(resolvedRegulationCoverage)) {
+          nextCoverage = resolvedRegulationCoverage;
+          rules = responseRules.filter(rule => {
+            const category = regulationCategoryOf(rule);
+            return category != null && nextCoverage?.[category] === 'verified';
+          });
+          authoritativeSegment = rules.length ? { status: 'active', protocolVersion: 2 } : null;
+        } else if (responseRules && canonicalResponse) {
+          if (resolvedRegulationStatus === 'verified') {
+            nextCoverage = coverageFromPresentedRules(responseRules);
+            rules = responseRules.filter(rule => {
+              const category = regulationCategoryOf(rule);
+              return category != null && nextCoverage?.[category] === 'verified';
+            });
+            authoritativeSegment = rules.length ? { status: 'active', protocolVersion: 2 } : null;
+          } else {
+            nextCoverage = unknownRegulationCoverage();
+            rules = [];
+            authoritativeSegment = null;
+          }
+        } else if (responseRules) {
+          rules = responseRules;
+          authoritativeSegment = rules.length ? { status: 'active', legacyResponseRules: true } : null;
         } else {
           const segSnap = await getDoc(doc(db, 'streetSegments', segmentId));
           if (cancelled) return;
@@ -178,11 +250,33 @@ export const StreetIntelligenceCard = ({
           const selected = filterAuthoritativeRules(segment, loadedRules);
           rules = selected.ok ? selected.rules : [];
           authoritativeSegment = selected.ok ? segment : null;
+          if (segment?.protocolVersion === 2) {
+            nextCoverage = isRegulationCoverage(segment.regulationCoverage)
+              ? segment.regulationCoverage
+              : unknownRegulationCoverage();
+            if (isRegulationCoverage(segment.regulationCoverage)) {
+              rules = rules.filter(rule => {
+                const category = regulationCategoryOf(rule);
+                return category != null && nextCoverage?.[category] === 'verified';
+              });
+            }
+          }
         }
         cdbg(`streetRules count: ${rules.length}`);
-        const nextPresentation = classifyStreetIntelligence(authoritativeSegment, rules);
+        const nextPresentation = authoritativeSegment?.protocolVersion === 2 || authoritativeSegment?.legacyResponseRules === true
+          ? {
+            state: rules.some(rule => Array.isArray(rule.schedules) && rule.schedules.length > 0) ? 'supported' as const : 'unknown' as const,
+            source: null,
+            lastSourceSync: null,
+            reasons: [],
+          }
+          : classifyStreetIntelligence(authoritativeSegment, rules);
         cdbg(`presentation state: ${nextPresentation.state} | source: ${nextPresentation.source ?? 'none'}`);
         setPresentation(nextPresentation);
+        setCoverage(nextCoverage);
+        setDotProvenance(rules.some(rule => (
+          rule.type === 'streetCleaning'
+        ) && (rule.source === 'nyc_open_data' || rule.source === 'dot')));
 
         const suspensions = suspSnap.docs
           .map(d => ({ id: d.id, ...d.data() } as SuspensionDoc))
@@ -264,7 +358,7 @@ export const StreetIntelligenceCard = ({
     load();
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [segmentId, effectiveSide, resolvedPublicRules, resolvedRegulationStatus]);
+  }, [segmentId, effectiveSide, resolvedPublicRules, resolvedRegulationStatus, resolvedRegulationCoverage]);
 
   const debugBlock = isDebugMode && debugLines.length > 0 ? (
     <div style={{ marginTop: 8, padding: '6px 8px', background: 'rgba(0,0,0,0.85)', borderRadius: 8, border: '1px solid #1e75ff55' }}>
@@ -279,9 +373,8 @@ export const StreetIntelligenceCard = ({
   const curbVerified = sideConfidence === 'high' && Boolean(parkingSide);
   const identifiedCurb = curbVerified ? (
     <div className="pq-mycar-intel-street">
-      <CheckCircle size={14} className="text-[var(--color-text-secondary)] shrink-0" />
       <div>
-        <p className="text-sm font-semibold text-[var(--color-text)]">{t('street_intel.curb_identified')}</p>
+        <p className="pq-mycar-intel-claim">{t('street_intel.curb_identified')}</p>
         {drivingSide === 'left' || drivingSide === 'right' ? (
           <p className="pq-mycar-intel-reason" style={{ marginBottom: 0 }}>
             {t(drivingSide === 'right' ? 'street_intel.parked_right' : 'street_intel.parked_left')}
@@ -368,7 +461,9 @@ export const StreetIntelligenceCard = ({
   const effectiveSideLabel = sideLabel(effectiveSide);
   const sideHeader = drivingSide === 'left' || drivingSide === 'right'
     ? `${streetName} · ${t(drivingSide === 'right' ? 'street_intel.parked_right' : 'street_intel.parked_left')}`
-    : streetName;
+    : effectiveSide && CURB_KEY[effectiveSide]
+      ? `${streetName} — ${t(CURB_KEY[effectiveSide])}`
+      : streetName;
   const sideMeters = meterWindows.filter(window => !window.side || window.side === effectiveSide);
   const sideRestrictions = restrictionWindows.filter(window => !window.side || window.side === effectiveSide);
   const sideTimeLimits = timeLimitedWindows.filter(window => !window.side || window.side === effectiveSide);
@@ -415,12 +510,7 @@ export const StreetIntelligenceCard = ({
       <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)] mb-1">
         {t('street_intel.street_cleaning')}
       </span>
-      <span className="block">{formatMeterWindowLabel({
-        side: sideCleaning[0].side,
-        days: sideCleaning[0].days,
-        startTime: sideCleaning[0].startTime || '00:00',
-        endTime: sideCleaning[0].endTime || '00:00',
-      })}</span>
+      <span className="block">{formatCleaningDisclosure(sideCleaning[0])}</span>
     </div>
   ) : (sideMeters.length || sideRestrictions.length) ? (
     <p className="pq-mycar-intel-reason" style={{ marginTop: 10, marginBottom: 0 }}>
@@ -467,12 +557,8 @@ export const StreetIntelligenceCard = ({
     );
   }
 
-  const toneClass = result.activeNow
-    ? 'pq-mycar-intel--danger'
-    : 'pq-mycar-intel--safe';
-  const iconTone = result.activeNow
-    ? 'is-danger'
-    : 'is-safe';
+  const toneClass = result.activeNow ? 'pq-mycar-intel--danger' : '';
+  const iconTone = result.activeNow ? 'is-danger' : '';
   const datetimeTone = result.activeNow
     ? 'is-danger'
     : '';
@@ -511,23 +597,17 @@ export const StreetIntelligenceCard = ({
         </div>
       ) : result.nextDay ? (
         <div className="pq-mycar-intel-hero">
-          <div className={`pq-mycar-intel-hero-icon ${iconTone}`}>
-            <CheckCircle size={18} />
-          </div>
           <div>
             <p className="pq-mycar-intel-label">
-              {t('street_intel.safe_until_label')}
+              {t('street_intel.next_cleaning_label')}
             </p>
-            <p className={`pq-mycar-intel-datetime ${datetimeTone}`}>
-              {result.safeUntil ? fmtSafeUntil(result.safeUntil) : `${result.nextDay} ${result.nextTime}`}
+            <p className="pq-mycar-intel-datetime">
+              {localizeReminder(result.nextDay, result.nextTime) || (result.safeUntil ? fmtSafeUntil(result.safeUntil) : '')}
             </p>
           </div>
         </div>
       ) : (
         <div className="pq-mycar-intel-hero">
-          <div className={`pq-mycar-intel-hero-icon ${iconTone}`}>
-            <CheckCircle size={18} />
-          </div>
           <p className="text-sm text-[var(--color-text-secondary)]">{t('street_intel.no_upcoming')}</p>
         </div>
       )}
@@ -538,6 +618,23 @@ export const StreetIntelligenceCard = ({
       {cleaningDetails}
       {timeLimitDetails}
       {meterDetails}
+      {sideCleaning.length ? (
+        <div className="pq-mycar-intel-reason" style={{ marginTop: 10, marginBottom: 0 }}>
+          {dotProvenance ? (
+            <>
+              <span className="block">{t('street_intel.source_dot')}</span>
+              <span className="block">{t('street_intel.time_zone_new_york')}</span>
+              <span className="block">{t('street_intel.regulation_time_unavailable')}</span>
+            </>
+          ) : null}
+          <span className="block">
+            {coverageIsComplete(coverage)
+              ? t('street_intel.checked_information_neutral')
+              : t('street_intel.other_restrictions_unverified')}
+          </span>
+          <span className="block">{t('street_intel.posted_signs_control')}</span>
+        </div>
+      ) : null}
 
       {debugBlock}
     </div>

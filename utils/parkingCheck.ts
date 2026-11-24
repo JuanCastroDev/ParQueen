@@ -14,6 +14,7 @@
 import type { SafeUntilResult } from './streetIntelligence';
 import type { StreetIntelligencePresentationState } from './streetIntelligencePresentation';
 import { type HydrantAssessment, isHydrantBlocking, isHydrantUncertain } from './hydrantDistance';
+import { coverageIsComplete, type RegulationCoverage } from './regulationCoverage';
 
 export type OverallStatus = 'move' | 'check' | 'no_known_issue';
 
@@ -21,6 +22,7 @@ export type StreetRuleStatus =
   | 'active_restriction'  // a restriction is running right now
   | 'clear'               // rules known, none active
   | 'side_unknown'        // we do not know which side the car is on
+  | 'coverage_incomplete' // a known rule does not cover every restriction category
   | 'unavailable';        // no usable street data for this spot
 
 export type ConfidenceLevel = 'high' | 'review';
@@ -34,6 +36,7 @@ export interface StreetRuleInput {
   effectiveSide: string | null;
   /** True when the lookup itself errored (network, permissions, provider). */
   failed?: boolean;
+  regulationCoverage?: RegulationCoverage | null;
 }
 
 export interface ParkingCheckInput {
@@ -57,6 +60,7 @@ export function evaluateStreetRules(input: StreetRuleInput): StreetRuleStatus {
   if (!input.effectiveSide) return 'side_unknown';
   if (!input.safeUntil) return 'unavailable';
   if (input.safeUntil.activeNow) return 'active_restriction';
+  if (!coverageIsComplete(input.regulationCoverage)) return 'coverage_incomplete';
   return 'clear';
 }
 
@@ -79,6 +83,7 @@ export function evaluateParkingCheck(input: ParkingCheckInput): ParkingCheckResu
 
   // ── Things we could not establish ────────────────────────────────────────
   if (street === 'unavailable') reasons.push('street_unavailable');
+  if (street === 'coverage_incomplete') reasons.push('regulation_coverage_incomplete');
   if (street === 'side_unknown') reasons.push('side_unknown');
   if (input.street.presentation === 'caution') reasons.push('street_needs_review');
   if (hydrant === null) reasons.push('hydrant_not_checked');

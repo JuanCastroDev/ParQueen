@@ -632,6 +632,21 @@ describe('computeSafeUntil — device-timezone independence (NYC clock)', () => 
     expect(spanResult.safeUntil?.toISOString()).toBe('2026-03-09T12:30:00.000Z'); // 8:30 AM EDT = 12:30 UTC
   });
 
+  it('keeps the cleaning-reminder start at 8:30 AM New York time across the fall-back transition', () => {
+    const beforeFallback = new Date('2026-10-29T07:00:00-04:00'); // Thursday, still EDT
+    const sameDay = withTZ('UTC', () =>
+      computeSafeUntil(MELVILLE_SCHEDULES, 'West', NO_SUSPENSIONS, beforeFallback));
+    expect(sameDay.nextTime).toBe('8:30 AM');
+    expect(sameDay.safeUntil?.toISOString()).toBe('2026-10-29T12:30:00.000Z');
+
+    const acrossFallback = new Date('2026-10-30T07:00:00-04:00'); // Friday, next window is Monday after the change to EST
+    const nextWeek = withTZ('Asia/Tokyo', () =>
+      computeSafeUntil(MELVILLE_SCHEDULES, 'West', NO_SUSPENSIONS, acrossFallback));
+    expect(nextWeek.nextDay).toBe('Monday');
+    expect(nextWeek.nextTime).toBe('8:30 AM');
+    expect(nextWeek.safeUntil?.toISOString()).toBe('2026-11-02T13:30:00.000Z');
+  });
+
   it('suspension-date matching (#84) is unaffected by this change', () => {
     const now = new Date('2026-08-27T20:15:00-04:00'); // Thu 8:15 PM EDT — UTC date already rolled to Aug 28
     const eveningSchedule: CleaningSchedule[] = [{ side: 'West', days: ['Thu'], startTime: '20:00', endTime: '21:00' }];

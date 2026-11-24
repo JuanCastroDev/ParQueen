@@ -449,7 +449,7 @@ const UserDetailsModal = ({
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
                 <DetailItem label="Street"                        value={session.streetName || '—'} />
                 <DetailItem label="Session Started"               value={formatDateTime(session.savedAt)} />
-                <DetailItem label="Safe Until (Next Cleaning)"    value={formatDateTime(session.nextCleaningAt)} />
+                <DetailItem label="Next street cleaning"    value={formatDateTime(session.nextCleaningAt)} />
                 <DetailItem label="Parking Side"                  value={session.parkingSide || '—'} />
                 {session.segmentId && (
                   <DetailItem label="Segment ID">

@@ -700,7 +700,7 @@ export const OnboardingView = ({
 
                                     {/* Safe Until — amber, visually prominent */}
                                     <div style={{ fontSize: 'clamp(15px,2dvh,17px)', fontWeight: 700, color: '#f59e0b', letterSpacing: '-0.01em', marginBottom: 4 }}>
-                                        Safe until 8:30 AM
+                                        Next street cleaning · 8:30 AM
                                     </div>
 
                                     {/* Schedule */}

@@ -74,7 +74,7 @@ describe('canonical curb V2 client contract', () => {
       lat: 40.7, lng: -74, accuracyMeters: 5, sampleCount: 4, consistencyMeters: 3,
     })).toEqual({
       protocolVersion: 2,
-      responseVersion: 1,
+      responseVersion: 2,
       location: { lat: 40.7, lng: -74, accuracyMeters: 5, sampleCount: 4, consistencyMeters: 3 },
     });
     expect(buildCanonicalCurbRequest({
@@ -129,7 +129,7 @@ describe('canonical curb V2 client contract', () => {
     expect(invoke).toHaveBeenCalledOnce();
     expect(invoke).toHaveBeenCalledWith({
       protocolVersion: 2,
-      responseVersion: 1,
+      responseVersion: 2,
       location: location(),
     });
   });
@@ -150,7 +150,7 @@ describe('canonical curb V2 client contract', () => {
     })).toEqual({ protocolVersion: 2, status: 'side_confirmation_required', confirmation });
     expect(buildCanonicalCurbRequest(location(), sideToken('N'))).toEqual({
       protocolVersion: 2,
-      responseVersion: 1,
+      responseVersion: 2,
       location: location(),
       candidateToken: sideToken('N'),
     });
@@ -381,6 +381,31 @@ describe('A1 additive response compatibility', () => {
     expect(parseCanonicalCurbResponse(extended).status).toBe('high_confidence');
     expect((parseCanonicalCurbResponse(extended) as { publicSchedules?: { cleaning: unknown[] } }).publicSchedules?.cleaning).toHaveLength(1);
     expect(parseWithLegacyExactKeys(extended)).toBe(false);
+  });
+
+  it('rejects an unknown response version and a version 2 payload without coverage', () => {
+    expect(() => parseCanonicalCurbResponse({ ...extended, responseVersion: 3 })).toThrow(/Invalid canonical curb response/);
+    expect(() => parseCanonicalCurbResponse({ ...extended, responseVersion: 2 })).toThrow(/Invalid canonical curb response/);
+    expect(() => parseCanonicalCurbResponse({
+      ...extended,
+      regulationCoverage: { cleaning: 'verified' },
+    })).toThrow(/Invalid canonical curb response/);
+  });
+
+  it('accepts responseVersion 2 only with a complete category coverage object', () => {
+    const coverage = {
+      cleaning: 'verified', restrictions: 'unknown', timeLimits: 'unknown', meters: 'unknown',
+    };
+    const parsed = parseCanonicalCurbResponse({
+      ...extended,
+      responseVersion: 2,
+      regulationStatus: 'partial',
+      regulationCompleteness: 'incomplete',
+      regulationAvailability: 'unavailable',
+      regulationCoverage: coverage,
+    });
+    expect(parsed.status).toBe('high_confidence');
+    if (parsed.status === 'high_confidence') expect(parsed.regulationCoverage).toEqual(coverage);
   });
 
   it('rejects private identity material in publicRules', () => {
