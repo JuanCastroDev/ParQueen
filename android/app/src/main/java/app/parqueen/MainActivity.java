@@ -4,9 +4,11 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.view.View;
 import android.webkit.WebView;
 
 import androidx.core.splashscreen.SplashScreen;
+import androidx.core.splashscreen.SplashScreenViewProvider;
 
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.WebViewListener;
@@ -19,7 +21,8 @@ public class MainActivity extends BridgeActivity {
      */
     private static final long MAX_LAUNCH_SCREEN_HOLD_MS = 2500;
     private static final long WEB_LOGO_POLL_MS = 32;
-    private static final long EXIT_FADE_DELAY_MS = 100;
+    /** Upper bound for keeping the exit view up while the WebView presents its first frame. */
+    private static final long MAX_EXIT_WAIT_MS = 1000;
     private static final long EXIT_FADE_MS = 200;
 
     /**
@@ -43,18 +46,7 @@ public class MainActivity extends BridgeActivity {
         SplashScreen launchScreen = SplashScreen.installSplashScreen(this);
         holdStart = SystemClock.uptimeMillis();
         launchScreen.setKeepOnScreenCondition(() -> !webLogoReady && !launchHoldExpired());
-        // The hold suppresses the app's draws, so the WebView presents its
-        // first frames only after release. Cross-fade the launch screen out
-        // instead of cutting to the WebView. This exit view lives inside the
-        // app window, so its logo already sits exactly over the web logo.
-        launchScreen.setOnExitAnimationListener(provider ->
-            provider.getView().animate()
-                .alpha(0f)
-                .setStartDelay(EXIT_FADE_DELAY_MS)
-                .setDuration(EXIT_FADE_MS)
-                .withEndAction(provider::remove)
-                .start()
-        );
+        launchScreen.setOnExitAnimationListener(this::fadeOutWhenWebFramePresented);
         bridgeBuilder.addWebViewListener(new WebViewListener() {
             @Override
             public void onPageCommitVisible(WebView view, String url) {
@@ -80,5 +72,33 @@ public class MainActivity extends BridgeActivity {
                 mainHandler.postDelayed(() -> pollWebLogo(view), WEB_LOGO_POLL_MS);
             }
         });
+    }
+
+    /**
+     * The hold suppresses the app's draws, so the WebView presents its first
+     * frame only after release, and on a slow device that can lag well behind
+     * "logo loaded". Keep the exit view (it sits inside the app window, exactly
+     * over the web logo) until the WebView reports its content is ready to be
+     * drawn, give it one more frame, then cross-fade. Never longer than
+     * MAX_EXIT_WAIT_MS.
+     */
+    private void fadeOutWhenWebFramePresented(SplashScreenViewProvider provider) {
+        View exitView = provider.getView();
+        boolean[] started = { false };
+        Runnable fadeOut = () -> {
+            if (started[0]) return;
+            started[0] = true;
+            exitView.animate().alpha(0f).setDuration(EXIT_FADE_MS).withEndAction(provider::remove).start();
+        };
+        WebView webView = bridge != null ? bridge.getWebView() : null;
+        if (webView != null) {
+            webView.postVisualStateCallback(0, new WebView.VisualStateCallback() {
+                @Override
+                public void onComplete(long requestId) {
+                    webView.postOnAnimation(fadeOut);
+                }
+            });
+        }
+        mainHandler.postDelayed(fadeOut, MAX_EXIT_WAIT_MS);
     }
 }
