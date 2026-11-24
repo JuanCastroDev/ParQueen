@@ -1,13 +1,16 @@
 import { createRequire } from 'node:module';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const require = createRequire(import.meta.url);
 const { readFileSync } = require('node:fs');
 const { createPrivateBlockfaceResolver } = require('./privateBlockfaceResolver');
 const {
   createLocalGeosupportTransport,
+  demoLocalResolverBinding,
   localFunction3cAllowed,
   localStreetIntelligenceBinding,
+  LOCAL_LOGICAL_FUNCTION3C_URL,
+  stopLocalGeosupport,
 } = require('./localGeosupportTransport');
 
 const PRODUCTION_FUNCTION_3C = 'https://parqueen-curb-resolver-spike-oxbozdhlwa-uc.a.run.app';
@@ -80,7 +83,9 @@ describe('local Function 3C transport', () => {
     expect(closedAt).toBeGreaterThan(-1);
     expect(closedAt).toBeLessThan(runtime.indexOf('orchestratorDependencies'));
     expect(runtime).toContain('localStreetIntelligenceBinding()');
+    expect(runtime).toContain('demoLocalResolverBinding(localBinding)');
     expect(runtime).toContain("localBinding.mode === 'local'");
+    expect(runtime).toContain('demoLocalBinding: demoBinding');
     expect(runtime).toContain('attachOwnerPilot(orchestratorDependencies, verifiedUid)');
 
     const misconfigured = [
@@ -132,5 +137,117 @@ describe('local Function 3C transport', () => {
     } finally {
       global.fetch = originalFetch;
     }
+  });
+
+  it('binds the exact logical URL only for a verified local demo session', () => {
+    const binding = localStreetIntelligenceBinding(demoEnv);
+    expect(binding.mode).toBe('local');
+    const demo = demoLocalResolverBinding(binding, demoEnv);
+    expect(demo).toMatchObject({
+      mode: 'local',
+      logicalServiceUrl: LOCAL_LOGICAL_FUNCTION3C_URL,
+      transport: binding.transport,
+      getIdToken: binding.getIdToken,
+    });
+    expect(demoLocalResolverBinding({ ...binding, mode: 'production' }, demoEnv)).toBeNull();
+    expect(demoLocalResolverBinding({ ...binding, transport: null }, demoEnv)).toBeNull();
+    expect(demoLocalResolverBinding({ ...binding, getIdToken: null }, demoEnv)).toBeNull();
+    expect(demoLocalResolverBinding(binding, { ...demoEnv, GCLOUD_PROJECT: 'parkqueen-46475363-ccf36' })).toBeNull();
+    expect(demoLocalResolverBinding(binding, { ...demoEnv, FUNCTIONS_EMULATOR: 'false' })).toBeNull();
+    expect(demoLocalResolverBinding(binding, { ...demoEnv, FIRESTORE_EMULATOR_HOST: '127.0.0.1:8180' })).toBeNull();
+    expect(demoLocalResolverBinding(binding, { ...demoEnv, FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9098' })).toBeNull();
+    expect(demoLocalResolverBinding(binding, { ...demoEnv, K_REVISION: '2' })).toBeNull();
+    expect(demoLocalResolverBinding(binding, { ...demoEnv, CURB_LOCAL_FUNCTION3C: 'off' })).toBeNull();
+  });
+});
+
+describe('local Function 3C process cleanup', () => {
+  const childProcess = require('node:child_process');
+  const requestBody = JSON.stringify({
+    borough: 'BRONX',
+    onStreet: 'MELVILLE STREET',
+    crossStreetOne: 'VAN NEST AVENUE',
+    crossStreetTwo: 'MORRIS PARK AVENUE',
+    compassDirection: 'W',
+  });
+
+  function dockerChild() {
+    const handlers = {};
+    return {
+      pid: 4242,
+      killed: false,
+      exitCode: null,
+      signalCode: null,
+      stdin: { write() {} },
+      stdout: { on() {} },
+      stderr: { on() {} },
+      on(event, handler) { handlers[event] = handler; },
+      kill() {
+        this.killed = true;
+        this.exitCode = 1;
+        handlers.exit?.(1);
+      },
+      unref() {},
+    };
+  }
+
+  afterEach(() => {
+    stopLocalGeosupport();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  function installSpawn() {
+    const child = dockerChild();
+    const bins = [];
+    vi.spyOn(childProcess, 'spawn').mockImplementation(bin => {
+      bins.push(String(bin));
+      if (String(bin).toLowerCase() === 'taskkill') return dockerChild();
+      return child;
+    });
+    return { child, bins };
+  }
+
+  it('does not spawn Docker when the request is already aborted', async () => {
+    const { bins } = installSpawn();
+    const local = createLocalGeosupportTransport(demoEnv);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(local.transport({
+      body: requestBody,
+      signal: controller.signal,
+    })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(bins.filter(bin => bin.toLowerCase() !== 'taskkill')).toEqual([]);
+  });
+
+  it('kills the running Docker process when the request is cancelled and does not start another', async () => {
+    const { child, bins } = installSpawn();
+    const local = createLocalGeosupportTransport(demoEnv);
+    const controller = new AbortController();
+    const pending = local.transport({ body: requestBody, signal: controller.signal });
+    const assertion = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    controller.abort();
+    await assertion;
+    expect(child.killed).toBe(true);
+    expect(bins.filter(bin => bin.toLowerCase() !== 'taskkill')).toHaveLength(1);
+  });
+
+  it('stops the Docker process when the lookup times out', async () => {
+    vi.useFakeTimers();
+    const { child, bins } = installSpawn();
+    const local = createLocalGeosupportTransport(demoEnv);
+    const pending = local.transport({ body: requestBody });
+    const assertion = expect(pending).rejects.toMatchObject({ name: 'TimeoutError' });
+    await vi.advanceTimersByTimeAsync(20000);
+    await assertion;
+    expect(child.killed).toBe(true);
+    expect(bins.filter(bin => bin.toLowerCase() !== 'taskkill')).toHaveLength(1);
+  });
+
+  it('does not spawn Docker for an unreadable request', async () => {
+    const { bins } = installSpawn();
+    const local = createLocalGeosupportTransport(demoEnv);
+    await expect(local.transport({ body: 'not-json' })).rejects.toThrow('unreadable request');
+    expect(bins).toEqual([]);
   });
 });

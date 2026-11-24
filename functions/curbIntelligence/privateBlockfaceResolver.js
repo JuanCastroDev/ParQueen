@@ -14,6 +14,7 @@ const BFI = /^\d{10}$/;
 const RETURN_CODE = /^[A-Z0-9 ]{2}$/;
 const REASON_CODE = /^[A-Z0-9 ]$/;
 const validatedSuccesses = new WeakMap();
+const { LOCAL_LOGICAL_FUNCTION3C_URL, localFunction3cAllowed } = require('./localGeosupportTransport');
 
 const failure = failureClass => ({ ok: false, failureClass });
 
@@ -168,11 +169,39 @@ async function defaultTransport(request) {
   });
 }
 
+function demoLogicalTarget(options) {
+  const binding = options.demoLocalBinding;
+  if (!binding || binding.mode !== 'local') return null;
+  if (binding.logicalServiceUrl !== LOCAL_LOGICAL_FUNCTION3C_URL) return null;
+  if (options.serviceUrl !== LOCAL_LOGICAL_FUNCTION3C_URL) return null;
+  if (typeof options.transport !== 'function' || options.transport === defaultTransport) return null;
+  if (typeof options.getIdToken !== 'function' || options.getIdToken === defaultGetIdToken) return null;
+  if (options.transport !== binding.transport || options.getIdToken !== binding.getIdToken) return null;
+  if (!localFunction3cAllowed(options.env || process.env)) return null;
+  return {
+    serviceUrl: LOCAL_LOGICAL_FUNCTION3C_URL,
+    transport: options.transport,
+    getIdToken: options.getIdToken,
+  };
+}
+
+function selectTransportTarget(options) {
+  if (options.demoLocalBinding) return demoLogicalTarget(options);
+  const serviceUrl = normalizeServiceUrl(options.serviceUrl);
+  if (!serviceUrl) return null;
+  return {
+    serviceUrl,
+    transport: options.transport || defaultTransport,
+    getIdToken: options.getIdToken || defaultGetIdToken,
+  };
+}
+
 function createPrivateBlockfaceResolver(options = {}) {
   const enabled = options.mode === 'shadow';
-  const serviceUrl = enabled ? normalizeServiceUrl(options.serviceUrl) : null;
-  const getIdToken = options.getIdToken || defaultGetIdToken;
-  const transport = options.transport || defaultTransport;
+  const target = enabled ? selectTransportTarget(options) : null;
+  const serviceUrl = target?.serviceUrl || null;
+  const getIdToken = target?.getIdToken || defaultGetIdToken;
+  const transport = target?.transport || defaultTransport;
   const requests = new Map();
   let resolver;
 

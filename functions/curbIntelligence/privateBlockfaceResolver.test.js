@@ -212,6 +212,202 @@ describe('private blockface resolver request scope', () => {
     expect(transport).toHaveBeenCalledTimes(2);
   });
 
+  it('accepts only the exact isolated logical URL on an injected local transport', async () => {
+    const demoEnv = {
+      FUNCTIONS_EMULATOR: 'true',
+      CURB_LOCAL_FUNCTION3C: 'local',
+      GCLOUD_PROJECT: 'demo-parkqueen-functions-test',
+      FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080',
+      FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099',
+      K_REVISION: '1',
+    };
+    const transport = vi.fn(async () => response(200, VALID_SUCCESS));
+    const getIdToken = vi.fn(async () => 'local-geosupport');
+    const binding = Object.freeze({
+      mode: 'local',
+      logicalServiceUrl: 'http://127.0.0.1:9',
+      transport,
+      getIdToken,
+    });
+    const calls = [];
+    const originalFetch = global.fetch;
+    global.fetch = async url => {
+      calls.push(String(url));
+      throw new Error('production fetch refused');
+    };
+    try {
+      const resolver = createPrivateBlockfaceResolver({
+        mode: 'shadow',
+        serviceUrl: 'http://127.0.0.1:9',
+        demoLocalBinding: binding,
+        transport,
+        getIdToken,
+        env: demoEnv,
+      });
+      await expect(resolver.resolve(VALID_TUPLE)).resolves.toEqual(VALID_SUCCESS);
+      expect(getIdToken).toHaveBeenCalledWith('http://127.0.0.1:9');
+      expect(transport).toHaveBeenCalledWith(expect.objectContaining({
+        url: 'http://127.0.0.1:9/resolve-blockface',
+      }));
+      expect(calls).toEqual([]);
+      expect(JSON.stringify(transport.mock.calls)).not.toContain('run.app');
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it.each([
+    ['another loopback port', 'http://127.0.0.1:10', 'http://127.0.0.1:9'],
+    ['localhost name', 'http://localhost:9', 'http://127.0.0.1:9'],
+    ['https loopback', 'https://127.0.0.1:9', 'http://127.0.0.1:9'],
+    ['trailing slash', 'http://127.0.0.1:9/', 'http://127.0.0.1:9'],
+    ['tampered binding', 'http://127.0.0.1:9', 'http://127.0.0.1:10'],
+  ])('rejects %s without calling transport', async (_label, serviceUrl, logicalServiceUrl) => {
+    const transport = vi.fn(async () => response(200, VALID_SUCCESS));
+    const getIdToken = vi.fn(async () => 'local-geosupport');
+    const resolver = createPrivateBlockfaceResolver({
+      mode: 'shadow',
+      serviceUrl,
+      demoLocalBinding: {
+        mode: 'local',
+        logicalServiceUrl,
+        transport,
+        getIdToken,
+      },
+      transport,
+      getIdToken,
+      env: {
+        FUNCTIONS_EMULATOR: 'true',
+        CURB_LOCAL_FUNCTION3C: 'local',
+        GCLOUD_PROJECT: 'demo-parkqueen-functions-test',
+        FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080',
+        FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099',
+        K_REVISION: '1',
+      },
+    });
+    await expect(resolver.resolve(VALID_TUPLE)).resolves.toEqual({
+      ok: false, failureClass: 'CONFIGURATION_FAILURE',
+    });
+    expect(transport).not.toHaveBeenCalled();
+    expect(getIdToken).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['production project', { GCLOUD_PROJECT: 'parkqueen-46475363-ccf36' }],
+    ['emulator flag off', { FUNCTIONS_EMULATOR: 'false' }],
+    ['wrong Firestore host', { FIRESTORE_EMULATOR_HOST: '127.0.0.1:8180' }],
+    ['wrong Auth host', { FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9098' }],
+    ['wrong revision', { K_REVISION: '2' }],
+    ['local switch off', { CURB_LOCAL_FUNCTION3C: 'off' }],
+  ])('fails closed for %s', async (_label, override) => {
+    const transport = vi.fn(async () => response(200, VALID_SUCCESS));
+    const getIdToken = vi.fn(async () => 'local-geosupport');
+    const resolver = createPrivateBlockfaceResolver({
+      mode: 'shadow',
+      serviceUrl: 'http://127.0.0.1:9',
+      demoLocalBinding: { mode: 'local', logicalServiceUrl: 'http://127.0.0.1:9', transport, getIdToken },
+      transport,
+      getIdToken,
+      env: {
+        FUNCTIONS_EMULATOR: 'true',
+        CURB_LOCAL_FUNCTION3C: 'local',
+        GCLOUD_PROJECT: 'demo-parkqueen-functions-test',
+        FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080',
+        FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099',
+        K_REVISION: '1',
+        ...override,
+      },
+    });
+    await expect(resolver.resolve(VALID_TUPLE)).resolves.toEqual({
+      ok: false, failureClass: 'CONFIGURATION_FAILURE',
+    });
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the local transport or token provider is missing or replaced', async () => {
+    const transport = vi.fn(async () => response(200, VALID_SUCCESS));
+    const getIdToken = vi.fn(async () => 'local-geosupport');
+    const env = {
+      FUNCTIONS_EMULATOR: 'true',
+      CURB_LOCAL_FUNCTION3C: 'local',
+      GCLOUD_PROJECT: 'demo-parkqueen-functions-test',
+      FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080',
+      FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099',
+      K_REVISION: '1',
+    };
+    const binding = { mode: 'local', logicalServiceUrl: 'http://127.0.0.1:9', transport, getIdToken };
+    const missingTransport = createPrivateBlockfaceResolver({
+      mode: 'shadow', serviceUrl: 'http://127.0.0.1:9', demoLocalBinding: binding, getIdToken, env,
+    });
+    const missingToken = createPrivateBlockfaceResolver({
+      mode: 'shadow', serviceUrl: 'http://127.0.0.1:9', demoLocalBinding: binding, transport, env,
+    });
+    const replaced = createPrivateBlockfaceResolver({
+      mode: 'shadow',
+      serviceUrl: 'http://127.0.0.1:9',
+      demoLocalBinding: binding,
+      transport: vi.fn(async () => response(200, VALID_SUCCESS)),
+      getIdToken,
+      env,
+    });
+    await expect(missingTransport.resolve(VALID_TUPLE)).resolves.toEqual({
+      ok: false, failureClass: 'CONFIGURATION_FAILURE',
+    });
+    await expect(missingToken.resolve(VALID_TUPLE)).resolves.toEqual({
+      ok: false, failureClass: 'CONFIGURATION_FAILURE',
+    });
+    await expect(replaced.resolve(VALID_TUPLE)).resolves.toEqual({
+      ok: false, failureClass: 'CONFIGURATION_FAILURE',
+    });
+    expect(transport).not.toHaveBeenCalled();
+    expect(getIdToken).not.toHaveBeenCalled();
+  });
+
+  it('keeps an ordinary HTTP URL closed when no demo binding is supplied', async () => {
+    const transport = vi.fn(async () => response(200, VALID_SUCCESS));
+    const resolver = createPrivateBlockfaceResolver({
+      mode: 'shadow',
+      serviceUrl: 'http://127.0.0.1:9',
+      transport,
+      getIdToken: vi.fn(async () => 'token'),
+      env: { FUNCTIONS_EMULATOR: 'false', GCLOUD_PROJECT: 'parkqueen-46475363-ccf36' },
+    });
+    await expect(resolver.resolve(VALID_TUPLE)).resolves.toEqual({
+      ok: false, failureClass: 'CONFIGURATION_FAILURE',
+    });
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it('still rejects an invalid tuple and a malformed local response', async () => {
+    const env = {
+      FUNCTIONS_EMULATOR: 'true',
+      CURB_LOCAL_FUNCTION3C: 'local',
+      GCLOUD_PROJECT: 'demo-parkqueen-functions-test',
+      FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080',
+      FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099',
+      K_REVISION: '1',
+    };
+    const transport = vi.fn(async () => response(200, '<html>not json</html>'));
+    const getIdToken = vi.fn(async () => 'local-geosupport');
+    const binding = { mode: 'local', logicalServiceUrl: 'http://127.0.0.1:9', transport, getIdToken };
+    const resolver = createPrivateBlockfaceResolver({
+      mode: 'shadow',
+      serviceUrl: 'http://127.0.0.1:9',
+      demoLocalBinding: binding,
+      transport,
+      getIdToken,
+      env,
+    });
+    await expect(resolver.resolve({ ...VALID_TUPLE, borough: 'MN' })).resolves.toEqual({
+      ok: false, failureClass: 'INVALID_REQUEST',
+    });
+    expect(transport).not.toHaveBeenCalled();
+    await expect(resolver.resolve(VALID_TUPLE)).resolves.toEqual({
+      ok: false, failureClass: 'INVALID_RESPONSE',
+    });
+    expect(transport).toHaveBeenCalledOnce();
+  });
+
   it('defaults to off with zero authentication or transport activity', async () => {
     const getIdToken = vi.fn(async () => 'must-not-run');
     const transport = vi.fn(async () => response(200, VALID_SUCCESS));

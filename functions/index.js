@@ -5179,9 +5179,18 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
     return { protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' };
   }
 
-  const { localStreetIntelligenceBinding } = require('./curbIntelligence/localGeosupportTransport');
+  const {
+    localStreetIntelligenceBinding,
+    demoLocalResolverBinding,
+  } = require('./curbIntelligence/localGeosupportTransport');
   const localBinding = localStreetIntelligenceBinding();
   if (localBinding.mode === 'closed') {
+    return { protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' };
+  }
+  const demoBinding = localBinding.mode === 'local'
+    ? demoLocalResolverBinding(localBinding)
+    : null;
+  if (localBinding.mode === 'local' && !demoBinding) {
     return { protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' };
   }
 
@@ -5190,9 +5199,10 @@ async function _runCanonicalCurbV2(requestData, verifiedUid) {
   const blockfaceResolver = createPrivateBlockfaceResolver({
     mode: 'shadow',
     serviceUrl: config.serviceUrl,
-    ...(localBinding.mode === 'local' ? {
-      transport: localBinding.transport,
-      getIdToken: localBinding.getIdToken,
+    ...(demoBinding ? {
+      demoLocalBinding: demoBinding,
+      transport: demoBinding.transport,
+      getIdToken: demoBinding.getIdToken,
     } : {}),
   });
   const initializationStartedAt = Date.now();
