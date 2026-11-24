@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFile, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -160,6 +160,134 @@ describe('gdal3.js resource resolution', () => {
     } finally {
       process.chdir(previous);
       rmSync(installed.root, { recursive: true, force: true });
+      rmSync(decoyRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an empty resource and a directory placed where the WebAssembly file belongs', () => {
+    const empty = layout({ wasm: '' });
+    const directoryResource = layout();
+    const wasmPath = join(directoryResource.directory, 'gdal3WebAssembly.wasm');
+    rmSync(wasmPath);
+    mkdirSync(wasmPath);
+    try {
+      expect(resolveGdalResourceDirectory(empty.modulePath)).toBeNull();
+      expect(resolveGdalResourceDirectory(directoryResource.modulePath)).toBeNull();
+      expect(readFileSync(join(empty.directory, 'gdal3WebAssembly.data'), 'utf8')).toBe('data-bytes');
+    } finally {
+      rmSync(empty.root, { recursive: true, force: true });
+      rmSync(directoryResource.root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not redirect a traversed or suffixed path read by the configured module', async () => {
+    const previous = process.cwd();
+    const installed = layout();
+    writeFileSync(join(installed.directory, 'secret.txt'), 'secret-bytes');
+    writeFileSync(join(installed.directory, 'gdal3WebAssembly.wasm.extra'), 'extra-bytes');
+    const packageDir = installed.directory.replaceAll('\\', '/');
+    const traversedPath = `${packageDir}/gdal3WebAssembly.wasm/../secret.txt`;
+    const suffixedPath = `${packageDir}/gdal3WebAssembly.wasm.extra`;
+    writeFileSync(installed.modulePath, `
+      const fs = require('fs');
+      module.exports = async function initGdalJs() {
+        const traversed = fs.readFileSync(${JSON.stringify(traversedPath)}, 'utf8');
+        const suffixed = fs.readFileSync(${JSON.stringify(suffixedPath)}, 'utf8');
+        if (traversed !== 'secret-bytes' || suffixed !== 'extra-bytes') {
+          throw new Error('resource redirect escaped the two WebAssembly filenames');
+        }
+        return {
+          open() { return { datasets: [{}] }; },
+          async ogrinfo() { return { layers: [] }; },
+          async close() {},
+        };
+      };
+    `);
+    try {
+      expect(await openGdalSession({ CURB_LION_GDAL_MODULE: installed.modulePath })).not.toBeNull();
+      expect(process.cwd()).toBe(previous);
+      expect(readFileSync(join(installed.directory, 'secret.txt'), 'utf8')).toBe('secret-bytes');
+    } finally {
+      process.chdir(previous);
+      rmSync(installed.root, { recursive: true, force: true });
+    }
+  });
+
+  it('serializes overlapping initialization and restores reads afterward', async () => {
+    const previous = process.cwd();
+    const orderPath = join(mkdtempSync(join(tmpdir(), 'gdal-order-')), 'order.txt');
+    writeFileSync(orderPath, '');
+    const moduleSource = (label) => `
+      const fs = require('fs');
+      module.exports = async function initGdalJs() {
+        fs.appendFileSync(${JSON.stringify(orderPath)}, '${label}-start\\n');
+        const own = fs.readFileSync('node_modules/gdal3.js/dist/package/gdal3WebAssembly.wasm', 'utf8');
+        await new Promise(resolve => setTimeout(resolve, 40));
+        if (own !== 'wasm-bytes') throw new Error('configured module resource was not readable');
+        fs.appendFileSync(${JSON.stringify(orderPath)}, '${label}-end\\n');
+        return {
+          open() { return { datasets: [{}] }; },
+          async ogrinfo() { return { layers: [] }; },
+          async close() {},
+        };
+      };
+    `;
+    const first = layout({ source: moduleSource('A') });
+    const second = layout({ source: moduleSource('B') });
+    const decoyRoot = mkdtempSync(join(tmpdir(), 'gdal-decoy-'));
+    const decoy = join(decoyRoot, 'node_modules', 'gdal3.js', 'dist', 'package', 'gdal3WebAssembly.wasm');
+    mkdirSync(join(decoyRoot, 'node_modules', 'gdal3.js', 'dist', 'package'), { recursive: true });
+    writeFileSync(decoy, 'decoy-bytes');
+    try {
+      const pending = Promise.all([
+        openGdalSession({ CURB_LION_GDAL_MODULE: first.modulePath }),
+        openGdalSession({ CURB_LION_GDAL_MODULE: second.modulePath }),
+      ]);
+      await new Promise(resolve => setTimeout(resolve, 10));
+      expect(readFileSync(decoy, 'utf8')).toBe('decoy-bytes');
+      expect(await new Promise((resolve, reject) => {
+        readFile(decoy, 'utf8', (error, value) => error ? reject(error) : resolve(value));
+      })).toBe('decoy-bytes');
+      const sessions = await pending;
+      expect(sessions[0]).not.toBeNull();
+      expect(sessions[1]).not.toBeNull();
+      expect(readFileSync(orderPath, 'utf8')).toBe('A-start\nA-end\nB-start\nB-end\n');
+      expect(process.cwd()).toBe(previous);
+      expect(readFileSync(decoy, 'utf8')).toBe('decoy-bytes');
+      expect(() => readFileSync(join(previous, 'node_modules', 'gdal3.js', 'dist', 'package', 'gdal3WebAssembly.wasm'))).toThrow();
+    } finally {
+      process.chdir(previous);
+      rmSync(first.root, { recursive: true, force: true });
+      rmSync(second.root, { recursive: true, force: true });
+      rmSync(decoyRoot, { recursive: true, force: true });
+      rmSync(resolve(orderPath, '..'), { recursive: true, force: true });
+    }
+  });
+
+  it('restores the original file reads after initialization fails', async () => {
+    const previous = process.cwd();
+    const broken = layout({
+      source: `
+        const fs = require('fs');
+        module.exports = async function initGdalJs() {
+          fs.readFileSync('node_modules/gdal3.js/dist/package/gdal3WebAssembly.wasm', 'utf8');
+          await new Promise(resolve => setTimeout(resolve, 20));
+          throw new Error('gdal init failed');
+        };
+      `,
+    });
+    const decoyRoot = mkdtempSync(join(tmpdir(), 'gdal-decoy-'));
+    const decoy = join(decoyRoot, 'node_modules', 'gdal3.js', 'dist', 'package', 'gdal3WebAssembly.wasm');
+    mkdirSync(join(decoyRoot, 'node_modules', 'gdal3.js', 'dist', 'package'), { recursive: true });
+    writeFileSync(decoy, 'decoy-bytes');
+    try {
+      expect(await openGdalSession({ CURB_LION_GDAL_MODULE: broken.modulePath })).toBeNull();
+      expect(process.cwd()).toBe(previous);
+      expect(readFileSync(decoy, 'utf8')).toBe('decoy-bytes');
+      expect(() => readFileSync(join(previous, 'node_modules', 'gdal3.js', 'dist', 'package', 'gdal3WebAssembly.wasm'))).toThrow();
+    } finally {
+      process.chdir(previous);
+      rmSync(broken.root, { recursive: true, force: true });
       rmSync(decoyRoot, { recursive: true, force: true });
     }
   });
