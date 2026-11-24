@@ -1,7 +1,8 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { useFocusOnMount } from '../hooks/useFocusOnMount';
 import { SignupProgress } from '../components/SignupProgress';
-import { ChevronLeft, ChevronRight, Search, X, Trash2, Check, Loader2 } from 'lucide-react';
+import { InlineLoader } from '../components/LoadingScreen';
+import { ChevronLeft, ChevronRight, Search, X, Trash2, Check } from 'lucide-react';
 import { VehicleIcon } from '../utils/vehicleIcon';
 import { doc, updateDoc, deleteField } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -509,7 +510,7 @@ export const EditVehicleView = ({ user, onBack, isOnboarding, onSkip }: Props) =
                 : {}}
             >
               {saving
-                ? <Loader2 size={18} className="animate-spin text-white/50" />
+                ? <InlineLoader size={18} label={t('common.loading')} className="text-white/50" />
                 : <>{t('vehicle.next')} <ChevronRight size={18} /></>
               }
             </button>
@@ -775,7 +776,7 @@ export const EditVehicleView = ({ user, onBack, isOnboarding, onSkip }: Props) =
                 : {}}
             >
               {saving
-                ? <Loader2 size={18} className="animate-spin text-white/50" />
+                ? <InlineLoader size={18} label={t('common.loading')} className="text-white/50" />
                 : <>{t('vehicle.next')} <ChevronRight size={18} /></>
               }
             </button>

@@ -133,7 +133,9 @@ describe('SpotDetailsCard in-flight claim and arrive controls', () => {
     expect(busyClaim.props.disabled).toBe(true);
     expect(busyClaim.props['aria-busy']).toBe(true);
     expect(buttonWithText(busy, t('claim_flow.im_heading_there'))).toBeUndefined();
-    expect(busyClaim.findAll((node) => node.props?.className === 'animate-spin')).toHaveLength(1);
+    // The branded inline loader, never a generic spinner (docs/LOADING_STATES.md).
+    expect(busyClaim.findAll((node) => node.props?.['data-pq-loader'] === 'inline')).toHaveLength(1);
+    expect(busyClaim.findAll((node) => String(node.props?.className ?? '').includes('animate-spin'))).toHaveLength(0);
     act(() => busy.unmount());
   });
 

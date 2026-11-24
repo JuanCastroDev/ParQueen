@@ -7,6 +7,7 @@ import {
 import { fetchDashboardCounts } from '../../utils/adminReadService';
 import { segmentAllowsAuthoritativeRead } from '../../utils/canonicalCurbWriteAuthority';
 import { RefreshCw, AlertCircle, CheckCircle, AlertTriangle } from 'lucide-react';
+import { InlineLoader } from '../../components/LoadingScreen';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -259,7 +260,7 @@ export function StreetIntelligenceHealthPage() {
           disabled={loading}
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition-colors"
         >
-          <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+          {loading ? <InlineLoader size={13} /> : <RefreshCw size={13} />}
           Refresh
         </button>
       </div>

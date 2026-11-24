@@ -8,6 +8,8 @@
   <title>ParQueen - NYC Parking</title>
   <meta name="theme-color" content="#071426" />
   <link rel="manifest" href="/manifest.webmanifest" />
+  <!-- Applies the saved light/dark theme before first paint (CSP forbids inline scripts). -->
+  <script src="/theme-boot.js"></script>
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
 
   <!-- FontAwesome -->
@@ -54,7 +56,12 @@
 </head>
 
 <body class="bg-[var(--color-bg)] text-[var(--color-text)] overflow-hidden">
-  <div id="root"></div>
+  <!-- Branded boot frame: identical to <LoadingScreen /> (components/LoadingScreen.tsx),
+       painted before the JS bundle runs and replaced by React on its first commit. -->
+  <div id="root"><div class="pq-loading-screen" data-pq-boot role="status" aria-live="polite" aria-label="Loading ParQueen"><img
+        src="/assets/Parqueen_Logo.png" alt="" aria-hidden="true" width="160" height="131" decoding="sync" draggable="false"
+        class="pq-brand-pulse select-none pointer-events-none" style="width: 160px; height: auto"
+        data-pq-loader="logo" /></div></div>
   <script type="module" src="/index.tsx"></script>
 </body>
 

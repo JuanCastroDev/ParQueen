@@ -3,6 +3,7 @@ import { getFunctions, httpsCallable } from 'firebase/functions';
 import { getApp } from 'firebase/app';
 import { fetchParseFailuresList } from '../../utils/adminReadService';
 import { AlertCircle, CheckCircle, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
+import { InlineLoader } from '../../components/LoadingScreen';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -331,7 +332,7 @@ export function ParseFailuresPage() {
             className="p-1.5 text-gray-400 hover:text-gray-600 disabled:opacity-50 transition-colors"
             title="Refresh"
           >
-            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            {loading ? <InlineLoader size={14} /> : <RefreshCw size={14} />}
           </button>
         </div>
       </div>

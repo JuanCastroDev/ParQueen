@@ -20,6 +20,7 @@ const es: Record<string, string> = {
     // Common labels
     'common.search_placeholder': 'Busca un vecindario',
     'common.searching': 'Buscando…',
+    'common.loading': 'Cargando…',
     'common.cancel_search': 'Cancelar búsqueda',
     'common.close': 'Cerrar',
     'common.ping_your_spot': 'Ping tu lugar',
@@ -228,6 +229,7 @@ const es: Record<string, string> = {
     'map.free_spots_plural': '{count} lugares libres cerca',
     'map.no_spots_nearby': 'No hay lugares activos cerca',
     'map.no_spots_available_now': 'No hay lugares disponibles ahora.',
+    'map.loading': 'Cargando el mapa',
     'map.load_failed': 'No se pudo cargar el mapa.',
     'map.load_retry': 'Intentar de nuevo',
     'map.view_nearby_spot': 'Ver lugar de estacionamiento cercano',
