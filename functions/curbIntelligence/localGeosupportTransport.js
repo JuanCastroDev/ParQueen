@@ -1,8 +1,9 @@
 'use strict';
 
-const { spawn } = require('node:child_process');
 const { existsSync } = require('node:fs');
 const DEMO_PROJECT_ID = 'demo-parkqueen-functions-test';
+const LOCAL_LOGICAL_FUNCTION3C_URL = 'http://127.0.0.1:9';
+const LOCAL_LOOKUP_TIMEOUT_MS = 20000;
 const PRODUCTION_PROJECT_ID = 'parkqueen-46475363-ccf36';
 const DEMO_AUTH_HOST = '127.0.0.1:9099';
 const DEMO_FIRESTORE_HOST = '127.0.0.1:8080';
@@ -51,6 +52,25 @@ function failingTransport(message) {
   };
 }
 
+function namedError(name, message) {
+  const error = new Error(message);
+  error.name = name;
+  return error;
+}
+
+function killTree(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  try { child.kill(); } catch { /* The process has already exited. */ }
+  if (process.platform !== 'win32' || !child.pid) return;
+  const killer = require('node:child_process').spawn(
+    'taskkill',
+    ['/PID', String(child.pid), '/T', '/F'],
+    { windowsHide: true, stdio: 'ignore' },
+  );
+  killer.on('error', () => {});
+  killer.unref?.();
+}
+
 let geosupport = null;
 
 function startGeosupport(image, service) {
@@ -66,15 +86,21 @@ function startGeosupport(image, service) {
     '    sys.stdout.write("PARQUEEN_GEO " + json.dumps({"status": result.status_code, "payload": result.payload}) + "\\n")',
     '    sys.stdout.flush()',
   ].join('\n');
-  const child = spawn(dockerBin(), [
+  const child = require('node:child_process').spawn(dockerBin(), [
     'run', '-i', '--rm', '-v', `${service}:/app`, '-w', '/app', image,
     'python', '-u', '-c', script,
   ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
   let buffer = '';
   let stderr = '';
   const waiters = [];
-  const failWaiters = error => {
-    while (waiters.length) waiters.shift().reject(error);
+  const session = { stopped: false, lookup: null };
+  const finish = error => {
+    if (session.stopped) return;
+    session.stopped = true;
+    if (geosupport === session) geosupport = null;
+    const pending = waiters.splice(0);
+    for (const waiter of pending) waiter.reject(error);
+    killTree(child);
   };
   child.stdout.on('data', chunk => {
     buffer += chunk.toString('utf8');
@@ -92,22 +118,51 @@ function startGeosupport(image, service) {
   child.stderr.on('data', chunk => {
     stderr = `${stderr}${chunk.toString('utf8')}`.slice(-2000);
   });
-  child.on('exit', code => failWaiters(new Error(`Function 3C exited ${code}: ${stderr}`)));
-  child.on('error', error => failWaiters(error));
+  child.on('exit', code => finish(new Error(`Function 3C exited ${code}: ${stderr.slice(-200)}`)));
+  child.on('error', error => finish(error));
   let chain = Promise.resolve();
-  const lookup = tuple => {
+  session.lookup = (tuple, signal) => {
     const run = chain.then(() => new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`Function 3C timed out: ${stderr}`)), 20000);
+      if (session.stopped || signal?.aborted) {
+        const error = namedError('AbortError', 'The local Function 3C request was cancelled.');
+        if (!session.stopped) finish(error);
+        reject(error);
+        return;
+      }
+      let settled = false;
+      const settle = (report, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+        report(value);
+      };
+      const timer = setTimeout(() => {
+        finish(namedError('TimeoutError', 'Function 3C timed out'));
+      }, LOCAL_LOOKUP_TIMEOUT_MS);
+      const onAbort = () => {
+        finish(namedError('AbortError', 'The local Function 3C request was cancelled.'));
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
       waiters.push({
-        resolve: value => { clearTimeout(timer); resolve(value); },
-        reject: error => { clearTimeout(timer); reject(error); },
+        resolve: value => settle(resolve, value),
+        reject: error => settle(reject, error),
       });
-      child.stdin.write(`${JSON.stringify(tuple)}\n`);
+      try {
+        child.stdin.write(`${JSON.stringify(tuple)}\n`);
+      } catch (error) {
+        finish(error);
+      }
     }));
     chain = run.then(() => {}, () => {});
     return run;
   };
-  return { lookup };
+  session.stop = () => finish(namedError('AbortError', 'The local Function 3C process was stopped.'));
+  return session;
+}
+
+function stopLocalGeosupport() {
+  geosupport?.stop?.();
 }
 
 function createLocalGeosupportTransport(env = process.env) {
@@ -123,8 +178,11 @@ function createLocalGeosupportTransport(env = process.env) {
       } catch {
         throw new Error('Local Function 3C received an unreadable request.');
       }
-      if (!geosupport) geosupport = startGeosupport(image, service);
-      const result = await geosupport.lookup(body);
+      if (request.signal?.aborted) {
+        throw namedError('AbortError', 'The local Function 3C request was cancelled.');
+      }
+      if (!geosupport || geosupport.stopped) geosupport = startGeosupport(image, service);
+      const result = await geosupport.lookup(body, request.signal);
       return { status: result.status, text: async () => JSON.stringify(result.payload) };
     };
   return {
@@ -133,14 +191,29 @@ function createLocalGeosupportTransport(env = process.env) {
   };
 }
 
+function demoLocalResolverBinding(binding, env = process.env) {
+  if (!binding || binding.mode !== 'local') return null;
+  if (!localFunction3cAllowed(env)) return null;
+  if (typeof binding.transport !== 'function' || typeof binding.getIdToken !== 'function') return null;
+  return Object.freeze({
+    mode: 'local',
+    logicalServiceUrl: LOCAL_LOGICAL_FUNCTION3C_URL,
+    transport: binding.transport,
+    getIdToken: binding.getIdToken,
+  });
+}
+
 module.exports = {
   DEMO_AUTH_HOST,
   DEMO_FIRESTORE_HOST,
   DEMO_PROJECT_ID,
+  LOCAL_LOGICAL_FUNCTION3C_URL,
   PRODUCTION_PROJECT_ID,
   localDemoSession,
   localModeRequested,
   localFunction3cAllowed,
   localStreetIntelligenceBinding,
+  demoLocalResolverBinding,
   createLocalGeosupportTransport,
+  stopLocalGeosupport,
 };
