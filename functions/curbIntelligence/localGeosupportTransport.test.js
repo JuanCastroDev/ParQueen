@@ -548,6 +548,42 @@ describe('local Function 3C process cleanup', () => {
     expect(inspectCalls(calls).length).toBeGreaterThan(0);
   });
 
+  it('does not accept two early absence answers while the CLI can still create the container', async () => {
+    vi.useFakeTimers();
+    const docker = fakeDocker({ createOnRun: false });
+    const { child, handlers, calls, cid } = installSpawn({ writeCid: 'never', docker });
+    child.kill = function kill() { this.killed = true; };
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const local = createLocalGeosupportTransport(localEnv());
+    const controller = new AbortController();
+    let settled = false;
+    const pending = local.transport({ body: requestBody, signal: controller.signal }).then(
+      () => { settled = true; return { ok: true }; },
+      reason => { settled = true; return reason; },
+    );
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(3600);
+    expect(settled).toBe(false);
+    expect(cleanupRecords(log).some(entry => entry.outcome === 'absent')).toBe(false);
+    docker.create(cid);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(settled).toBe(false);
+    expect(docker.containers.has(docker.owner.name)).toBe(false);
+    child.exitCode = 1;
+    handlers.exit(1);
+    await vi.advanceTimersByTimeAsync(2000);
+    const reason = await pending;
+    expect(reason).toMatchObject({ name: 'AbortError' });
+    expect(reason.cleanup).toBeUndefined();
+    expect(rmCalls(calls)).toEqual([['rm', '-f', cid]]);
+    expect(docker.containers.size).toBe(0);
+    expect(cleanupRecords(log)).toEqual([expect.objectContaining({
+      outcome: 'absent',
+      containerName: docker.owner.name,
+      containerId: cid,
+    })]);
+  });
+
   it('never removes a container under the owned name that carries another owner label', async () => {
     const docker = fakeDocker({ foreignLabel: true });
     const { calls } = installSpawn({ docker });

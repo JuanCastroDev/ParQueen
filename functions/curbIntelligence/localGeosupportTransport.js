@@ -179,13 +179,18 @@ function inspectOwned(bin, owner) {
   ]).then(result => classifyInspect(result, owner));
 }
 
+function cliHasExited(child) {
+  return !child || child.exitCode !== null || child.signalCode !== null;
+}
+
 function waitForCliExit(child, exited) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  if (cliHasExited(child)) return Promise.resolve();
   return Promise.race([exited, delay(CLI_EXIT_WAIT_MS)]);
 }
 
-// Success means Docker reported the owned container absent twice, after the Docker CLI exited, so
-// a container whose create was still in flight is caught. Anything else is reported, not hidden.
+// Success requires the Docker CLI to have exited and Docker to then report the owned container
+// absent twice. "No such container" while that CLI is still running is not success: it can still
+// create the container. A present owned container is removed by full id. Anything else is reported.
 async function releaseOwnedContainer(bin, child, exited, cidFile, owner) {
   const startedAt = Date.now();
   killTree(child);
@@ -193,16 +198,24 @@ async function releaseOwnedContainer(bin, child, exited, cidFile, owner) {
   let id = readContainerId(cidFile);
   let absentChecks = 0;
   let last = { state: 'unknown', detail: 'not inspected' };
+  let attempts = 0;
   try {
-    for (let attempt = 0; attempt < CLEANUP_MAX_ATTEMPTS && Date.now() - startedAt < CLEANUP_BUDGET_MS; attempt += 1) {
+    while (Date.now() - startedAt < CLEANUP_BUDGET_MS) {
       last = await inspectOwned(bin, owner);
       if (last.state === 'absent') {
+        if (!cliHasExited(child)) {
+          absentChecks = 0;
+          await delay(ABSENCE_RECHECK_MS);
+          continue;
+        }
         absentChecks += 1;
         if (absentChecks >= 2) return { ok: true, id, name: owner.name };
         await delay(ABSENCE_RECHECK_MS);
         continue;
       }
       absentChecks = 0;
+      attempts += 1;
+      if (attempts > CLEANUP_MAX_ATTEMPTS) break;
       if (last.state === 'foreign') {
         return { ok: false, id: last.id, name: owner.name, reason: 'not_owned' };
       }
@@ -213,12 +226,15 @@ async function releaseOwnedContainer(bin, child, exited, cidFile, owner) {
       }
       await delay(ABSENCE_RECHECK_MS);
     }
+    if (last.state === 'owned') {
+      return { ok: false, id, name: owner.name, reason: 'still_present', detail: last.detail };
+    }
     return {
       ok: false,
       id,
       name: owner.name,
-      reason: last.state === 'owned' ? 'still_present' : 'unverified',
-      detail: last.detail,
+      reason: 'unverified',
+      detail: cliHasExited(child) ? last.detail : 'Docker CLI was still running',
     };
   } finally {
     rmSync(join(cidFile, '..'), { recursive: true, force: true });
