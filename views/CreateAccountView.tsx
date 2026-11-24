@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { RecaptchaVerifier } from 'firebase/auth';
 import { t, useLang } from '../i18n';
-import { Shield, Loader2 } from 'lucide-react';
+import { Shield } from 'lucide-react';
 import { SignupProgress } from '../components/SignupProgress';
+import { InlineLoader } from '../components/LoadingScreen';
 import { CountrySelector } from '../components/CountrySelector';
 import {
     parseNationalToE164,
@@ -248,7 +249,7 @@ export const CreateAccountView: React.FC<CreateAccountViewProps> = ({ onContinue
                 >
                     {sending ? (
                         <>
-                            <Loader2 size={18} className="animate-spin" />
+                            <InlineLoader size={18} />
                             {t('create_account.sending')}
                         </>
                     ) : (

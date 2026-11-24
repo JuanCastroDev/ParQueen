@@ -5318,6 +5318,24 @@ a.pq-settings-row:hover { background: var(--color-overlay); }
   color: var(--pq-elev-text-muted);
 }
 
+/* Canonical branded loading (components/LoadingScreen.tsx, docs/LOADING_STATES.md).
+   index.html paints the same .pq-loading-screen markup before the JS bundle
+   runs, so the first frame after the native splash is already the logo. */
+.pq-loading-screen {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg);
+}
+@keyframes pq-brand-pulse {
+  50% { opacity: 0.5; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .pq-brand-pulse { animation: pq-brand-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+}
+
 /* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    TAILWIND MUST STAY LAST IN THIS FILE. DO NOT MOVE IT ABOVE THE RULES ABOVE.
 

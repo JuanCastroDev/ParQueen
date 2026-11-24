@@ -90,6 +90,7 @@ import { usePingPhaseClock } from './street-parking/usePingPhaseClock';
 import { AppTour, TOUR_KEY } from './street-parking/AppTour';
 import { resolveNotificationPing } from '../utils/notificationPing';
 import { AccessibleModal } from '../components/AccessibleModal';
+import { LoadingScreen } from '../components/LoadingScreen';
 import { shouldShowMapPrimaryNavigation } from './street-parking/mobileNavigationVisibility';
 import { getMapContextChip } from './street-parking/mapContextChip';
 import { isHandoffRecoveryCardRendered } from './street-parking/handoffRecoveryCard';
@@ -3162,7 +3163,7 @@ export const MapView: React.FC<MapViewProps> = ({
                             </button>
                         </div>
                     ) : (
-                        <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full" />
+                        <LoadingScreen label={t('map.loading')} />
                     )}
                 </div>
             )}
