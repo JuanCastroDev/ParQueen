@@ -340,6 +340,19 @@ describe('native launch screen hand-off (Android)', () => {
     expect(exitWait).toBeLessThanOrEqual(1000);
     expect(fade).toBeGreaterThan(0);
     expect(fade).toBeLessThanOrEqual(300);
+    // The launch logo glides onto the web logo's measured position before fading,
+    // so the two logos never show apart (seen on a Galaxy S20, 2026-11-24).
+    expect(activity).toContain('View icon = provider.getIconView();');
+    expect(activity).toContain('icon.animate().translationY(shift).setDuration(GLIDE_MS)');
+    expect(activity).toContain('.setStartDelay(fadeDelay)');
+    expect(activity).toContain('webView.getLocationOnScreen(web);');
+    expect(activity).toContain('icon.getLocationOnScreen(logo);');
+    const glide = Number(activity.match(/GLIDE_MS = (\d+);/)?.[1]);
+    const maxGlideDp = Number(activity.match(/MAX_GLIDE_DP = (\d+)f;/)?.[1]);
+    expect(glide).toBeGreaterThan(0);
+    expect(glide).toBeLessThanOrEqual(200);
+    expect(maxGlideDp).toBeGreaterThan(0);
+    expect(maxGlideDp).toBeLessThanOrEqual(64);
     // The plugins the app registers stay registered.
     expect(activity).toContain('registerPlugin(PhoneAuthPlugin.class);');
     expect(activity).toContain('registerPlugin(AppCheckBridgePlugin.class);');
