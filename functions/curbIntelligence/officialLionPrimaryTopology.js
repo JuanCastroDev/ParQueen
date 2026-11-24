@@ -573,7 +573,7 @@ function createUnavailableCatalog() {
   };
 }
 
-function sealCatalog(catalog) {
+function sealCatalog(catalog, indexAdmitted = false) {
   const admitted = Object.freeze({
     ok: true,
     certificationStatus: 'NOT_CERTIFIED',
@@ -583,12 +583,19 @@ function sealCatalog(catalog) {
       return catalog.relationshipsFor(records);
     },
   });
-  seals.set(admitted, catalog);
+  seals.set(admitted, Object.freeze({
+    catalog,
+    indexAdmitted: indexAdmitted === true,
+  }));
   return admitted;
 }
 
 function readOfficialLionPrimary(value) {
   return seals.has(value) ? value : null;
+}
+
+function readOfficialLionIndexAdmission(value) {
+  return seals.get(value)?.indexAdmitted === true;
 }
 
 async function openApprovedLionArchive(archivePath) {
@@ -597,9 +604,9 @@ async function openApprovedLionArchive(archivePath) {
   if (!identity) return null;
   const indexed = loadPinnedRelationshipIndex(relationshipIndexPath(archivePath));
   if (indexed?.lionSha256 === identity.sha256 && indexed.lionByteLength === identity.byteLength) {
-    return sealCatalog(createCatalog(null, null, indexed));
+    return sealCatalog(createCatalog(null, null, indexed), true);
   }
-  return sealCatalog(createUnavailableCatalog());
+  return sealCatalog(createUnavailableCatalog(), false);
 }
 
 let admittedCatalog = null;
@@ -623,6 +630,7 @@ module.exports = {
   resolveGdalResourceDirectory,
   officialEndpointGeometry,
   openApprovedLionArchive,
+  readOfficialLionIndexAdmission,
   readOfficialLionPrimary,
   verifiedExtraction,
 };

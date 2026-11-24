@@ -6,6 +6,11 @@ const { existsSync, linkSync, mkdtempSync, readFileSync, rmSync, writeFileSync }
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { spawn } = require('node:child_process');
+const {
+  evaluateOfficialLionRelationship,
+  openApprovedLionArchive,
+  readOfficialLionIndexAdmission,
+} = require('./officialLionPrimaryTopology');
 
 const ARCHIVE = 'C:/Users/jayca/AppData/Local/ParQueen/street-intel-qa-sources/lion-26b/nyclion_26b.zip';
 const liveArchive = existsSync(ARCHIVE) && existsSync(`${ARCHIVE}.relationship-index`);
@@ -42,6 +47,93 @@ function runNode(script, env = {}) {
     child.on('exit', status => resolve({ status, stdout, stderr }));
   });
 }
+
+const MELVILLE_GEOMETRY = Object.freeze({
+  type: 'MultiLineString',
+  coordinates: [[[-73.869399076566, 40.841629393257], [-73.870996446086, 40.84311966193]]],
+});
+
+function melvilleRecord(overrides = {}) {
+  return {
+    sourceVersion: { resourceId: 'inkn-q76z', version: '1793494484:1744725948' },
+    geometry: MELVILLE_GEOMETRY,
+    leftBlockFaceId: '1522611401',
+    rightBlockFaceId: '1522607000',
+    sourceNative: {
+      physicalid: '98053', b5sc: '250420', boroughcode: '2', streetwidth: '24',
+    },
+    ...overrides,
+  };
+}
+
+function melvillePacket() {
+  const segment = (physicalId, segmentId, street, streetCode, nodeIdFrom, nodeIdTo, left, right) => ({
+    physicalId, segmentId, street, streetCode, nodeIdFrom, nodeIdTo,
+    leftBlockFaceId: left, rightBlockFaceId: right, geometry: MELVILLE_GEOMETRY,
+  });
+  return {
+    segments: [
+      segment('98053', '0085847', 'MELVILLE STREET', '250420', '0052416', '0048539', '1522611401', '1522607000'),
+      segment('40573', '0085848', 'VAN NEST AVENUE', '271120', '0052416', '0052431', '1522611960', '1522602777'),
+      segment('40574', '0085843', 'VAN NEST AVENUE', '271120', '0052413', '0052416', '1522604786', '1522602779'),
+      segment('56255', '0079542', 'MORRIS PARK AVENUE', '252220', '0048536', '0048539', '1522605705', '1522604784'),
+      segment('56254', '0079547', 'MORRIS PARK AVENUE', '252220', '0048539', '0052429', '1522605705', '1522607001'),
+    ],
+    nodeNames: [
+      { nodeId: '0052416', name: ' VAN NEST AVE' },
+      { nodeId: '0052416', name: ' MELVILLE ST' },
+      { nodeId: '0048539', name: ' MORRIS PARK AVE' },
+      { nodeId: '0048539', name: ' MELVILLE ST' },
+    ],
+  };
+}
+
+describe('LION readiness is index admission, not a rejected relationship', () => {
+  const rejected = [
+    ['missing CSCL fields', { sourceNative: { physicalid: '98053' } }],
+    ['source-version conflict', melvilleRecord({ sourceVersion: { resourceId: 'other', version: '1' } })],
+    ['wrong block faces', melvilleRecord({ leftBlockFaceId: '1522611402' })],
+    ['geometry mismatch', melvilleRecord({
+      geometry: {
+        type: 'MultiLineString',
+        coordinates: [[[-73.80, 40.70], [-73.81, 40.71]]],
+      },
+    })],
+  ];
+
+  it.each(rejected)('does not treat a %s result as catalog readiness', (_label, input) => {
+    const result = evaluateOfficialLionRelationship(input, melvillePacket());
+    expect(result.ok).toBe(false);
+    expect(readOfficialLionIndexAdmission(result)).toBe(false);
+  });
+
+  it('does not treat an unavailable source or a forged admission flag as readiness', () => {
+    expect(readOfficialLionIndexAdmission(null)).toBe(false);
+    expect(readOfficialLionIndexAdmission({
+      ok: false,
+      reason: 'lion_primary_unavailable',
+    })).toBe(false);
+    expect(readOfficialLionIndexAdmission({
+      ok: true,
+      certificationStatus: 'NOT_CERTIFIED',
+      productionAuthoritative: false,
+      indexAdmitted: true,
+      relationshipsFor: async () => new Map(),
+    })).toBe(false);
+  });
+
+  it('keeps a reviewed Melville relationship distinct from index admission', () => {
+    const reconciled = evaluateOfficialLionRelationship(melvilleRecord(), melvillePacket());
+    expect(reconciled).toMatchObject({
+      ok: true,
+      onStreet: 'MELVILLE STREET',
+      segmentId: '0085847',
+      productionAuthoritative: false,
+      certificationStatus: 'NOT_CERTIFIED',
+    });
+    expect(readOfficialLionIndexAdmission(reconciled)).toBe(false);
+  });
+});
 
 describe('local LION prewarm gate', () => {
   const directories = [];
@@ -133,6 +225,8 @@ describe('local LION prewarm gate', () => {
       ok: false,
       reason: 'lion_primary_unavailable',
     });
+    expect(readOfficialLionIndexAdmission(result.catalog)).toBe(false);
+    expect(readOfficialLionIndexAdmission([...relationships.values()][0])).toBe(false);
   });
 
   it('keeps a thrown loader from rejecting and does not log the archive path', async () => {
@@ -183,9 +277,14 @@ describe('same-process LION catalog reuse', () => {
       const { loadOfficialLionPrimary } = require('./curbIntelligence/officialLionPrimaryTopology');
       const env = JSON.parse(process.env.PREWARM_ENV);
       (async () => {
+        const { readOfficialLionIndexAdmission } = require('./curbIntelligence/officialLionPrimaryTopology');
         const first = await prewarmOfficialLionPrimary(env);
         const loaded = await loadOfficialLionPrimary(env);
         const second = await prewarmOfficialLionPrimary(env);
+        const partial = await first.catalog.relationshipsFor([
+          { sourceNative: { physicalid: '98053' } },
+        ]);
+        const partialResult = [...partial.values()][0];
         process.stdout.write(JSON.stringify({
           workerId: localWorkerIdentity().workerId,
           pid: process.pid,
@@ -196,6 +295,10 @@ describe('same-process LION catalog reuse', () => {
           certificationStatus: first.catalog && first.catalog.certificationStatus,
           sameAsLoad: first.catalog === loaded,
           sameAsSecondPrewarm: first.catalog === second.catalog,
+          indexAdmitted: readOfficialLionIndexAdmission(first.catalog),
+          partialRelationshipOk: partialResult.ok === true,
+          partialReason: partialResult.reason || null,
+          partialIsReady: readOfficialLionIndexAdmission(partialResult),
         }));
       })().catch(error => {
         process.stderr.write(error.stack);
@@ -214,6 +317,10 @@ describe('same-process LION catalog reuse', () => {
     expect(report.certificationStatus).toBe('NOT_CERTIFIED');
     expect(report.sameAsLoad).toBe(true);
     expect(report.sameAsSecondPrewarm).toBe(true);
+    expect(report.indexAdmitted).toBe(true);
+    expect(report.partialRelationshipOk).toBe(false);
+    expect(report.partialReason).not.toBe('lion_primary_unavailable');
+    expect(report.partialIsReady).toBe(false);
     expect(report.elapsedMs).toBeGreaterThan(0);
     expect(result.stdout).not.toContain(ARCHIVE);
   }, 20000);
