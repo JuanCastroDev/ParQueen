@@ -204,4 +204,46 @@ describe('canonical source and orchestration deadlines', () => {
     expect(transport).toHaveBeenCalledOnce();
     expect(persistCanonicalCurb).not.toHaveBeenCalled();
   });
+
+  it('drops a completed cache result that lands after the deadline and does not publish it', async () => {
+    const controller = new AbortController();
+    const persistCanonicalCurb = vi.fn(async () => ({ success: true }));
+    const transport = vi.fn(async () => ({
+      status: 200,
+      text: async () => JSON.stringify(proofBody),
+    }));
+    const blockfaceResolver = createPrivateBlockfaceResolver({
+      mode: 'shadow',
+      serviceUrl: 'https://parqueen-test-resolver-uc.a.run.app',
+      getIdToken: async () => 'synthetic-token',
+      transport,
+    });
+    const readCanonicalCache = vi.fn(async () => {
+      controller.abort();
+      return {
+        hit: true,
+        publicSegment: {
+          ruleSummary: { cleaningAvailable: true, rulesResolved: true },
+        },
+        publicRules: [{ category: 'cleaning' }],
+      };
+    });
+    const result = await runCanonicalCurbOrchestrator(request(), {
+      signal: controller.signal,
+      deadlineAt: Date.now() + OVERALL_DEADLINE_MS,
+      persistToken: 'deadline-token',
+      persistAllowed: () => false,
+      fetchFn: vi.fn(async url => ({ ok: true, json: async () => payloadFor(url) })),
+      blockfaceResolver,
+      persistCanonicalCurb,
+      readCanonicalCache,
+      publishUserResolution: true,
+      inFlight: new Map(),
+      telemetry: { emit: vi.fn() },
+    });
+
+    expect(result).toEqual({ protocolVersion: 2, status: 'unsupported', reason: 'source_unavailable' });
+    expect(persistCanonicalCurb).not.toHaveBeenCalled();
+    expect(OVERALL_DEADLINE_MS).toBe(8000);
+  });
 });
