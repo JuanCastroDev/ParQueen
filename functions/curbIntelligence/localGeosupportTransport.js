@@ -1,5 +1,6 @@
 'use strict';
 
+const { randomBytes } = require('node:crypto');
 const { existsSync, mkdtempSync, readFileSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
@@ -125,28 +126,100 @@ function runDocker(bin, args) {
   });
 }
 
-async function readContainerIdSoon(cidFile) {
-  const started = Date.now();
-  let id = readContainerId(cidFile);
-  while (!id && Date.now() - started < 1000) {
-    await new Promise(resolve => { setTimeout(resolve, 50); });
-    id = readContainerId(cidFile);
-  }
-  return id;
+// Every session's container carries a unique name and a matching label, so cleanup can find it
+// without the cidfile and can refuse to touch any container this session did not create.
+const OWNER_LABEL = 'parqueen.function3c.run';
+const CLEANUP_BUDGET_MS = 15000;
+const CLEANUP_MAX_ATTEMPTS = 8;
+const CLI_EXIT_WAIT_MS = 3000;
+const ABSENCE_RECHECK_MS = 250;
+const delay = ms => new Promise(resolve => { setTimeout(resolve, ms); });
+
+function ownedContainer() {
+  const run = randomBytes(8).toString('hex');
+  return { run, name: `parqueen-f3c-${run}` };
 }
 
-async function releaseOwnedContainer(bin, child, cidFile) {
-  killTree(child);
-  const id = await readContainerIdSoon(cidFile);
-  if (!id) {
-    rmSync(join(cidFile, '..'), { recursive: true, force: true });
-    return { ok: true, id: null };
+// Only Docker's own "not found" answer proves absence. Daemon, transport, timeout (124) and spawn
+// (127) failures are "unknown", never "absent".
+function classifyInspect(result, owner) {
+  if (result.status === 0) {
+    const [id = '', label = ''] = result.stdout.trim().split(/\s+/);
+    if (!/^[a-f0-9]{64}$/i.test(id)) return { state: 'unknown', detail: 'unreadable inspect output' };
+    return label === owner.run ? { state: 'owned', id } : { state: 'foreign', id };
   }
-  await runDocker(bin, ['rm', '-f', id]);
-  const inspect = await runDocker(bin, ['inspect', '-f', '{{.State.Running}}', id]);
-  const running = inspect.status === 0 && inspect.stdout.trim() === 'true';
-  rmSync(join(cidFile, '..'), { recursive: true, force: true });
-  return { ok: !running, id };
+  if (/\bNo such (container|object)\b/i.test(result.stderr)) return { state: 'absent' };
+  const detail = result.stderr.trim().split(/\r?\n/).pop() || `docker inspect exited ${result.status}`;
+  return { state: 'unknown', detail: detail.slice(0, 200) };
+}
+
+function inspectOwned(bin, owner) {
+  return runDocker(bin, [
+    'inspect', '--type', 'container',
+    '-f', `{{.Id}} {{index .Config.Labels "${OWNER_LABEL}"}}`,
+    owner.name,
+  ]).then(result => classifyInspect(result, owner));
+}
+
+function waitForCliExit(child, exited) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return Promise.race([exited, delay(CLI_EXIT_WAIT_MS)]);
+}
+
+// Success means Docker reported the owned container absent twice, after the Docker CLI exited, so
+// a container whose create was still in flight is caught. Anything else is reported, not hidden.
+async function releaseOwnedContainer(bin, child, exited, cidFile, owner) {
+  const startedAt = Date.now();
+  killTree(child);
+  await waitForCliExit(child, exited);
+  let id = readContainerId(cidFile);
+  let absentChecks = 0;
+  let last = { state: 'unknown', detail: 'not inspected' };
+  try {
+    for (let attempt = 0; attempt < CLEANUP_MAX_ATTEMPTS && Date.now() - startedAt < CLEANUP_BUDGET_MS; attempt += 1) {
+      last = await inspectOwned(bin, owner);
+      if (last.state === 'absent') {
+        absentChecks += 1;
+        if (absentChecks >= 2) return { ok: true, id, name: owner.name };
+        await delay(ABSENCE_RECHECK_MS);
+        continue;
+      }
+      absentChecks = 0;
+      if (last.state === 'foreign') {
+        return { ok: false, id: last.id, name: owner.name, reason: 'not_owned' };
+      }
+      if (last.state === 'owned') {
+        id = last.id;
+        await runDocker(bin, ['rm', '-f', last.id]);
+        continue;
+      }
+      await delay(ABSENCE_RECHECK_MS);
+    }
+    return {
+      ok: false,
+      id,
+      name: owner.name,
+      reason: last.state === 'owned' ? 'still_present' : 'unverified',
+      detail: last.detail,
+    };
+  } finally {
+    rmSync(join(cidFile, '..'), { recursive: true, force: true });
+  }
+}
+
+function cleanupFailure(error, result) {
+  const label = result.id ? `${result.name} (${result.id})` : result.name;
+  const text = result.reason === 'not_owned'
+    ? `Container name ${result.name} belongs to a container this session did not create; it was not removed.`
+    : result.reason === 'still_present'
+      ? `Container ${label} remained after removal.`
+      : `Container ${label} could not be confirmed removed: ${result.detail}.`;
+  const orphan = namedError('Error', `${error.message} ${text}`);
+  orphan.containerId = result.id;
+  orphan.containerName = result.name;
+  orphan.cleanup = result.reason;
+  orphan.cause = error;
+  return orphan;
 }
 
 let geosupport = null;
@@ -170,11 +243,15 @@ function startGeosupport(image, service, env) {
   const runDirectory = mkdtempSync(join(cidDirectory, 'parqueen-f3c-'));
   const cidFile = join(runDirectory, 'cid');
   const bin = dockerBin(env);
+  const owner = ownedContainer();
   const child = require('node:child_process').spawn(bin, [
     'run', '-i', '--rm', '--cidfile', cidFile,
+    '--name', owner.name, '--label', `${OWNER_LABEL}=${owner.run}`,
     '-v', `${service}:/app`, '-w', '/app', image,
     'python', '-u', '-c', script,
   ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  let cliExited;
+  const exited = new Promise(resolve => { cliExited = resolve; });
   notePhase(env, 'cli_spawn', performance.now() - startedAt);
   let buffer = '';
   let stderr = '';
@@ -188,13 +265,8 @@ function startGeosupport(image, service, env) {
     if (geosupport === session) geosupport = null;
     for (const [signal, onAbort] of listeners) signal.removeEventListener('abort', onAbort);
     const pending = waiters.splice(0);
-    session.failure = releaseOwnedContainer(bin, child, cidFile).then(result => {
-      if (result.ok) return error;
-      const orphan = namedError('Error', `${error.message} Container ${result.id} remained running.`);
-      orphan.containerId = result.id;
-      orphan.cause = error;
-      return orphan;
-    });
+    session.failure = releaseOwnedContainer(bin, child, exited, cidFile, owner)
+      .then(result => (result.ok ? error : cleanupFailure(error, result)));
     for (const waiter of pending) {
       session.failure.then(reason => waiter.reject(reason));
     }
@@ -237,8 +309,14 @@ function startGeosupport(image, service, env) {
   child.stderr.on('data', chunk => {
     stderr = `${stderr}${chunk.toString('utf8')}`.slice(-2000);
   });
-  child.on('exit', code => session.finish(new Error(`Function 3C exited ${code}: ${stderr.slice(-200)}`)));
-  child.on('error', error => session.finish(error));
+  child.on('exit', code => {
+    cliExited();
+    session.finish(new Error(`Function 3C exited ${code}: ${stderr.slice(-200)}`));
+  });
+  child.on('error', error => {
+    cliExited();
+    session.finish(error);
+  });
   let chain = Promise.resolve();
   session.lookup = (tuple, signal) => {
     const run = chain.then(() => new Promise((resolve, reject) => {
