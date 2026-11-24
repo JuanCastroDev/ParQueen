@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { MessageSquare, MapPin, Clock, Navigation, Car } from 'lucide-react';
+import { MessageSquare, MapPin, Clock, Navigation } from 'lucide-react';
 import { MapItem } from './types';
 import { t, useLang } from '../../i18n';
 import { InlineLoader } from '../../components/LoadingScreen';
