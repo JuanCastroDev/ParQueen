@@ -46,8 +46,8 @@ Every loading state comes from `components/LoadingScreen.tsx`:
    `pq_launch_background` (#050d1c, the dark `--color-bg`). The app window and
    the Capacitor WebView (`android.backgroundColor`) use the same color until
    the first web frame, so there is no white flash. `MainActivity` holds the
-   launch screen (`setKeepOnScreenCondition`) until the WebView commits its
-   first frame (`onPageCommitVisible`), capped at 2.5 s, so the native logo
+   launch screen (`setKeepOnScreenCondition`) until the WebView has painted and
+   the boot logo image has loaded (polled after `onPageCommitVisible`), capped at 2.5 s, so the native logo
    hands straight to the identical web boot logo. The splash logo sits 12 dp
    below center because the WebView starts below the status bar.
    Regenerate it with `scripts/android/render-splash-logo.cjs`. iOS still uses its
