@@ -49,11 +49,13 @@ Every loading state comes from `components/LoadingScreen.tsx`:
    launch screen (`setKeepOnScreenCondition`) until the WebView has painted and
    the boot logo image has loaded (polled after `onPageCommitVisible`), capped at 2.5 s. The exit view then stays until the
    WebView reports a frame ready to draw (`postVisualStateCallback`, capped at
-   1 s), and cross-fades out (200 ms) over the identical web boot logo. The system
-   splash is centered on the whole screen, while the WebView starts below the
-   status bar. So the logo settles about half a status bar (13 dp on a
-   24 dp bar) at the hand-off. The platform draws its exit view before app
-   code runs, so this can’t be offset away.
+   1 s). The splash logo is centered on the whole screen, while the web logo is
+   centered in the WebView, which is inset by the system bars. On a Galaxy S20
+   with 3-button navigation the two are about 12 dp apart. So the launch logo
+   first glides (120 ms) onto the web logo's measured position, then the exit
+   view fades out (200 ms). The two logos are never visible apart, and the
+   offset follows each device's real insets; nothing is hard-coded. A gap
+   larger than 48 dp is treated as implausible and skipped.
    Regenerate it with `scripts/android/render-splash-logo.cjs`. iOS still uses its
    storyboard launch screen.
 2. **`index.html` boot frame.** `#root` contains the same markup as
