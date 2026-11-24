@@ -81,4 +81,25 @@ describe('participant success attestation shape', () => {
     expect(isMatchingParticipantAttestation({ ...finder, outcome: 'success' }, finder)).toBe(false);
     expect(isMatchingParticipantAttestation({ ...finder, outcome: 'failed' }, finder)).toBe(false);
   });
+
+  it('binds new claimer success to the current claim generation and compares it on retry', () => {
+    const generation = '11111111-1111-4111-8111-111111111111';
+    const attestation = buildParticipantSuccessAttestation({
+      spotId: 'spot-1',
+      claimerId: 'claimer-1',
+      finderId: 'finder-1',
+      address: '1 Main St',
+      role: 'claimer',
+      createdAt: { toMillis: () => 1_700_000_000_100 },
+      claimGenerationId: generation,
+    });
+    expect(attestation.claimGenerationId).toBe(generation);
+    expect(isMatchingParticipantAttestation(attestation, attestation)).toBe(true);
+    const { claimGenerationId: _legacyGeneration, ...legacy } = attestation;
+    expect(isMatchingParticipantAttestation(legacy, attestation)).toBe(true);
+    expect(isMatchingParticipantAttestation(
+      { ...attestation, claimGenerationId: '22222222-2222-4222-8222-222222222222' },
+      attestation,
+    )).toBe(false);
+  });
 });

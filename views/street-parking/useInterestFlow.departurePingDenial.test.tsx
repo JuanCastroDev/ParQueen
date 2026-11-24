@@ -75,6 +75,9 @@ vi.mock('firebase/firestore', () => ({
 }));
 
 vi.mock('./cancelClaimCallable', () => ({ cancelClaimCallable: vi.fn() }));
+vi.mock('./completeHandoffSuccessCallable', () => ({
+  completeHandoffSuccessCallable: vi.fn(async () => ({ outcome: 'awarded' })),
+}));
 vi.mock('../../utils/errorReporting', () => ({ reportCriticalActionFailure: vi.fn() }));
 
 import { useInterestFlow } from './useInterestFlow';
@@ -139,6 +142,7 @@ async function reachCelebration(getFlow: () => ReturnType<typeof useInterestFlow
   await act(async () => {
     spotListeners.forEach((fn) => fn({
       data: () => ({ status: 'occupied', claimState: 'completed_success' }),
+      metadata: { fromCache: false, hasPendingWrites: false },
     }));
   });
   expect(getFlow().handoffStep).toBe('celebration');
