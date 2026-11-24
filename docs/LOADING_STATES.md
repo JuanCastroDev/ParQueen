@@ -47,9 +47,12 @@ Every loading state comes from `components/LoadingScreen.tsx`:
    the Capacitor WebView (`android.backgroundColor`) use the same color until
    the first web frame, so there is no white flash. `MainActivity` holds the
    launch screen (`setKeepOnScreenCondition`) until the WebView has painted and
-   the boot logo image has loaded (polled after `onPageCommitVisible`), capped at 2.5 s, so the native logo
-   hands straight to the identical web boot logo. The splash logo sits 12 dp
-   below center because the WebView starts below the status bar.
+   the boot logo image has loaded (polled after `onPageCommitVisible`), capped at 2.5 s. It then cross-fades out (100 ms + 200 ms)
+   over the identical web boot logo, with no logo-less frame. The system
+   splash is centered on the whole screen, while the WebView starts below the
+   status bar. So the logo settles about half a status bar (13 dp on a
+   24 dp bar) at the hand-off. The platform draws its exit view before app
+   code runs, so this can’t be offset away.
    Regenerate it with `scripts/android/render-splash-logo.cjs`. iOS still uses its
    storyboard launch screen.
 2. **`index.html` boot frame.** `#root` contains the same markup as

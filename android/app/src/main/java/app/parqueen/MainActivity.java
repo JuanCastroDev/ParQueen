@@ -19,6 +19,8 @@ public class MainActivity extends BridgeActivity {
      */
     private static final long MAX_LAUNCH_SCREEN_HOLD_MS = 2500;
     private static final long WEB_LOGO_POLL_MS = 32;
+    private static final long EXIT_FADE_DELAY_MS = 100;
+    private static final long EXIT_FADE_MS = 200;
 
     /**
      * True once the index.html boot logo (data-pq-boot) has loaded, or once
@@ -41,6 +43,18 @@ public class MainActivity extends BridgeActivity {
         SplashScreen launchScreen = SplashScreen.installSplashScreen(this);
         holdStart = SystemClock.uptimeMillis();
         launchScreen.setKeepOnScreenCondition(() -> !webLogoReady && !launchHoldExpired());
+        // The hold suppresses the app's draws, so the WebView presents its
+        // first frames only after release. Cross-fade the launch screen out
+        // instead of cutting to the WebView. This exit view lives inside the
+        // app window, so its logo already sits exactly over the web logo.
+        launchScreen.setOnExitAnimationListener(provider ->
+            provider.getView().animate()
+                .alpha(0f)
+                .setStartDelay(EXIT_FADE_DELAY_MS)
+                .setDuration(EXIT_FADE_MS)
+                .withEndAction(provider::remove)
+                .start()
+        );
         bridgeBuilder.addWebViewListener(new WebViewListener() {
             @Override
             public void onPageCommitVisible(WebView view, String url) {
