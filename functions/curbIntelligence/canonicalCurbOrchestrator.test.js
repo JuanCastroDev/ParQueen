@@ -152,7 +152,15 @@ describe('runCanonicalCurbOrchestrator', () => {
       segmentId: publicCurbKey(authenticPrimary.identity),
       streetName: 'MARAN PLACE',
       sideLabel: 'North',
-      ruleSummary: { cleaningAvailable: true },
+      ruleSummary: { cleaningAvailable: false },
+      responseVersion: 1,
+      cacheHit: false,
+      identityConfidence: 'high',
+      regulationStatus: 'partial',
+      regulationCompleteness: 'incomplete',
+      regulationAvailability: 'unavailable',
+      publicRules: [],
+      publicSchedules: { cleaning: [], restrictions: [], timeLimited: [], meters: [] },
     });
     expect(deps.resolveCanonicalCurb).toHaveBeenCalledOnce();
     expect(deps.loadCanonicalRules).toHaveBeenCalledOnce();

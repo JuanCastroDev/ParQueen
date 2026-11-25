@@ -118,11 +118,12 @@ describe('A1 response-only user resolution', () => {
     const result = await runCanonicalCurbOrchestrator({ protocolVersion: 2, location }, deps);
     expect(result.status).toBe('high_confidence');
     expect(result.segmentId).toBe(publicCurbKey(authenticPrimary.identity));
+    expect(result.responseVersion).toBe(1);
+    expect(result.regulationStatus).toBe('partial');
+    expect(result.publicRules).toEqual([]);
+    expect(result.ruleSummary.cleaningAvailable).toBe(false);
     expect(deps.persistCanonicalCurb).not.toHaveBeenCalled();
     expect(deps.writes).toEqual([]);
-    expect(Object.keys(result).sort()).toEqual([
-      'protocolVersion', 'ruleSummary', 'segmentId', 'sideLabel', 'status', 'streetName',
-    ].sort());
   });
 
   it('uses the same extended contract for fresh results and trusted cache hits', async () => {
@@ -131,10 +132,11 @@ describe('A1 response-only user resolution', () => {
     expect(fresh.status).toBe('high_confidence');
     expect(fresh.responseVersion).toBe(1);
     expect(fresh.cacheHit).toBe(false);
-    expect(fresh.regulationStatus).toBe('verified');
+    expect(fresh.regulationStatus).toBe('partial');
     expect(fresh.identityConfidence).toBe('high');
-    expect(fresh.publicRules[0]).toMatchObject({ type: 'streetCleaning', source: 'nyc_open_data' });
-    expect(fresh.publicSchedules.cleaning[0]).toMatchObject({ days: ['Mon'], startTime: '08:00' });
+    expect(fresh.publicRules).toEqual([]);
+    expect(fresh.publicSchedules.cleaning).toEqual([]);
+    expect(fresh.ruleSummary.cleaningAvailable).toBe(false);
     expect(freshDeps.persistCanonicalCurb).not.toHaveBeenCalled();
 
     const cachedRules = [{ category: 'cleaning', type: 'streetCleaning', source: 'nyc_open_data', schedules: [{ days: ['Mon'], startTime: '08:00', endTime: '09:30' }] }];
@@ -149,7 +151,10 @@ describe('A1 response-only user resolution', () => {
     expect(cached.status).toBe('high_confidence');
     expect(cached.responseVersion).toBe(1);
     expect(cached.cacheHit).toBe(true);
-    expect(cached.publicSchedules.cleaning).toHaveLength(1);
+    expect(cached.regulationStatus).toBe('partial');
+    expect(cached.publicRules).toEqual([]);
+    expect(cached.publicSchedules.cleaning).toEqual([]);
+    expect(cached.ruleSummary.cleaningAvailable).toBe(false);
     expect(cacheDeps.persistCanonicalCurb).not.toHaveBeenCalled();
     expect(cacheDeps.loadCanonicalRules).not.toHaveBeenCalled();
   });
@@ -241,7 +246,7 @@ describe('A1 response-only user resolution', () => {
       })),
     });
     const empty = await runCanonicalCurbOrchestrator({ protocolVersion: 2, responseVersion: 1, location }, emptyDeps);
-    expect(empty.regulationStatus).toBe('verified_empty');
+    expect(empty.regulationStatus).toBe('unknown');
     expect(empty.publicRules).toEqual([]);
     expect(empty.ruleSummary.cleaningAvailable).toBe(false);
   });
@@ -282,6 +287,40 @@ describe('A1 response-only user resolution', () => {
     expect(hit.regulationStatus).toBe('partial');
     expect(hit.regulationCoverage).toEqual(coverage);
     expect(hit.publicRules[0].type).toBe('streetCleaning');
+  });
+
+  it('suppresses version 1 cache hits when coverage is complete, partial, or missing', async () => {
+    const cachedRules = [{
+      category: 'cleaning', type: 'streetCleaning', source: 'nyc_open_data',
+      schedules: [{ days: ['Mon'], startTime: '08:00', endTime: '09:30', side: 'North' }],
+    }];
+    const shapes = [
+      { cleaning: 'verified', restrictions: 'verified_empty', timeLimits: 'verified_empty', meters: 'verified_empty' },
+      { cleaning: 'verified', restrictions: 'verified_empty', timeLimits: 'verified_empty', meters: 'unknown' },
+      undefined,
+    ];
+    for (const regulationCoverage of shapes) {
+      const cacheDeps = dependencies({
+        readCanonicalCache: vi.fn(async () => ({
+          hit: true,
+          publicSegment: {
+            ...toPublicCurb(identity),
+            ruleSummary: { cleaningAvailable: true, rulesResolved: true },
+            ...(regulationCoverage ? { regulationCoverage } : {}),
+          },
+          publicRules: cachedRules,
+        })),
+      });
+      const cached = await runCanonicalCurbOrchestrator({ protocolVersion: 2, responseVersion: 1, location }, cacheDeps);
+      expect(cached.responseVersion).toBe(1);
+      expect(cached.cacheHit).toBe(true);
+      expect(cached.publicRules).toEqual([]);
+      expect(cached.publicSchedules.cleaning).toEqual([]);
+      expect(cached.regulationStatus).not.toBe('verified');
+      expect(cached.regulationStatus).not.toBe('verified_empty');
+      expect(cached.ruleSummary.cleaningAvailable).toBe(false);
+      expect(cacheDeps.loadCanonicalRules).not.toHaveBeenCalled();
+    }
   });
 
   it('restores main publication only when publishUserResolution is explicitly enabled', async () => {
