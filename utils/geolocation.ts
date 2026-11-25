@@ -163,6 +163,22 @@ export const mapPluginPermissionStatus = (
   return emptySnapshot('prompt', locationServicesEnabled);
 };
 
+/**
+ * Result of an explicit `requestPermissions()` call. Android reports a first "Don't allow" as
+ * `prompt-with-rationale` (it may still ask again later), so right after the dialog that state means
+ * the user declined and maps to `denied` unless some location was granted. `checkPermissions()` keeps
+ * `mapPluginPermissionStatus`, where the same state still means "not decided yet".
+ */
+export const mapRequestedPermissionStatus = (
+  status: { location?: string; coarseLocation?: string },
+  locationServicesEnabled: boolean,
+): LocationPermissionSnapshot => {
+  const mapped = mapPluginPermissionStatus(status, locationServicesEnabled);
+  if (mapped.status !== 'prompt') return mapped;
+  const declined = status.location === 'prompt-with-rationale' || status.coarseLocation === 'prompt-with-rationale';
+  return declined ? emptySnapshot('denied', locationServicesEnabled) : mapped;
+};
+
 const nativeErrorCode = (error: unknown): string => {
   if (typeof error === 'string') return error;
   if (error && typeof error === 'object') {
@@ -355,7 +371,7 @@ export const createNativeGeolocation = (plugin: NativeGeolocationPlugin = Capaci
       if (current.status === 'granted' || current.status === 'denied') return current;
       try {
         const status = await plugin.requestPermissions({ permissions: ['location'] });
-        return mapPluginPermissionStatus(status, true);
+        return mapRequestedPermissionStatus(status, true);
       } catch (error) {
         if (isLocationServicesDisabledError(error)) {
           return emptySnapshot('unavailable', false);
