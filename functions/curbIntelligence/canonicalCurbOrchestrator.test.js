@@ -168,6 +168,19 @@ describe('runCanonicalCurbOrchestrator', () => {
     expect(JSON.stringify(result)).not.toMatch(/1000000001|global|physical|b5sc/);
   });
 
+  it('suppresses version 2 when the product path is on and the Android gate is off', async () => {
+    const deps = dependencies({
+      resolveCanonicalCurb: vi.fn(async () => authenticPrimary),
+      env: { CURB_PRODUCT_PATH: 'on', GCLOUD_PROJECT: 'parkqueen-46475363-ccf36' },
+    });
+    const result = await runCanonicalCurbOrchestrator(request({ responseVersion: 2, platform: 'android' }), deps);
+    expect(result.responseVersion).toBe(1);
+    expect(result.publicRules).toEqual([]);
+    expect(result.ruleSummary).toEqual({ cleaningAvailable: false });
+    expect(result.regulationStatus).not.toBe('verified');
+    expect(result.regulationCoverage).toBeUndefined();
+  });
+
   it('suppresses a responseVersion 2 schedule when the Android release gate is enforced and ineligible', async () => {
     const deps = dependencies({
       resolveCanonicalCurb: vi.fn(async () => authenticPrimary),

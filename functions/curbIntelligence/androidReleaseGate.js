@@ -1,39 +1,55 @@
 'use strict';
 
-const { createHash } = require('node:crypto');
+const { createHash, randomBytes } = require('node:crypto');
+const { localDemoSession } = require('./localGeosupportTransport');
 
 /**
- * Future Android release policy for Street Intelligence.
+ * Android release gate for Street Intelligence. Default off. Not a Play call.
  *
- * The installed production package app.parqueen is versionCode 1. That build
- * is below the coverage-aware minimum. The next Play-distributed build that
- * may receive actionable schedules is versionCode 2. This module does not
- * change the Gradle versionCode and does not publish a store build.
+ * Trust boundary. Firebase App Check on the callable exposes request.app.appId.
+ * It does not expose package, certificate, or versionCode. A client field named
+ * versionCode, platform, uid, or responseVersion is not evidence.
  *
- * Play Integrity's standard verdict can attest the Play package name, the
- * Play App Signing certificate, appRecognitionVerdict, and versionCode. It
- * does not attest the git commit or the embedded web bundle SHA. Those belong
- * in the release record that maps versionCode 2 to one commit at upload time.
- * A sideloaded APK is UNRECOGNIZED_VERSION and is not a Play-recognized build.
+ * Standard Play Integrity (developer.android.com/google/play/integrity):
+ * - requestHash binds a token to one server-calculated request. It is not a
+ *   nonce. Two legitimate checks of the same curb share the business fields
+ *   and must not be rejected merely because those fields hash the same way.
+ * - Google clears verdicts after the same token is decrypted many times. That
+ *   is not an atomic single use across Cloud Functions instances. Two
+ *   overlapping decodeIntegrityToken calls can both return PLAY_RECOGNIZED.
+ * - The replay key is therefore the integrity token digest, consumed once.
+ *   A fresh token for the same location is a new authorization. The same
+ *   token is not.
+ * - Classic API nonces are a different mode. This gate verifies the standard
+ *   requestHash verdict and does not invent a second nonce scheme.
  *
- * The trusted certificate digest is the Play App Signing certificate. It is
- * not in this repository. An empty trust set fails closed.
+ * Binding. The server recomputes requestHash from the curb request, the
+ * authenticated caller uid, and a server-issued challenge. The uid comes from
+ * the callable auth context. The challenge is 128 random bits, stored before
+ * the app asks Play for a token, and echoed inside the hash the app submits
+ * to Play. A token minted for another user, place, or challenge does not match.
  *
- * Firebase App Check on the callable exposes request.app.appId only. A
- * successful App Check token is not a minimum-version verdict.
+ * Production decode and replay storage are not configured. createGooglePlayIntegrityDecoder
+ * never calls Google and never returns a verdict. A function supplied by a
+ * test is ignored when production is not explicitly false. A memory store is
+ * not durable and is rejected on that path. The gate therefore fails closed
+ * if turned on before a Play-distributed versionCode 2 build, the Play App
+ * Signing certificate, a Google decode credential, and a durable replay store exist.
  *
- * Web and iOS cannot satisfy this Android verdict. They need their own gates.
- * CURB_ANDROID_RELEASE_GATE defaults off. Turning it on without a configured
- * Google decoder, replay store, and Play certificate suppresses every
- * responseVersion 2 schedule. Version 1 stays suppressed either way.
+ * Web and iOS do not become eligible by sending a platform string. Product
+ * publication outside the isolated local demo stays closed unless the Android
+ * gate is on and web and iOS are explicitly withheld.
  */
+const GOOGLE_DECODER = Symbol('googlePlayIntegrityDecoder');
 const ANDROID_RELEASE_POLICY = Object.freeze({
   packageName: 'app.parqueen',
   currentProductionVersionCode: 1,
   coverageAwareVersionCode: 2,
   attestationMaxAgeMs: 5 * 60 * 1000,
   clockSkewMs: 60 * 1000,
+  decodeUrl: 'https://playintegrity.googleapis.com/v1/app.parqueen:decodeIntegrityToken',
 });
+const CHALLENGE_PATTERN = /^[A-Za-z0-9_-]{22,128}$/;
 
 function readAndroidReleaseGateConfig(env = {}) {
   const source = env && typeof env === 'object' ? env : {};
@@ -51,6 +67,38 @@ function readAndroidReleaseGateConfig(env = {}) {
   };
 }
 
+function readPlatformReleaseDecisions(env = {}) {
+  const source = env && typeof env === 'object' ? env : {};
+  return {
+    android: source.CURB_ANDROID_RELEASE_GATE === 'on' ? 'play_integrity' : 'off',
+    web: source.CURB_WEB_RELEASE === 'withheld' ? 'withheld' : 'undecided',
+    ios: source.CURB_IOS_RELEASE === 'withheld' ? 'withheld' : 'undecided',
+  };
+}
+
+function assessProductActivationInterlock(env = {}) {
+  const source = env && typeof env === 'object' ? env : {};
+  const decisions = readPlatformReleaseDecisions(source);
+  if (localDemoSession(source)) {
+    return { release: 'local_demo', publishVersion2: true, reason: 'local_demo', decisions };
+  }
+  if (source.CURB_PRODUCT_PATH !== 'on') {
+    return { release: 'product_off', publishVersion2: false, reason: 'product_off', decisions };
+  }
+  if (decisions.android !== 'play_integrity') {
+    return {
+      release: 'blocked', publishVersion2: false, reason: 'product_without_android_gate', decisions,
+    };
+  }
+  if (decisions.web !== 'withheld') {
+    return { release: 'blocked', publishVersion2: false, reason: 'web_release_undecided', decisions };
+  }
+  if (decisions.ios !== 'withheld') {
+    return { release: 'blocked', publishVersion2: false, reason: 'ios_release_undecided', decisions };
+  }
+  return { release: 'android_gate', publishVersion2: true, reason: 'android_gate_required', decisions };
+}
+
 function stableString(value) {
   if (Array.isArray(value)) return `[${value.map(stableString).join(',')}]`;
   if (value && typeof value === 'object') {
@@ -59,27 +107,176 @@ function stableString(value) {
   return JSON.stringify(value);
 }
 
-function streetIntelligenceRequestHash(request) {
+function boundCaller(uid) {
+  return typeof uid === 'string' && uid.length > 0 && uid.length <= 128 && !uid.includes('/');
+}
+
+function streetIntelligenceRequestHash(request, binding = {}) {
   const body = request && typeof request === 'object' ? request : {};
+  const source = binding && typeof binding === 'object' ? binding : {};
   return createHash('sha256').update(stableString({
     protocolVersion: body.protocolVersion,
     responseVersion: body.responseVersion ?? null,
     location: body.location ?? null,
     candidateToken: body.candidateToken || null,
+    challengeId: typeof source.challengeId === 'string' ? source.challengeId : null,
+    authUid: typeof source.authUid === 'string' ? source.authUid : null,
   })).digest('base64url');
 }
 
+function integrityTokenKey(token) {
+  return createHash('sha256').update(String(token)).digest('base64url');
+}
+
+function prune(map, now) {
+  for (const [key, expiry] of map) {
+    if (expiry <= now) map.delete(key);
+  }
+}
+
 function createMemoryReplayStore(now = Date.now) {
-  const seen = new Map();
+  const tokens = new Map();
+  const challenges = new Map();
+  const clock = typeof now === 'function' ? now : () => now;
   return {
-    consume(hash, expiresAt) {
-      const current = now();
-      for (const [key, expiry] of seen) {
-        if (expiry <= current) seen.delete(key);
-      }
-      if (seen.has(hash)) return false;
-      seen.set(hash, expiresAt);
+    durable: false,
+    issueChallenge(id, uid, expiresAt) {
+      prune(challenges, clock());
+      if (!boundCaller(uid) || challenges.has(id)) return false;
+      challenges.set(id, { uid, expiresAt, used: false });
       return true;
+    },
+    challengeIssued(id, uid) {
+      prune(challenges, clock());
+      const row = challenges.get(id);
+      if (!row || row.uid !== uid) return false;
+      if (row.expiresAt <= clock()) return false;
+      return row.used ? 'used' : true;
+    },
+    consumeChallenge(id, uid) {
+      const issued = this.challengeIssued(id, uid);
+      if (issued !== true) return false;
+      challenges.get(id).used = true;
+      return true;
+    },
+    consumeToken(key, expiresAt) {
+      prune(tokens, clock());
+      if (tokens.has(key)) return false;
+      tokens.set(key, expiresAt);
+      return true;
+    },
+  };
+}
+
+function createDurableReplayStore(adapter) {
+  if (!adapter || typeof adapter.claim !== 'function'
+    || typeof adapter.issue !== 'function'
+    || typeof adapter.consumeIssued !== 'function') {
+    throw new Error('replay_store_unconfigured');
+  }
+  return {
+    durable: true,
+    issueChallenge: (id, uid, expiresAt) => adapter.issue(`challenge_${id}`, { uid, expiresAt }),
+    challengeIssued: (id, uid) => adapter.consumeIssued(`challenge_${id}`, uid, true),
+    consumeChallenge: (id, uid) => adapter.consumeIssued(`challenge_${id}`, uid, false),
+    consumeToken: (key, expiresAt) => adapter.claim(`token_${key}`, expiresAt),
+  };
+}
+
+function createFirestoreReplayStore(db, now = Date.now) {
+  if (!db || typeof db.collection !== 'function' || typeof db.runTransaction !== 'function') {
+    throw new Error('replay_store_unconfigured');
+  }
+  const clock = typeof now === 'function' ? now : () => now;
+  const refFor = (key) => db.collection('streetIntelligenceIntegrityReplay').doc(key);
+  return createDurableReplayStore({
+    async claim(key, expiresAt) {
+      const ref = refFor(key);
+      let accepted = false;
+      await db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        if (snap.exists) {
+          accepted = false;
+          return;
+        }
+        tx.create(ref, { expiresAt });
+        accepted = true;
+      });
+      return accepted;
+    },
+    async issue(key, record) {
+      const ref = refFor(key);
+      let accepted = false;
+      await db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        if (snap.exists) {
+          accepted = false;
+          return;
+        }
+        tx.create(ref, { uid: record.uid, expiresAt: record.expiresAt, used: false });
+        accepted = true;
+      });
+      return accepted;
+    },
+    async consumeIssued(key, uid, peek) {
+      const ref = refFor(key);
+      let result = false;
+      await db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        const data = snap.exists && typeof snap.data === 'function' ? snap.data() : null;
+        if (!data || data.uid !== uid || data.expiresAt <= clock()) {
+          result = false;
+          return;
+        }
+        if (data.used === true) {
+          result = 'used';
+          return;
+        }
+        result = true;
+        if (peek !== true) tx.update(ref, { used: true });
+      });
+      return result;
+    },
+  });
+}
+
+function createSerializedClaim(now = Date.now) {
+  const tokens = new Map();
+  const challenges = new Map();
+  const clock = typeof now === 'function' ? now : () => now;
+  let chain = Promise.resolve();
+  const exclusive = (work) => {
+    const run = chain.then(work, work);
+    chain = run.then(() => {}, () => {});
+    return run;
+  };
+  return {
+    claim(key, expiresAt) {
+      return exclusive(async () => {
+        await Promise.resolve();
+        if (tokens.has(key)) return false;
+        await Promise.resolve();
+        tokens.set(key, expiresAt);
+        return true;
+      });
+    },
+    issue(key, record) {
+      return exclusive(async () => {
+        if (challenges.has(key)) return false;
+        challenges.set(key, { ...record, used: false });
+        return true;
+      });
+    },
+    consumeIssued(key, uid, peek) {
+      return exclusive(async () => {
+        await Promise.resolve();
+        const row = challenges.get(key);
+        if (!row || row.uid !== uid || row.expiresAt <= clock()) return false;
+        if (row.used) return 'used';
+        if (peek === true) return true;
+        row.used = true;
+        return true;
+      });
     },
   };
 }
@@ -120,35 +317,68 @@ function assessDecodedPlayIntegrity(decoded, input) {
   const now = input.now;
   if (timestamp > now + config.clockSkewMs) return denied('attestation_expired');
   if (now - timestamp > config.maxAgeMs) return denied('attestation_expired');
-  if (!input.replayStore || typeof input.replayStore.consume !== 'function') {
-    return denied('replay_store_unconfigured');
-  }
-  if (input.replayStore.consume(input.requestHash, timestamp + config.maxAgeMs) !== true) {
-    return denied('replayed');
-  }
   return {
     eligible: true,
     reason: 'play_recognized',
     packageName: config.packageName,
     versionCode,
+    tokenExpiresAt: timestamp + config.maxAgeMs,
   };
 }
 
-/**
- * Fail closed. A client-reported versionCode is never read.
- * production !== false rejects every injected decoder, including a decoder
- * that returns a well-formed local payload. Tests pass production: false.
- */
+function isGoogleDecoder(decode) {
+  return typeof decode === 'function' && decode.kind === GOOGLE_DECODER;
+}
+
+function createGooglePlayIntegrityDecoder() {
+  const decode = async () => {
+    const error = new Error('play_integrity_decoder_unconfigured');
+    error.code = 'unconfigured';
+    throw error;
+  };
+  decode.kind = GOOGLE_DECODER;
+  return decode;
+}
+
+async function issueStreetIntelligenceIntegrityChallenge({ authUid, replayStore, now = Date.now, production = true }) {
+  if (!boundCaller(authUid)) return { issued: false, reason: 'caller_unbound' };
+  if (production !== false && replayStore?.durable !== true) {
+    return { issued: false, reason: 'replay_store_unconfigured' };
+  }
+  if (!replayStore || typeof replayStore.issueChallenge !== 'function') {
+    return { issued: false, reason: 'replay_store_unconfigured' };
+  }
+  const clock = typeof now === 'function' ? now() : now;
+  const challengeId = randomBytes(16).toString('base64url');
+  const expiresAt = clock + ANDROID_RELEASE_POLICY.attestationMaxAgeMs;
+  if (await replayStore.issueChallenge(challengeId, authUid, expiresAt) !== true) {
+    return { issued: false, reason: 'challenge_unbound' };
+  }
+  return { issued: true, challengeId, expiresAt };
+}
+
 async function evaluateAndroidReleaseEligibility(input) {
   const config = input.config || readAndroidReleaseGateConfig();
   if (!config.enforced) return denied('gate_off');
-  const platform = input.request?.platform;
-  if (platform != null && platform !== 'android') return denied('platform_unsupported');
   if (input.production !== false) {
-    if (input.googleDecoder !== true || typeof input.decode !== 'function') {
-      return denied('attestation_unverifiable');
-    }
+    if (!isGoogleDecoder(input.decode)) return denied('attestation_unverifiable');
+    if (input.replayStore?.durable !== true) return denied('replay_store_unconfigured');
   }
+  const authUid = input.authUid;
+  if (!boundCaller(authUid)) return denied('caller_unbound');
+  const challengeId = input.challengeId;
+  if (typeof challengeId !== 'string' || !CHALLENGE_PATTERN.test(challengeId)) {
+    return denied('challenge_unbound');
+  }
+  const replayStore = input.replayStore;
+  if (!replayStore || typeof replayStore.consumeToken !== 'function'
+    || typeof replayStore.consumeChallenge !== 'function'
+    || typeof replayStore.challengeIssued !== 'function') {
+    return denied('replay_store_unconfigured');
+  }
+  const issued = await replayStore.challengeIssued(challengeId, authUid);
+  if (issued === 'used') return denied('challenge_replayed');
+  if (issued !== true) return denied('challenge_unbound');
   if (typeof input.integrityToken !== 'string' || input.integrityToken.length === 0) {
     return denied('attestation_missing');
   }
@@ -160,12 +390,26 @@ async function evaluateAndroidReleaseEligibility(input) {
   } catch {
     return denied('attestation_unverifiable');
   }
-  return assessDecodedPlayIntegrity(decoded, {
+  const requestHash = streetIntelligenceRequestHash(input.request, { authUid, challengeId });
+  const verdict = assessDecodedPlayIntegrity(decoded, {
     config,
-    requestHash: input.requestHash,
+    requestHash,
     now: input.now,
-    replayStore: input.replayStore,
   });
+  if (verdict.eligible !== true) return verdict;
+  const tokenAccepted = await replayStore.consumeToken(
+    integrityTokenKey(input.integrityToken),
+    verdict.tokenExpiresAt,
+  );
+  if (tokenAccepted !== true) return denied('replayed');
+  const challengeAccepted = await replayStore.consumeChallenge(challengeId, authUid);
+  if (challengeAccepted !== true) return denied('challenge_replayed');
+  return {
+    eligible: true,
+    reason: 'play_recognized',
+    packageName: verdict.packageName,
+    versionCode: verdict.versionCode,
+  };
 }
 
 async function resolveAndroidReleaseGate(request, dependencies = {}) {
@@ -176,18 +420,23 @@ async function resolveAndroidReleaseGate(request, dependencies = {}) {
       reason: dependencies.releaseGate.reason || (dependencies.releaseGate.eligible === true ? 'play_recognized' : 'ineligible'),
     };
   }
-  const config = readAndroidReleaseGateConfig(dependencies.env || process.env);
+  const env = dependencies.env || process.env;
+  const interlock = assessProductActivationInterlock(env);
+  if (interlock.publishVersion2 === false && interlock.reason !== 'product_off') {
+    return { enforced: true, eligible: false, reason: interlock.reason };
+  }
+  const config = readAndroidReleaseGateConfig(env);
   if (!config.enforced) return { enforced: false, eligible: false, reason: 'gate_off' };
   const decision = await evaluateAndroidReleaseEligibility({
     config,
     request,
+    authUid: dependencies.callerUid,
+    challengeId: typeof request?.integrityChallengeId === 'string' ? request.integrityChallengeId : '',
     integrityToken: typeof request?.playIntegrityToken === 'string' ? request.playIntegrityToken : '',
-    requestHash: streetIntelligenceRequestHash(request),
     now: typeof dependencies.now === 'function' ? dependencies.now() : Date.now(),
     production: true,
-    decode: dependencies.decodePlayIntegrity,
+    decode: dependencies.playIntegrityGoogleDecoder === true ? createGooglePlayIntegrityDecoder() : undefined,
     replayStore: dependencies.playIntegrityReplay,
-    googleDecoder: dependencies.playIntegrityGoogleDecoder === true,
   });
   return { enforced: true, eligible: decision.eligible === true, reason: decision.reason };
 }
@@ -195,9 +444,17 @@ async function resolveAndroidReleaseGate(request, dependencies = {}) {
 module.exports = {
   ANDROID_RELEASE_POLICY,
   readAndroidReleaseGateConfig,
+  readPlatformReleaseDecisions,
+  assessProductActivationInterlock,
   streetIntelligenceRequestHash,
+  integrityTokenKey,
   createMemoryReplayStore,
+  createDurableReplayStore,
+  createFirestoreReplayStore,
+  createSerializedClaim,
   assessDecodedPlayIntegrity,
+  createGooglePlayIntegrityDecoder,
+  issueStreetIntelligenceIntegrityChallenge,
   evaluateAndroidReleaseEligibility,
   resolveAndroidReleaseGate,
 };
