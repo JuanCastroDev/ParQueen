@@ -33,9 +33,20 @@ describe('localizeScheduleWeekday', () => {
     expect(localizeScheduleClock('8:30 AM')).toBe('8:30 a. m.');
   });
 
+  it('localizes the full-week schedule line without changing the stored phrase', async () => {
+    const { setLang } = await import('../i18n');
+    const { localizeScheduleDescription } = await import('./localizeScheduleDisplay');
+    const stored = 'Every day · 12 AM–11:59 PM';
+    expect(localizeScheduleDescription(stored)).toBe('Every day · 12 AM–11:59 PM');
+    setLang('es');
+    expect(localizeScheduleDescription(stored)).toBe('Todos los días · 12 a. m.–11:59 p. m.');
+    expect(stored).toBe('Every day · 12 AM–11:59 PM');
+  });
+
   it('is what Parking Check uses for the displayed weekday', () => {
     const source = readFileSync(new URL('../views/assistant/ParkingCheckTool.tsx', import.meta.url), 'utf8');
     expect(source).toContain('localizeScheduleWeekday(street.safeUntil.nextDay)');
+    expect(source).toContain('localizeScheduleDescription(street.safeUntil.scheduleDescription)');
     expect(source).not.toContain(".replace('{day}', street.safeUntil.nextDay)");
   });
 });

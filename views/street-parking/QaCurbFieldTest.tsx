@@ -5,6 +5,7 @@ import {
   runQaCurbFieldAttempt,
   type QaFieldReport,
 } from '../../utils/qaCurbFieldTest';
+import { t, useLang } from '../../i18n';
 import { CurbSideCrossSection } from './CurbSideCrossSection';
 import { VisualCurbSelector } from './VisualCurbSelector';
 
@@ -36,6 +37,7 @@ export const QaCurbFieldTest: React.FC<Props> = ({ enabled, onResolve, readGps }
   const firstStatusRef = useRef<string | null>(null);
   const inFlightRef = useRef(false);
 
+  useLang();
   if (!enabled) return null;
 
   const run = (candidateToken?: string) => {
@@ -58,7 +60,7 @@ export const QaCurbFieldTest: React.FC<Props> = ({ enabled, onResolve, readGps }
   };
 
   return (
-    <section className="pointer-events-auto mb-2 w-full max-w-sm self-end rounded-2xl bg-[var(--color-card)] px-3 py-2 text-left text-[12px] text-[var(--color-text)] shadow-lg" aria-label="QA curb field test">
+    <section className="pointer-events-auto mb-2 w-full max-w-sm self-end rounded-2xl bg-[var(--color-card)] px-3 py-2 text-left text-[12px] text-[var(--color-text)] shadow-lg" aria-label={t('qa.curb_test_aria')}>
       <button
         type="button"
         className="pq-mycar-intel-retry"
@@ -67,11 +69,11 @@ export const QaCurbFieldTest: React.FC<Props> = ({ enabled, onResolve, readGps }
       >
         {running
           ? (stage === 'rules'
-            ? 'Checking parking regulations'
+            ? t('qa.curb_test_rules')
             : stage === 'curb'
-              ? 'Identifying your curb'
-              : 'Getting your location')
-          : 'Test curb here'}
+              ? t('qa.curb_test_curb')
+              : t('qa.curb_test_location'))
+          : t('qa.curb_test_action')}
       </button>
       {report && (
         <div className="mt-2 space-y-1">

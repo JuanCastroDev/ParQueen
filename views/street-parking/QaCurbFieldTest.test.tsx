@@ -13,6 +13,7 @@ vi.hoisted(() => {
     length: 0,
   };
 });
+import { setLang } from '../../i18n';
 import { QaCurbFieldTest } from './QaCurbFieldTest';
 import { readSavedSpot, writeSavedSpot, SAVED_SPOT_KEY, type SavedSpot } from '../../utils/savedSpot';
 import { sampleSideConfirmationToken } from '../../utils/sideConfirmationTokenFixture';
@@ -76,6 +77,7 @@ function buttonLabeled(renderer: TestRenderer.ReactTestRenderer, label: string) 
 
 describe('QA curb field test panel', () => {
   afterEach(() => {
+    setLang('en');
     localStorage.removeItem(SAVED_SPOT_KEY);
   });
 
@@ -104,7 +106,7 @@ describe('QA curb field test panel', () => {
         <QaCurbFieldTest enabled onResolve={resolve} readGps={() => gps} />,
       );
     });
-    await act(async () => { buttonLabeled(renderer!, 'Test curb here')!.props.onClick(); });
+    await act(async () => { buttonLabeled(renderer!, 'QA: Test curb here')!.props.onClick(); });
     await act(async () => { buttonLabeled(renderer!, 'Northeast')!.props.onClick(); });
 
     const text = textOf(renderer!);
@@ -136,7 +138,7 @@ describe('QA curb field test panel', () => {
         <QaCurbFieldTest enabled onResolve={resolve} readGps={() => gps} />,
       );
     });
-    await act(async () => { buttonLabeled(renderer!, 'Test curb here')!.props.onClick(); });
+    await act(async () => { buttonLabeled(renderer!, 'QA: Test curb here')!.props.onClick(); });
     await act(async () => { buttonLabeled(renderer!, 'Cancel')!.props.onClick(); });
     expect(textOf(renderer!)).toContain('Fail-closed: cancelled');
     expect(resolve).toHaveBeenCalledTimes(1);
@@ -151,7 +153,7 @@ describe('QA curb field test panel', () => {
         <QaCurbFieldTest enabled onResolve={failed} readGps={() => gps} />,
       );
     });
-    await act(async () => { buttonLabeled(renderer!, 'Test curb here')!.props.onClick(); });
+    await act(async () => { buttonLabeled(renderer!, 'QA: Test curb here')!.props.onClick(); });
     expect(textOf(renderer!)).toContain('Fail-closed: location_quality');
 
     const stalled = vi.fn(() => new Promise<CanonicalCurbResponse>(() => {}));
@@ -161,13 +163,27 @@ describe('QA curb field test panel', () => {
         <QaCurbFieldTest enabled onResolve={stalled} readGps={() => gps} />,
       );
     });
-    await act(async () => { buttonLabeled(renderer!, 'Test curb here')!.props.onClick(); });
+    await act(async () => { buttonLabeled(renderer!, 'QA: Test curb here')!.props.onClick(); });
     await act(async () => { await vi.advanceTimersByTimeAsync(45_000); });
     vi.useRealTimers();
     expect(textOf(renderer!)).toContain('Fail-closed: timeout');
     expect(stalled).toHaveBeenCalledTimes(1);
     expect(localStorage.getItem(SAVED_SPOT_KEY)).toBe(before);
     expect(readSavedSpot()?.curbResolutionStatus).toBe('high_confidence');
+  });
+
+  it('marks the control as QA and translates it without remounting', () => {
+    let renderer!: TestRenderer.ReactTestRenderer;
+    act(() => {
+      renderer = TestRenderer.create(
+        <QaCurbFieldTest enabled onResolve={async () => { throw new Error('should not run'); }} readGps={() => null} />,
+      );
+    });
+    expect(buttonLabeled(renderer, 'QA: Test curb here')).toBeTruthy();
+    act(() => { setLang('es'); });
+    expect(buttonLabeled(renderer, 'QA: Probar el bordillo aquí')).toBeTruthy();
+    act(() => { setLang('en'); });
+    expect(buttonLabeled(renderer, 'QA: Test curb here')).toBeTruthy();
   });
 
   it('renders nothing outside the QA build', () => {

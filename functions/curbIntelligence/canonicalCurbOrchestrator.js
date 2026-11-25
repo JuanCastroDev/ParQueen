@@ -26,6 +26,7 @@ const {
   requestedPublicResponseVersion,
   selectedHasUnresolvedConflicts,
 } = require('./canonicalCurbPublicResponse');
+const { resolveAndroidReleaseGate } = require('./androidReleaseGate');
 const { classifyRegulationCoverage, isRegulationCoverage } = require('./regulationCoverage');
 const {
   proveCanonicalCurbIdentity,
@@ -92,6 +93,7 @@ function highResponse(publicCurb, selected, options = {}) {
     sourceUnavailable: options.sourceUnavailable === true,
     dotState: options.dotState,
     dotReasons: options.dotReasons,
+    releaseGate: options.releaseGate,
   });
 }
 
@@ -282,6 +284,7 @@ async function execute(request, dependencies) {
   }
   const includeExtended = requestIncludesExtendedResponse(request);
   const responseVersion = includeExtended ? requestedPublicResponseVersion(request) : 1;
+  const releaseGate = await resolveAndroidReleaseGate(request, dependencies);
   const cachedCoverage = isRegulationCoverage(cache?.publicSegment?.regulationCoverage)
     ? cache.publicSegment.regulationCoverage : null;
   const cacheUsable = Boolean(cache?.hit && cache.publicSegment)
@@ -307,6 +310,7 @@ async function execute(request, dependencies) {
           cacheHit: true,
           includeExtended,
           responseVersion,
+          releaseGate,
           regulationCoverage: loaded.selectedRules?.regulationCoverage,
           sources: loaded.sources,
           dotComplete: loaded.dotComplete,
@@ -325,6 +329,7 @@ async function execute(request, dependencies) {
         cacheHit: true,
         includeExtended,
         responseVersion,
+        releaseGate,
         regulationCoverage: cachedCoverage,
         dotComplete: summary.rulesResolved === true
           || (summary.cleaningAvailable === true && cachedRules.length > 0),
@@ -351,6 +356,7 @@ async function execute(request, dependencies) {
     cacheHit: false,
     includeExtended,
     responseVersion,
+    releaseGate,
     regulationCoverage: selectedRules.regulationCoverage,
     sources: loaded.sources,
     dotComplete: loaded.dotComplete,

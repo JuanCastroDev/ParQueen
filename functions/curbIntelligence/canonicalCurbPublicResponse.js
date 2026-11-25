@@ -184,7 +184,10 @@ function buildHighConfidenceResponse(publicCurb, selected, options = {}) {
     ruleSummary: { cleaningAvailable: false },
   };
   if (options.includeExtended !== true) return response;
-  if (options.responseVersion === CATEGORY_RESPONSE_VERSION) {
+  const releaseGate = options.releaseGate;
+  const categoryPermitted = options.responseVersion === CATEGORY_RESPONSE_VERSION
+    && (releaseGate?.enforced !== true || releaseGate.eligible === true);
+  if (categoryPermitted) {
     const coverage = isRegulationCoverage(options.regulationCoverage)
       ? options.regulationCoverage
       : classifyRegulationCoverage(options.sources || selected?.sources, selected);
