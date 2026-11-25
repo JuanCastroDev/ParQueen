@@ -34,7 +34,7 @@
 
   --color-overlay: rgba(255, 255, 255, 0.04);
   --mobile-primary-nav-space: calc(96px + env(safe-area-inset-bottom, 0px));
-  --mobile-map-header-width: min(86vw, 372px);
+  --mobile-map-header-width: min(calc(100vw - 8px), 372px);
   /* Unified shell tokens: nav items sit in a centered track inside the full-width docked surface;
      header/search/status chrome is capped at --shell-content-max on wide screens. */
   --shell-nav-track: 398px;
@@ -173,6 +173,21 @@ html, body, #root {
   width: var(--mobile-map-header-width);
 }
 
+/* Android text zoom enlarges the placeholder without enlarging the row.
+   The header adds this class only when the full placeholder no longer fits,
+   and the field keeps the user's text size. */
+.map-header-search-row.is-scan-icon .map-ai-action-label {
+  display: none;
+}
+
+.map-header-search-row.is-scan-icon .map-ai-action {
+  width: 44px;
+  max-width: 44px;
+  min-width: 44px;
+  padding: 0;
+  justify-content: center;
+}
+
 .map-search-shell,
 .map-ai-action,
 .map-status-chip,
@@ -190,7 +205,8 @@ html, body, #root {
   flex: 1 1 auto;
   width: auto;
   min-width: 0;
-  height: 51px;
+  min-height: 51px;
+  height: auto;
   padding-right: 6px;
   border-radius: 16px;
   border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 14%, rgba(70, 100, 150, 0.12));
@@ -223,31 +239,35 @@ html, body, #root {
 .map-search-input {
   min-width: 0;
   box-sizing: border-box;
-  height: 32px;
+  height: auto;
   min-height: 32px;
   padding-right: 4px;
   padding-top: 0;
   padding-bottom: 0;
   color: var(--mobile-shell-text);
-  line-height: 1.4;
+  line-height: 1.25;
   letter-spacing: -0.018em;
-  overflow: visible;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .map-search-input::placeholder {
   color: color-mix(in srgb, var(--mobile-shell-text-muted) 72%, var(--mobile-shell-text) 28%);
-  line-height: 1.4;
-  overflow: visible;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .map-ai-action {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   box-sizing: border-box;
   width: auto;
-  height: 51px;
-  min-width: 92px;
-  min-height: 44px;
-  padding: 0 16px;
+  max-width: 42%;
+  height: auto;
+  min-height: 51px;
+  min-width: 44px;
+  padding: 0 10px;
   gap: 7px;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 34%, rgba(110, 160, 230, 0.22));
@@ -269,7 +289,11 @@ html, body, #root {
   font-size: 13px;
   font-weight: 650;
   letter-spacing: -0.01em;
-  line-height: 1;
+  line-height: 1.1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: color-mix(in srgb, #f2f7ff 72%, var(--mobile-shell-accent) 28%);
 }
 
@@ -754,31 +778,32 @@ html, body, #root {
 @media (max-width: 340px) and (orientation: portrait) {
   .map-search-shell {
     width: auto;
-    padding-right: 10px;
-    padding-left: 10px;
+    padding-right: 8px;
+    padding-left: 8px;
   }
 
   .map-search-content {
-    margin-right: 14px;
-    margin-left: 8px;
-    gap: 8px;
+    margin-right: 0;
+    margin-left: 0;
+    gap: 6px;
   }
 
   .map-search-icon {
-    width: 20px;
-    height: 20px;
+    width: 16px;
+    height: 16px;
   }
 
-  .map-search-input {
-    font-size: 14px;
+  .map-ai-action-label {
+    display: none;
   }
 
   .map-ai-action {
-    width: auto;
-    height: 51px;
-    min-width: 84px;
+    width: 44px;
+    max-width: 44px;
+    min-width: 44px;
     min-height: 44px;
-    padding: 0 12px;
+    padding: 0;
+    justify-content: center;
   }
 }
 

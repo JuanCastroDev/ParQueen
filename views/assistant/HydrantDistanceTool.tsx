@@ -7,6 +7,7 @@ import { readSavedSpot, type SavedSpot } from '../../utils/savedSpot';
 import {
   assessHydrantDistance, type HydrantAssessment, HYDRANT_THRESHOLD_FT,
 } from '../../utils/hydrantDistance';
+import { readQaHydrantFixture } from '../../utils/streetIntelQaHydrant';
 import { HydrantIcon } from './HydrantIcon';
 import { getCurrentPosition } from '../../utils/geolocation';
 
@@ -25,6 +26,8 @@ export interface HydrantLookup {
  * one hydrant implementation in the app.
  */
 export async function lookupNearestHydrant(lat: number, lng: number): Promise<HydrantLookup> {
+  const fixture = readQaHydrantFixture();
+  if (fixture) return fixture;
   try {
     const fn = httpsCallable<{ lat: number; lng: number }, HydrantLookup>(
       getFunctions(getApp(), 'us-central1'), 'checkHydrantDistance',
