@@ -151,6 +151,10 @@ function changedPathsFromDiff(base, head) {
       if (again.status !== 0) return { error: 'changed commits are not available after fetch' };
     }
   }
+  if (['workflow_dispatch', 'release_dispatch'].includes(process.env.GITHUB_EVENT_NAME)) {
+    const ancestry = git(['merge-base', '--is-ancestor', base, head]);
+    if (ancestry.status !== 0) return { error: 'head is not a descendant of base' };
+  }
   const names = git(['diff', '--name-status', '--find-renames', `${base}...${head}`]);
   if (names.status !== 0) return { error: 'git diff could not be read' };
   return pathsFromNameStatus(names.stdout);
@@ -288,8 +292,13 @@ function filesFromArgs(argv) {
 
 function main() {
   const event = process.env.GITHUB_EVENT_NAME || '';
-  if (event === 'workflow_dispatch') {
-    failClosed('workflow_dispatch has no pull-request diff');
+  // Manual exact-SHA release validation is permitted only when the workflow
+  // supplies an explicit trusted base and exact checked-out head. The normal
+  // base/head binding, changed-path classification, trusted-base verifier
+  // check, and founder-evidence verification below remain mandatory.
+  if (event === 'workflow_dispatch'
+      && (!process.env.PR_BASE_SHA || !process.env.PR_HEAD_SHA)) {
+    failClosed('workflow_dispatch requires explicit base and head SHAs');
   }
 
   const explicit = process.argv.includes('--file');
