@@ -13,7 +13,7 @@ vi.mock('firebase/app', () => ({ getApp: vi.fn(() => ({})) }));
 import {
   fetchAllUsers, fetchUserDetail, fetchReportsList, fetchAuditLogList,
   fetchPingsList, fetchParseFailuresList, fetchDashboardCounts,
-  fetchStreetSchedules, fetchStreetIntelligenceHealth,
+  fetchStreetSchedules, fetchStreetIntelligenceHealth, appendSchedulePage,
 } from './adminReadService';
 import { httpsCallable } from 'firebase/functions';
 
@@ -96,8 +96,17 @@ describe('adminReadService — view name and param wiring', () => {
     await fetchStreetSchedules('curb2_public');
     expect(mockCallable).toHaveBeenLastCalledWith({
       view: 'streetScheduleList',
-      params: { segmentId: 'curb2_public', limit: 100 },
+      params: { segmentId: 'curb2_public', cursor: null, limit: 100 },
     });
+    await fetchStreetSchedules('curb2_public', 'rule-100');
+    expect(mockCallable).toHaveBeenLastCalledWith({
+      view: 'streetScheduleList',
+      params: { segmentId: 'curb2_public', cursor: 'rule-100', limit: 100 },
+    });
+    expect(appendSchedulePage(
+      [{ id: 'rule-001', type: null, schedules: [] }],
+      [{ id: 'rule-001', type: null, schedules: [] }, { id: 'rule-101', type: null, schedules: [] }],
+    ).map(rule => rule.id)).toEqual(['rule-001', 'rule-101']);
 
     mockCallable.mockResolvedValue({ data: { activeRules: 0 } });
     await fetchStreetIntelligenceHealth();

@@ -9,17 +9,44 @@ function doc(id, data) {
   return { id, exists: true, data: () => data, ref: { id } };
 }
 
+function queryFor(rows) {
+  let filtered = rows.slice();
+  let limitN = filtered.length;
+  let startAfterId = null;
+  const api = {
+    where(field, op, value) {
+      if (field === 'supersededAt' && op === '==') {
+        filtered = filtered.filter(row => row.data().supersededAt === value);
+      }
+      return api;
+    },
+    orderBy() {
+      filtered = filtered.slice().sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      return api;
+    },
+    limit(n) { limitN = n; return api; },
+    startAfter(snap) { startAfterId = snap.id; return api; },
+    count() { return { get: async () => ({ data: () => ({ count: filtered.length }) }) }; },
+    get: async () => {
+      let page = filtered;
+      if (startAfterId) {
+        const index = page.findIndex(row => row.id === startAfterId);
+        page = index >= 0 ? page.slice(index + 1) : [];
+      }
+      page = page.slice(0, limitN);
+      return { size: page.length, docs: page, empty: page.length === 0 };
+    },
+    doc(ruleId) {
+      const found = rows.find(rule => rule.id === ruleId);
+      return { get: async () => (found ? doc(found.id, found.data()) : { exists: false }) };
+    },
+  };
+  return api;
+}
+
 function fakeDb(state) {
   const segment = state.segment;
   const rules = state.rules;
-  const queryFor = (rows) => ({
-    orderBy() { return this; },
-    limit() { return this; },
-    startAfter() { return this; },
-    where() { return this; },
-    count() { return { get: async () => ({ data: () => ({ count: rows.length }) }) }; },
-    get: async () => ({ size: rows.length, docs: rows, empty: rows.length === 0 }),
-  });
   return {
     collection(name) {
       if (name !== 'streetSegments') throw new Error(name);
@@ -29,13 +56,7 @@ function fakeDb(state) {
             get: async () => (segment && segment.id === id ? doc(id, segment.data) : { exists: false, data: () => undefined }),
             collection(sub) {
               if (sub !== 'streetRules') throw new Error(sub);
-              return {
-                orderBy() { return queryFor(rules); },
-                doc(ruleId) {
-                  const found = rules.find(rule => rule.id === ruleId);
-                  return { get: async () => (found ? doc(found.id, found.data()) : { exists: false }) };
-                },
-              };
+              return queryFor(rules);
             },
           };
         },
@@ -47,6 +68,18 @@ function fakeDb(state) {
       if (name !== 'streetRules') throw new Error(name);
       return queryFor(rules);
     },
+  };
+}
+
+const GENERATION = 'a'.repeat(32);
+const OTHER_GENERATION = 'b'.repeat(32);
+function authority(generationId) {
+  return {
+    scheme: 1,
+    generationId,
+    deadlineAtMs: 2_000_000_000_000,
+    committedAt: 1_000,
+    promotedAt: 1_500,
   };
 }
 
@@ -70,7 +103,10 @@ describe('admin street schedule reads', () => {
         officialBlockFaceId: '1522611401',
         identity: { physicalId: '98053' },
         geometry: { type: 'LineString' },
+        provenance: { importedBy: 'private-job' },
+        source: 'nyc_open_data',
         writeAuthority: null,
+        supersededAt: null,
       })],
     });
     const page = await ADMIN_READ_VIEWS.streetScheduleList(db, { segmentId: 'curb2_public' });
@@ -80,7 +116,32 @@ describe('admin street schedule reads', () => {
       type: 'streetCleaning',
       schedules: [{ side: 'West', days: ['Mon'], startTime: '08:30', endTime: '10:00', type: null }],
     }]);
-    expect(JSON.stringify(page)).not.toMatch(/1522611401|98053|physicalId|LineString/);
+    expect(JSON.stringify(page)).not.toMatch(/1522611401|98053|physicalId|LineString|private-job|nyc_open_data|writeAuthority/);
+  });
+
+  it('returns only the current authoritative rule and continues past filtered pages', async () => {
+    const rules = [
+      doc('rule-active', {
+        type: 'streetCleaning', supersededAt: null, writeAuthority: authority(GENERATION),
+        schedules: [{ side: 'West', days: ['Mon'], startTime: '08:00', endTime: '09:30' }],
+      }),
+      doc('rule-legacy', { type: 'streetCleaning', supersededAt: null, writeAuthority: null, schedules: [] }),
+      doc('rule-mismatched', { type: 'streetCleaning', supersededAt: null, writeAuthority: authority(OTHER_GENERATION), schedules: [] }),
+      doc('rule-superseded', { type: 'streetCleaning', supersededAt: 10, writeAuthority: authority(GENERATION), schedules: [] }),
+    ];
+    const db = fakeDb({
+      segment: { id: 'curb2_public', data: { writeAuthority: authority(GENERATION) } },
+      rules,
+    });
+    const first = await ADMIN_READ_VIEWS.streetScheduleList(db, { segmentId: 'curb2_public', limit: 2 });
+    const second = await ADMIN_READ_VIEWS.streetScheduleList(db, {
+      segmentId: 'curb2_public', limit: 2, cursor: first.nextCursor,
+    });
+    expect(first.rules.map(rule => rule.id)).toEqual(['rule-active']);
+    expect(first.done).toBe(false);
+    expect(second.rules.map(rule => rule.id)).toEqual([]);
+    expect(second.done).toBe(true);
+    expect([...first.rules, ...second.rules].map(rule => rule.id)).toEqual(['rule-active']);
   });
 
   it('rejects an oversized page and a segment id that could cross collections', async () => {

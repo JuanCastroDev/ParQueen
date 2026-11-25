@@ -45,12 +45,18 @@ function loadProductionRules(root = path.resolve(__dirname, '../..')) {
 const STREET_RULES_MIGRATION_PLAN = Object.freeze({
   rulesFileChanged: false,
   founderApprovalRequired: true,
+  executed: false,
+  productPath: 'off',
+  androidReleaseGate: 'off',
+  version1Schedules: 'suppressed',
+  offlineSavedSpotsRemain: true,
   order: Object.freeze([
-    'Deploy the adminReadView schedule views while streetRules reads are still public.',
-    'Ship the admin screens that call those views. Do not deploy the rules first.',
-    'Keep public segment discovery. Coverage-aware clients keep using callable publicRules.',
-    'Founder approves the candidate rules diff. Only then deny nested and collection-group streetRules reads.',
-    'Old installed clients that still read streetRules fail closed to unknown. They do not show a new schedule, and a saved on-device schedule remains until the app is updated.',
+    'Founder-signed Functions provenance.',
+    'Approved deployment of the new admin views.',
+    'Verified admin client rollout.',
+    'Founder approval of the separate two-line Firestore rules change.',
+    'Full candidate-rules regression acceptance.',
+    'Production rules deployment only after all preceding gates pass.',
   ]),
   rollback: Object.freeze([
     'Restore the two allow read: if true lines. That rollback does not publish version 1 schedules.',

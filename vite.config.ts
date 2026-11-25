@@ -94,6 +94,7 @@ export default defineConfig(({ command, mode }) => {
           'firestore.rules.streetRulesCandidate.test.ts',
           'functions/curbIntelligence/androidReleaseGate.emulator.test.js',
           'functions/adminStreetScheduleRead.emulator.test.js',
+          'functions/adminScheduleAuthorization.emulator.test.js',
           'firestore.rules.test.candidate-aware.ts',
           'firestore.rules.test.original-suite.ts',
           'firestore.rules.finder-notice.31ag.test.ts',
