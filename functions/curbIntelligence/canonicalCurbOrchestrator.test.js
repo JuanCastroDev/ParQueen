@@ -168,6 +168,19 @@ describe('runCanonicalCurbOrchestrator', () => {
     expect(JSON.stringify(result)).not.toMatch(/1000000001|global|physical|b5sc/);
   });
 
+  it('suppresses a responseVersion 2 schedule when the Android release gate is enforced and ineligible', async () => {
+    const deps = dependencies({
+      resolveCanonicalCurb: vi.fn(async () => authenticPrimary),
+      releaseGate: { enforced: true, eligible: false, reason: 'attestation_missing' },
+    });
+    const result = await runCanonicalCurbOrchestrator(request({ responseVersion: 2, versionCode: 99 }), deps);
+    expect(result.responseVersion).toBe(1);
+    expect(result.publicRules).toEqual([]);
+    expect(result.ruleSummary).toEqual({ cleaningAvailable: false });
+    expect(result.regulationStatus).not.toBe('verified');
+    expect(result.regulationCoverage).toBeUndefined();
+  });
+
   it('requires canonical Function 3C identity proof before an authentic primary can reach cache', async () => {
     const deps = dependencies({
       resolveCanonicalCurb: vi.fn(async () => authenticPrimary),

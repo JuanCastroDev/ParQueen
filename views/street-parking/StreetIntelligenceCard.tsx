@@ -23,6 +23,7 @@ import {
   type RegulationCoverage,
 } from '../../utils/regulationCoverage';
 import { t, useLang } from '../../i18n';
+import { localizeScheduleDescription } from '../../utils/localizeScheduleDisplay';
 
 interface Props {
   segmentId: string;
@@ -480,12 +481,12 @@ export const StreetIntelligenceCard = ({
           <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)] mb-1">
             {kindTitle(window.type)}
           </span>
-          <span className="block">{window.anytime ? t('street_intel.anytime') : formatMeterWindowLabel({
+          <span className="block">{window.anytime ? t('street_intel.anytime') : localizeScheduleDescription(formatMeterWindowLabel({
             side: window.side,
             days: window.days,
             startTime: window.startTime || '00:00',
             endTime: window.endTime || '00:00',
-          })}</span>
+          }))}</span>
         </div>
       ))}
     </div>

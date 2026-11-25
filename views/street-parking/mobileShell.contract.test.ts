@@ -122,9 +122,12 @@ describe('mobile shell layout contract', () => {
     expect(css).toMatch(/\.map-header-search-row\s*\{[^}]*width:\s*var\(--mobile-map-header-width\)/s);
     expect(css).toMatch(/\.map-search-shell\s*\{[^}]*flex:\s*1 1 auto[^}]*min-height:\s*51px/s);
     expect(css).toMatch(/\.map-search-input\s*\{[^}]*text-overflow:\s*ellipsis/s);
-    const narrowPortrait = css.slice(css.indexOf('@media (max-width: 340px)'));
-    const narrowBlock = narrowPortrait.slice(0, narrowPortrait.indexOf('\n}'));
-    expect(narrowBlock).not.toContain('font-size: 14px');
+    const narrowStart = css.indexOf('@media (max-width: 340px)');
+    const narrow = css.slice(narrowStart, css.indexOf('@media (max-height: 500px)'));
+    expect(narrow).not.toContain('font-size: 14px');
+    expect(narrow).toMatch(/\.map-ai-action-label\s*\{[^}]*display:\s*none/);
+    expect(narrow).toMatch(/\.map-ai-action\s*\{[^}]*width:\s*44px[^}]*min-width:\s*44px/);
+    expect(read('views/street-parking/HeaderBar.tsx')).toContain("aria-label={t('assistant.scan_aria')}");
     expect(css).toMatch(/\.map-status-row\s*\{[^}]*width:\s*var\(--mobile-map-header-width\)/s);
     expect(css).toMatch(/\.map-ai-action\s*\{[^}]*min-height:\s*51px[^}]*min-width:\s*44px/s);
     expect(css).toMatch(/@media \(max-height: 500px\)[\s\S]*?\.map-search-shell\s*\{[^}]*height:\s*52px/s);

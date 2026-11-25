@@ -25,3 +25,9 @@ export function localizeScheduleClock(time: string | null | undefined): string {
     .replace(/\bAM\b/g, t('street_intel.time_am'))
     .replace(/\bPM\b/g, t('street_intel.time_pm'));
 }
+
+/** Display-only. The stored schedule phrase from the calculator stays English. */
+export function localizeScheduleDescription(description: string | null | undefined): string {
+  if (!description) return '';
+  return localizeScheduleClock(description.replace(/^Every day\b/, t('street_intel.every_day')));
+}
