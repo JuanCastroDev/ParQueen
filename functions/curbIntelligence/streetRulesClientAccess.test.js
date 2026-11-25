@@ -41,6 +41,7 @@ describe('streetRules client access inventory', () => {
     expect(health).toContain('fetchStreetIntelligenceHealth');
     expect(health).not.toContain("collectionGroup(");
     expect(admin).toContain('fetchStreetSchedules');
+    expect(admin).toContain('Load more cleaning rules');
     expect(admin).not.toContain("collection(db, 'streetSegments', seg.id, 'streetRules')");
     expect(legacyCard).toContain("collection(db, 'streetSegments', segmentId, 'streetRules')");
     expect(legacyParking).toContain("collection(db, 'streetSegments', spot.segmentId, 'streetRules')");

@@ -22,6 +22,7 @@
 // per view) — nothing beyond that is returned.
 
 const { HttpsError } = require('firebase-functions/v2/https');
+const { FieldPath } = require('firebase-admin/firestore');
 
 const LIST_DEFAULT_LIMIT = 200;
 const LIST_MAX_LIMIT = 500;
@@ -343,14 +344,30 @@ async function streetScheduleList(db, params) {
   const segmentRef = db.collection('streetSegments').doc(params.segmentId);
   const segmentSnap = await segmentRef.get();
   if (!segmentSnap.exists) return { rules: [], nextCursor: null, done: true, segmentFound: false };
-  let query = segmentRef.collection('streetRules').orderBy('__name__').limit(pageLimit);
+  // The previous admin screen queried supersededAt == null before display.
+  // filterAuthoritativeRules does not apply that restriction, so the query does.
+  let query = segmentRef.collection('streetRules')
+    .where('supersededAt', '==', null)
+    .orderBy(FieldPath.documentId())
+    .limit(pageLimit);
   const cursorId = typeof params.cursor === 'string' && params.cursor ? params.cursor : null;
   if (cursorId) {
     if (!SEGMENT_ID_PATTERN.test(cursorId)) throw new HttpsError('invalid-argument', 'cursor must be a string or null.');
     const cursorSnap = await segmentRef.collection('streetRules').doc(cursorId).get();
-    if (cursorSnap.exists) query = query.startAfter(cursorSnap);
+    if (!cursorSnap.exists) {
+      throw new HttpsError('failed-precondition', 'The schedule page cursor is no longer valid. Reload the list.');
+    }
+    query = query.startAfter(cursorSnap);
   }
-  const snap = await query.get();
+  let snap;
+  try {
+    snap = await query.get();
+  } catch (err) {
+    if (cursorId) {
+      throw new HttpsError('failed-precondition', 'The schedule page cursor is no longer valid. Reload the list.');
+    }
+    throw err;
+  }
   const kept = filterAuthoritativeRules(
     segmentSnap.data(),
     snap.docs.map(doc => ({ id: doc.id, ...doc.data() })),

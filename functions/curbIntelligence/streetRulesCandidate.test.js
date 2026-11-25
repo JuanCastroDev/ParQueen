@@ -26,6 +26,19 @@ describe('streetRules candidate diff', () => {
     expect(diff).toHaveLength(2);
     expect(STREET_RULES_MIGRATION_PLAN.rulesFileChanged).toBe(false);
     expect(STREET_RULES_MIGRATION_PLAN.founderApprovalRequired).toBe(true);
+    expect(STREET_RULES_MIGRATION_PLAN.executed).toBe(false);
+    expect(STREET_RULES_MIGRATION_PLAN.productPath).toBe('off');
+    expect(STREET_RULES_MIGRATION_PLAN.androidReleaseGate).toBe('off');
+    expect(STREET_RULES_MIGRATION_PLAN.version1Schedules).toBe('suppressed');
+    expect(STREET_RULES_MIGRATION_PLAN.offlineSavedSpotsRemain).toBe(true);
+    expect(STREET_RULES_MIGRATION_PLAN.order).toEqual([
+      'Founder-signed Functions provenance.',
+      'Approved deployment of the new admin views.',
+      'Verified admin client rollout.',
+      'Founder approval of the separate two-line Firestore rules change.',
+      'Full candidate-rules regression acceptance.',
+      'Production rules deployment only after all preceding gates pass.',
+    ]);
     expect(STREET_RULES_MIGRATION_PLAN.rollback.join(' ')).toMatch(/version 1/);
     expect(STREET_RULES_MIGRATION_PLAN.rollback.join(' ')).toMatch(/pq_saved_spot/);
   });

@@ -84,6 +84,35 @@ describe.skipIf(!isolated)('full ruleset streetRules candidate', () => {
     await assertFails(getDoc(doc(user, 'users', 'someone', 'private', 'account')));
   });
 
+  it('SS-5: admin token cannot read streetRules directly', async () => {
+    const adminToken = testEnv.authenticatedContext('admin-user', { role: 'admin' }).firestore();
+    await assertFails(getDoc(doc(adminToken, 'streetSegments', 'seg-1', 'streetRules', 'rule-1')));
+    await assertSucceeds(getDoc(doc(adminToken, 'streetSegments', 'seg-1')));
+  });
+
+  it('SS-8: public segment reads stay open and streetRules reads are denied', async () => {
+    const anon = testEnv.unauthenticatedContext().firestore();
+    await assertSucceeds(getDoc(doc(anon, 'streetSegments', 'seg-1')));
+    await assertFails(getDoc(doc(anon, 'streetSegments', 'seg-1', 'streetRules', 'rule-1')));
+  });
+
+  it('F: street segments and suspensions stay publicly readable while street rules are denied', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore();
+      await setDoc(doc(db, 'streetSegments', 'seg-s7'), { name: 'Main' });
+      await setDoc(doc(db, 'streetSegments', 'seg-s7', 'streetRules', 'rule-s7'), { days: ['Mon'] });
+      await setDoc(doc(db, 'suspensions', 'curb-s7'), { reason: 'sweep' });
+    });
+    const anon = testEnv.unauthenticatedContext().firestore();
+    const user = testEnv.authenticatedContext('old-client').firestore();
+    await assertSucceeds(getDoc(doc(anon, 'streetSegments', 'seg-s7')));
+    await assertFails(getDoc(doc(anon, 'streetSegments', 'seg-s7', 'streetRules', 'rule-s7')));
+    await assertSucceeds(getDoc(doc(anon, 'suspensions', 'curb-s7')));
+    await assertSucceeds(getDoc(doc(user, 'streetSegments', 'seg-s7')));
+    await assertSucceeds(getDoc(doc(user, 'suspensions', 'curb-s7')));
+    await assertFails(getDoc(doc(user, 'streetSegments', 'seg-s7', 'streetRules', 'rule-s7')));
+  });
+
   it('lets the Admin SDK read a schedule the client rules deny', async () => {
     const snap = await getFirestore(getApps().find(app => app.name === 'rules-admin')!).doc('streetSegments/seg-1/streetRules/rule-1').get();
     expect(snap.exists).toBe(true);

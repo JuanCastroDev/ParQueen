@@ -9,6 +9,7 @@ export default defineConfig({
     include: [
       'functions/curbIntelligence/androidReleaseGate.emulator.test.js',
       'functions/adminStreetScheduleRead.emulator.test.js',
+      'functions/adminScheduleAuthorization.emulator.test.js',
       'firestore.rules.streetRulesCandidate.test.ts',
     ],
   },
