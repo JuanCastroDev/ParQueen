@@ -94,7 +94,15 @@ describe('old and new curb clients', () => {
     expect(clientBeforeCoverageShowsSafeUntil(response)).toBe(false);
   });
 
-  it('records that a version 1 client still treats a coarse verified cleaning rule as Safe Until', () => {
+  it('records the pre-gate version 1 payload as Safe Until and the gated payload as not', () => {
+    expect(clientBeforeCoverageShowsSafeUntil({
+      publicRules: [cleaningRule],
+      regulationStatus: 'verified',
+    })).toBe(true);
+    expect(clientBeforeCoverageShowsSafeUntil({
+      publicRules: [],
+      regulationStatus: 'partial',
+    })).toBe(false);
     const response = parseCanonicalCurbResponse({
       protocolVersion: 2,
       status: 'high_confidence',

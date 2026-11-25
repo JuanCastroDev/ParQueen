@@ -29,18 +29,22 @@ describe('canonicalCurbPublicResponse', () => {
       'protocolVersion', 'ruleSummary', 'segmentId', 'sideLabel', 'status', 'streetName',
     ].sort());
     expect(response.status).toBe('high_confidence');
-    expect(response.ruleSummary).toEqual({ cleaningAvailable: true });
+    expect(response.ruleSummary).toEqual({ cleaningAvailable: false });
     const unknown = buildHighConfidenceResponse(curb, selected, { includeExtended: false });
     expect(unknown.ruleSummary).toEqual({ cleaningAvailable: false });
   });
 
-  it('adds versioned public rules and schedules without private identity fields', () => {
+  it('withholds version 1 schedules without dropping the curb identity', () => {
     const response = buildHighConfidenceResponse(curb, selected, { includeExtended: true, cacheHit: false, dotComplete: true });
     expect(response.responseVersion).toBe(1);
     expect(response.cacheHit).toBe(false);
-    expect(response.publicRules[0].type).toBe('streetCleaning');
-    expect(response.publicRules[0].source).toBe('sweepnyc');
-    expect(response.publicSchedules.cleaning[0]).toMatchObject({ days: ['Monday'], startTime: '09:00', endTime: '10:30' });
+    expect(response.segmentId).toBe(curb.segmentId);
+    expect(response.streetName).toBe('Broadway');
+    expect(response.sideLabel).toBe('West');
+    expect(response.regulationStatus).toBe('partial');
+    expect(response.publicRules).toEqual([]);
+    expect(response.publicSchedules).toEqual({ cleaning: [], restrictions: [], timeLimited: [], meters: [] });
+    expect(response.ruleSummary.cleaningAvailable).toBe(false);
     expect(JSON.stringify(response)).not.toMatch(/identityProof|persistToken|candidateToken|officialBlockFace|"lat"|"lng"/);
   });
 
@@ -53,7 +57,7 @@ describe('canonicalCurbPublicResponse', () => {
   it('recognizes the additive request contract', () => {
     expect(requestIncludesExtendedResponse({ responseVersion: 1 })).toBe(true);
     expect(requestIncludesExtendedResponse({ responseVersion: 2 })).toBe(true);
-    expect(requestIncludesExtendedResponse({ protocolVersion: 2 })).toBe(false);
+    expect(requestIncludesExtendedResponse({ protocolVersion: 2 })).toBe(true);
   });
 
   it('classifies complete, incomplete, conflicting, unavailable, and verified-empty regulations', () => {
@@ -125,7 +129,35 @@ describe('canonicalCurbPublicResponse', () => {
     expect(JSON.stringify(response)).not.toMatch(/1795288288:1744725948|live-current/);
   });
 
-  it('still publishes a version 1 verified cleaning rule when meter coverage is unavailable', () => {
+  it('keeps a verified cleaning rule and a known active restriction on response version 2', () => {
+    const cleaning = {
+      category: 'cleaning', source: 'dot',
+      schedules: [{ days: ['Mon', 'Thu'], startTime: '08:30', endTime: '10:00', side: 'West' }],
+    };
+    const restriction = {
+      category: 'restriction', type: 'noStanding', source: 'dot',
+      schedules: [{ days: ['Mon'], startTime: '08:00', endTime: '18:00', side: 'West', type: 'noStanding' }],
+    };
+    const response = buildHighConfidenceResponse(curb, {
+      rules: [cleaning, restriction], cleaning, restrictions: [restriction], timeLimits: [], meter: null, conflicts: [],
+    }, {
+      includeExtended: true,
+      responseVersion: 2,
+      sources: {
+        dot: { state: 'complete', resourceId: 'nfid-uabd' },
+        parkNyc: { state: 'unavailable', reason: 'source_unavailable' },
+      },
+    });
+    expect(response.responseVersion).toBe(2);
+    expect(response.regulationCoverage).toMatchObject({
+      cleaning: 'verified', restrictions: 'verified', timeLimits: 'verified_empty', meters: 'unknown',
+    });
+    expect(response.publicRules.map(rule => rule.type).sort()).toEqual(['noStanding', 'streetCleaning']);
+    expect(response.ruleSummary.cleaningAvailable).toBe(true);
+    expect(response.regulationStatus).toBe('partial');
+  });
+
+  it('does not publish a version 1 cleaning rule when meter coverage is unavailable', () => {
     const cleaning = {
       category: 'cleaning', source: 'dot',
       schedules: [{ days: ['Mon', 'Thu'], startTime: '08:30', endTime: '10:00', side: 'West' }],
@@ -140,9 +172,10 @@ describe('canonicalCurbPublicResponse', () => {
     });
     expect(response.responseVersion).toBe(1);
     expect(response.regulationCoverage).toBeUndefined();
-    expect(response.regulationStatus).toBe('verified');
-    expect(response.publicRules).toHaveLength(1);
-    expect(response.ruleSummary.cleaningAvailable).toBe(true);
+    expect(response.regulationStatus).toBe('partial');
+    expect(response.publicRules).toEqual([]);
+    expect(response.publicSchedules.cleaning).toEqual([]);
+    expect(response.ruleSummary.cleaningAvailable).toBe(false);
   });
 
   it('omits public rules when an older server does not open the extended response', () => {

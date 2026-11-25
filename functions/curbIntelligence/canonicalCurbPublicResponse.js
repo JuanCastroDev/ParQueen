@@ -41,11 +41,6 @@ function sanitizeAlreadyPublic(rule) {
   });
 }
 
-function cleaningAvailableFrom(publicRules, selected) {
-  if (selected && !Array.isArray(selected) && selected.cleaning != null) return true;
-  return publicRules.some(rule => rule.type === 'streetCleaning' || rule.category === 'cleaning');
-}
-
 function buildPublicSchedules(publicRules) {
   const cleaning = [];
   const restrictions = [];
@@ -143,6 +138,29 @@ function regulationsAreAuthoritative(regulationStatus) {
   return regulationStatus === 'verified';
 }
 
+/**
+ * Clients that request response version 1, or omit the version, treat a
+ * public rule as parking approval when regulationStatus is null or verified.
+ * They also read Firestore when publicRules is omitted. This gate keeps the
+ * extended version 1 fields, returns no schedule, and uses a non-verified
+ * status. It does not claim that unmodeled restrictions were checked.
+ */
+function legacyScheduleSuppression(regulation, withheldRuleCount) {
+  const withhold = Number.isInteger(withheldRuleCount) && withheldRuleCount > 0;
+  if (regulation?.regulationStatus === 'partial' || (regulation?.regulationStatus === 'verified' && withhold)) {
+    return {
+      regulationStatus: 'partial',
+      regulationCompleteness: 'incomplete',
+      regulationAvailability: 'unavailable',
+    };
+  }
+  return {
+    regulationStatus: 'unknown',
+    regulationCompleteness: regulation?.regulationCompleteness === 'incomplete' ? 'incomplete' : 'unknown',
+    regulationAvailability: 'unavailable',
+  };
+}
+
 function buildHighConfidenceResponse(publicCurb, selected, options = {}) {
   if (!publicCurb || typeof publicCurb.segmentId !== 'string'
     || typeof publicCurb.streetName !== 'string'
@@ -157,15 +175,13 @@ function buildHighConfidenceResponse(publicCurb, selected, options = {}) {
     ...options,
     publicRules,
   });
-  const cleaningAvailable = regulation.regulationStatus === 'verified'
-    && cleaningAvailableFrom(publicRules, selected);
   const response = {
     protocolVersion: 2,
     status: 'high_confidence',
     segmentId: publicCurb.segmentId,
     streetName: publicCurb.streetName,
     sideLabel: publicCurb.sideLabel,
-    ruleSummary: { cleaningAvailable },
+    ruleSummary: { cleaningAvailable: false },
   };
   if (options.includeExtended !== true) return response;
   if (options.responseVersion === CATEGORY_RESPONSE_VERSION) {
@@ -188,23 +204,23 @@ function buildHighConfidenceResponse(publicCurb, selected, options = {}) {
       publicSchedules: buildPublicSchedules(categoryRules),
     };
   }
-  const publishRules = regulation.regulationStatus === 'verified' ? publicRules : [];
   return {
     ...response,
+    ...legacyScheduleSuppression(regulation, publicRules.length),
     responseVersion: PUBLIC_RESPONSE_VERSION,
     cacheHit: options.cacheHit === true,
     identityConfidence: 'high',
-    regulationStatus: regulation.regulationStatus,
-    regulationCompleteness: regulation.regulationCompleteness,
-    regulationAvailability: regulation.regulationAvailability,
-    publicRules: publishRules,
-    publicSchedules: buildPublicSchedules(publishRules),
+    publicRules: [],
+    publicSchedules: {
+      cleaning: [], restrictions: [], timeLimited: [], meters: [],
+    },
   };
 }
 
 function requestIncludesExtendedResponse(request) {
-  return request?.responseVersion === PUBLIC_RESPONSE_VERSION
-    || request?.responseVersion === CATEGORY_RESPONSE_VERSION;
+  // An omitted version used to return the short payload. The installed
+  // client treats a missing publicRules array as a Firestore fallback.
+  return Boolean(request) && typeof request === 'object' && !Array.isArray(request);
 }
 
 function requestedPublicResponseVersion(request) {
@@ -226,4 +242,5 @@ module.exports = {
   sanitizeAlreadyPublic,
   classifyRegulationStatus,
   regulationsAreAuthoritative,
+  legacyScheduleSuppression,
 };
