@@ -259,6 +259,12 @@ const es: Record<string, string> = {
     'my_car.cleaning_reminder': 'Avísame 1 h antes de limpieza',
     'my_car.no_cleaning_data': 'No hay datos de limpieza para esta cuadra. Revisa los letreros.',
     'my_car.navigate': 'Navegar a mi carro',
+    'my_car.navigate_short': 'Navegar',
+    'my_car.cleaning_alert': 'Aviso de limpieza',
+    'my_car.move_reminder': 'Aviso de mover',
+    'my_car.reminder_on': 'Sí',
+    'my_car.minutes_left_short': '{min} min',
+    'my_car.cleaning_reminder_detail': 'Te avisaremos 1 hora antes de la limpieza, y otra vez 30 minutos antes de que empiece la limpieza de la calle',
     'my_car.section_private': 'Privado',
     'my_car.remind_to_move': 'Recuérdame moverme',
     'my_car.reminder_private': 'Solo tú recibirás este recordatorio.',
@@ -894,6 +900,8 @@ const es: Record<string, string> = {
 
     // Assistant
     'assistant.scan_title': 'Escanear señal de parqueo',
+    'assistant.scan_action': 'Escanear',
+    'assistant.scan_aria': 'Escanear señal de la calle',
     'assistant.hub_title': 'Herramientas de Parqueo',
     'assistant.back_map_aria': 'Volver al mapa',
     'assistant.check_title': '¿Es seguro aquí?',

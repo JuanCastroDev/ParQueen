@@ -106,7 +106,8 @@ describe('mobile shell layout contract', () => {
     expect(header).toContain('map-header-search-row');
     expect(header).toContain('map-search-shell');
     expect(header).toContain('map-ai-action');
-    expect(header).toContain('Scan');
+    expect(header).toContain("t('assistant.scan_action')");
+    expect(header).toContain("t('assistant.scan_aria')");
     expect(map).toContain('map-status-chip');
     expect(map).toContain('map-control-button');
     expect(map).not.toContain('map-primary-cta');
@@ -115,11 +116,15 @@ describe('mobile shell layout contract', () => {
   it('uses one slimmer portrait header grid while retaining touch and responsive geometry', () => {
     const css = read('index.css');
 
-    expect(css).toContain('--mobile-map-header-width: min(86vw, 372px)');
+    expect(css).toContain('--mobile-map-header-width: min(calc(100vw - 8px), 372px)');
     expect(css).toMatch(/\.map-header-search-row\s*\{[^}]*width:\s*var\(--mobile-map-header-width\)/s);
-    expect(css).toMatch(/\.map-search-shell\s*\{[^}]*flex:\s*1 1 auto[^}]*height:\s*51px/s);
+    expect(css).toMatch(/\.map-search-shell\s*\{[^}]*flex:\s*1 1 auto[^}]*min-height:\s*51px/s);
+    expect(css).toMatch(/\.map-search-input\s*\{[^}]*text-overflow:\s*ellipsis/s);
+    const narrowPortrait = css.slice(css.indexOf('@media (max-width: 340px)'));
+    const narrowBlock = narrowPortrait.slice(0, narrowPortrait.indexOf('\n}'));
+    expect(narrowBlock).not.toContain('font-size: 14px');
     expect(css).toMatch(/\.map-status-row\s*\{[^}]*width:\s*var\(--mobile-map-header-width\)/s);
-    expect(css).toMatch(/\.map-ai-action\s*\{[^}]*height:\s*51px[^}]*min-height:\s*44px/s);
+    expect(css).toMatch(/\.map-ai-action\s*\{[^}]*min-height:\s*51px[^}]*min-width:\s*44px/s);
     expect(css).toMatch(/@media \(max-height: 500px\)[\s\S]*?\.map-search-shell\s*\{[^}]*height:\s*52px/s);
     expect(css).toMatch(/@media \(max-height: 500px\)[\s\S]*?\.map-ai-action\s*\{[^}]*height:\s*52px[^}]*min-height:\s*44px/s);
     expect(css).toMatch(/@media \(min-width: 768px\)[\s\S]*?\.map-search-shell\s*\{[^}]*height:\s*50px/s);

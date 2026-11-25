@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { db } from '../../firebase';
 import { collection, doc, getDoc, getDocs, orderBy, query, where } from 'firebase/firestore';
 import { AlertTriangle, Car, CheckCircle2, HelpCircle, MapPin, RefreshCw, ScanLine } from 'lucide-react';
-import { t } from '../../i18n';
+import { t, useLang } from '../../i18n';
+import { localizeScheduleClock, localizeScheduleWeekday } from '../../utils/localizeScheduleDisplay';
 import { readSavedSpot, effectiveParkingSide, type SavedSpot } from '../../utils/savedSpot';
 import {
   computeSafeUntil, toNYCDateKey, addNYCDateKeyDays, MAX_FORWARD_SEARCH_DAYS_AHEAD,
@@ -120,6 +121,7 @@ export const ParkingCheckTool = ({
   onScanSign?: () => void;
   onViewOnMap?: () => void;
 }) => {
+  useLang();
   const [spot, setSpot] = useState<SavedSpot | null | undefined>(undefined);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<ParkingCheckResult | null>(null);
@@ -240,8 +242,8 @@ export const ParkingCheckTool = ({
         detail={
           (result.street === 'clear' || result.street === 'coverage_incomplete') && street?.safeUntil?.nextDay
             ? t(result.street === 'coverage_incomplete' ? 'check.street_next_cleaning' : 'check.street_next')
-                .replace('{day}', street.safeUntil.nextDay)
-                .replace('{time}', street.safeUntil.nextTime ?? '')
+                .replace('{day}', localizeScheduleWeekday(street.safeUntil.nextDay))
+                .replace('{time}', localizeScheduleClock(street.safeUntil.nextTime))
             : result.street === 'active_restriction' && street?.safeUntil?.scheduleDescription
               ? street.safeUntil.scheduleDescription
               : null

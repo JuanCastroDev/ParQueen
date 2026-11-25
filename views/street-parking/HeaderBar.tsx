@@ -67,7 +67,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
     useLang();
     return (
         <header style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }} className="map-mobile-header w-full flex flex-col gap-2.5 pointer-events-auto">
-            <div className="map-header-search-row max-w-none md:max-w-[var(--shell-content-max)] mx-auto flex items-center gap-2.5">
+            <div className="map-header-search-row max-w-none md:max-w-[var(--shell-content-max)] mx-auto flex items-center gap-2">
                 <div data-tour="search" className="map-search-shell relative flex-1 min-w-0 flex items-center transition-all duration-300">
                     {/* Stage A: the docked nav Profile tab replaces this at every width (same setView(PROFILE)).
                         Kept in the DOM, hidden, so the tour target is not deleted. */}
@@ -75,7 +75,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
                         <UserAvatar user={user} onClick={() => setView(AppView.PROFILE)} />
                     </span>
 
-                    <div className="map-search-content flex-1 min-w-0 ml-2.5 mr-4 flex items-center gap-2">
+                    <div className="map-search-content flex-1 min-w-0 ml-1.5 mr-1.5 flex items-center gap-1.5">
                         <Search size={20} strokeWidth={2} className="map-search-icon" />
                         <input
                             ref={inputRef}
@@ -114,13 +114,13 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
                 <button
                     data-tour="ai"
                     type="button"
-                    aria-label="Scan street sign"
-                    title="Scan"
+                    aria-label={t('assistant.scan_aria')}
+                    title={t('assistant.scan_action')}
                     onClick={() => setView(AppView.AI_ASSISTANT)}
-                    className="map-ai-action flex items-center justify-center gap-1.5 rounded-full active:scale-95 transition-all shrink-0"
+                    className="map-ai-action flex items-center justify-center gap-1.5 rounded-full active:scale-95 transition-all"
                 >
                     <Camera size={16} strokeWidth={2.05} aria-hidden="true" />
-                    <span className="map-ai-action-label">Scan</span>
+                    <span className="map-ai-action-label">{t('assistant.scan_action')}</span>
                 </button>
 
                 <button

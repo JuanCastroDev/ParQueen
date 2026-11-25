@@ -2418,11 +2418,11 @@ export const MapView: React.FC<MapViewProps> = ({
                                     mapRef.current.flyTo({ center: dest, zoom: 16 });
                                     setShowSessionSheet(false);
                                 }}
-                                aria-label="Navigate to my car"
+                                aria-label={t('my_car.navigate')}
                                 className="pq-mycar-nav"
                             >
                                 <Navigation size={14} />
-                                <span>Navigate</span>
+                                <span>{t('my_car.navigate_short')}</span>
                             </button>
                         </section>
 
@@ -2532,30 +2532,32 @@ export const MapView: React.FC<MapViewProps> = ({
                                 aria-pressed={cleaningAvailable && reminderEnabled}
                                 className={`pq-mycar-remind-tile${cleaningAvailable && reminderEnabled ? ' is-on' : ''}`}
                             >
-                                <span className="pq-mycar-remind-on" aria-hidden="true">On</span>
+                                <span className="pq-mycar-remind-on" aria-hidden="true">{t('my_car.reminder_on')}</span>
                                 <div className="pq-mycar-remind-tile-icon">
                                     <Bell size={16} />
                                 </div>
-                                <span className="pq-mycar-remind-tile-label">Cleaning alert</span>
+                                <span className="pq-mycar-remind-tile-label">{t('my_car.cleaning_alert')}</span>
                             </button>
                             <button
                                 onClick={() => setShowRemindPanel(v => !v)}
                                 aria-expanded={showRemindPanel || !!parkingTimer.timer}
                                 className={`pq-mycar-remind-tile${parkingTimer.timer || showRemindPanel ? ' is-on' : ''}`}
                             >
-                                <span className="pq-mycar-remind-on" aria-hidden="true">On</span>
+                                <span className="pq-mycar-remind-on" aria-hidden="true">{t('my_car.reminder_on')}</span>
                                 <div className="pq-mycar-remind-tile-icon">
                                     <Clock size={16} />
                                 </div>
                                 <span className="pq-mycar-remind-tile-label">
-                                    {parkingTimer.timer ? <>{parkingTimer.minutesRemaining}m left</> : <>Move reminder</>}
+                                    {parkingTimer.timer
+                                        ? t('my_car.minutes_left_short', { min: parkingTimer.minutesRemaining })
+                                        : t('my_car.move_reminder')}
                                 </span>
                             </button>
                         </div>
 
                         {cleaningAvailable && nextCleaningAt && reminderEnabled && (
                             <p className="pq-mycar-remind-note">
-                                We'll remind you <strong>1 hour before</strong> cleaning, and again at <strong>30 minutes before</strong> street cleaning starts
+                                {t('my_car.cleaning_reminder_detail')}
                             </p>
                         )}
 
