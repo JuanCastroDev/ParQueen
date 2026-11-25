@@ -18,10 +18,20 @@ A run dispatched **from `main`** with `release_sha`, `release_branch` and `basel
 3. Records the release and baseline tree SHAs and the exact changed-file inventory (name-status and its sha256).
 4. Rejects any change to Functions, rules, indexes, Firebase project/deploy config other than `hosting.headers`,
    runtime source, CI policy or workflows, release preflight, fixtures, S7, claim/handoff/lifecycle client files,
-   Street Intelligence client logic, dependency lockfiles or dependency sets, gate scripts in `package.json`,
-   test/build/TypeScript verification config, secret-scan config, and native Firebase credentials.
-5. Runs the provenance guard from the baseline's archived verifier, which must be byte-identical to `main`'s trusted
-   copy, and requires `PROVENANCE_GUARD: PASS`.
+   Street Intelligence client logic, dependency lockfiles, package-manager config (`.npmrc` etc.), test/build/
+   TypeScript verification config, the production build guard, secret-scan config, and native Firebase credentials.
+   `package.json` must be identical to the baseline except for script changes listed in
+   `REVIEWED_PACKAGE_SCRIPT_CHANGES` with exact before/after digests (today only `test:street-intel`); any npm
+   lifecycle script (`preinstall`, `install`, `postinstall`, `prepare`, `prepack`, any `pre*`/`post*`) must not change.
+5. Provenance, in two independent parts, both required:
+   - **Historical verifier.** The baseline's own `provenance-change-guard.mjs`, `provenance-evidence.mjs` and trust
+     anchor are recognized only by the git blob ids and sha256 digests reviewed in
+     `release-production-baselines.json` (`verifier.historical`). They are run from exactly those bytes against
+     `baseline...release` and must report `PROVENANCE_GUARD: PASS`.
+   - **Current policy.** `main`'s verifier files must match the reviewed `verifier.currentPolicy` digests, and the
+     current guard's `decisionForPath` must classify every changed path `clear`. A newer, stricter policy therefore
+     still applies to an old baseline. Any other verifier version on either side fails closed until the record is
+     re-reviewed. There is no founder-evidence route here: exact-SHA releases may not touch critical paths.
 6. Checks out the release (and, separately, the baseline) detached, confirms commit, tree and clean tracked state,
    and runs every PR Gate suite in PR Gate's order: npm ci, general PR unit suite, `tsc`, production build, PostHog
    release assertion, Playwright smoke/accessibility, Functions install (npm 10), Sharp checks, Functions index load,
@@ -31,8 +41,13 @@ A run dispatched **from `main`** with `release_sha`, `release_branch` and `basel
    disabled, and fails on any result located in a file the release changes.
 9. Re-checks at the end that the branch still points at `release_sha`.
 
-Disposition: **PASS** only if every release check passed. A release-only failure is **FAIL**. A failure that the
-baseline shares under the same CI is **BLOCKED** and needs an explicit founder disposition; it is never PASS.
+Disposition is fail-closed. **PASS** requires all of: authorization and provenance records with `ok: true`; complete
+evidence for **both** release and baseline (commit and tree matching the authorized identities, an outcomes file
+with exactly the 17 expected checks, each `0` or `1`, no duplicates or unknown names); a real unit-test report
+(`numTotalTests > 0`, no failures) when unit tests pass; every release check `0`; gitleaks and both CodeQL languages
+exit `0`; and a successful branch-head re-check. Anything missing, malformed or unknown is **FAIL**. A failure the
+baseline shares under the same CI is **BLOCKED** (founder disposition required), never PASS. A missing baseline
+can never produce PASS.
 
 Evidence: artifact `exact-sha-evidence-<release_sha>` (`evidence.json`, `evidence.md`, 90-day retention) with the
 workflow ref and SHA, run id, release and baseline commits and trees, changed-file hash, per-check outcomes for
@@ -58,9 +73,8 @@ tree, baseline and workflow SHA.
 
 ## Governance
 
-- `scripts/ci/release-exact-sha.mjs`, its test and `release-production-baselines.json` are provenance-critical
-  (`scripts/ci/`). Adding or changing them needs founder-signed FOUNDER-EXECUTED evidence for the exact PR head.
-- The workflow file itself is classified `clear` by the current guard although it defines release evidence. A policy
-  amendment adding it to the guard's `POLICY_FILES` is recommended; it is not part of this change.
-- If `main`'s trusted verifier changes after a baseline was approved, the binding check fails closed until a
-  founder decision addresses that baseline.
+- The workflow, `scripts/ci/release-exact-sha.mjs`, its test and `release-production-baselines.json` are
+  provenance-critical (the workflow is listed in the guard's `POLICY_FILES`; the rest are under `scripts/ci/`).
+  Adding or changing any of them needs founder-signed FOUNDER-EXECUTED evidence for the exact PR head.
+- When `main`'s verifier changes (as PR #383 did), `verifier.currentPolicy` no longer matches and every exact-SHA run
+  fails closed until a reviewed change updates the record. That update is itself provenance-critical.

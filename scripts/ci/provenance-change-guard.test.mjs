@@ -89,6 +89,7 @@ describe('provenance change classification', () => {
     expect(decisionForPath('scripts/ci/provenance-change-guard.mjs')).toBe('critical');
     expect(decisionForPath('scripts/ci/general-pr-suite.mjs')).toBe('critical');
     expect(decisionForPath('.github/workflows/pr-gate.yml')).toBe('critical');
+    expect(decisionForPath('.github/workflows/release-exact-sha-verify.yml')).toBe('critical');
     expect(decisionForPath('data/runtime-source/runtime-source-artifact.json')).toBe('critical');
   });
 

@@ -1,26 +1,29 @@
 // Exact-SHA release verification helper. Runs only from the trusted main checkout
 // (.github/workflows/release-exact-sha-verify.yml). It never executes code from the release
-// commit: it reads that commit as git data, applies the release scope policy, and later turns the
-// verify jobs' recorded outcomes into one PASS / FAIL / BLOCKED disposition.
+// commit: it reads that commit as git data, applies the release scope policy, binds provenance
+// to reviewed verifier digests, and turns the verify jobs' recorded outcomes into one
+// PASS / FAIL / BLOCKED disposition.
 //
 //   node scripts/ci/release-exact-sha.mjs authorize   (env RELEASE_SHA, RELEASE_BRANCH, BASELINE_SHA, OUT_DIR)
+//   node scripts/ci/release-exact-sha.mjs provenance  (env RELEASE_SHA, BASELINE_SHA, OUT_DIR)
 //   node scripts/ci/release-exact-sha.mjs recheck     (env RELEASE_SHA, RELEASE_BRANCH)
 //   node scripts/ci/release-exact-sha.mjs codeql      (env SARIF_DIR, CHANGED_FILES)
-//   node scripts/ci/release-exact-sha.mjs report      (env EVIDENCE_DIR, OUT_DIR, plus run identity)
+//   node scripts/ci/release-exact-sha.mjs report      (env EVIDENCE_DIR, OUT_DIR, BRANCH_UNCHANGED, run identity)
 //
 // A green result applies only to the exact release commit, tree, baseline and workflow revision
 // it records. It is not the required PR Gate check and does not authorize a deployment.
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const BASELINES_FILE = path.join(MODULE_DIR, 'release-production-baselines.json');
 
-// Local tests may point at a fixture allowlist. Inside GitHub Actions only the reviewed file counts.
+// Local tests may point at a fixture record. Inside GitHub Actions only the reviewed file counts.
 export function baselinesPath(env = process.env) {
   if (env.GITHUB_ACTIONS === 'true') return BASELINES_FILE;
   return env.PARQUEEN_RELEASE_BASELINES ? path.resolve(env.PARQUEEN_RELEASE_BASELINES) : BASELINES_FILE;
@@ -28,6 +31,13 @@ export function baselinesPath(env = process.env) {
 
 export const FULL_SHA = /^[0-9a-f]{40}$/;
 export const RELEASE_BRANCH = /^release\/[A-Za-z0-9][A-Za-z0-9._-]{0,80}(?:\/[A-Za-z0-9][A-Za-z0-9._-]{0,80})?$/;
+export const VERIFIER_FILES = [
+  'scripts/ci/provenance-change-guard.mjs',
+  'scripts/ci/provenance-evidence.mjs',
+  'scripts/ci/provenance-trust-anchor.json',
+];
+
+const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
 // Paths a narrow client release must never change. A hit is a scope violation, not a warning.
 export const FORBIDDEN = [
@@ -50,23 +60,30 @@ export const FORBIDDEN = [
   // are reviewed through the changed-file inventory instead.
   { test: p => /^(utils|services|hooks|views\/street-parking)\/[^/]*(curb|streetIntel|qaCurb)/i.test(p), why: 'Street Intelligence' },
   { test: p => /^(package-lock\.json|npm-shrinkwrap\.json)$/.test(p), why: 'root dependency lockfile' },
+  { test: p => /^\.(npmrc|yarnrc(\.yml)?|pnpmfile\.cjs)$/.test(p) || p === 'pnpm-lock.yaml', why: 'package manager config (install hooks)' },
   { test: p => p === 'android/app/google-services.json' || p.startsWith('ios/App/App/GoogleService-Info'), why: 'native Firebase credentials' },
   // The verification itself must not be weakened by the commit it verifies.
   { test: p => /^(vite|vitest)[^/]*\.config\.[cm]?[jt]s$/.test(p) || /^playwright\.config\.[cm]?[jt]s$/.test(p), why: 'test or build verification config' },
+  { test: p => /^(productionBuildConfig|sentryRelease)\.[cm]?[jt]s$/.test(p), why: 'production build guard' },
   { test: p => /^tsconfig[^/]*\.json$/.test(p), why: 'TypeScript verification config' },
   { test: p => /^\.gitleaks(\.toml|ignore)$/.test(p), why: 'secret-scan config' },
 ];
 
-// package.json scripts that the verification workflow runs. They must be byte-identical.
-export const GATE_SCRIPTS = [
-  'build', 'verify:posthog:release', 'test:e2e', 'test:functions', 'test:functions:isolated',
-  'test:rules', 'test:rules:unit', 'test:storage:rules', 'test:storage:rules:unit',
-];
+// npm runs these (and pre<x>/post<x> around any script it runs) without being asked.
+export const LIFECYCLE_SCRIPTS = new Set([
+  'preinstall', 'install', 'postinstall', 'prepare', 'preprepare', 'postprepare',
+  'prepublish', 'prepublishOnly', 'prepack', 'postpack', 'dependencies',
+]);
+export const isLifecycleScript = name => LIFECYCLE_SCRIPTS.has(name) || /^(pre|post)/.test(name);
 
-// Files that may change only in the narrow way described.
-export const SEMANTIC = {
-  'firebase.json': 'only hosting.headers may change',
-  'package.json': 'dependencies, devDependencies, optionalDependencies, overrides, engines and gate scripts must not change',
+// The only package.json changes a release may carry: exact, reviewed before/after values (sha256
+// of the script string). Everything else in package.json must be identical to the baseline.
+export const REVIEWED_PACKAGE_SCRIPT_CHANGES = {
+  // Sign Scanner retired utils/assistantTools.test.ts; this script now lists utils/savedSpot.test.ts.
+  'test:street-intel': {
+    before: 'a1cd2a7d77e0f9bed9a42e9983c6930625b5171a51700e9aabacd88c2a132d2a',
+    after: 'f9f69ea50adf187e18aa9e8cbeef7557953b83cbfcec435c77950f066d032fc3',
+  },
 };
 
 export function normalize(file) {
@@ -95,6 +112,26 @@ const stableJson = value => JSON.stringify(value, (k, v) => (v && typeof v === '
   ? Object.fromEntries(Object.keys(v).sort().map(key => [key, v[key]]))
   : v));
 
+export function packageJsonViolation(before, after, reviewed = REVIEWED_PACKAGE_SCRIPT_CHANGES) {
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  for (const key of keys) {
+    if (key === 'scripts') continue;
+    if (stableJson(before[key] ?? null) !== stableJson(after[key] ?? null)) return `package.json changes ${key}`;
+  }
+  const a = before.scripts || {};
+  const b = after.scripts || {};
+  for (const name of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    if (a[name] === b[name]) continue;
+    if (isLifecycleScript(name)) return `package.json changes lifecycle script ${name}`;
+    const approved = reviewed[name];
+    const hash = v => (typeof v === 'string' ? sha256(v) : null);
+    if (!approved || approved.before !== hash(a[name]) || approved.after !== hash(b[name])) {
+      return `package.json changes unreviewed script ${name}`;
+    }
+  }
+  return null;
+}
+
 export function semanticViolation(file, beforeText, afterText) {
   let before; let after;
   try {
@@ -113,17 +150,11 @@ export function semanticViolation(file, beforeText, afterText) {
     };
     return stableJson(strip(before)) === stableJson(strip(after)) ? null : 'firebase.json changes more than hosting.headers';
   }
-  if (file === 'package.json') {
-    for (const key of ['dependencies', 'devDependencies', 'optionalDependencies', 'overrides', 'engines']) {
-      if (stableJson(before[key] ?? null) !== stableJson(after[key] ?? null)) return `package.json changes ${key}`;
-    }
-    for (const script of GATE_SCRIPTS) {
-      if ((before.scripts?.[script] ?? null) !== (after.scripts?.[script] ?? null)) return `package.json changes gate script ${script}`;
-    }
-    return null;
-  }
+  if (file === 'package.json') return packageJsonViolation(before, after);
   return null;
 }
+
+export const SEMANTIC = new Set(['firebase.json', 'package.json']);
 
 export function scopeViolations(entries, readBlob) {
   const violations = [];
@@ -131,8 +162,9 @@ export function scopeViolations(entries, readBlob) {
     for (const p of [entry.path, entry.from].filter(Boolean)) {
       const rule = FORBIDDEN.find(r => r.test(p));
       if (rule) violations.push({ path: p, why: rule.why });
+      if (SEMANTIC.has(p) && p !== entry.path) violations.push({ path: p, why: `${p} was renamed` });
     }
-    if (SEMANTIC[entry.path]) {
+    if (SEMANTIC.has(entry.path)) {
       const problem = semanticViolation(entry.path, readBlob('baseline', entry.path), readBlob('release', entry.path));
       if (problem) violations.push({ path: entry.path, why: problem });
     }
@@ -155,6 +187,7 @@ export function validateInputs({ releaseSha, releaseBranch, baselineSha }, basel
 
 function git(args, opts = {}) {
   const res = spawnSync('git', args, {
+    cwd: opts.cwd,
     encoding: opts.buffer ? undefined : 'utf8',
     maxBuffer: 256 * 1024 * 1024,
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' },
@@ -162,10 +195,10 @@ function git(args, opts = {}) {
   return { status: res.status, stdout: res.stdout, stderr: String(res.stderr || '') };
 }
 
-function fail(reason, out) {
+function fail(reason, out, file = 'authorize.json') {
   console.error('RELEASE_EXACT_SHA: FAIL_CLOSED');
   console.error(reason);
-  if (out) writeFileSync(path.join(out, 'authorize.json'), JSON.stringify({ ok: false, reason }, null, 1));
+  if (out) writeFileSync(path.join(out, file), JSON.stringify({ ok: false, reason }, null, 1));
   process.exit(1);
 }
 
@@ -179,13 +212,18 @@ function remoteBranchSha(branch) {
   return { sha };
 }
 
+function loadRecord(env, baselineSha) {
+  const baselines = JSON.parse(readFileSync(baselinesPath(env), 'utf8'));
+  return { baselines, record: (baselines.baselines || []).find(b => b.sha === baselineSha) || null };
+}
+
 export function authorize(env = process.env) {
   const out = env.OUT_DIR || '.';
   mkdirSync(out, { recursive: true });
   const releaseSha = String(env.RELEASE_SHA || '');
   const releaseBranch = String(env.RELEASE_BRANCH || '');
   const baselineSha = String(env.BASELINE_SHA || '');
-  const baselines = JSON.parse(readFileSync(baselinesPath(env), 'utf8'));
+  const { baselines } = loadRecord(env, baselineSha);
   const { errors, approved } = validateInputs({ releaseSha, releaseBranch, baselineSha }, baselines);
   if (errors.length) fail(errors.join('; '), out);
 
@@ -225,7 +263,7 @@ export function authorize(env = process.env) {
     baselineTree,
     baselineRecord: approved,
     changedFiles: parsed.entries.length,
-    changedFilesSha256: createHash('sha256').update(diff.stdout.replace(/\r\n/g, '\n')).digest('hex'),
+    changedFilesSha256: sha256(diff.stdout.replace(/\r\n/g, '\n')),
     violations,
   };
   writeFileSync(path.join(out, 'changed-files.tsv'), diff.stdout);
@@ -240,6 +278,101 @@ export function authorize(env = process.env) {
     process.exit(1);
   }
   console.log(`RELEASE_EXACT_SHA: AUTHORIZED ${releaseSha} tree ${releaseTree} baseline ${baselineSha} files ${parsed.entries.length}`);
+}
+
+// Provenance against a historical baseline, in two independent parts:
+// 1. The baseline's own verifier, recognized only by the reviewed blob ids and sha256 digests in
+//    release-production-baselines.json, classifies base...release and must report PASS.
+// 2. The CURRENT trusted policy (main's verifier, itself pinned by reviewed digests) classifies the
+//    same diff independently; every path must be clear.
+// Any other verifier version, a changed current policy, or a critical path fails closed. The
+// founder-evidence route is not available here: exact-SHA releases may not touch critical paths.
+export function checkVerifierRecord(record, readHistorical, readCurrent) {
+  const errors = [];
+  const historical = record?.verifier?.historical || {};
+  const current = record?.verifier?.currentPolicy || {};
+  for (const file of VERIFIER_FILES) {
+    const h = historical[file];
+    const c = current[file];
+    if (!h?.blob || !h?.sha256 || !c?.sha256) { errors.push(`no reviewed digest for ${file}`); continue; }
+    const hist = readHistorical(file);
+    if (!hist || hist.blob !== h.blob || sha256(hist.bytes) !== h.sha256) errors.push(`baseline ${file} is not the reviewed historical verifier`);
+    const cur = readCurrent(file);
+    if (!cur || sha256(cur) !== c.sha256) errors.push(`current ${file} is not the reviewed trusted policy`);
+  }
+  return errors;
+}
+
+export async function provenance(env = process.env) {
+  const out = env.OUT_DIR || '.';
+  mkdirSync(out, { recursive: true });
+  const releaseSha = String(env.RELEASE_SHA || '');
+  const baselineSha = String(env.BASELINE_SHA || '');
+  if (!FULL_SHA.test(releaseSha) || !FULL_SHA.test(baselineSha)) fail('full release and baseline SHAs are required', out, 'provenance.json');
+  const { record } = loadRecord(env, baselineSha);
+  if (!record) fail('baseline_sha is not an approved production baseline', out, 'provenance.json');
+
+  const readHistorical = file => {
+    const blob = git(['rev-parse', `${baselineSha}:${file}`]).stdout.trim();
+    const bytes = git(['cat-file', 'blob', `${baselineSha}:${file}`], { buffer: true });
+    return bytes.status === 0 && FULL_SHA.test(blob) ? { blob, bytes: bytes.stdout } : null;
+  };
+  const policyDir = env.GITHUB_ACTIONS === 'true' ? MODULE_DIR : (env.PARQUEEN_RELEASE_POLICY_DIR || MODULE_DIR);
+  const readCurrent = file => {
+    const p = path.join(policyDir, path.basename(file));
+    return existsSync(p) ? readFileSync(p) : null;
+  };
+  const errors = checkVerifierRecord(record, readHistorical, readCurrent);
+  if (errors.length) fail(errors.join('; '), out, 'provenance.json');
+
+  // 1. Historical verifier, run from exactly the reviewed bytes.
+  const work = mkdtempSync(path.join(tmpdir(), 'pq-hist-verifier-'));
+  let historical;
+  try {
+    for (const file of VERIFIER_FILES) {
+      mkdirSync(path.join(work, path.dirname(file)), { recursive: true });
+      writeFileSync(path.join(work, file), readHistorical(file).bytes);
+    }
+    const run = spawnSync(process.execPath, [path.join(work, 'scripts/ci/provenance-change-guard.mjs')], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        GITHUB_EVENT_NAME: 'release_exact_sha',
+        PR_BASE_SHA: baselineSha,
+        PR_HEAD_SHA: releaseSha,
+        PARQUEEN_PROVENANCE_SIGNING_KEY: '',
+      },
+    });
+    historical = { status: run.status, output: `${run.stdout}${run.stderr}` };
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+  writeFileSync(path.join(out, 'provenance-historical.txt'), historical.output);
+  const historicalPass = historical.status === 0 && historical.output.split(/\r?\n/).includes('PROVENANCE_GUARD: PASS');
+
+  // 2. Independent classification under the current trusted policy.
+  const guard = await import(pathToFileURL(path.join(policyDir, 'provenance-change-guard.mjs')).href);
+  const diff = git(['diff', '--name-status', '--find-renames', `${baselineSha}...${releaseSha}`]);
+  const parsed = diff.status === 0 ? guard.pathsFromNameStatus(diff.stdout) : { error: 'git diff could not be read' };
+  const classified = parsed.error ? [] : parsed.files.map(f => ({ file: f, decision: guard.decisionForPath(f) }));
+  const notClear = classified.filter(c => c.decision !== 'clear');
+  const currentPass = !parsed.error && classified.length > 0 && notClear.length === 0;
+
+  const result = {
+    ok: historicalPass && currentPass,
+    historicalVerifier: { pass: historicalPass, status: historical.status },
+    currentPolicy: { pass: currentPass, files: classified.length, notClear, error: parsed.error || null },
+    digests: record.verifier,
+  };
+  writeFileSync(path.join(out, 'provenance.json'), JSON.stringify(result, null, 1));
+  if (!result.ok) {
+    console.error('RELEASE_EXACT_SHA: PROVENANCE_FAIL_CLOSED');
+    if (!historicalPass) console.error('historical verifier did not report PROVENANCE_GUARD: PASS');
+    for (const c of notClear) console.error(`CURRENT_POLICY ${c.decision} ${c.file}`);
+    if (parsed.error) console.error(parsed.error);
+    process.exit(1);
+  }
+  console.log(`RELEASE_EXACT_SHA: PROVENANCE_PASS historical=PASS current=${classified.length} clear`);
 }
 
 export function recheck(env = process.env) {
@@ -283,6 +416,14 @@ export function codeqlGate(env = process.env) {
   process.exit(inChanged.length ? 1 : 0);
 }
 
+// The exact set of verify-job outcomes the workflow records, in order.
+export const EXPECTED_CHECKS = [
+  'npm-ci', 'functions-npm-ci', 'playwright-install', 'unit-tests', 'typecheck', 'production-build',
+  'posthog-release', 'e2e', 'functions-npm10-ci', 'sharp-smoke', 'firebase-cli', 'functions-index-load',
+  'functions-integration', 'functions-isolated', 'firestore-rules', 'analytics-consent-emulator', 'storage-rules',
+];
+export const CODEQL_LANGUAGES = ['javascript-typescript', 'actions'];
+
 export function failedTests(vitestJson) {
   const failed = [];
   for (const file of vitestJson?.testResults || []) {
@@ -295,52 +436,121 @@ export function failedTests(vitestJson) {
   return failed.sort();
 }
 
+// Strict: every line is `<expected check>\t<0|1>`, no duplicates, nothing missing, nothing extra.
 export function parseOutcomes(text) {
-  return Object.fromEntries(String(text || '').split(/\r?\n/).filter(Boolean).map(l => l.split('\t')).map(([k, v]) => [k, Number(v)]));
+  const outcomes = {};
+  const errors = [];
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    if (!line) continue;
+    const m = /^([a-z0-9-]+)\t([01])$/.exec(line);
+    if (!m) { errors.push(`malformed outcome line: ${JSON.stringify(line.slice(0, 80))}`); continue; }
+    if (!EXPECTED_CHECKS.includes(m[1])) { errors.push(`unexpected check ${m[1]}`); continue; }
+    if (m[1] in outcomes) { errors.push(`duplicate check ${m[1]}`); continue; }
+    outcomes[m[1]] = Number(m[2]);
+  }
+  for (const name of EXPECTED_CHECKS) if (!(name in outcomes)) errors.push(`missing check ${name}`);
+  return { outcomes, errors };
 }
 
-// PASS only when every release check passed. A release-only failure is FAIL. A failure that the
-// baseline shares under the same CI is BLOCKED: it needs an explicit founder disposition.
-export function disposition({ authorizeOk, branchUnchanged, release, baseline, gitleaks, codeql }) {
-  const reasons = [];
-  if (!authorizeOk) return { result: 'FAIL', reasons: ['authorization or scope check failed'] };
-  if (!branchUnchanged) return { result: 'FAIL', reasons: ['release branch moved during verification'] };
-  if (gitleaks !== 0) reasons.push(`FAIL secret scan exit ${gitleaks}`);
-  for (const [lang, code] of Object.entries(codeql || {})) if (code !== 0) reasons.push(`FAIL CodeQL ${lang} exit ${code}`);
-  if (!release) return { result: 'FAIL', reasons: [...reasons, 'release verification produced no outcomes'] };
-  let shared = 0;
-  for (const [check, code] of Object.entries(release.outcomes)) {
-    if (code === 0) continue;
-    const base = baseline?.outcomes?.[check];
-    if (check === 'unit-tests' && baseline) {
-      const baseFailed = new Set(baseline.failedTests || []);
-      const newFails = (release.failedTests || []).filter(t => !baseFailed.has(t));
-      if (newFails.length || !(release.failedTests || []).length) reasons.push(`FAIL unit-tests: ${newFails.length ? newFails.join('; ') : 'exited non-zero without a test failure'}`);
-      else { shared += 1; reasons.push(`BLOCKED unit-tests: ${release.failedTests.length} failure(s) also fail on the baseline`); }
-    } else if (base !== undefined && base !== 0) {
-      shared += 1;
-      reasons.push(`BLOCKED ${check}: also fails on the baseline (exit ${base})`);
+const readText = file => (existsSync(file) ? readFileSync(file, 'utf8') : null);
+
+// Reads one verify job's evidence. Any missing or malformed part is an error, never a default.
+export function subjectEvidence(dir) {
+  const errors = [];
+  if (!existsSync(dir)) return { errors: ['evidence directory is missing'] };
+  const head = readText(path.join(dir, 'head.txt'))?.trim();
+  const tree = readText(path.join(dir, 'tree.txt'))?.trim();
+  if (!FULL_SHA.test(head || '')) errors.push('head.txt is missing or malformed');
+  if (!FULL_SHA.test(tree || '')) errors.push('tree.txt is missing or malformed');
+  const outcomesText = readText(path.join(dir, 'outcomes.tsv'));
+  if (outcomesText == null) errors.push('outcomes.tsv is missing');
+  const parsed = parseOutcomes(outcomesText ?? '');
+  if (outcomesText != null) errors.push(...parsed.errors);
+  let vitest = null;
+  const vitestText = readText(path.join(dir, 'vitest.json'));
+  if (vitestText != null) {
+    try { vitest = JSON.parse(vitestText); } catch { errors.push('vitest.json is malformed'); }
+  }
+  return {
+    head, tree, errors,
+    outcomes: parsed.outcomes,
+    vitest,
+    failedTests: vitest ? failedTests(vitest) : null,
+    manifest: readText(path.join(dir, 'dist-manifest.sha256')) ?? '',
+  };
+}
+
+function exitCode(file) {
+  const text = readText(file);
+  if (text == null) return { error: 'missing' };
+  const m = /^\s*(\d+)\s*$/.exec(text);
+  return m ? { code: Number(m[1]) } : { error: 'malformed' };
+}
+
+// PASS needs complete, consistent evidence for BOTH subjects and every mandatory check green.
+// Anything missing, malformed or unknown is FAIL. A failure shared with the baseline under the
+// same CI is BLOCKED (founder disposition required), never PASS.
+export function disposition({ auth, provenance: prov, branchUnchanged, release, baseline, gitleaks, codeql }) {
+  const fails = [];
+  const blocked = [];
+  if (!auth?.ok) fails.push('authorization or scope check failed or is missing');
+  if (!prov?.ok) fails.push('provenance check failed or is missing');
+  if (branchUnchanged !== true) fails.push('release branch head re-check did not succeed');
+  for (const [label, subject, sha, tree] of [
+    ['release', release, auth?.releaseSha, auth?.releaseTree],
+    ['baseline', baseline, auth?.baselineSha, auth?.baselineTree],
+  ]) {
+    if (!subject) { fails.push(`${label} evidence is missing`); continue; }
+    for (const e of subject.errors || []) fails.push(`${label}: ${e}`);
+    if (!FULL_SHA.test(sha || '') || subject.head !== sha) fails.push(`${label} commit identity does not match`);
+    if (!FULL_SHA.test(tree || '') || subject.tree !== tree) fails.push(`${label} tree identity does not match`);
+  }
+  if (gitleaks?.code !== 0) fails.push(`secret scan ${gitleaks?.error ?? `exit ${gitleaks?.code}`}`);
+  for (const lang of CODEQL_LANGUAGES) {
+    const r = codeql?.[lang];
+    if (r?.code !== 0) fails.push(`CodeQL ${lang} ${r?.error ?? `exit ${r?.code}`}`);
+  }
+  if (fails.length) return { result: 'FAIL', reasons: fails };
+
+  const releaseTestsOk = release.outcomes['unit-tests'] === 0;
+  if (releaseTestsOk && (!release.vitest || !(release.vitest.numTotalTests > 0) || release.vitest.numFailedTests !== 0 || release.failedTests.length)) {
+    fails.push('release unit-tests passed without a complete vitest report');
+  }
+  for (const check of EXPECTED_CHECKS) {
+    if (release.outcomes[check] === 0) continue;
+    if (check === 'unit-tests') {
+      if (!release.failedTests?.length || !baseline.failedTests) {
+        fails.push('unit-tests failed without comparable per-test results');
+        continue;
+      }
+      const shared = new Set(baseline.failedTests);
+      const fresh = release.failedTests.filter(t => !shared.has(t));
+      if (fresh.length) fails.push(`unit-tests new failures: ${fresh.join('; ')}`);
+      else blocked.push(`unit-tests: ${release.failedTests.length} failure(s) also fail on the baseline`);
+    } else if (baseline.outcomes[check] === 1) {
+      blocked.push(`${check}: also fails on the baseline`);
     } else {
-      reasons.push(`FAIL ${check} exit ${code}`);
+      fails.push(`${check} failed on the release only`);
     }
   }
-  if (reasons.some(r => r.startsWith('FAIL'))) return { result: 'FAIL', reasons };
-  if (shared) return { result: 'BLOCKED', reasons };
+  if (fails.length) return { result: 'FAIL', reasons: [...fails, ...blocked.map(b => `shared: ${b}`)] };
+  if (blocked.length) return { result: 'BLOCKED', reasons: blocked };
   return { result: 'PASS', reasons: [] };
 }
 
-function readJson(file, fallback = null) {
-  try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return fallback; }
+function readJson(file) {
+  try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; }
 }
 
-function subjectEvidence(dir) {
-  if (!existsSync(dir)) return null;
+export function collectEvidence(ev, env = process.env) {
   return {
-    head: readFileSync(path.join(dir, 'head.txt'), 'utf8').trim(),
-    tree: readFileSync(path.join(dir, 'tree.txt'), 'utf8').trim(),
-    outcomes: parseOutcomes(readFileSync(path.join(dir, 'outcomes.tsv'), 'utf8')),
-    failedTests: failedTests(readJson(path.join(dir, 'vitest.json'), {})),
-    manifest: existsSync(path.join(dir, 'dist-manifest.sha256')) ? readFileSync(path.join(dir, 'dist-manifest.sha256'), 'utf8') : '',
+    auth: readJson(path.join(ev, 'authorize', 'authorize.json')),
+    provenance: readJson(path.join(ev, 'authorize', 'provenance.json')),
+    release: existsSync(path.join(ev, 'verify-release')) ? subjectEvidence(path.join(ev, 'verify-release')) : null,
+    baseline: existsSync(path.join(ev, 'verify-baseline')) ? subjectEvidence(path.join(ev, 'verify-baseline')) : null,
+    gitleaks: exitCode(path.join(ev, 'gitleaks', 'exit.txt')),
+    codeql: Object.fromEntries(CODEQL_LANGUAGES.map(l => [l, exitCode(path.join(ev, `codeql-${l}`, 'exit.txt'))])),
+    branchUnchanged: env.BRANCH_UNCHANGED === 'true',
   };
 }
 
@@ -348,32 +558,19 @@ export function report(env = process.env) {
   const ev = env.EVIDENCE_DIR;
   const out = env.OUT_DIR || '.';
   mkdirSync(out, { recursive: true });
-  const auth = readJson(path.join(ev, 'authorize', 'authorize.json'), { ok: false });
-  const release = subjectEvidence(path.join(ev, 'verify-release'));
-  const baseline = subjectEvidence(path.join(ev, 'verify-baseline'));
-  const codeql = {};
-  for (const lang of ['javascript-typescript', 'actions']) {
-    const f = path.join(ev, `codeql-${lang}`, 'exit.txt');
-    codeql[lang] = existsSync(f) ? Number(readFileSync(f, 'utf8').trim()) : 1;
-  }
-  const gitleaksFile = path.join(ev, 'gitleaks', 'exit.txt');
-  const gitleaks = existsSync(gitleaksFile) ? Number(readFileSync(gitleaksFile, 'utf8').trim()) : 1;
-  const identityOk = release && release.head === auth.releaseSha && release.tree === auth.releaseTree
-    && (!baseline || (baseline.head === auth.baselineSha && baseline.tree === auth.baselineTree));
-  const decision = disposition({
-    authorizeOk: auth.ok && identityOk,
-    branchUnchanged: env.BRANCH_UNCHANGED === 'true',
-    release, baseline, gitleaks, codeql,
-  });
-  const manifestSha = release?.manifest ? createHash('sha256').update(release.manifest).digest('hex') : null;
+  const collected = collectEvidence(ev, env);
+  const decision = disposition(collected);
+  const { auth, release, baseline, gitleaks, codeql } = collected;
+  const manifestSha = release?.manifest ? sha256(release.manifest) : null;
   const evidence = {
     kind: 'ParQueen isolated exact-SHA release verification (NOT the required PR Gate check)',
     disposition: decision.result,
     reasons: decision.reasons,
     workflow: { ref: env.WORKFLOW_REF, sha: env.WORKFLOW_SHA, runId: env.RUN_ID, runAttempt: env.RUN_ATTEMPT, runUrl: env.RUN_URL, actor: env.ACTOR },
-    release: { sha: auth.releaseSha, branch: auth.releaseBranch, tree: auth.releaseTree },
-    baseline: { sha: auth.baselineSha, tree: auth.baselineTree, record: auth.baselineRecord },
-    changedFiles: { count: auth.changedFiles, sha256: auth.changedFilesSha256, violations: auth.violations },
+    release: { sha: auth?.releaseSha, branch: auth?.releaseBranch, tree: auth?.releaseTree },
+    baseline: { sha: auth?.baselineSha, tree: auth?.baselineTree, record: auth?.baselineRecord },
+    changedFiles: { count: auth?.changedFiles, sha256: auth?.changedFilesSha256, violations: auth?.violations },
+    provenance: collected.provenance,
     checks: { release: release?.outcomes, baseline: baseline?.outcomes, gitleaks, codeql },
     failedTests: { release: release?.failedTests, baseline: baseline?.failedTests },
     ciBuildManifestSha256: manifestSha,
@@ -385,18 +582,19 @@ export function report(env = process.env) {
     '',
     'Isolated verification of one immutable commit. **Not** the required `gate` / `private provenance required` checks, and not a deployment authorization.',
     '',
-    `| Item | Value |`, `| --- | --- |`,
-    `| Release | \`${auth.releaseSha}\` on \`${auth.releaseBranch}\` |`,
-    `| Release tree | \`${auth.releaseTree}\` |`,
-    `| Baseline | \`${auth.baselineSha}\` (tree \`${auth.baselineTree}\`) |`,
+    '| Item | Value |', '| --- | --- |',
+    `| Release | \`${auth?.releaseSha}\` on \`${auth?.releaseBranch}\` |`,
+    `| Release tree | \`${auth?.releaseTree}\` |`,
+    `| Baseline | \`${auth?.baselineSha}\` (tree \`${auth?.baselineTree}\`) |`,
     `| Workflow | \`${env.WORKFLOW_REF}\` @ \`${env.WORKFLOW_SHA}\` run ${env.RUN_ID}.${env.RUN_ATTEMPT} |`,
-    `| Changed files | ${auth.changedFiles} (name-status sha256 \`${auth.changedFilesSha256}\`) |`,
+    `| Changed files | ${auth?.changedFiles} (name-status sha256 \`${auth?.changedFilesSha256}\`) |`,
+    `| Provenance | historical ${collected.provenance?.historicalVerifier?.pass ? 'PASS' : 'FAIL'}, current policy ${collected.provenance?.currentPolicy?.pass ? 'PASS' : 'FAIL'} |`,
     `| CI build manifest sha256 | \`${manifestSha}\` |`,
     '',
     '| Check | Release | Baseline |', '| --- | --- | --- |',
-    ...Object.keys(release?.outcomes || {}).map(k => `| ${k} | ${release.outcomes[k]} | ${baseline?.outcomes?.[k] ?? 'n/a'} |`),
-    `| secret scan (gitleaks, baseline..release) | ${gitleaks} | n/a |`,
-    ...Object.entries(codeql).map(([k, v]) => `| CodeQL ${k} (changed files) | ${v} | n/a |`),
+    ...EXPECTED_CHECKS.map(k => `| ${k} | ${release?.outcomes?.[k] ?? 'missing'} | ${baseline?.outcomes?.[k] ?? 'missing'} |`),
+    `| secret scan (gitleaks, baseline..release) | ${gitleaks.code ?? gitleaks.error} | n/a |`,
+    ...CODEQL_LANGUAGES.map(l => `| CodeQL ${l} (changed files) | ${codeql[l].code ?? codeql[l].error} | n/a |`),
     '',
     ...(decision.reasons.length ? ['Reasons:', ...decision.reasons.map(r => `- ${r}`)] : ['No failures.']),
   ];
@@ -409,7 +607,7 @@ export function report(env = process.env) {
 const isMain = process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
 if (isMain) {
   const command = process.argv[2];
-  const commands = { authorize, recheck, codeql: codeqlGate, report };
+  const commands = { authorize, provenance, recheck, codeql: codeqlGate, report };
   if (!commands[command]) fail(`unknown command ${command}`);
-  commands[command]();
+  await commands[command]();
 }

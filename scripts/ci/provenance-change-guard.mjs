@@ -45,6 +45,8 @@ const POLICY_FILES = new Set([
   '.github/workflows/pr-gate.yml',
   '.github/workflows/unit-tests.yml',
   '.github/workflows/provenance-change-guard.yml',
+  // Defines exact-SHA release evidence, so it is policy even though it lives outside scripts/ci.
+  '.github/workflows/release-exact-sha-verify.yml',
 ]);
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));

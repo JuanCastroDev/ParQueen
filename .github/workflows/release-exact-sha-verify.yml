@@ -80,23 +80,13 @@ jobs:
           OUT_DIR: ${{ runner.temp }}/authorize
         run: node scripts/ci/release-exact-sha.mjs authorize
 
-      - name: Provenance guard (baseline verifier, bound to main)
+      # Historical baseline verifier recognized only by reviewed digests, plus independent
+      # classification under main's current trusted policy (also digest-pinned). See
+      # scripts/ci/release-production-baselines.json.
+      - name: Provenance (reviewed historical verifier + current policy)
         env:
           OUT_DIR: ${{ runner.temp }}/authorize
-        run: |
-          set -euo pipefail
-          work="${RUNNER_TEMP}/verifier"
-          mkdir -p "$work"
-          git -c core.autocrlf=false archive "$BASELINE_SHA" scripts/ci/provenance-change-guard.mjs scripts/ci/provenance-evidence.mjs scripts/ci/provenance-trust-anchor.json | tar -x -C "$work"
-          for f in provenance-change-guard.mjs provenance-evidence.mjs provenance-trust-anchor.json; do
-            if [ "$(sha256sum < "$work/scripts/ci/$f")" != "$(git cat-file blob "${GITHUB_SHA}:scripts/ci/$f" | sha256sum)" ]; then
-              echo "RELEASE_EXACT_SHA: FAIL_CLOSED baseline verifier differs from main's trusted $f" >&2
-              exit 1
-            fi
-          done
-          GITHUB_EVENT_NAME=release_exact_sha PR_BASE_SHA="$BASELINE_SHA" PR_HEAD_SHA="$RELEASE_SHA" \
-            node "$work/scripts/ci/provenance-change-guard.mjs" | tee "$OUT_DIR/provenance-guard.txt"
-          grep -Fxq 'PROVENANCE_GUARD: PASS' "$OUT_DIR/provenance-guard.txt"
+        run: node scripts/ci/release-exact-sha.mjs provenance
 
       - name: Upload authorization evidence
         if: always()

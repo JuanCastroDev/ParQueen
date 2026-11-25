@@ -1,11 +1,39 @@
 {
-  "description": "Production source baselines approved for exact-SHA release verification. A baseline is the commit whose build is proven to be live. Adding or changing an entry is a provenance-critical change.",
+  "description": "Production source baselines approved for exact-SHA release verification. A baseline is the commit whose build is proven to be live. `verifier.historical` pins the baseline's own provenance verifier by git blob id and sha256; `verifier.currentPolicy` pins the trusted main verifier the binding was reviewed against (sha256 of the LF bytes). A verifier at either side that does not match fails closed. Adding or changing an entry is a provenance-critical change.",
   "baselines": [
     {
       "sha": "a7d53cc8ef2738331cb5d9c8394b21b8cb3ecaab",
       "hostingSite": "parkqueen-46475363-ccf36",
       "hostingVersion": "f8a02be15a2e22ca",
-      "evidence": "All 94 served files byte-identical to a clean LF build of this commit (read-only inventory, 2026-11-25)."
+      "evidence": "All 94 served files byte-identical to a clean LF build of this commit (read-only inventory, 2026-11-25).",
+      "verifier": {
+        "historical": {
+          "scripts/ci/provenance-change-guard.mjs": {
+            "blob": "7b0b0eea1626a7b84c0b83cf69c76335e2243ebe",
+            "sha256": "6a714d6fd1124593e62e535e24b2b562773ba141111aa1e0d69f66a44d44ff57"
+          },
+          "scripts/ci/provenance-evidence.mjs": {
+            "blob": "d07aee7333a3cf9ab4493a7e6e84e0f1f2a05ae2",
+            "sha256": "050075b7b0ed4dfd4d164c35617172dccdff288ee8e2b4fa88508b7efbaed271"
+          },
+          "scripts/ci/provenance-trust-anchor.json": {
+            "blob": "d569c7cc88741c9275aa59916acbce06fd68bbfd",
+            "sha256": "cc178e99295379d54321bb848655038ecaed65b8bc266b552a0d9981289be8e9"
+          }
+        },
+        "currentPolicy": {
+          "scripts/ci/provenance-change-guard.mjs": {
+            "sha256": "40ba5e5f219c7bf8c214822b3f0b55856069a92412658a4869c9293baf6f06da",
+            "note": "main after PR #383 (3676dfa) plus this change's POLICY_FILES entry for release-exact-sha-verify.yml"
+          },
+          "scripts/ci/provenance-evidence.mjs": {
+            "sha256": "050075b7b0ed4dfd4d164c35617172dccdff288ee8e2b4fa88508b7efbaed271"
+          },
+          "scripts/ci/provenance-trust-anchor.json": {
+            "sha256": "cc178e99295379d54321bb848655038ecaed65b8bc266b552a0d9981289be8e9"
+          }
+        }
+      }
     }
   ]
 }
