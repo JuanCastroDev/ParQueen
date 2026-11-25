@@ -161,9 +161,28 @@ function createMemoryReplayStore(now = Date.now) {
     },
     consumeToken(key, expiresAt) {
       prune(tokens, clock());
-      if (tokens.has(key)) return false;
+      if (tokens.has(key) && tokens.get(key) > clock()) return false;
       tokens.set(key, expiresAt);
       return true;
+    },
+    consumeGrant({ tokenKey, tokenExpiresAt, challengeId, authUid }) {
+      prune(tokens, clock());
+      const issued = this.challengeIssued(challengeId, authUid);
+      if (issued === 'used') return { ok: false, reason: 'challenge_replayed' };
+      if (issued !== true) {
+        const row = challenges.get(challengeId);
+        if (row && row.uid === authUid && row.expiresAt <= clock()) {
+          return { ok: false, reason: 'challenge_expired' };
+        }
+        return { ok: false, reason: 'challenge_unbound' };
+      }
+      const tokenExpiry = tokens.get(tokenKey);
+      if (tokenExpiry !== undefined && tokenExpiry > clock()) {
+        return { ok: false, reason: 'replayed' };
+      }
+      tokens.set(tokenKey, tokenExpiresAt);
+      challenges.get(challengeId).used = true;
+      return { ok: true };
     },
   };
 }
@@ -180,6 +199,11 @@ function createDurableReplayStore(adapter) {
     challengeIssued: (id, uid) => adapter.consumeIssued(`challenge_${id}`, uid, true),
     consumeChallenge: (id, uid) => adapter.consumeIssued(`challenge_${id}`, uid, false),
     consumeToken: (key, expiresAt) => adapter.claim(`token_${key}`, expiresAt),
+    consumeGrant: (input) => (
+      typeof adapter.consumeGrant === 'function'
+        ? adapter.consumeGrant(input)
+        : Promise.resolve({ ok: false, reason: 'replay_store_unconfigured' })
+    ),
   };
 }
 
@@ -217,6 +241,41 @@ function createFirestoreReplayStore(db, now = Date.now) {
         accepted = true;
       });
       return accepted;
+    },
+    async consumeGrant({ tokenKey, tokenExpiresAt, challengeId, authUid }) {
+      const tokenRef = refFor(`token_${tokenKey}`);
+      const challengeRef = refFor(`challenge_${challengeId}`);
+      try {
+        let outcome = { ok: false, reason: 'replay_store_unavailable' };
+        await db.runTransaction(async (tx) => {
+          const tokenSnap = await tx.get(tokenRef);
+          const challengeSnap = await tx.get(challengeRef);
+          const tokenData = tokenSnap.exists && typeof tokenSnap.data === 'function' ? tokenSnap.data() : null;
+          const challenge = challengeSnap.exists && typeof challengeSnap.data === 'function' ? challengeSnap.data() : null;
+          if (tokenData && tokenData.expiresAt > clock()) {
+            outcome = { ok: false, reason: 'replayed' };
+            return;
+          }
+          if (!challenge || challenge.uid !== authUid) {
+            outcome = { ok: false, reason: 'challenge_unbound' };
+            return;
+          }
+          if (challenge.expiresAt <= clock()) {
+            outcome = { ok: false, reason: 'challenge_expired' };
+            return;
+          }
+          if (challenge.used === true) {
+            outcome = { ok: false, reason: 'challenge_replayed' };
+            return;
+          }
+          tx.set(tokenRef, { expiresAt: tokenExpiresAt, kind: 'token' });
+          tx.update(challengeRef, { used: true });
+          outcome = { ok: true, reason: 'consumed' };
+        });
+        return outcome;
+      } catch {
+        return { ok: false, reason: 'replay_store_unavailable' };
+      }
     },
     async consumeIssued(key, uid, peek) {
       const ref = refFor(key);
@@ -276,6 +335,20 @@ function createSerializedClaim(now = Date.now) {
         if (peek === true) return true;
         row.used = true;
         return true;
+      });
+    },
+    consumeGrant({ tokenKey, tokenExpiresAt, challengeId, authUid }) {
+      return exclusive(async () => {
+        await Promise.resolve();
+        const challenge = challenges.get(`challenge_${challengeId}`);
+        const tokenExpiry = tokens.get(`token_${tokenKey}`);
+        if (tokenExpiry !== undefined && tokenExpiry > clock()) return { ok: false, reason: 'replayed' };
+        if (!challenge || challenge.uid !== authUid) return { ok: false, reason: 'challenge_unbound' };
+        if (challenge.expiresAt <= clock()) return { ok: false, reason: 'challenge_expired' };
+        if (challenge.used) return { ok: false, reason: 'challenge_replayed' };
+        tokens.set(`token_${tokenKey}`, tokenExpiresAt);
+        challenge.used = true;
+        return { ok: true, reason: 'consumed' };
       });
     },
   };
@@ -397,13 +470,19 @@ async function evaluateAndroidReleaseEligibility(input) {
     now: input.now,
   });
   if (verdict.eligible !== true) return verdict;
-  const tokenAccepted = await replayStore.consumeToken(
-    integrityTokenKey(input.integrityToken),
-    verdict.tokenExpiresAt,
-  );
-  if (tokenAccepted !== true) return denied('replayed');
-  const challengeAccepted = await replayStore.consumeChallenge(challengeId, authUid);
-  if (challengeAccepted !== true) return denied('challenge_replayed');
+  if (typeof replayStore.consumeGrant !== 'function') return denied('replay_store_unconfigured');
+  let grant;
+  try {
+    grant = await replayStore.consumeGrant({
+      tokenKey: integrityTokenKey(input.integrityToken),
+      tokenExpiresAt: verdict.tokenExpiresAt,
+      challengeId,
+      authUid,
+    });
+  } catch {
+    return denied('replay_store_unavailable');
+  }
+  if (!grant || grant.ok !== true) return denied(grant && grant.reason ? grant.reason : 'replay_store_unavailable');
   return {
     eligible: true,
     reason: 'play_recognized',

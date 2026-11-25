@@ -24,6 +24,7 @@ let holdReads = false;
 let releaseReads: Array<() => void> = [];
 let segmentData: any = { status: 'active' };
 let streetRuleRows: { id: string; data: any }[] = [];
+let streetRulesDenied = false;
 interface SuspensionsQueryCall { constraints: any[] }
 let suspensionsQueryCalls: SuspensionsQueryCall[] = [];
 
@@ -57,6 +58,7 @@ vi.mock('firebase/firestore', () => ({
             return Promise.resolve({ docs: filtered.map(r => ({ id: r.id, data: () => r.data })) });
         }
         if (Array.isArray(q.__col) && (q.__col[q.__col.length - 1] === 'streetRules' || q.__col[q.__col.length - 1] === 'streetRulesV2')) {
+            if (streetRulesDenied) return Promise.reject(Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' }));
             return Promise.resolve({ docs: streetRuleRows.map(r => ({ id: r.id, data: () => r.data })) });
         }
         return Promise.resolve({ docs: [] });
@@ -246,6 +248,7 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
         segmentExists = true;
         segmentData = SUPPORTED_ADMIN_SEGMENT;
         streetRuleRows = [{ id: 'rule1', data: MELVILLE_RULE }];
+        streetRulesDenied = false;
         holdReads = false;
         releaseReads = [];
         vi.useFakeTimers();
@@ -588,6 +591,8 @@ describe('StreetIntelligenceCard — calibrated authority presentation', () => {
 
 
 describe('StreetIntelligenceCard — A1 response-provided rules', () => {
+    afterEach(() => { streetRulesDenied = false; });
+
     it('renders schedules from the callable payload when Firestore has no segment', async () => {
         segmentExists = false;
         streetRuleRows = [];
@@ -600,6 +605,33 @@ describe('StreetIntelligenceCard — A1 response-provided rules', () => {
         expect(text).toContain('Next street cleaning');
         expect(text).not.toContain('Safe Until');
         expect(text).not.toContain('Parking information unavailable');
+    });
+
+    it('keeps a callable schedule when a direct streetRules read is denied', async () => {
+        streetRulesDenied = true;
+        streetRuleRows = [];
+        const { renderer, getResult } = await renderCard({
+            parkingSide: 'West',
+            sideConfidence: 'high',
+            resolvedPublicRules: [MELVILLE_RULE],
+            resolvedRegulationCoverage: {
+                cleaning: 'verified', restrictions: 'unknown', timeLimits: 'unknown', meters: 'unknown',
+            },
+        });
+        const text = renderedText(renderer);
+        expect(text).toContain('Next street cleaning');
+        expect(text).not.toContain('Safe Until');
+        expect(getResult().cleaningAvailable).not.toBe(false);
+    });
+
+    it('does not show a schedule when the legacy Firestore read is denied', async () => {
+        streetRulesDenied = true;
+        streetRuleRows = [{ id: 'rule1', data: MELVILLE_RULE }];
+        const { renderer, getResult } = await renderCard({ parkingSide: 'West', sideConfidence: 'high' });
+        const text = renderedText(renderer);
+        expect(text).not.toContain('Next street cleaning');
+        expect(text).not.toContain('Safe Until');
+        expect(getResult().cleaningAvailable).toBe(false);
     });
 
     it('degrades to unknown instead of inventing a schedule when neither payload nor Firestore has rules', async () => {

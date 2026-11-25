@@ -50,10 +50,11 @@ describe('AC-14 — no migrated admin page performs direct Firestore access for 
     });
   }
 
-  it('StreetIntelligenceHealthPage.tsx only reads the public streetSegments/streetRules collections directly, never a protected one', () => {
+  it('StreetIntelligenceHealthPage.tsx reads public segment documents and loads schedule counts through adminReadView', () => {
     const src = readView('views/admin/StreetIntelligenceHealthPage.tsx');
     expect(src).toMatch(/collection\(db!?,\s*['"]streetSegments['"]\)/);
-    expect(src).toMatch(/collectionGroup\(db!?,\s*['"]streetRules['"]\)/);
+    expect(src).not.toMatch(/collectionGroup\(/);
+    expect(src).toMatch(/fetchStreetIntelligenceHealth/);
     for (const name of PROTECTED_COLLECTIONS) {
       expect(src).not.toMatch(new RegExp(`collection\\(db!?,\\s*['"]${name}['"]`));
     }

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { filterAuthoritativeRules } from '../../utils/canonicalCurbWriteAuthority';
+import { fetchStreetSchedules, type AdminScheduleRule } from '../../utils/adminReadService';
 import { db } from '../../firebase';
 import {
   collection, getDocs, query, orderBy, where,
@@ -11,7 +11,7 @@ import { ParseFailuresPage } from './ParseFailuresPage';
 import { StreetIntelligenceHealthPage } from './StreetIntelligenceHealthPage';
 import {
   geocodeAddress, fetchStreetGeometry, computeGeohash, computeCrossRaw,
-  SegmentDoc, SuspensionDoc, StreetRuleDoc,
+  SegmentDoc, SuspensionDoc,
 } from '../../utils/streetIntelligence';
 
 const BOROUGHS = [
@@ -231,19 +231,21 @@ function AddRuleForm({ segmentId, onSaved }: { segmentId: string; onSaved: () =>
 
 function SegmentRow({ seg, onDeleted }: { seg: SegmentDoc; onDeleted: () => void }) {
   const [expanded, setExpanded] = useState(false);
-  const [rules, setRules] = useState<StreetRuleDoc[]>([]);
+  const [rules, setRules] = useState<AdminScheduleRule[]>([]);
   const [loadingRules, setLoadingRules] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [segError, setSegError] = useState<string | null>(null);
 
   const loadRules = async () => {
     setLoadingRules(true);
-    const snap = await getDocs(
-      query(collection(db, 'streetSegments', seg.id, 'streetRules'), where('supersededAt', '==', null))
-    );
-    const loaded = snap.docs.map(d => ({ id: d.id, ...d.data() } as StreetRuleDoc));
-    const selected = filterAuthoritativeRules(seg, loaded);
-    setRules(selected.ok ? selected.rules : []);
+    try {
+      const page = await fetchStreetSchedules(seg.id);
+      setRules(page.rules);
+      setSegError(null);
+    } catch {
+      setRules([]);
+      setSegError('Could not load cleaning rules.');
+    }
     setLoadingRules(false);
   };
 

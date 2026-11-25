@@ -314,6 +314,82 @@ async function parseFailuresList(db) {
   return { failures: snap.docs.map(d => ({ id: d.id, ...d.data() })) };
 }
 
+const { filterAuthoritativeRules } = require('./curbIntelligence/writeAuthority');
+
+const SCHEDULE_PAGE_MAX = 100;
+const SEGMENT_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
+function presentSchedule(id, data) {
+  const schedules = Array.isArray(data.schedules) ? data.schedules.map(window => ({
+    side: window && window.side != null ? window.side : null,
+    days: Array.isArray(window && window.days) ? window.days : [],
+    startTime: window && window.startTime != null ? window.startTime : null,
+    endTime: window && window.endTime != null ? window.endTime : null,
+    type: window && window.type != null ? window.type : null,
+  })) : [];
+  return {
+    id,
+    type: typeof data.type === 'string' ? data.type : null,
+    schedules,
+  };
+}
+
+async function streetScheduleList(db, params) {
+  if (typeof params.segmentId !== 'string' || !SEGMENT_ID_PATTERN.test(params.segmentId)) {
+    throw new HttpsError('invalid-argument', 'segmentId is required.');
+  }
+  validatePagination(params, SCHEDULE_PAGE_MAX);
+  const pageLimit = Number.isInteger(params.limit) ? params.limit : SCHEDULE_PAGE_MAX;
+  const segmentRef = db.collection('streetSegments').doc(params.segmentId);
+  const segmentSnap = await segmentRef.get();
+  if (!segmentSnap.exists) return { rules: [], nextCursor: null, done: true, segmentFound: false };
+  let query = segmentRef.collection('streetRules').orderBy('__name__').limit(pageLimit);
+  const cursorId = typeof params.cursor === 'string' && params.cursor ? params.cursor : null;
+  if (cursorId) {
+    if (!SEGMENT_ID_PATTERN.test(cursorId)) throw new HttpsError('invalid-argument', 'cursor must be a string or null.');
+    const cursorSnap = await segmentRef.collection('streetRules').doc(cursorId).get();
+    if (cursorSnap.exists) query = query.startAfter(cursorSnap);
+  }
+  const snap = await query.get();
+  const kept = filterAuthoritativeRules(
+    segmentSnap.data(),
+    snap.docs.map(doc => ({ id: doc.id, ...doc.data() })),
+  );
+  const rules = (kept.ok ? kept.rules : []).map(rule => presentSchedule(rule.id, rule));
+  const done = snap.size < pageLimit;
+  return {
+    rules,
+    nextCursor: done ? null : snap.docs[snap.docs.length - 1].id,
+    done,
+    segmentFound: true,
+  };
+}
+
+async function countQuery(query) {
+  const snap = await query.count().get();
+  return snap.data().count;
+}
+
+async function streetIntelligenceHealth(db) {
+  const segments = db.collection('streetSegments');
+  const [
+    totalSegments, activeSegments, sweepnycSegments, adminSegments,
+    archivedSegments, needsReviewSegments, activeRules,
+  ] = await Promise.all([
+    countQuery(segments),
+    countQuery(segments.where('status', '==', 'active')),
+    countQuery(segments.where('source', '==', 'sweepnyc')),
+    countQuery(segments.where('source', '==', 'admin')),
+    countQuery(segments.where('status', '==', 'archived')),
+    countQuery(segments.where('status', '==', 'needs_review')),
+    countQuery(db.collectionGroup('streetRules').where('supersededAt', '==', null)),
+  ]);
+  return {
+    totalSegments, activeSegments, sweepnycSegments, adminSegments,
+    archivedSegments, needsReviewSegments, activeRules,
+  };
+}
+
 const ADMIN_READ_VIEWS = {
   dashboardCounts,
   usersList,
@@ -322,6 +398,8 @@ const ADMIN_READ_VIEWS = {
   auditLogList,
   pingsList,
   parseFailuresList,
+  streetScheduleList,
+  streetIntelligenceHealth,
 };
 
 module.exports = { ADMIN_READ_VIEWS };
