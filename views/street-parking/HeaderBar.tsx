@@ -1,4 +1,4 @@
-﻿import React from 'react';
+﻿import React, { useEffect, useRef, useState } from 'react';
 import { Search, Camera, MessageSquare, Bell } from 'lucide-react';
 import { AppView } from '../../types';
 import { t, useLang } from '../../i18n';
@@ -64,10 +64,54 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
     setPendingUpdatesCount,
     onSelectResult,
 }) => {
-    useLang();
+    const lang = useLang();
+    const rowRef = useRef<HTMLDivElement>(null);
+    const [scanIcon, setScanIcon] = useState(false);
+
+    useEffect(() => {
+        const row = rowRef.current;
+        const input = row?.querySelector('input');
+        const scan = row?.querySelector('.map-ai-action');
+        if (!row || !input || !scan || typeof document === 'undefined') return;
+
+        let labelExtra = 72;
+        const placeholderWidth = () => {
+            const style = getComputedStyle(input);
+            const probe = document.createElement('span');
+            probe.textContent = input.getAttribute('placeholder') || '';
+            // Specify the design size. Android text zoom enlarges it once;
+            // copying the already-zoomed computed size would enlarge it again.
+            probe.style.fontSize = '16px';
+            probe.style.fontFamily = style.fontFamily;
+            probe.style.fontWeight = style.fontWeight;
+            probe.style.letterSpacing = style.letterSpacing;
+            probe.style.position = 'absolute';
+            probe.style.whiteSpace = 'nowrap';
+            probe.style.visibility = 'hidden';
+            document.body.appendChild(probe);
+            const width = probe.getBoundingClientRect().width;
+            probe.remove();
+            return width;
+        };
+        const measure = () => {
+            if (!input.clientWidth) return;
+            const text = placeholderWidth();
+            const scanWidth = scan.getBoundingClientRect().width;
+            if (scanWidth > 50) labelExtra = scanWidth - 44;
+            const availableWithLabel = input.clientWidth - (scanWidth <= 50 ? labelExtra : 0);
+            const next = text > availableWithLabel + 1;
+            setScanIcon((current) => current === next ? current : next);
+        };
+        measure();
+        if (typeof ResizeObserver === 'undefined') return;
+        const observer = new ResizeObserver(measure);
+        observer.observe(row);
+        return () => observer.disconnect();
+    }, [lang]);
+
     return (
         <header style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }} className="map-mobile-header w-full flex flex-col gap-2.5 pointer-events-auto">
-            <div className="map-header-search-row max-w-none md:max-w-[var(--shell-content-max)] mx-auto flex items-center gap-2">
+            <div ref={rowRef} className={`map-header-search-row max-w-none md:max-w-[var(--shell-content-max)] mx-auto flex items-center gap-2${scanIcon ? ' is-scan-icon' : ''}`}>
                 <div data-tour="search" className="map-search-shell relative flex-1 min-w-0 flex items-center transition-all duration-300">
                     {/* Stage A: the docked nav Profile tab replaces this at every width (same setView(PROFILE)).
                         Kept in the DOM, hidden, so the tour target is not deleted. */}
