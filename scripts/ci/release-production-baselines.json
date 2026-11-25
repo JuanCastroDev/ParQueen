@@ -1,0 +1,11 @@
+{
+  "description": "Production source baselines approved for exact-SHA release verification. A baseline is the commit whose build is proven to be live. Adding or changing an entry is a provenance-critical change.",
+  "baselines": [
+    {
+      "sha": "a7d53cc8ef2738331cb5d9c8394b21b8cb3ecaab",
+      "hostingSite": "parkqueen-46475363-ccf36",
+      "hostingVersion": "f8a02be15a2e22ca",
+      "evidence": "All 94 served files byte-identical to a clean LF build of this commit (read-only inventory, 2026-11-25)."
+    }
+  ]
+}

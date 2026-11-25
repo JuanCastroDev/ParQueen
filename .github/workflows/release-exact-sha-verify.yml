@@ -1,0 +1,410 @@
+name: Release exact-SHA verification
+
+# Manual, read-only verification of ONE immutable release commit that is not on main
+# (for example a narrow release built on the live production baseline).
+#
+# Why this exists: a pull request into main tests the merge with current main, and PR Gate's
+# workflow_dispatch fails closed because it has no pull-request diff. Neither can test an
+# off-main commit by itself. This workflow does, and only that.
+#
+# Trust model:
+# - Dispatch it from main. Every job refuses any other workflow ref, so the definition and the
+#   helper (scripts/ci/release-exact-sha.mjs) are the reviewed copies on main. Nothing from the
+#   release branch's .github/ or scripts/ci/ is executed; the scope check rejects releases that
+#   change them.
+# - The release commit is fetched from this repository only, must be the current head of the
+#   named release/* branch, must descend from an approved production baseline
+#   (scripts/ci/release-production-baselines.json), and is checked out detached and verified by
+#   commit and tree before anything runs. The branch is re-checked at the end.
+# - The provenance guard runs from the baseline's archived verifier, which must be byte-identical
+#   to main's trusted copy, and must report PASS.
+# - Read-only token, no secrets, no deploy step, demo emulator projects only. Repository
+#   variable VITE_MAPBOX_TOKEN (public pk token) is used for the production build, as in PR Gate.
+#
+# Output: an evidence artifact with disposition PASS / FAIL / BLOCKED. It is NOT the required
+# `gate` / `private provenance required` checks and does not authorize a deployment. It is valid
+# only for the exact release SHA, tree, baseline and workflow revision it records.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Full 40-character release commit SHA
+        required: true
+        type: string
+      release_branch:
+        description: release/... branch that must currently point at release_sha
+        required: true
+        type: string
+      baseline_sha:
+        description: Full 40-character approved production baseline SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-exact-sha-${{ inputs.release_sha }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_SHA: ${{ inputs.release_sha }}
+  RELEASE_BRANCH: ${{ inputs.release_branch }}
+  BASELINE_SHA: ${{ inputs.baseline_sha }}
+
+jobs:
+  authorize:
+    name: authorize release identity and scope
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release_tree: ${{ steps.authorize.outputs.release_tree }}
+      baseline_tree: ${{ steps.authorize.outputs.baseline_tree }}
+    steps:
+      # TM-16: SHA-pinned (same pins as PR Gate).
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Verify identity, ancestry and scope
+        id: authorize
+        env:
+          OUT_DIR: ${{ runner.temp }}/authorize
+        run: node scripts/ci/release-exact-sha.mjs authorize
+
+      - name: Provenance guard (baseline verifier, bound to main)
+        env:
+          OUT_DIR: ${{ runner.temp }}/authorize
+        run: |
+          set -euo pipefail
+          work="${RUNNER_TEMP}/verifier"
+          mkdir -p "$work"
+          git -c core.autocrlf=false archive "$BASELINE_SHA" scripts/ci/provenance-change-guard.mjs scripts/ci/provenance-evidence.mjs scripts/ci/provenance-trust-anchor.json | tar -x -C "$work"
+          for f in provenance-change-guard.mjs provenance-evidence.mjs provenance-trust-anchor.json; do
+            if [ "$(sha256sum < "$work/scripts/ci/$f")" != "$(git cat-file blob "${GITHUB_SHA}:scripts/ci/$f" | sha256sum)" ]; then
+              echo "RELEASE_EXACT_SHA: FAIL_CLOSED baseline verifier differs from main's trusted $f" >&2
+              exit 1
+            fi
+          done
+          GITHUB_EVENT_NAME=release_exact_sha PR_BASE_SHA="$BASELINE_SHA" PR_HEAD_SHA="$RELEASE_SHA" \
+            node "$work/scripts/ci/provenance-change-guard.mjs" | tee "$OUT_DIR/provenance-guard.txt"
+          grep -Fxq 'PROVENANCE_GUARD: PASS' "$OUT_DIR/provenance-guard.txt"
+
+      - name: Upload authorization evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: authorize
+          path: ${{ runner.temp }}/authorize
+          if-no-files-found: ignore
+
+  verify:
+    name: verify ${{ matrix.subject }}
+    needs: authorize
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        # The baseline runs the same checks under the same CI so a shared failure can be told
+        # apart from one the release introduced.
+        subject: [release, baseline]
+    env:
+      SUBJECT_SHA: ${{ matrix.subject == 'release' && inputs.release_sha || inputs.baseline_sha }}
+      SUBJECT_TREE: ${{ matrix.subject == 'release' && needs.authorize.outputs.release_tree || needs.authorize.outputs.baseline_tree }}
+      SUBJECT: ${{ matrix.subject }}
+      FIREBASE_CLI_EXPERIMENTS: webframeworks
+    steps:
+      - name: Evidence directory
+        run: echo "EVIDENCE=${RUNNER_TEMP}/verify-${SUBJECT}" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ matrix.subject == 'release' && inputs.release_sha || inputs.baseline_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Confirm detached HEAD, tree and clean tracked state
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          head="$(git rev-parse HEAD)"; tree="$(git rev-parse 'HEAD^{tree}')"
+          [ "$head" = "$SUBJECT_SHA" ] || { echo "HEAD $head is not $SUBJECT_SHA" >&2; exit 1; }
+          [ "$tree" = "$SUBJECT_TREE" ] || { echo "tree $tree is not $SUBJECT_TREE" >&2; exit 1; }
+          [ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "tracked files are not clean" >&2; exit 1; }
+          echo "$head" > "$EVIDENCE/head.txt"; echo "$tree" > "$EVIDENCE/tree.txt"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # The checks below mirror PR Gate's workflow_dispatch route (every suite), in the same order.
+      - id: npm_ci
+        continue-on-error: true
+        run: npm ci
+      - id: functions_npm_ci
+        continue-on-error: true
+        run: npm ci --prefix functions
+      - id: playwright_install
+        continue-on-error: true
+        run: npx playwright install --with-deps chromium
+      - id: unit_tests
+        continue-on-error: true
+        run: node scripts/ci/general-pr-suite.mjs --reporter=default --reporter=json --outputFile.json="$EVIDENCE/vitest.json"
+      - id: typecheck
+        continue-on-error: true
+        run: npx tsc --noEmit
+      - id: production_build
+        continue-on-error: true
+        run: npm run build
+        env:
+          VITE_MAPBOX_TOKEN: ${{ vars.VITE_MAPBOX_TOKEN }}
+      - name: CI build manifest
+        if: steps.production_build.outcome == 'success'
+        run: (cd dist && find . -type f -print0 | sort -z | xargs -0 sha256sum) > "$EVIDENCE/dist-manifest.sha256"
+      - id: posthog_release
+        continue-on-error: true
+        run: npm run verify:posthog:release
+      - id: e2e
+        continue-on-error: true
+        run: npm run test:e2e
+      - id: functions_npm10_ci
+        continue-on-error: true
+        run: |
+          npm install -g npm@10
+          npm ci --prefix functions --include=optional
+      - id: sharp_smoke
+        continue-on-error: true
+        run: |
+          node -e "
+            const sharp = require('./functions/node_modules/sharp');
+            const v = sharp.versions;
+            const gte = (a, m) => { const [a0,a1,a2]=a.split('.').map(Number); const [m0,m1,m2]=m.split('.').map(Number); return a0!==m0 ? a0>m0 : a1!==m1 ? a1>m1 : a2>=m2; };
+            if (!gte(v.sharp, '0.35.3') || !gte(v.vips, '8.18.3')) throw new Error('sharp/vips too old');
+            sharp({ create: { width: 32, height: 32, channels: 3, background: { r:200,g:80,b:80 } } })
+              .withMetadata({ orientation: 6 }).jpeg({ quality: 80 }).toBuffer()
+              .then(buf => sharp(buf, { failOn:'warning', limitInputPixels:16777216, limitInputChannels:4 })
+                .resize({ width:512, height:512, fit:'inside', withoutEnlargement:true }).webp({ quality: 80 }).toBuffer())
+              .then(webp => sharp(webp).metadata())
+              .then(m => { if (m.format !== 'webp' || m.exif !== undefined) throw new Error('sharp smoke failed'); console.log('sharp smoke PASS'); });
+          "
+      - id: firebase_cli
+        continue-on-error: true
+        run: npm install -g firebase-tools@15.24.0
+      - id: functions_index_load
+        continue-on-error: true
+        run: timeout --signal=KILL 120 node .github/scripts/probe-functions-index-load.js
+        env:
+          FIREBASE_CONFIG: '{"projectId":"demo-parkqueen","storageBucket":"demo-parkqueen.appspot.com"}'
+          GCLOUD_PROJECT: demo-parkqueen
+          FUNCTIONS_EMULATOR: 'true'
+      - id: functions_integration
+        continue-on-error: true
+        run: npm run test:functions
+      - id: functions_isolated
+        continue-on-error: true
+        run: npm run test:functions:isolated
+      - id: firestore_rules
+        continue-on-error: true
+        run: npm run test:rules
+      - id: analytics_consent_emulator
+        continue-on-error: true
+        run: firebase emulators:exec --only firestore --project demo-parkqueen-rules-test "node node_modules/vitest/vitest.mjs run utils/analyticsConsentFirestore.emulator.test.ts"
+      - id: storage_rules
+        continue-on-error: true
+        run: npm run test:storage:rules
+
+      - name: Record outcomes
+        if: always()
+        env:
+          OUTCOMES: >-
+            npm-ci=${{ steps.npm_ci.outcome }}
+            functions-npm-ci=${{ steps.functions_npm_ci.outcome }}
+            playwright-install=${{ steps.playwright_install.outcome }}
+            unit-tests=${{ steps.unit_tests.outcome }}
+            typecheck=${{ steps.typecheck.outcome }}
+            production-build=${{ steps.production_build.outcome }}
+            posthog-release=${{ steps.posthog_release.outcome }}
+            e2e=${{ steps.e2e.outcome }}
+            functions-npm10-ci=${{ steps.functions_npm10_ci.outcome }}
+            sharp-smoke=${{ steps.sharp_smoke.outcome }}
+            firebase-cli=${{ steps.firebase_cli.outcome }}
+            functions-index-load=${{ steps.functions_index_load.outcome }}
+            functions-integration=${{ steps.functions_integration.outcome }}
+            functions-isolated=${{ steps.functions_isolated.outcome }}
+            firestore-rules=${{ steps.firestore_rules.outcome }}
+            analytics-consent-emulator=${{ steps.analytics_consent_emulator.outcome }}
+            storage-rules=${{ steps.storage_rules.outcome }}
+        run: |
+          mkdir -p "$EVIDENCE"
+          : > "$EVIDENCE/outcomes.tsv"
+          failed=0
+          for pair in $OUTCOMES; do
+            name="${pair%%=*}"; outcome="${pair#*=}"
+            if [ "$outcome" = success ]; then code=0; else code=1; failed=1; fi
+            printf '%s\t%s\n' "$name" "$code" >> "$EVIDENCE/outcomes.tsv"
+          done
+          cat "$EVIDENCE/outcomes.tsv"
+          echo "$failed" > "$EVIDENCE/failed.txt"
+
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verify-${{ matrix.subject }}
+          path: ${{ runner.temp }}/verify-${{ matrix.subject }}
+          if-no-files-found: ignore
+
+      - name: Fail when any check failed
+        if: always()
+        run: test "$(cat "$EVIDENCE/failed.txt" 2>/dev/null || echo 1)" = 0
+
+  gitleaks:
+    name: secret scan (baseline..release)
+    needs: authorize
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Checkout main for the trusted .gitleaks.toml; the release commits are scanned as history.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch release commits as data
+        run: git fetch --no-tags --no-write-fetch-head origin "+refs/heads/${RELEASE_BRANCH}:refs/release-exact-sha/candidate"
+      - name: Install pinned gitleaks 8.30.1
+        run: |
+          set -euo pipefail
+          curl -sSfL -o "$RUNNER_TEMP/gitleaks.tgz" https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP" gitleaks
+      - name: Scan release commits
+        run: |
+          set +e
+          mkdir -p "$RUNNER_TEMP/gitleaks-out"
+          [ "$(git rev-parse refs/release-exact-sha/candidate)" = "$RELEASE_SHA" ] || { echo 1 > "$RUNNER_TEMP/gitleaks-out/exit.txt"; exit 1; }
+          "$RUNNER_TEMP/gitleaks" git --config .gitleaks.toml --log-opts="${BASELINE_SHA}..${RELEASE_SHA}" --redact --no-banner --exit-code 1 \
+            --report-format json --report-path "$RUNNER_TEMP/gitleaks-out/report.json" .
+          code=$?
+          echo "$code" > "$RUNNER_TEMP/gitleaks-out/exit.txt"
+          exit "$code"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: gitleaks
+          path: ${{ runner.temp }}/gitleaks-out
+          if-no-files-found: ignore
+
+  codeql:
+    name: CodeQL ${{ matrix.language }} (no upload)
+    needs: authorize
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, actions]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.release_sha }}
+          persist-credentials: false
+      - name: Confirm release commit
+        run: test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+      # Same pinned CodeQL and query suite as codeql.yml; results are not uploaded.
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-and-quality
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          category: "/language:${{ matrix.language }}"
+          upload: never
+          output: ${{ runner.temp }}/sarif
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          path: _trusted_main
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: authorize
+          path: ${{ runner.temp }}/authorize
+      - name: Fail on results in changed files
+        env:
+          SARIF_DIR: ${{ runner.temp }}/sarif
+          CHANGED_FILES: ${{ runner.temp }}/authorize/changed-files.txt
+        run: |
+          set +e
+          mkdir -p "$RUNNER_TEMP/codeql-out"
+          node _trusted_main/scripts/ci/release-exact-sha.mjs codeql | tee "$RUNNER_TEMP/codeql-out/codeql.txt"
+          code=${PIPESTATUS[0]}
+          echo "$code" > "$RUNNER_TEMP/codeql-out/exit.txt"
+          exit "$code"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: codeql-${{ matrix.language }}
+          path: ${{ runner.temp }}/codeql-out
+          if-no-files-found: ignore
+
+  evidence:
+    name: evidence and disposition
+    needs: [authorize, verify, gitleaks, codeql]
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: ${{ runner.temp }}/evidence
+      - name: Re-check that the release branch did not move
+        id: recheck
+        continue-on-error: true
+        run: node scripts/ci/release-exact-sha.mjs recheck
+      - name: Disposition
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/evidence
+          OUT_DIR: ${{ runner.temp }}/report
+          BRANCH_UNCHANGED: ${{ steps.recheck.outcome == 'success' }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ACTOR: ${{ github.actor }}
+        run: node scripts/ci/release-exact-sha.mjs report
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: exact-sha-evidence-${{ inputs.release_sha }}
+          path: ${{ runner.temp }}/report
+          retention-days: 90
