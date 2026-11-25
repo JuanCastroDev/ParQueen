@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useRef, useState } from 'react';
+﻿import React, { useLayoutEffect, useRef, useState } from 'react';
 import { Search, Camera, MessageSquare, Bell } from 'lucide-react';
 import { AppView } from '../../types';
 import { t, useLang } from '../../i18n';
@@ -68,7 +68,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
     const rowRef = useRef<HTMLDivElement>(null);
     const [scanIcon, setScanIcon] = useState(false);
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         const row = rowRef.current;
         const input = row?.querySelector('input');
         const scan = row?.querySelector('.map-ai-action');
@@ -84,7 +84,6 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
             probe.style.fontSize = '16px';
             probe.style.fontFamily = style.fontFamily;
             probe.style.fontWeight = style.fontWeight;
-            probe.style.letterSpacing = style.letterSpacing;
             probe.style.position = 'absolute';
             probe.style.whiteSpace = 'nowrap';
             probe.style.visibility = 'hidden';
@@ -95,11 +94,14 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
         };
         const measure = () => {
             if (!input.clientWidth) return;
+            const style = getComputedStyle(input);
             const text = placeholderWidth();
             const scanWidth = scan.getBoundingClientRect().width;
             if (scanWidth > 50) labelExtra = scanWidth - 44;
-            const availableWithLabel = input.clientWidth - (scanWidth <= 50 ? labelExtra : 0);
-            const next = text > availableWithLabel + 1;
+            const field = input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+            const availableWithLabel = field - (scanWidth <= 50 ? labelExtra : 0);
+            // Leave a few pixels so the last letter is not replaced by an ellipsis.
+            const next = text + 8 > availableWithLabel;
             setScanIcon((current) => current === next ? current : next);
         };
         measure();
