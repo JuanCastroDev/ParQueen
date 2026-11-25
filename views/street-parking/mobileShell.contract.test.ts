@@ -117,6 +117,8 @@ describe('mobile shell layout contract', () => {
     const css = read('index.css');
 
     expect(css).toContain('--mobile-map-header-width: min(calc(100vw - 8px), 372px)');
+    expect(css).toContain('container-name: map-header');
+    expect(css).toMatch(/@container map-header \(max-width: 18em\)[\s\S]*?\.map-ai-action-label\s*\{[^}]*display:\s*none/);
     expect(css).toMatch(/\.map-header-search-row\s*\{[^}]*width:\s*var\(--mobile-map-header-width\)/s);
     expect(css).toMatch(/\.map-search-shell\s*\{[^}]*flex:\s*1 1 auto[^}]*min-height:\s*51px/s);
     expect(css).toMatch(/\.map-search-input\s*\{[^}]*text-overflow:\s*ellipsis/s);

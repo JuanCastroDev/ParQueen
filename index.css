@@ -171,6 +171,26 @@ html, body, #root {
 /* Center-Ping mobile prototype: one cohesive navigation/action system. */
 .map-header-search-row {
   width: var(--mobile-map-header-width);
+  container-type: inline-size;
+  container-name: map-header;
+  font-size: 16px;
+}
+
+/* The row's em grows with the user's text size. At a normal size the Scan
+   word fits beside the placeholder; when the text is enlarged, keep the
+   16px-or-larger field and collapse Scan to its icon. */
+@container map-header (max-width: 18em) {
+  .map-ai-action-label {
+    display: none;
+  }
+
+  .map-ai-action {
+    width: 44px;
+    max-width: 44px;
+    min-width: 44px;
+    padding: 0;
+    justify-content: center;
+  }
 }
 
 .map-search-shell,
