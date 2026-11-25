@@ -212,13 +212,16 @@ describe('outcome parsing', () => {
   });
 });
 
+const MANIFEST = `${'a'.repeat(64)}  ./assets/index-abc.js\n${'b'.repeat(64)}  ./index.html\n`;
+
 describe('disposition is fail-closed', () => {
-  const vitestOk = { numTotalTests: 10, numFailedTests: 0, testResults: [] };
+  const vitestOk = { numTotalTests: 10, numFailedTests: 0, success: true, testResults: [] };
   const subject = (head, tree, codes = {}, failed = []) => ({
     head, tree, errors: [],
     outcomes: Object.fromEntries(EXPECTED_CHECKS.map(c => [c, codes[c] ?? 0])),
-    vitest: failed.length ? { numTotalTests: 10, numFailedTests: failed.length } : vitestOk,
+    vitest: failed.length ? { numTotalTests: 10, numFailedTests: failed.length, success: false } : vitestOk,
     failedTests: failed,
+    manifest: (codes['production-build'] ?? 0) === 0 ? MANIFEST : null,
   });
   const good = () => ({
     auth: { ok: true, releaseSha: B, releaseTree: T1, baselineSha: A, baselineTree: T2 },
@@ -256,9 +259,58 @@ describe('disposition is fail-closed', () => {
     expect(disposition({ ...good(), baseline: { ...subject(A, T2), errors: ['unexpected check deploy'] } }).result).toBe('FAIL');
   });
 
-  it('fails when unit tests "pass" without a real report', () => {
-    expect(disposition({ ...good(), release: { ...subject(B, T1), vitest: null } }).result).toBe('FAIL');
-    expect(disposition({ ...good(), release: { ...subject(B, T1), vitest: { numTotalTests: 0, numFailedTests: 0 } } }).result).toBe('FAIL');
+  it('fails when unit tests "pass" without a real report, for the release AND the baseline', () => {
+    for (const side of ['release', 'baseline']) {
+      const s = side === 'release' ? subject(B, T1) : subject(A, T2);
+      const bad = [
+        { vitest: null },
+        { vitest: { numTotalTests: 0, numFailedTests: 0 } },
+        { vitest: { numTotalTests: 10, numFailedTests: 1 } },
+        { vitest: { numTotalTests: 10, numFailedTests: 0, success: false } },
+        { failedTests: ['x > y'] },
+      ];
+      for (const patch of bad) {
+        const d = disposition({ ...good(), [side]: { ...s, ...patch } });
+        expect(d.result, `${side} ${JSON.stringify(patch)}`).toBe('FAIL');
+        expect(d.reasons.some(r => r.startsWith(`${side}:`))).toBe(true);
+      }
+    }
+  });
+
+  it('fails when a recorded unit-test failure is contradicted by a clean report', () => {
+    const contradicted = { ...subject(A, T2, { 'unit-tests': 1 }), vitest: { numTotalTests: 10, numFailedTests: 0, success: true }, failedTests: [] };
+    const d = disposition({ ...good(), release: subject(B, T1, { 'unit-tests': 1 }, ['a > x']), baseline: contradicted });
+    expect(d.result).toBe('FAIL');
+    expect(d.reasons.join()).toContain('baseline: unit-tests failed but vitest.json reports a clean run');
+  });
+
+  it('fails when a successful build has no usable manifest, for the release AND the baseline', () => {
+    for (const side of ['release', 'baseline']) {
+      const s = side === 'release' ? subject(B, T1) : subject(A, T2);
+      for (const [label, manifest] of [
+        ['missing', null],
+        ['empty', ''],
+        ['blank lines', '\n\n'],
+        ['malformed hash', `${'z'.repeat(64)}  ./index.html\n`],
+        ['short hash', `abc  ./index.html\n`],
+        ['no path', `${'a'.repeat(64)}\n`],
+        ['no index.html', `${'a'.repeat(64)}  ./assets/x.js\n`],
+        ['duplicate path', `${'a'.repeat(64)}  ./index.html\n${'b'.repeat(64)}  ./index.html\n`],
+      ]) {
+        const d = disposition({ ...good(), [side]: { ...s, manifest } });
+        expect(d.result, `${side} ${label}`).toBe('FAIL');
+        expect(d.reasons.join(), `${side} ${label}`).toMatch(new RegExp(`${side}: dist-manifest`));
+      }
+    }
+  });
+
+  it('does not require a manifest when the build genuinely failed, and keeps the comparison policy', () => {
+    const noBuild = (h, t) => subject(h, t, { 'production-build': 1 });
+    expect(noBuild(B, T1).manifest).toBeNull();
+    expect(disposition({ ...good(), release: noBuild(B, T1), baseline: noBuild(A, T2) }).result).toBe('BLOCKED');
+    const releaseOnly = disposition({ ...good(), release: noBuild(B, T1) });
+    expect(releaseOnly.result).toBe('FAIL');
+    expect(releaseOnly.reasons.join()).toContain('production-build failed on the release only');
   });
 
   it('blocks shared failures, fails new ones and fails uncomparable unit-test failures', () => {
@@ -288,19 +340,53 @@ describe('partial artifact downloads', () => {
     }
   };
   const outcomes = EXPECTED_CHECKS.map(c => `${c}\t0`).join('\n') + '\n';
-  const vitest = JSON.stringify({ numTotalTests: 5, numFailedTests: 0, testResults: [] });
+  const vitest = JSON.stringify({ numTotalTests: 5, numFailedTests: 0, success: true, testResults: [] });
   const complete = {
     'authorize/authorize.json': JSON.stringify({ ok: true, releaseSha: B, releaseTree: T1, baselineSha: A, baselineTree: T2 }),
     'authorize/provenance.json': JSON.stringify({ ok: true }),
     'verify-release/head.txt': `${B}\n`, 'verify-release/tree.txt': `${T1}\n`, 'verify-release/outcomes.tsv': outcomes, 'verify-release/vitest.json': vitest,
+    'verify-release/dist-manifest.sha256': MANIFEST,
     'verify-baseline/head.txt': `${A}\n`, 'verify-baseline/tree.txt': `${T2}\n`, 'verify-baseline/outcomes.tsv': outcomes, 'verify-baseline/vitest.json': vitest,
+    'verify-baseline/dist-manifest.sha256': MANIFEST,
     'gitleaks/exit.txt': '0\n', 'codeql-javascript-typescript/exit.txt': '0\n', 'codeql-actions/exit.txt': '0\n',
   };
-  const decide = omit => {
+  const decide = (omit, replace = {}) => {
     const dir = mkdtempSync(path.join(root, 'ev-'));
-    lay(dir, Object.fromEntries(Object.entries(complete).filter(([p]) => !omit.some(o => p.startsWith(o)))));
+    lay(dir, { ...Object.fromEntries(Object.entries(complete).filter(([p]) => !omit.some(o => p.startsWith(o)))), ...replace });
     return disposition(collectEvidence(dir, { BRANCH_UNCHANGED: 'true' }));
   };
+
+  it('fails when only the baseline vitest.json is missing from otherwise passing evidence', () => {
+    const d = decide(['verify-baseline/vitest.json']);
+    expect(d.result).toBe('FAIL');
+    expect(d.reasons).toContain('baseline: unit-tests passed without a valid vitest.json');
+  });
+
+  it('fails on a malformed baseline vitest.json', () => {
+    expect(decide([], { 'verify-baseline/vitest.json': '{not json' }).result).toBe('FAIL');
+  });
+
+  it.each([
+    ['missing release manifest', ['verify-release/dist-manifest.sha256'], {}, /release: dist-manifest.sha256 is missing/],
+    ['empty release manifest', [], { 'verify-release/dist-manifest.sha256': '' }, /release: dist-manifest.sha256 is empty/],
+    ['malformed release manifest', [], { 'verify-release/dist-manifest.sha256': 'not a manifest\n' }, /release: dist-manifest.sha256 has 1 malformed/],
+    ['missing baseline manifest after a successful baseline build', ['verify-baseline/dist-manifest.sha256'], {}, /baseline: dist-manifest.sha256 is missing/],
+  ])('fails on %s', (_label, omit, replace, reason) => {
+    const d = decide(omit, replace);
+    expect(d.result).toBe('FAIL');
+    expect(d.reasons.join('\n')).toMatch(reason);
+  });
+
+  it('records no manifest digest unless the manifest is present and well-formed', () => {
+    const dir = mkdtempSync(path.join(root, 'rep-'));
+    lay(dir, { ...complete, 'verify-release/dist-manifest.sha256': '' });
+    const out = mkdtempSync(path.join(root, 'rep-out-'));
+    const r = spawnSync(process.execPath, [SCRIPT, 'report'], { encoding: 'utf8', env: childEnv({ EVIDENCE_DIR: dir, OUT_DIR: out, BRANCH_UNCHANGED: 'true' }) });
+    expect(r.status).toBe(1);
+    const ev = JSON.parse(readFileSync(path.join(out, 'evidence.json'), 'utf8'));
+    expect(ev.disposition).toBe('FAIL');
+    expect(ev.ciBuildManifestSha256).toBeNull();
+  });
 
   it('passes with every artifact present', () => {
     expect(decide([]).result).toBe('PASS');

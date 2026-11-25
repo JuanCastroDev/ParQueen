@@ -454,6 +454,43 @@ export function parseOutcomes(text) {
 
 const readText = file => (existsSync(file) ? readFileSync(file, 'utf8') : null);
 
+// `sha256sum` output for every file in dist/ ("<64 hex><two spaces or space+*>./<path>").
+const MANIFEST_LINE = /^[0-9a-f]{64} [ *]\.\/\S(?:.*\S)?$/;
+
+export function manifestErrors(text) {
+  if (text == null) return ['dist-manifest.sha256 is missing after a successful production build'];
+  const lines = text.split(/\r?\n/).filter(l => l.length > 0);
+  if (lines.length === 0) return ['dist-manifest.sha256 is empty after a successful production build'];
+  const errors = [];
+  const bad = lines.filter(l => !MANIFEST_LINE.test(l));
+  if (bad.length) errors.push(`dist-manifest.sha256 has ${bad.length} malformed line(s)`);
+  const paths = lines.filter(l => MANIFEST_LINE.test(l)).map(l => l.slice(66).replace(/^\*/, '').trim());
+  if (new Set(paths).size !== paths.length) errors.push('dist-manifest.sha256 lists a path twice');
+  if (!paths.includes('./index.html')) errors.push('dist-manifest.sha256 has no ./index.html entry');
+  return errors;
+}
+
+// Test-report and build-artifact consistency for one subject. Applied to BOTH release and baseline.
+// A recorded success needs real evidence; a recorded failure must not be contradicted by a clean report.
+export function subjectIntegrityErrors(subject) {
+  const errors = [];
+  const tests = subject?.outcomes?.['unit-tests'];
+  const v = subject?.vitest;
+  if (tests === 0) {
+    if (!v) errors.push('unit-tests passed without a valid vitest.json');
+    else {
+      if (!(Number.isInteger(v.numTotalTests) && v.numTotalTests > 0)) errors.push('vitest.json reports no tests');
+      if (v.numFailedTests !== 0) errors.push('vitest.json reports failed tests while unit-tests passed');
+      if (v.success === false) errors.push('vitest.json reports success=false while unit-tests passed');
+      if ((subject.failedTests || []).length) errors.push('vitest.json lists failed tests while unit-tests passed');
+    }
+  } else if (tests === 1 && v && v.numFailedTests === 0 && !(subject.failedTests || []).length && v.success !== false) {
+    errors.push('unit-tests failed but vitest.json reports a clean run');
+  }
+  if (subject?.outcomes?.['production-build'] === 0) errors.push(...manifestErrors(subject.manifest));
+  return errors;
+}
+
 // Reads one verify job's evidence. Any missing or malformed part is an error, never a default.
 export function subjectEvidence(dir) {
   const errors = [];
@@ -471,13 +508,15 @@ export function subjectEvidence(dir) {
   if (vitestText != null) {
     try { vitest = JSON.parse(vitestText); } catch { errors.push('vitest.json is malformed'); }
   }
-  return {
+  const subject = {
     head, tree, errors,
     outcomes: parsed.outcomes,
     vitest,
     failedTests: vitest ? failedTests(vitest) : null,
-    manifest: readText(path.join(dir, 'dist-manifest.sha256')) ?? '',
+    manifest: readText(path.join(dir, 'dist-manifest.sha256')),
   };
+  errors.push(...subjectIntegrityErrors(subject));
+  return subject;
 }
 
 function exitCode(file) {
@@ -501,7 +540,8 @@ export function disposition({ auth, provenance: prov, branchUnchanged, release, 
     ['baseline', baseline, auth?.baselineSha, auth?.baselineTree],
   ]) {
     if (!subject) { fails.push(`${label} evidence is missing`); continue; }
-    for (const e of subject.errors || []) fails.push(`${label}: ${e}`);
+    // Re-validated here so evidence assembled any other way gets the same checks.
+    for (const e of new Set([...(subject.errors || []), ...subjectIntegrityErrors(subject)])) fails.push(`${label}: ${e}`);
     if (!FULL_SHA.test(sha || '') || subject.head !== sha) fails.push(`${label} commit identity does not match`);
     if (!FULL_SHA.test(tree || '') || subject.tree !== tree) fails.push(`${label} tree identity does not match`);
   }
@@ -512,10 +552,6 @@ export function disposition({ auth, provenance: prov, branchUnchanged, release, 
   }
   if (fails.length) return { result: 'FAIL', reasons: fails };
 
-  const releaseTestsOk = release.outcomes['unit-tests'] === 0;
-  if (releaseTestsOk && (!release.vitest || !(release.vitest.numTotalTests > 0) || release.vitest.numFailedTests !== 0 || release.failedTests.length)) {
-    fails.push('release unit-tests passed without a complete vitest report');
-  }
   for (const check of EXPECTED_CHECKS) {
     if (release.outcomes[check] === 0) continue;
     if (check === 'unit-tests') {
@@ -561,7 +597,8 @@ export function report(env = process.env) {
   const collected = collectEvidence(ev, env);
   const decision = disposition(collected);
   const { auth, release, baseline, gitleaks, codeql } = collected;
-  const manifestSha = release?.manifest ? sha256(release.manifest) : null;
+  // A digest is recorded only over a present, well-formed manifest; never over missing evidence.
+  const manifestSha = release?.manifest != null && manifestErrors(release.manifest).length === 0 ? sha256(release.manifest) : null;
   const evidence = {
     kind: 'ParQueen isolated exact-SHA release verification (NOT the required PR Gate check)',
     disposition: decision.result,
