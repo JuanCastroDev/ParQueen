@@ -2,9 +2,10 @@
 
 /**
  * Inventory of client reads that bypass the callable version gate.
- * Production firestore.rules are unchanged. The proposed rules below are
- * the migration target and require an explicit founder decision before
- * they replace the public reads.
+ * Production firestore.rules are unchanged. The abbreviated rules below show
+ * only the intended clause. The candidate that is tested against the complete
+ * ruleset is buildStreetRulesClosedCandidate in streetRulesCandidate.js.
+ * Replacing the two public reads requires an explicit founder decision.
  *
  * Denying streetRules reads stops a client from loading a published schedule
  * through Firestore. It does not delete a schedule already stored on the
@@ -55,14 +56,14 @@ const STREET_RULES_CLIENTS = Object.freeze([
   Object.freeze({
     id: 'admin-segment-list',
     file: 'views/admin/StreetSegmentsPage.tsx',
-    reads: ['streetSegments', 'streetSegments/{id}/streetRules'],
-    ifDenied: 'The admin segment screen can no longer list rules. Move it to an Admin SDK callable before denying reads. A token role is not the replacement.',
+    reads: ['streetSegments', 'adminReadView streetScheduleList'],
+    ifDenied: 'Segment discovery stays public. Schedule rows come from the Admin SDK view. The view must be deployed before the admin UI, and before the rules change.',
   }),
   Object.freeze({
     id: 'admin-health',
     file: 'views/admin/StreetIntelligenceHealthPage.tsx',
-    reads: ['streetSegments counts', "collectionGroup('streetRules')"],
-    ifDenied: 'The health page count breaks. Move that count to an Admin SDK callable before denying the collection-group read.',
+    reads: ['streetSegments documents', 'adminReadView streetIntelligenceHealth'],
+    ifDenied: 'The active-rule count no longer uses collectionGroup. Borough rows still read public segment documents, which do not contain schedules.',
   }),
   Object.freeze({
     id: 'callable-persistence',

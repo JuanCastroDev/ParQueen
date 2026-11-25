@@ -99,6 +99,41 @@ export function fetchParseFailuresList(): Promise<{ failures: Record<string, any
   return callAdminReadView('parseFailuresList');
 }
 
+export interface AdminScheduleWindow {
+  side: string | null;
+  days: string[];
+  startTime: string | null;
+  endTime: string | null;
+  type: string | null;
+}
+
+export interface AdminScheduleRule {
+  id: string;
+  type: string | null;
+  schedules: AdminScheduleWindow[];
+}
+
+export function fetchStreetSchedules(segmentId: string): Promise<{
+  rules: AdminScheduleRule[];
+  nextCursor: string | null;
+  done: boolean;
+  segmentFound: boolean;
+}> {
+  return callAdminReadView('streetScheduleList', { segmentId, limit: 100 });
+}
+
+export function fetchStreetIntelligenceHealth(): Promise<{
+  totalSegments: number;
+  activeSegments: number;
+  sweepnycSegments: number;
+  adminSegments: number;
+  archivedSegments: number;
+  needsReviewSegments: number;
+  activeRules: number;
+}> {
+  return callAdminReadView('streetIntelligenceHealth');
+}
+
 export function fetchDashboardCounts(): Promise<{
   totalUsers: number;
   activePings: number;

@@ -38,8 +38,10 @@ describe('streetRules client access inventory', () => {
     expect(parking).toContain("collection(db, 'streetSegments', spot.segmentId, 'streetRules')");
     expect(map).toContain("collection(db, 'streetSegments')");
     expect(map).toContain('savedSpot.curbProtocolVersion === 2');
-    expect(health).toContain("collectionGroup(db!, 'streetRules')");
-    expect(admin).toContain("collection(db, 'streetSegments', seg.id, 'streetRules')");
+    expect(health).toContain('fetchStreetIntelligenceHealth');
+    expect(health).not.toContain("collectionGroup(");
+    expect(admin).toContain('fetchStreetSchedules');
+    expect(admin).not.toContain("collection(db, 'streetSegments', seg.id, 'streetRules')");
     expect(legacyCard).toContain("collection(db, 'streetSegments', segmentId, 'streetRules')");
     expect(legacyParking).toContain("collection(db, 'streetSegments', spot.segmentId, 'streetRules')");
     expect(persistence).toContain('streetSegments/${key}/streetRules');
