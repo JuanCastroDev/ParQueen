@@ -253,7 +253,7 @@ html, body, #root {
   min-height: 51px;
   min-width: 44px;
   padding: 0 10px;
-  gap: 7px
+  gap: 7px;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--mobile-shell-accent) 34%, rgba(110, 160, 230, 0.22));
   color: var(--mobile-shell-accent);
