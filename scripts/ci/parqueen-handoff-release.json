@@ -1,0 +1,16 @@
+{
+  "project": "parkqueen-46475363-ccf36",
+  "region": "us-central1",
+  "featureSha": "cc20d11119d70fe7aa379fd5877525ccdc193007",
+  "featureFirstParent": "ad19d807fd11483104d58518be5255f34ad421c0",
+  "baselineSha256": "7087aa6bdcd06c6891cbe44d885c00f8ec7bedc951adb908bb31661cfe71e765",
+  "archiveSha256": "5a5cfadc2049d74349af137fa01cc16d33ae9094fac7a39fc5dcf38fe96f4926",
+  "inventorySha256": "9a6c93d7e5ecb8e96ab109a49696fdbcd031e378ea37fb3f929564d24412df66",
+  "waitlistGuardSha256": "b4ef384d294524e3b4c4c87b00f6d63551a84837853e6dde823f09ef0be4f907",
+  "sourceFiles": 207,
+  "stages": {
+    "cleanup": ["cleanupAbandonedArrivedHandoffs"],
+    "feedback": ["awardCrowns", "updateTrustOnFeedback"],
+    "callable": ["completeHandoffSuccess"]
+  }
+}

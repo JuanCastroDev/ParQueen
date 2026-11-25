@@ -147,7 +147,7 @@ describe('provenance change guard command', () => {
     expect(result.stdout).not.toContain('PROVENANCE_GUARD: PASS');
   });
 
-  it('fails closed for workflow_dispatch and an unreadable file argument', () => {
+  it('fails closed for workflow_dispatch without exact identities and an unreadable file argument', () => {
     const dispatched = runGuard([], {
       GITHUB_EVENT_NAME: 'workflow_dispatch',
     });
@@ -162,6 +162,46 @@ describe('provenance change guard command', () => {
     expect(quoted.status).toBe(1);
     expect(quoted.stderr).toContain('FAIL_CLOSED');
     expect(quoted.stderr).toContain('classification failed');
+  });
+
+  it('accepts an exact-SHA workflow_dispatch only through the normal diff classifier', () => {
+    withSyntheticRepo((dir, base) => {
+      writeFileSync(path.join(dir, 'README.txt'), 'harmless release change\n');
+      gitIn(dir, ['add', '--', 'README.txt']);
+      gitIn(dir, ['commit', '-m', 'release']);
+      const head = gitIn(dir, ['rev-parse', 'HEAD']);
+      const dispatched = runGuard([], {
+        GITHUB_EVENT_NAME: 'workflow_dispatch',
+        PR_BASE_SHA: base,
+        PR_HEAD_SHA: head,
+      }, dir);
+      expect(dispatched.status).toBe(0);
+      expect(dispatched.stdout).toContain('PROVENANCE_GUARD: PASS');
+      expect(dispatched.stdout).toContain('Changed files: 1');
+    });
+  });
+
+  it('fails closed when workflow_dispatch supplies a divergent base and head', () => {
+    withSyntheticRepo((dir, base) => {
+      gitIn(dir, ['checkout', '-b', 'release']);
+      writeFileSync(path.join(dir, 'release.txt'), 'release\n');
+      gitIn(dir, ['add', '--', 'release.txt']);
+      gitIn(dir, ['commit', '-m', 'release']);
+      const head = gitIn(dir, ['rev-parse', 'HEAD']);
+      gitIn(dir, ['checkout', '-b', 'divergent', base]);
+      writeFileSync(path.join(dir, 'divergent.txt'), 'divergent\n');
+      gitIn(dir, ['add', '--', 'divergent.txt']);
+      gitIn(dir, ['commit', '-m', 'divergent']);
+      const divergentBase = gitIn(dir, ['rev-parse', 'HEAD']);
+      const dispatched = runGuard([], {
+        GITHUB_EVENT_NAME: 'workflow_dispatch',
+        PR_BASE_SHA: divergentBase,
+        PR_HEAD_SHA: head,
+      }, dir);
+      expect(dispatched.status).toBe(1);
+      expect(dispatched.stderr).toContain('head is not a descendant of base');
+      expect(dispatched.stderr).toContain('FAIL_CLOSED');
+    });
   });
 
   it('fails closed for the confirmed index and new-module bypasses', () => {

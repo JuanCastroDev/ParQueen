@@ -776,6 +776,12 @@ describe('local signing command and workflow binding', () => {
     expect(durable).toContain('pull_request_target:');
     expect(durable).toContain('ref: ${{ github.event.pull_request.base.sha }}');
     expect(durable).toContain('persist-credentials: false');
+    expect(gate).toContain('git rev-parse --verify "${PR_HEAD_SHA}^1"');
+    expect(gate).toContain('[ "${RELEASE_RUN_SHA}" != "${PR_HEAD_SHA}" ]');
+    expect(gate).toContain('[ "${RELEASE_RUN_REF}" != refs/heads/main ]');
+    expect(gate).toContain('GITHUB_EVENT_NAME=release_dispatch node "$work/scripts/ci/provenance-change-guard.mjs"');
+    expect(gate).toContain('git rev-parse HEAD');
+    expect(gate).toContain('ref: ${{ github.sha }}');
     const bootstrap = readFileSync(path.join(here, 'PROVENANCE_FOUNDER_EVIDENCE_BOOTSTRAP.md'), 'utf8');
     expect(bootstrap).toContain('25926302');
     expect(bootstrap).toContain('not mergeable');
@@ -799,9 +805,14 @@ describe('local signing command and workflow binding', () => {
       'scripts/ci/PROVENANCE_FOUNDER_EVIDENCE_BOOTSTRAP.md',
       'scripts/ci/general-pr-suite.mjs',
       'scripts/ci/provenance-change-guard.mjs',
+      'scripts/ci/provenance-change-guard.test.mjs',
       'scripts/ci/provenance-evidence.mjs',
       'scripts/ci/provenance-evidence.test.mjs',
       'scripts/ci/provenance-trust-anchor.json',
+      'scripts/ci/parqueen-handoff-release.json',
+      'scripts/ci/parqueen-handoff-runner.mjs',
+      'scripts/ci/parqueen-handoff-runner.test.mjs',
+      'scripts/ci/parqueen-handoff-predeploy.mjs',
     ];
     const files = status.stdout.split(/\r?\n/).filter(Boolean).map((line) => line.slice(3).replace(/\\/g, '/'));
     expect(files.every((file) => allowed.includes(file))).toBe(true);
