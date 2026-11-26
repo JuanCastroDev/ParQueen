@@ -8,7 +8,6 @@ const consumers = [
   '../views/LocationPromptView.tsx',
   '../views/StreetParkingView.tsx',
   '../views/NotificationsView.tsx',
-  '../views/assistant/HydrantDistanceTool.tsx',
 ] as const;
 
 describe('location consumers use the shared abstraction', () => {

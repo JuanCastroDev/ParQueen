@@ -159,14 +159,14 @@ export function resolveOnboardingAndroidBack(slideIndex: number): OnboardingAndr
   return slideIndex > 0 ? 'previousSlide' : 'minimize';
 }
 
-/** Parking Tools owns tool-mode; App only receives this high-level decision. */
-export type AssistantAndroidBackAction = 'backToHub' | 'leaveAssistant';
+/** The Sign Scanner owns its scan phases; App only receives this high-level decision. */
+export type SignScannerAndroidBackAction = 'backToScannerHome' | 'leaveScanner';
 
 /**
- * Mirror AssistantView visible Back:
- * - nested tool (scanner / hydrant / check) -> hub
- * - hub -> leave to Map
+ * Mirror the Sign Scanner's visible Back:
+ * - preview / reading / result / error -> scanner home (photo discarded, late result dropped)
+ * - scanner home -> leave to Map
  */
-export function resolveAssistantAndroidBack(isOnHub: boolean): AssistantAndroidBackAction {
-  return isOnHub ? 'leaveAssistant' : 'backToHub';
+export function resolveSignScannerAndroidBack(isOnScannerHome: boolean): SignScannerAndroidBackAction {
+  return isOnScannerHome ? 'leaveScanner' : 'backToScannerHome';
 }

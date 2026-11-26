@@ -33,6 +33,7 @@
         "!.windsurf/**",
         "!.github/prompts/**",
         "!dist/**",
+        "!docs/previews/**",
         "!node_modules/**"
       ],
       "ignoreDependencies": [
