@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest';
 // AuditLogPage.test.tsx / PingsPage.test.tsx / ParseFailuresPage.test.tsx.
 // Those tests prove each page actually calls its adminReadView-backed
 // service function; this proves none of the six migrated pages (plus
-// StreetIntelligenceHealthPage, which also reads a protected count) still
+// StreetIntelligenceHealthPage, whose protected counts come from the admin view) still
 // contains a direct Firestore SDK call against a now-protected collection.
 
 const root = process.cwd();
@@ -50,10 +50,11 @@ describe('AC-14 — no migrated admin page performs direct Firestore access for 
     });
   }
 
-  it('StreetIntelligenceHealthPage.tsx only reads the public streetSegments/streetRules collections directly, never a protected one', () => {
+  it('StreetIntelligenceHealthPage.tsx reads public streetSegments directly and schedule counts through the admin view', () => {
     const src = readView('views/admin/StreetIntelligenceHealthPage.tsx');
     expect(src).toMatch(/collection\(db!?,\s*['"]streetSegments['"]\)/);
-    expect(src).toMatch(/collectionGroup\(db!?,\s*['"]streetRules['"]\)/);
+    expect(src).not.toMatch(/collectionGroup\(db!?,\s*['"]streetRules['"]\)/);
+    expect(src).toMatch(/fetchStreetIntelligenceHealth/);
     for (const name of PROTECTED_COLLECTIONS) {
       expect(src).not.toMatch(new RegExp(`collection\\(db!?,\\s*['"]${name}['"]`));
     }
@@ -61,7 +62,7 @@ describe('AC-14 — no migrated admin page performs direct Firestore access for 
     expect(src).toMatch(/fetchDashboardCounts/);
   });
 
-  it('every migrated page imports its data exclusively from utils/adminReadService (except StreetIntelligenceHealthPage, which uses it only for the one protected count)', () => {
+  it('every migrated page imports its data from utils/adminReadService', () => {
     for (const page of MIGRATED_PAGES) {
       const src = readView(page);
       expect(src).toMatch(/from ['"].*utils\/adminReadService['"]/);
