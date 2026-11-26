@@ -20,7 +20,7 @@ describe('camera-only sign scanner packaging', () => {
 
   it('keeps the sign scanner on camera capture and off the photo library', () => {
     const scanner = read('./signScanner.ts');
-    const view = read('../views/AssistantView.tsx');
+    const view = read('../views/sign-scanner/SignScannerView.tsx');
     const plist = read('../ios/App/App/Info.plist');
     expect(scanner).not.toMatch(/chooseFromGallery|pickFromGallery/);
     expect(view).not.toMatch(/chooseFromGallery|pickFromGallery/);

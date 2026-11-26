@@ -14,10 +14,13 @@ describe('Street Intelligence safety-copy language parity', () => {
 
     setLang('en');
     expect(t('street_intel.decision_caution')).toBe('Check posted signs and current NYC rules before parking.');
-    expect(t('assistant.disclaimer')).toBe('AI interpretation may be incomplete or incorrect. Verify posted signs.');
+    // The Sign Scanner's AI limitation (replaced assistant.disclaimer when the Parking Tools hub was retired).
+    expect(t('scanner.boundary_strong')).toBe('An AI reading of your photo, not verified legal permission.');
+    expect(t('scanner.boundary_body')).toBe('It can be incomplete or wrong. The posted signs, curb markings, and local rules always apply.');
 
     setLang('es');
     expect(t('street_intel.decision_caution')).toBe('Revisa las señales publicadas y las reglas actuales de NYC antes de estacionarte.');
-    expect(t('assistant.disclaimer')).toBe('La interpretación de IA puede estar incompleta o ser incorrecta. Verifica las señales publicadas.');
+    expect(t('scanner.boundary_strong')).toBe('Es una lectura de tu foto hecha con IA, no un permiso legal verificado.');
+    expect(t('scanner.boundary_body')).toBe('Puede estar incompleta o equivocada. Siempre aplican las señales publicadas, las marcas de la acera y las reglas locales.');
   });
 });

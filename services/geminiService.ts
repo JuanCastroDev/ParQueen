@@ -18,6 +18,21 @@ export interface SignAnalysisResult {
   actionableAdvice?: string | null;
 }
 
+/** ERROR explanation when the callable itself failed (quota, rate limit, outage) — not the photo's fault. */
+export const SIGN_ANALYSIS_UNAVAILABLE_EXPLANATION =
+  "Assistant temporarily unavailable\nThe AI service is temporarily unavailable. Please try again shortly.";
+/** ERROR explanation for any other failure; a retake is the most useful next step. */
+export const SIGN_ANALYSIS_UNREADABLE_EXPLANATION =
+  "Couldn't read this sign\nTry taking another photo with the full sign visible and in focus.";
+
+/**
+ * True when an ERROR result came from the service being unavailable rather than from the photo.
+ * Lets the scanner lead with "Try again" (same photo) instead of "Retake" without adding a field
+ * to the analyzeSign response contract.
+ */
+export const isSignAnalysisUnavailable = (result: SignAnalysisResult): boolean =>
+  result.status === "ERROR" && result.explanation === SIGN_ANALYSIS_UNAVAILABLE_EXPLANATION;
+
 export const analyzeParkingSign = async (imageBase64: string): Promise<SignAnalysisResult> => {
   try {
     const fn = httpsCallable<{ imageBase64: string }, SignAnalysisResult>(getFns(), "analyzeSign");
@@ -25,17 +40,13 @@ export const analyzeParkingSign = async (imageBase64: string): Promise<SignAnaly
     return result.data;
   } catch (error: any) {
     console.error("Gemini Vision Error:", error);
-    const code = error?.code ?? error?.details?.code ?? "";
+    // The Firebase SDK reports callable failures as "functions/<code>"; a dropped
+    // connection arrives as "functions/internal".
+    const code = String(error?.code ?? error?.details?.code ?? "").replace(/^functions\//, "");
     if (code === "resource-exhausted" || code === "failed-precondition" || code === "unavailable" || code === "internal") {
-      return {
-        status: "ERROR",
-        explanation: "Assistant temporarily unavailable\nThe AI service is temporarily unavailable. Please try again shortly.",
-      };
+      return { status: "ERROR", explanation: SIGN_ANALYSIS_UNAVAILABLE_EXPLANATION };
     }
-    return {
-      status: "ERROR",
-      explanation: "Couldn't read this sign\nTry taking another photo with the full sign visible and in focus.",
-    };
+    return { status: "ERROR", explanation: SIGN_ANALYSIS_UNREADABLE_EXPLANATION };
   }
 };
 

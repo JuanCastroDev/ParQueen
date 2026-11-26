@@ -4,8 +4,8 @@ import { describe, expect, it } from 'vitest';
 const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 
 describe('sign scanner consumers stay camera-only', () => {
-  it('AssistantView does not import Capacitor Camera or a gallery picker', () => {
-    const source = read('../views/AssistantView.tsx');
+  it('SignScannerView does not import Capacitor Camera or a gallery picker', () => {
+    const source = read('../views/sign-scanner/SignScannerView.tsx');
     expect(source).not.toMatch(/from '@capacitor\/camera'/);
     expect(source).not.toMatch(/from '@capacitor\/app'/);
     expect(source).not.toMatch(/Capacitor\.(isNativePlatform|getPlatform)/);

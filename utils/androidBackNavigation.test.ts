@@ -4,9 +4,9 @@ import {
   dispatchAndroidSystemBack,
   editVehicleAfterOnboarding,
   resolveAndroidBack,
-  resolveAssistantAndroidBack,
   resolveMessagesAndroidBack,
   resolveOnboardingAndroidBack,
+  resolveSignScannerAndroidBack,
 } from './androidBackNavigation';
 
 const base = {
@@ -193,7 +193,7 @@ describe('resolveAndroidBack', () => {
     });
   });
 
-  it('delegates Parking Tools instead of jumping straight to Map', () => {
+  it('delegates the Sign Scanner instead of jumping straight to Map', () => {
     expect(resolveAndroidBack({ ...base, currentView: AppView.AI_ASSISTANT })).toEqual({
       type: 'delegateAssistant',
     });
@@ -240,13 +240,13 @@ describe('resolveOnboardingAndroidBack', () => {
   });
 });
 
-describe('resolveAssistantAndroidBack', () => {
-  it('returns nested tools to the Parking Tools hub', () => {
-    expect(resolveAssistantAndroidBack(false)).toBe('backToHub');
+describe('resolveSignScannerAndroidBack', () => {
+  it('returns preview / reading / result / error to the scanner home', () => {
+    expect(resolveSignScannerAndroidBack(false)).toBe('backToScannerHome');
   });
 
-  it('leaves Parking Tools from the hub', () => {
-    expect(resolveAssistantAndroidBack(true)).toBe('leaveAssistant');
+  it('leaves the Sign Scanner for the map from its home screen', () => {
+    expect(resolveSignScannerAndroidBack(true)).toBe('leaveScanner');
   });
 });
 
