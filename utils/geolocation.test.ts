@@ -13,6 +13,7 @@ import {
   mapBrowserPositionError,
   mapNativePositionError,
   mapPluginPermissionStatus,
+  mapRequestedPermissionStatus,
   normalizePosition,
   requestLocationPermission,
   watchPosition,
@@ -203,6 +204,70 @@ describe('native permission request does not re-prompt', () => {
     expect(snap.locationServicesEnabled).toBe(false);
     expect(snap.status).toBe('unavailable');
     expect(plugin.requestPermissions).not.toHaveBeenCalled();
+  });
+});
+
+describe('native permission request: the answer from the Android dialog', () => {
+  const requestWith = async (result: { location: string; coarseLocation?: string }) => {
+    const plugin = makeNativePlugin({ requestPermissions: vi.fn(async () => result) });
+    const snap = await createNativeGeolocation(plugin).requestPermission();
+    return { snap, plugin };
+  };
+
+  it('treats a first "Don\'t allow" (prompt-with-rationale) as a denial, asking only once', async () => {
+    const { snap, plugin } = await requestWith({ location: 'prompt-with-rationale', coarseLocation: 'prompt-with-rationale' });
+    expect(snap.status).toBe('denied');
+    expect(snap.locationServicesEnabled).toBe(true);
+    expect(plugin.requestPermissions).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an explicit permanent denial as denied', async () => {
+    const { snap } = await requestWith({ location: 'denied', coarseLocation: 'denied' });
+    expect(snap.status).toBe('denied');
+  });
+
+  it('keeps a precise grant as granted', async () => {
+    const { snap } = await requestWith({ location: 'granted', coarseLocation: 'granted' });
+    expect(snap).toMatchObject({ status: 'granted', accuracy: 'precise', precise: true });
+  });
+
+  it('keeps an approximate-only grant as granted even when precise was declined', async () => {
+    for (const location of ['prompt-with-rationale', 'denied']) {
+      const { snap } = await requestWith({ location, coarseLocation: 'granted' });
+      expect(snap).toMatchObject({ status: 'granted', accuracy: 'approximate', precise: false, approximate: true });
+    }
+  });
+
+  it('leaves a dismissed dialog (still plain prompt) as not decided', async () => {
+    const { snap } = await requestWith({ location: 'prompt', coarseLocation: 'prompt' });
+    expect(snap.status).toBe('prompt');
+  });
+
+  it('keeps location services off distinct from a denial when the request reports it', async () => {
+    const plugin = makeNativePlugin({
+      requestPermissions: vi.fn(async () => { throw { code: 'OS-PLUG-GLOC-0007' }; }),
+    });
+    const snap = await createNativeGeolocation(plugin).requestPermission();
+    expect(snap).toMatchObject({ status: 'unavailable', locationServicesEnabled: false });
+  });
+
+  it('keeps the startup check reading prompt-with-rationale as not decided, and still asks', async () => {
+    const plugin = makeNativePlugin({
+      checkPermissions: vi.fn(async () => ({ location: 'prompt-with-rationale', coarseLocation: 'prompt-with-rationale' })),
+      requestPermissions: vi.fn(async () => ({ location: 'granted', coarseLocation: 'granted' })),
+    });
+    const backend = createNativeGeolocation(plugin);
+    expect((await backend.checkPermission()).status).toBe('prompt');
+    expect(mapPluginPermissionStatus({ location: 'prompt-with-rationale', coarseLocation: 'prompt-with-rationale' }, true).status)
+      .toBe('prompt');
+    expect((await backend.requestPermission()).status).toBe('granted');
+    expect(plugin.requestPermissions).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps the requested result without changing the check-time mapping', () => {
+    const rationale = { location: 'prompt-with-rationale', coarseLocation: 'prompt-with-rationale' };
+    expect(mapRequestedPermissionStatus(rationale, true).status).toBe('denied');
+    expect(mapPluginPermissionStatus(rationale, true).status).toBe('prompt');
   });
 });
 

@@ -7,6 +7,18 @@
       "runtimeArgs": ["run", "dev"],
       "port": 5173,
       "autoPort": true
+    },
+    {
+      "name": "Sign Scanner Prototype",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "5181", "--bind", "127.0.0.1", "--directory", "docs/prototypes/sign-scanner"],
+      "port": 5181
+    },
+    {
+      "name": "Sign Scanner Preview",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--config", "docs/previews/sign-scanner/vite.config.ts"],
+      "port": 5182
     }
   ]
 }

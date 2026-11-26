@@ -76,6 +76,26 @@ export function recordScan(result: SignAnalysisResult): RecentScan[] {
   return next;
 }
 
+/**
+ * Puts back a list the user just cleared (the scanner's Undo). Only entries that pass the same
+ * shape check as loadRecentScans are written, so this can never widen what is stored.
+ */
+export function restoreRecentScans(scans: RecentScan[]): RecentScan[] {
+  const store = safeStorage();
+  const valid = scans
+    .filter(s => s && typeof s.id === 'string' && typeof s.title === 'string' && typeof s.ts === 'number'
+      && (s.status === 'YES' || s.status === 'NO' || s.status === 'CONDITIONAL'))
+    .map(s => ({ id: s.id, status: s.status, title: s.title.slice(0, MAX_TITLE), ts: s.ts }))
+    .slice(0, MAX);
+  if (!store) return valid;
+  try {
+    store.setItem(KEY, JSON.stringify(valid));
+  } catch {
+    // Quota or blocked storage: keep the in-memory list.
+  }
+  return valid;
+}
+
 export function clearRecentScans(): void {
   const store = safeStorage();
   try { store?.removeItem(KEY); } catch { /* ignore */ }
