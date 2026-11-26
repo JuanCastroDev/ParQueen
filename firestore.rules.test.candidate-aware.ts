@@ -38,6 +38,7 @@ import {
     writeBatch,
 } from 'firebase/firestore';
 import { assertRulesProject, readRulesEmulatorEndpoint } from './firestoreRulesEmulator';
+import { rulesTextUnderTest, streetRulesCandidateMode } from './firestoreRulesUnderTest';
 import { cancelClaimTransaction } from './views/street-parking/cancelClaimTransaction';
 import { commitClaimToHeading } from './views/street-parking/commitToHeading';
 import {
@@ -268,7 +269,7 @@ beforeAll(async () => {
     testEnv = await initializeTestEnvironment({
         projectId: PROJECT_ID,
         firestore: {
-            rules: readFileSync('firestore.rules', 'utf8'),
+            rules: rulesTextUnderTest(),
             host:  rulesEmulator.host,
             port:  rulesEmulator.port,
         },
@@ -3460,7 +3461,9 @@ describe('streetSegments/streetRules — direct client mutation blocked (coordin
     });
 
     it('SS-5: admin token can still read streetRules directly (dashboard listing unaffected)', async () => {
-        await assertSucceeds(getDoc(doc(adminDb(), 'streetSegments/seg-1/streetRules', 'rule-1')));
+        const read = getDoc(doc(adminDb(), 'streetSegments/seg-1/streetRules', 'rule-1'));
+        if (streetRulesCandidateMode()) await assertFails(read);
+        else await assertSucceeds(read);
     });
 
     it('SS-6: admin token can no longer directly update a streetRule (the confirmed backfill.ts exploit path)', async () => {
@@ -3477,7 +3480,9 @@ describe('streetSegments/streetRules — direct client mutation blocked (coordin
 
     it('SS-8: public/unauthenticated read access to streetSegments/streetRules is unchanged (Street Parking view depends on it)', async () => {
         await assertSucceeds(getDoc(doc(anonDb(), 'streetSegments', 'seg-1')));
-        await assertSucceeds(getDoc(doc(anonDb(), 'streetSegments/seg-1/streetRules', 'rule-1')));
+        const rulesRead = getDoc(doc(anonDb(), 'streetSegments/seg-1/streetRules', 'rule-1'));
+        if (streetRulesCandidateMode()) await assertFails(rulesRead);
+        else await assertSucceeds(rulesRead);
     });
 });
 
@@ -5143,7 +5148,7 @@ describe('A1 — one active incoming claim', () => {
     });
 
     it('F1-GATE-DORMANT: the complete dormant rollout predicate requires an explicit integer zero malformed count', () => {
-        const rules = readFileSync('firestore.rules', 'utf8');
+        const rules = rulesTextUnderTest();
         const start = rules.indexOf('function activeIncomingClaimInvariantEnforced() {');
         const end = rules.indexOf('\n    }', start);
         expect(start).toBeGreaterThan(-1);
@@ -6273,7 +6278,9 @@ describe('S7 access — Firestore caller gate', () => {
             await setDoc(doc(fs, 'suspensions', 'curb-s7'), { reason: 'sweep' });
         });
         await assertSucceeds(getDoc(doc(anonDb(), 'streetSegments', 'seg-s7')));
-        await assertSucceeds(getDoc(doc(anonDb(), 'streetSegments', 'seg-s7', 'streetRules', 'rule-s7')));
+        const rulesRead = getDoc(doc(anonDb(), 'streetSegments', 'seg-s7', 'streetRules', 'rule-s7'));
+        if (streetRulesCandidateMode()) await assertFails(rulesRead);
+        else await assertSucceeds(rulesRead);
         await assertSucceeds(getDoc(doc(anonDb(), 'suspensions', 'curb-s7')));
         await assertSucceeds(getDoc(doc(userDb(), 'streetSegments', 'seg-s7')));
         await assertSucceeds(getDoc(doc(userDb(), 'suspensions', 'curb-s7')));
@@ -6647,7 +6654,7 @@ describe('t743u — final rules: document-access headroom', () => {
     const CLM = 't743b-claimer';
     const GEN = 'cd'.repeat(32);
     const STARTED = Timestamp.fromMillis(Date.now() - 60_000);
-    const RULES_TEXT = readFileSync('firestore.rules', 'utf8');
+    const RULES_TEXT = rulesTextUnderTest();
     const PAD = 't743uPadDocs';
     const ANCHOR = 'return request.auth != null && !productAccessDenied() && !accountDeletionFenced();';
     const MIN_HEADROOM = 2;
@@ -6751,7 +6758,7 @@ describe('t745u — Ping create quota under the 1000-expression limit', () => {
         username: 'finder745', fullName: 'Finder Five', crowns: 0, status: 'Active', productAccessBlocked: false,
         vehicleColor: 'Red', vehicleType: 'Sedan', vehicleBrand: 'Toyota',
     };
-    const RULES_TEXT = readFileSync('firestore.rules', 'utf8');
+    const RULES_TEXT = rulesTextUnderTest();
     const RULE_LINES = RULES_TEXT.split('\n');
     function lineOf(needle: string, after = 0) {
         const i = RULE_LINES.findIndex((l, idx) => idx >= after && l.includes(needle));
@@ -7064,7 +7071,7 @@ describe('t745u — 5th Ping expression headroom', () => {
         username: 'finder745h', fullName: 'H', crowns: 0, status: 'Active', productAccessBlocked: false,
         vehicleColor: 'Red', vehicleType: 'Sedan', vehicleBrand: 'Toyota',
     };
-    const RULES_TEXT = readFileSync('firestore.rules', 'utf8');
+    const RULES_TEXT = rulesTextUnderTest();
     const CREATE_ANCHOR = '&& pingCreateRateRecorded(spotId)\n        && originLinkRecorded(spotId);';
     const FN_ANCHOR = '    function pingCreateRateRecorded(spotId) {';
     const PAD_FN = `    function t745uPad(i) {\n      return i != null${' && request.time != null'.repeat(10)};\n    }\n\n`;

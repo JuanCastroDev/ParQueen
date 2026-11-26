@@ -1,8 +1,8 @@
-import { readFileSync } from 'node:fs';
 import { beforeAll, afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { initializeTestEnvironment, type RulesTestEnvironment } from '@firebase/rules-unit-testing';
 import { doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
 import { assertRulesProject, readRulesEmulatorEndpoint, RULES_PROJECT_ID } from './firestoreRulesEmulator';
+import { rulesTextUnderTest } from './firestoreRulesUnderTest';
 
 const rulesEmulator = readRulesEmulatorEndpoint();
 assertRulesProject(RULES_PROJECT_ID);
@@ -14,7 +14,7 @@ let env: RulesTestEnvironment;
 beforeAll(async () => {
   env = await initializeTestEnvironment({
     projectId: RULES_PROJECT_ID,
-    firestore: { rules: readFileSync('firestore.rules', 'utf8'), host: rulesEmulator.host, port: rulesEmulator.port },
+    firestore: { rules: rulesTextUnderTest(), host: rulesEmulator.host, port: rulesEmulator.port },
   });
 });
 
@@ -72,7 +72,7 @@ describe('finder cancellation notice authority', () => {
   });
 
   it('keeps finder-cancel notices out of the client create list', () => {
-    const rules = readFileSync('firestore.rules', 'utf8');
+    const rules = rulesTextUnderTest();
     const notification = rules.slice(rules.indexOf('match /spotNotifications/'), rules.indexOf('// Design A attestations'));
     expect(notification).not.toContain("'cancelled',");
     expect(notification).toContain("'claimer_cancelled'");
