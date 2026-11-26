@@ -47,6 +47,7 @@ import {
     runTransaction,
 } from 'firebase/firestore';
 import { assertRulesProject, readRulesEmulatorEndpoint } from './firestoreRulesEmulator';
+import { rulesTextUnderTest } from './firestoreRulesUnderTest';
 
 const PROJECT_ID = 'demo-parkqueen-rules-test';
 const rulesEmulator = readRulesEmulatorEndpoint();
@@ -384,4 +385,4 @@ function register(id: string, title: string, fn: () => Promise<void>) {
 }
 
 suite('T1 legacy direct writes vs DEPLOYED production rules (134a97cf)', readDeployedRules, true);
-suite('T1 legacy direct writes vs HEAD candidate firestore.rules (unpublished)', () => readFileSync('firestore.rules', 'utf8'), false);
+suite('T1 legacy direct writes vs HEAD candidate firestore.rules (unpublished)', () => rulesTextUnderTest(), false);

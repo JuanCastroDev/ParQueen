@@ -95,6 +95,9 @@ export default defineConfig(({ command, mode }) => {
           'functions/curbIntelligence/androidReleaseGate.emulator.test.js',
           'functions/adminStreetScheduleRead.emulator.test.js',
           'functions/adminScheduleAuthorization.emulator.test.js',
+          ...(process.env.PARQUEEN_ACCEPTANCE_EMULATOR === '1'
+            ? []
+            : ['streetRulesMigrationAcceptance.emulator.test.tsx']),
           'firestore.rules.test.candidate-aware.ts',
           'firestore.rules.test.original-suite.ts',
           'firestore.rules.finder-notice.31ag.test.ts',

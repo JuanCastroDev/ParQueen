@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { rulesTextUnderTest } from './firestoreRulesUnderTest';
 import {
   assertFails,
   assertSucceeds,
@@ -46,7 +46,7 @@ describe('Ping direct-delete fallback rules', () => {
   beforeAll(async () => {
     env = await initializeTestEnvironment({
       projectId: PROJECT_ID,
-      firestore: { rules: readFileSync('firestore.rules', 'utf8') },
+      firestore: { rules: rulesTextUnderTest() },
     });
   });
 
