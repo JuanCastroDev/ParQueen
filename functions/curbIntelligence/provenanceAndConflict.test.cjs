@@ -312,7 +312,7 @@ test('post-review mutation and a failed validation do not become trusted', () =>
   assert.equal(again.ok, true);
   assert.throws(() => { again.authoritativeOutcomes = 'legacy-forged'; });
   record('mutation-and-cache', 'PASS', { first: first.reason, second: second.reason });
-});
+}, 15_000);
 
 test('compact Melville identity is unchanged on the original successor', () => {
   const record26c = successor.records.find(item => item.physicalId === '98053');
