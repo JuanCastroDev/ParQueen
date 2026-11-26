@@ -99,6 +99,52 @@ export function fetchParseFailuresList(): Promise<{ failures: Record<string, any
   return callAdminReadView('parseFailuresList');
 }
 
+export interface AdminScheduleWindow {
+  side: string | null;
+  days: string[];
+  startTime: string | null;
+  endTime: string | null;
+  type: string | null;
+}
+
+export interface AdminScheduleRule {
+  id: string;
+  type: string | null;
+  schedules: AdminScheduleWindow[];
+}
+
+export function fetchStreetSchedules(segmentId: string, cursor: string | null = null): Promise<{
+  rules: AdminScheduleRule[];
+  nextCursor: string | null;
+  done: boolean;
+  segmentFound: boolean;
+}> {
+  return callAdminReadView('streetScheduleList', { segmentId, cursor, limit: 100 });
+}
+
+export function appendSchedulePage(current: AdminScheduleRule[], incoming: AdminScheduleRule[]): AdminScheduleRule[] {
+  const seen = new Set(current.map(rule => rule.id));
+  const next = current.slice();
+  for (const rule of incoming) {
+    if (seen.has(rule.id)) continue;
+    seen.add(rule.id);
+    next.push(rule);
+  }
+  return next;
+}
+
+export function fetchStreetIntelligenceHealth(): Promise<{
+  totalSegments: number;
+  activeSegments: number;
+  sweepnycSegments: number;
+  adminSegments: number;
+  archivedSegments: number;
+  needsReviewSegments: number;
+  activeRules: number;
+}> {
+  return callAdminReadView('streetIntelligenceHealth');
+}
+
 export function fetchDashboardCounts(): Promise<{
   totalUsers: number;
   activePings: number;
