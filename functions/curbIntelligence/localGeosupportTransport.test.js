@@ -86,6 +86,7 @@ describe('local Function 3C transport', () => {
     const misconfigured = [
       { ...demoEnv, GCLOUD_PROJECT: 'parkqueen-46475363-ccf36', CURB_OFFICIAL_LION_PRIMARY: 'local' },
       { ...demoEnv, FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9098', CURB_OFFICIAL_LION_PRIMARY: 'local' },
+      { ...demoEnv, FIRESTORE_EMULATOR_HOST: '127.0.0.1:8180', CURB_OFFICIAL_LION_PRIMARY: 'local' },
       { ...demoEnv, FIRESTORE_EMULATOR_HOST: 'firestore.googleapis.com' },
       { ...demoEnv, FUNCTIONS_EMULATOR: 'false' },
       { ...demoEnv, CURB_LOCAL_FUNCTION3C: 'off', CURB_OFFICIAL_LION_PRIMARY: 'local' },

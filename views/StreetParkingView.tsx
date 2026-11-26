@@ -87,7 +87,16 @@ import { QaCurbFieldTest } from './street-parking/QaCurbFieldTest';
 import { useParkingTimer } from './street-parking/useParkingTimer';
 import { recordParkingAnalyticsEvent } from '../utils/parkingAnalytics';
 import { useMapChromePadding } from './street-parking/useMapChromePadding';
+import { App as CapacitorApp } from '@capacitor/app';
 import { SAVED_SPOT_KEY, readSavedSpot, writeSavedSpot, type SavedSpot } from '../utils/savedSpot';
+import {
+    expiredSideConfirmationReplacement,
+    runCurbSelectionAttempt,
+    savedSpotFieldsFromCanonicalResponse,
+    selectionMayCommit,
+    shouldRefreshSavedSpotOnForeground,
+    sideConfirmationMillisRemaining,
+} from '../utils/curbSelectionSession';
 import { usePingPhaseClock } from './street-parking/usePingPhaseClock';
 import { AppTour, TOUR_KEY } from './street-parking/AppTour';
 import { resolveNotificationPing } from '../utils/notificationPing';
@@ -98,96 +107,7 @@ import { getMapContextChip } from './street-parking/mapContextChip';
 import { isHandoffRecoveryCardRendered } from './street-parking/handoffRecoveryCard';
 import { isLegacyNYCOpenDataSegment } from '../utils/streetIntelligenceLegacy';
 
-const canonicalResponseFields = (response: CanonicalCurbResponse): Pick<SavedSpot,
-    'segmentId' | 'parkingSide' | 'restrictionVersionId' | 'segmentStreetName'
-    | 'streetIntelStatus' | 'streetIntelReason' | 'streetIntelCheckedAt'
-    | 'curbProtocolVersion' | 'curbResolutionStatus' | 'curbSelector' | 'curbSideConfirmation'
-    | 'sideConfidence' | 'confirmedParkingSide' | 'drivingSide'
-    | 'publicRules' | 'publicSchedules' | 'regulationStatus'
-> => {
-    const checkedAt = new Date().toISOString();
-    if (response.status === 'high_confidence') {
-        return {
-            segmentId: response.segmentId,
-            parkingSide: response.sideLabel,
-            restrictionVersionId: null,
-            segmentStreetName: response.streetName,
-            streetIntelStatus: 'found',
-            streetIntelReason: null,
-            streetIntelCheckedAt: checkedAt,
-            curbProtocolVersion: 2,
-            curbResolutionStatus: 'high_confidence',
-            curbSelector: null,
-            curbSideConfirmation: null,
-            sideConfidence: 'high',
-            confirmedParkingSide: null,
-            drivingSide: null,
-            publicRules: response.publicRules ? [...response.publicRules] : null,
-            publicSchedules: response.publicSchedules ? { ...response.publicSchedules } : null,
-            regulationStatus: response.regulationStatus ?? null,
-        };
-    }
-    if (response.status === 'ambiguous') {
-        return {
-            segmentId: null,
-            parkingSide: null,
-            restrictionVersionId: null,
-            segmentStreetName: null,
-            streetIntelStatus: null,
-            streetIntelReason: 'intersection_complex',
-            streetIntelCheckedAt: checkedAt,
-            curbProtocolVersion: 2,
-            curbResolutionStatus: 'ambiguous',
-            curbSelector: response.selector,
-            curbSideConfirmation: null,
-            sideConfidence: 'unknown',
-            confirmedParkingSide: null,
-            drivingSide: null,
-            publicRules: null,
-            publicSchedules: null,
-            regulationStatus: null,
-        };
-    }
-    if (response.status === 'side_confirmation_required') {
-        return {
-            segmentId: null,
-            parkingSide: null,
-            restrictionVersionId: null,
-            segmentStreetName: null,
-            streetIntelStatus: null,
-            streetIntelReason: null,
-            streetIntelCheckedAt: checkedAt,
-            curbProtocolVersion: 2,
-            curbResolutionStatus: 'side_confirmation_required',
-            curbSelector: null,
-            curbSideConfirmation: response.confirmation,
-            sideConfidence: 'unknown',
-            confirmedParkingSide: null,
-            drivingSide: null,
-            publicRules: null,
-            publicSchedules: null,
-            regulationStatus: null,
-        };
-    }
-    return {
-        segmentId: null,
-        parkingSide: null,
-        restrictionVersionId: null,
-        segmentStreetName: null,
-        streetIntelStatus: 'unavailable',
-        streetIntelReason: response.reason,
-        streetIntelCheckedAt: checkedAt,
-        curbProtocolVersion: 2,
-        curbResolutionStatus: 'unsupported',
-        curbSelector: null,
-        curbSideConfirmation: null,
-        sideConfidence: 'unknown',
-        confirmedParkingSide: null,
-        drivingSide: null,
-        publicRules: null,
-        publicSchedules: null,
-    };
-};
+const canonicalResponseFields = savedSpotFieldsFromCanonicalResponse;
 
 
 export const MapView: React.FC<MapViewProps> = ({
@@ -306,6 +226,8 @@ export const MapView: React.FC<MapViewProps> = ({
     const matchInFlightRef = useRef<Map<string, Promise<any>>>(new Map());
     const spotEpochRef = useRef(0);
     const saveInFlightRef = useRef(false);
+    const curbSelectionInFlightRef = useRef(false);
+    const retryStreetIntelInFlightRef = useRef(false);
 
     // Show first-run tutorial once map is ready and user is authenticated
     useEffect(() => {
@@ -963,8 +885,13 @@ export const MapView: React.FC<MapViewProps> = ({
     const commitSpotIfCurrent = (epoch: number, sessionId: string, spot: SavedSpot): boolean => {
         if (epoch !== spotEpochRef.current) return false;
         const stored = readSavedSpot();
-        if (stored && stored.sessionId !== sessionId) return false;
-        if (stored?.curbResolutionStatus === 'high_confidence' && spot.curbResolutionStatus !== 'high_confidence') return false;
+        if (!selectionMayCommit({
+            startedEpoch: epoch,
+            currentEpoch: spotEpochRef.current,
+            sessionId,
+            stored,
+            nextStatus: spot.curbResolutionStatus,
+        })) return false;
         writeSavedSpot(spot);
         setSavedSpot(spot);
         return true;
@@ -1074,50 +1001,45 @@ export const MapView: React.FC<MapViewProps> = ({
     const [curbSelectionLoading, setCurbSelectionLoading] = useState(false);
     const handleCanonicalCurbSelection = useCallback(async (candidateToken: string) => {
         if (!savedSpot || savedSpot.curbResolutionStatus !== 'ambiguous'
-            || !savedSpot.curbSelector || curbSelectionLoading) return;
-        const epoch = ++spotEpochRef.current;
-        const sessionId = savedSpot.sessionId;
+            || !savedSpot.curbSelector || curbSelectionInFlightRef.current) return;
         setCurbSelectionLoading(true);
         try {
-            const response = await requestCanonicalCurb(savedSpot.lat, savedSpot.lng, candidateToken);
-            if (response.status === 'unsupported') return;
-            const updated: SavedSpot = {
-                ...savedSpot,
-                ...canonicalResponseFields(response),
-                curbRefreshAttempted: true,
-            };
-            commitSpotIfCurrent(epoch, sessionId, updated);
-        } catch {
-            return;
+            await runCurbSelectionAttempt({
+                spot: savedSpot,
+                candidateToken,
+                mode: 'ambiguous',
+                now: Date.now(),
+                gate: curbSelectionInFlightRef,
+                currentEpoch: () => spotEpochRef.current,
+                bumpEpoch: () => ++spotEpochRef.current,
+                commit: commitSpotIfCurrent,
+                request: (candidateToken) => requestCanonicalCurb(savedSpot.lat, savedSpot.lng, candidateToken),
+            });
         } finally {
             setCurbSelectionLoading(false);
         }
-    }, [curbSelectionLoading, requestCanonicalCurb, savedSpot]);
+    }, [requestCanonicalCurb, savedSpot]);
 
     const handleSideConfirmation = useCallback(async (candidateToken: string) => {
         if (!savedSpot || savedSpot.curbResolutionStatus !== 'side_confirmation_required'
-            || !savedSpot.curbSideConfirmation || curbSelectionLoading) return;
-        const epoch = ++spotEpochRef.current;
-        const sessionId = savedSpot.sessionId;
+            || !savedSpot.curbSideConfirmation || curbSelectionInFlightRef.current) return;
         setCurbSelectionLoading(true);
         try {
-            const response = await requestCanonicalCurb(savedSpot.lat, savedSpot.lng, candidateToken);
-            if (response.status !== 'high_confidence') return;
-            const chosen = savedSpot.curbSideConfirmation.curbs.find(curb => curb.token === candidateToken);
-            const updated: SavedSpot = {
-                ...savedSpot,
-                ...canonicalResponseFields(response),
-                curbRefreshAttempted: true,
-                confirmedParkingSide: null,
-                drivingSide: chosen?.drivingSide ?? null,
-            };
-            commitSpotIfCurrent(epoch, sessionId, updated);
-        } catch {
-            return;
+            await runCurbSelectionAttempt({
+                spot: savedSpot,
+                candidateToken,
+                mode: 'side',
+                now: Date.now(),
+                gate: curbSelectionInFlightRef,
+                currentEpoch: () => spotEpochRef.current,
+                bumpEpoch: () => ++spotEpochRef.current,
+                commit: commitSpotIfCurrent,
+                request: (candidateToken) => requestCanonicalCurb(savedSpot.lat, savedSpot.lng, candidateToken),
+            });
         } finally {
             setCurbSelectionLoading(false);
         }
-    }, [curbSelectionLoading, requestCanonicalCurb, savedSpot]);
+    }, [requestCanonicalCurb, savedSpot]);
 
     const handleSideConfirmationCancel = useCallback(() => {
         if (!savedSpot || savedSpot.curbResolutionStatus !== 'side_confirmation_required') return;
@@ -1142,7 +1064,6 @@ export const MapView: React.FC<MapViewProps> = ({
         localStorage.setItem(SAVED_SPOT_KEY, JSON.stringify(updated));
     }, [savedSpot]);
 
-    const retryStreetIntelInFlightRef = useRef(false);
     const [retryingStreetIntel, setRetryingStreetIntel] = useState(false);
     const handleRetryStreetIntel = useCallback(async () => {
         if (!savedSpot || retryStreetIntelInFlightRef.current) return;
@@ -1157,6 +1078,17 @@ export const MapView: React.FC<MapViewProps> = ({
                 ...canonicalResponseFields(response),
                 curbRefreshAttempted: true,
                 gpsAccuracyMeters: lastGpsAccuracyRef.current ?? null,
+            };
+            commitSpotIfCurrent(epoch, sessionId, updated);
+        } catch {
+            const updated: SavedSpot = {
+                ...savedSpot,
+                ...canonicalResponseFields({
+                    protocolVersion: 2,
+                    status: 'unsupported',
+                    reason: 'source_unavailable',
+                }),
+                curbRefreshAttempted: true,
             };
             commitSpotIfCurrent(epoch, sessionId, updated);
         } finally {
@@ -1202,6 +1134,8 @@ export const MapView: React.FC<MapViewProps> = ({
     };
 
     const endSession = () => {
+        // Drop any in-flight curb result so ending the session cannot be undone.
+        spotEpochRef.current += 1;
         localStorage.removeItem(SAVED_SPOT_KEY);
         if (auth.currentUser) {
             setDoc(doc(db, 'parkingSessions', auth.currentUser.uid), { active: false }, { merge: true }).catch(() => {});
@@ -1221,6 +1155,51 @@ export const MapView: React.FC<MapViewProps> = ({
         activeRouteDestinationRef.current = null;
         if (mapRef.current) clearRoute(mapRef.current);
     };
+
+    useEffect(() => {
+        if (!savedSpot || savedSpot.curbResolutionStatus !== 'side_confirmation_required') return;
+        const expire = () => {
+            if (curbSelectionInFlightRef.current) return;
+            const replacement = expiredSideConfirmationReplacement(savedSpot, Date.now());
+            if (!replacement) return;
+            const epoch = ++spotEpochRef.current;
+            commitSpotIfCurrent(epoch, savedSpot.sessionId, replacement);
+        };
+        const delay = sideConfirmationMillisRemaining(savedSpot.streetIntelCheckedAt, Date.now());
+        if (delay <= 0) {
+            expire();
+            return;
+        }
+        const timer = window.setTimeout(expire, delay);
+        return () => window.clearTimeout(timer);
+    }, [savedSpot]);
+
+    useEffect(() => {
+        let cancelled = false;
+        let handle: { remove: () => Promise<void> } | null = null;
+        const refresh = (hidden: boolean) => {
+            if (!shouldRefreshSavedSpotOnForeground({
+                hidden,
+                selectionInFlight: curbSelectionInFlightRef.current,
+                retryInFlight: retryStreetIntelInFlightRef.current,
+                saveInFlight: saveInFlightRef.current,
+            })) return;
+            setSavedSpot(readSavedSpot());
+        };
+        const onVisibility = () => refresh(document.visibilityState === 'hidden');
+        document.addEventListener('visibilitychange', onVisibility);
+        void CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+            refresh(!isActive);
+        }).then(listener => {
+            if (cancelled) void listener.remove();
+            else handle = listener;
+        }).catch(() => {});
+        return () => {
+            cancelled = true;
+            document.removeEventListener('visibilitychange', onVisibility);
+            if (handle) void handle.remove();
+        };
+    }, []);
 
     // Proximity check — are we back at the car?
     const isNearSavedSpot = savedSpot && userLocation

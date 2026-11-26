@@ -14,6 +14,48 @@ export const SAVED_SPOT_KEY = 'pq_saved_spot';
 
 /** Sessions older than this are dropped on read, as they always have been. */
 export const SAVED_SPOT_TTL_MS = 24 * 60 * 60 * 1000;
+// A server-issued sidec1 token lasts five minutes. Discard the persisted
+// selection earlier to avoid offering an already-expired challenge after restart.
+// This is UX expiry only; the server must still validate every token.
+export const CURB_SIDE_CONFIRMATION_LOCAL_MAX_AGE_MS = 4 * 60 * 1000;
+
+/**
+ * Local UX deadline for a persisted side-confirmation challenge.
+ * The server HMAC lifetime is five minutes and remains the authority.
+ * A missing, future, or four-minute-old timestamp is not fresh.
+ */
+export function sideConfirmationChallengeFresh(
+  checkedAt: string | null | undefined,
+  now: number,
+): boolean {
+  const checkedAtMs = typeof checkedAt === 'string' ? Date.parse(checkedAt) : Number.NaN;
+  return Number.isFinite(checkedAtMs)
+    && checkedAtMs <= now
+    && now - checkedAtMs < CURB_SIDE_CONFIRMATION_LOCAL_MAX_AGE_MS;
+}
+
+/** Drop curb identity and any rules that must not survive an unusable challenge. */
+export function withoutCurbAuthority<T extends object>(spot: T): T {
+  return {
+    ...spot,
+    segmentId: null,
+    parkingSide: null,
+    restrictionVersionId: null,
+    segmentStreetName: null,
+    streetIntelStatus: 'unavailable',
+    streetIntelReason: 'candidate_incomplete',
+    curbProtocolVersion: 2,
+    curbResolutionStatus: 'unsupported',
+    curbSelector: null,
+    curbSideConfirmation: null,
+    sideConfidence: 'unknown',
+    confirmedParkingSide: null,
+    drivingSide: null,
+    publicRules: null,
+    publicSchedules: null,
+    regulationStatus: null,
+  };
+}
 
 export type SideConfidence = 'high' | 'low' | 'unknown';
 export type StreetIntelStatus = 'found' | 'unavailable' | 'failed';
@@ -146,12 +188,11 @@ export function readSavedSpot(now: number = Date.now()): SavedSpot | null {
           confirmation: s.curbSideConfirmation,
         });
         s.curbSideConfirmation = parsed.status === 'side_confirmation_required' ? parsed.confirmation : null;
+        if (!sideConfirmationChallengeFresh(s.streetIntelCheckedAt, now)) {
+          throw new Error('side_confirmation_expired');
+        }
       } catch {
-        s.curbResolutionStatus = 'unsupported';
-        s.curbSideConfirmation = null;
-        s.confirmedParkingSide = null;
-        s.streetIntelStatus = 'unavailable';
-        s.streetIntelReason = 'candidate_incomplete';
+        Object.assign(s, withoutCurbAuthority(s));
         changed = true;
       }
     }

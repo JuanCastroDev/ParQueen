@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const source = readFileSync(join(__dirname, '..', 'StreetParkingView.tsx'), 'utf8');
+const selectionSource = readFileSync(join(__dirname, '..', '..', 'utils', 'curbSelectionSession.ts'), 'utf8');
 
 const between = (startText: string, endText: string): string => {
   const start = source.indexOf(startText);
@@ -11,6 +12,19 @@ const between = (startText: string, endText: string): string => {
   expect(end).toBeGreaterThan(start);
   return source.slice(start, end);
 };
+
+const selectionBetween = (startText: string, endText: string): string => {
+  const start = selectionSource.indexOf(startText);
+  const end = selectionSource.indexOf(endText, start);
+  expect(start).toBeGreaterThan(-1);
+  expect(end).toBeGreaterThan(start);
+  return selectionSource.slice(start, end);
+};
+
+const responseFields = () => selectionBetween(
+  'export function savedSpotFieldsFromCanonicalResponse',
+  'export function spotAfterSelectionResponse',
+);
 
 describe('StreetParkingView canonical curb save contract', () => {
   it('persists the saved/resolving state before the bounded burst and callable finish', () => {
@@ -74,7 +88,7 @@ describe('StreetParkingView canonical curb save contract', () => {
   });
 
   it('keeps postal address separate from canonical curb street and persists ambiguity', () => {
-    const fields = between('const canonicalResponseFields', 'export const MapView');
+    const fields = responseFields();
     const save = between('const saveMySpot = async () =>', '// Used after handoff');
     expect(save).toContain("address: addressResult.status === 'fulfilled' ? addressResult.value : ''");
     expect(fields).toContain('segmentStreetName: response.streetName');
@@ -87,7 +101,8 @@ describe('StreetParkingView canonical curb save contract', () => {
     const selection = between('const handleCanonicalCurbSelection', 'const handleSideConfirmation');
     expect(selection.match(/requestCanonicalCurb\(savedSpot\.lat, savedSpot\.lng, candidateToken\)/g)).toHaveLength(1);
     expect(selection).toContain("savedSpot.curbResolutionStatus !== 'ambiguous'");
-    expect(selection).toContain('curbSelectionLoading');
+    expect(selection).toContain('curbSelectionInFlightRef.current');
+    expect(selection).toContain('setCurbSelectionLoading(true)');
     expect(selection).not.toContain('runMatchNearestSegment');
     expect(source).toContain('<VisualCurbSelector');
     expect(source).toContain('onSelect={handleCanonicalCurbSelection}');
@@ -95,6 +110,41 @@ describe('StreetParkingView canonical curb save contract', () => {
     expect(confirmation.match(/requestCanonicalCurb\(savedSpot\.lat, savedSpot\.lng, candidateToken\)/g)).toHaveLength(1);
     expect(confirmation).toContain("curbResolutionStatus !== 'side_confirmation_required'");
     expect(source).toContain('<CurbSideCrossSection');
+  });
+
+  it('recovers from rejected or expired curb selection tokens without claiming a verified curb', () => {
+    const selection = between('const handleCanonicalCurbSelection', 'const handleSideConfirmation');
+    const confirmation = between('const handleSideConfirmation', 'const handleSideConfirmationCancel');
+
+    for (const handler of [selection, confirmation]) {
+      expect(handler).toContain('runCurbSelectionAttempt');
+      expect(handler).toContain('curbSelectionInFlightRef.current');
+      expect(handler).toContain('commit: commitSpotIfCurrent');
+      expect(handler).not.toContain("if (response.status === 'unsupported') return;");
+      expect(handler).not.toContain("if (response.status !== 'high_confidence') return;");
+    }
+
+    expect(selection).toContain("mode: 'ambiguous'");
+    expect(confirmation).toContain("mode: 'side'");
+    const fields = responseFields();
+    const rejected = fields.slice(fields.lastIndexOf('return {'));
+    expect(rejected).toContain('segmentId: null');
+    expect(rejected).toContain('curbSideConfirmation: null');
+    expect(rejected).toContain('publicRules: null');
+    expect(rejected).toContain('regulationStatus: null');
+    expect(selectionSource).toContain("reason: 'source_unavailable'");
+    expect(selectionSource).toContain('drivingSide: response.status === \'high_confidence\' ? chosen?.drivingSide ?? null : null');
+
+    const retry = between('const handleRetryStreetIntel = useCallback', 'const writeCleaningReminder');
+    expect(retry).toContain('} catch {');
+    expect(retry).toContain("reason: 'source_unavailable'");
+    expect(retry).toContain('commitSpotIfCurrent(epoch, sessionId, updated)');
+    expect(retry).toContain('retryStreetIntelInFlightRef.current = false');
+    const end = between('const endSession = () =>', 'const isNearSavedSpot');
+    expect(end.indexOf('spotEpochRef.current += 1')).toBeGreaterThan(-1);
+    expect(end.indexOf('spotEpochRef.current += 1')).toBeLessThan(end.indexOf('removeItem(SAVED_SPOT_KEY)'));
+    expect(source).toContain('shouldRefreshSavedSpotOnForeground');
+    expect(source).toContain('expiredSideConfirmationReplacement');
   });
 
   it('does not look up or replace a curb when My Car opens', () => {
@@ -108,13 +158,16 @@ describe('StreetParkingView canonical curb save contract', () => {
     expect(save).toContain('if (existingSavedSpot)');
     expect(save).toContain('commitSpotIfCurrent(epoch, resolvingSpot.sessionId, spot)');
     const commit = between('const commitSpotIfCurrent', 'const saveMySpot');
-    expect(commit).toContain("stored?.curbResolutionStatus === 'high_confidence' && spot.curbResolutionStatus !== 'high_confidence'");
+    expect(commit).toContain('selectionMayCommit');
+    expect(commit).toContain('if (epoch !== spotEpochRef.current) return false');
+    expect(selectionSource).toContain("input.stored?.curbResolutionStatus === 'high_confidence' && input.nextStatus !== 'high_confidence'");
+    expect(selectionSource).toContain("if (!input.stored) return input.nextStatus === 'resolving'");
     const retry = between('const handleRetryStreetIntel = useCallback', 'const writeCleaningReminder');
     expect(retry).toContain('commitSpotIfCurrent(epoch, sessionId, updated)');
   });
 
   it('stores no invented side or segment for unsupported V2 results', () => {
-    const fields = between('const canonicalResponseFields', 'export const MapView');
+    const fields = responseFields();
     const unsupported = fields.slice(fields.lastIndexOf('return {'));
     expect(unsupported).toContain('segmentId: null');
     expect(unsupported).toContain('parkingSide: null');

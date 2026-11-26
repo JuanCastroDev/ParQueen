@@ -29,7 +29,7 @@ const spot = (): SavedSpot => ({
   segmentStreetName: null,
   streetIntelStatus: null,
   streetIntelReason: null,
-  streetIntelCheckedAt: null,
+  streetIntelCheckedAt: new Date().toISOString(),
   curbProtocolVersion: 2,
   curbResolutionStatus: 'side_confirmation_required',
   curbSelector: null,
@@ -138,19 +138,64 @@ describe('CurbSideCrossSection', () => {
     const view = readFileSync(new URL('../StreetParkingView.tsx', import.meta.url), 'utf8');
     const side = view.indexOf("curbResolutionStatus === 'side_confirmation_required'");
     const ambiguous = view.indexOf("curbResolutionStatus === 'ambiguous'");
-    const cancel = view.slice(view.indexOf('const handleSideConfirmationCancel'), view.indexOf('const retryStreetIntelInFlightRef'));
+    const cancel = view.slice(view.indexOf('const handleSideConfirmationCancel'), view.indexOf('const handleConfirmSide'));
     expect(side).toBeGreaterThan(-1);
     expect(side).toBeLessThan(ambiguous);
     expect(cancel).not.toContain('requestCanonicalCurb');
     expect(cancel).toContain("status: 'unsupported'");
     expect(cancel).toContain('confirmedParkingSide: null');
     const select = view.slice(view.indexOf('const handleSideConfirmation ='), view.indexOf('const handleSideConfirmationCancel'));
-    expect(select).toContain('canonicalResponseFields(response)');
+    expect(select).toContain('runCurbSelectionAttempt');
     expect(select).toContain('requestCanonicalCurb(savedSpot.lat, savedSpot.lng, candidateToken)');
     expect(select).not.toMatch(/notifyNearby|incrementTotalSpotsPinged|createPing/);
-    const fields = view.slice(view.indexOf('const canonicalResponseFields'), view.indexOf('const segmentRetrySessionRef'));
+    const fields = readFileSync(new URL('../../utils/curbSelectionSession.ts', import.meta.url), 'utf8');
     expect(fields).toContain('parkingSide: response.sideLabel');
     expect(fields).toContain('segmentId: response.segmentId');
+  });
+
+  it('expires persisted confirmation tokens before five minutes, without inventing a curb', () => {
+    const data = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => { data.set(key, value); },
+      removeItem: (key: string) => { data.delete(key); },
+    });
+    const now = Date.now();
+    const pending = {
+      ...spot(),
+      savedAt: now,
+      segmentId: 'stale-identity',
+      parkingSide: 'East',
+      sideConfidence: 'high' as const,
+      confirmedParkingSide: 'East',
+      publicRules: [],
+      regulationStatus: 'verified' as const,
+    };
+
+    writeSavedSpot({ ...pending, streetIntelCheckedAt: new Date(now - 4 * 60_000 + 1).toISOString() });
+    expect(readSavedSpot(now)?.curbResolutionStatus).toBe('side_confirmation_required');
+
+    for (const checkedAt of [
+      new Date(now - 4 * 60_000).toISOString(),
+      new Date(now + 1000).toISOString(),
+      null,
+    ]) {
+      writeSavedSpot({ ...pending, streetIntelCheckedAt: checkedAt });
+      const expired = readSavedSpot(now);
+      expect(expired).toMatchObject({
+        curbResolutionStatus: 'unsupported',
+        streetIntelStatus: 'unavailable',
+        streetIntelReason: 'candidate_incomplete',
+        segmentId: null,
+        parkingSide: null,
+        sideConfidence: 'unknown',
+        confirmedParkingSide: null,
+        publicRules: null,
+        regulationStatus: null,
+        curbSideConfirmation: null,
+      });
+      expect(readSavedSpot(now)?.curbResolutionStatus).toBe('unsupported');
+    }
   });
 
   it('draws a diagonal road at its bearing and submits the matching token', () => {
