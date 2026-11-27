@@ -1,11 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import { db } from '../../firebase';
-import {
-  collection, collectionGroup, getDocs, getCountFromServer,
-  query, where,
-} from 'firebase/firestore';
-import { fetchDashboardCounts } from '../../utils/adminReadService';
-import { segmentAllowsAuthoritativeRead } from '../../utils/canonicalCurbWriteAuthority';
+import { collection, getDocs } from 'firebase/firestore';
+import { fetchDashboardCounts, fetchStreetIntelligenceHealth } from '../../utils/adminReadService';
 import { RefreshCw, AlertCircle, CheckCircle, AlertTriangle } from 'lucide-react';
 import { InlineLoader } from '../../components/LoadingScreen';
 
@@ -52,32 +48,21 @@ async function loadStats(): Promise<{
   // readable (see firestore.rules) — its unresolved count now comes from
   // the requireCurrentAdmin-gated adminReadView('dashboardCounts') callable,
   // which already computes this same aggregate for DashboardPage.tsx.
-  const [
-    totalSnap, activeSnap, sweepnycSnap, adminSnap,
-    archivedSnap, reviewSnap, rulesSnap, dashboardCounts,
-    segmentDocs,
-  ] = await Promise.all([
-    getCountFromServer(collection(db!, 'streetSegments')),
-    getCountFromServer(query(collection(db!, 'streetSegments'), where('status', '==', 'active'))),
-    getCountFromServer(query(collection(db!, 'streetSegments'), where('source', '==', 'sweepnyc'))),
-    getCountFromServer(query(collection(db!, 'streetSegments'), where('source', '==', 'admin'))),
-    getCountFromServer(query(collection(db!, 'streetSegments'), where('status', '==', 'archived'))),
-    getCountFromServer(query(collection(db!, 'streetSegments'), where('status', '==', 'needs_review'))),
-    // Collection group count: all active (not superseded) rules across all segments
-    getCountFromServer(query(collectionGroup(db!, 'streetRules'), where('supersededAt', '==', null))),
+  const [scheduleHealth, dashboardCounts, segmentDocs] = await Promise.all([
+    fetchStreetIntelligenceHealth(),
     fetchDashboardCounts(),
     getDocs(collection(db!, 'streetSegments')),
   ]);
   const allSegmentDocs = [...segmentDocs.docs];
 
   const stats: HealthStats = {
-    totalSegments: totalSnap.data().count,
-    activeSegments: activeSnap.data().count,
-    sweepnycSegments: sweepnycSnap.data().count,
-    adminSegments: adminSnap.data().count,
-    archivedSegments: archivedSnap.data().count,
-    needsReviewSegments: reviewSnap.data().count,
-    activeRules: rulesSnap.data().count,
+    totalSegments: scheduleHealth.totalSegments,
+    activeSegments: scheduleHealth.activeSegments,
+    sweepnycSegments: scheduleHealth.sweepnycSegments,
+    adminSegments: scheduleHealth.adminSegments,
+    archivedSegments: scheduleHealth.archivedSegments,
+    needsReviewSegments: scheduleHealth.needsReviewSegments,
+    activeRules: scheduleHealth.activeRules,
     unresolvedFailures: dashboardCounts.parseFailures,
   };
 

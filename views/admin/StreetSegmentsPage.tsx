@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { filterAuthoritativeRules } from '../../utils/canonicalCurbWriteAuthority';
+import { appendSchedulePage, fetchStreetSchedules, type AdminScheduleRule } from '../../utils/adminReadService';
 import { db } from '../../firebase';
 import {
   collection, getDocs, query, orderBy, where,
@@ -11,7 +11,7 @@ import { ParseFailuresPage } from './ParseFailuresPage';
 import { StreetIntelligenceHealthPage } from './StreetIntelligenceHealthPage';
 import {
   geocodeAddress, fetchStreetGeometry, computeGeohash, computeCrossRaw,
-  SegmentDoc, SuspensionDoc, StreetRuleDoc,
+  SegmentDoc, SuspensionDoc,
 } from '../../utils/streetIntelligence';
 
 const BOROUGHS = [
@@ -231,20 +231,44 @@ function AddRuleForm({ segmentId, onSaved }: { segmentId: string; onSaved: () =>
 
 function SegmentRow({ seg, onDeleted }: { seg: SegmentDoc; onDeleted: () => void }) {
   const [expanded, setExpanded] = useState(false);
-  const [rules, setRules] = useState<StreetRuleDoc[]>([]);
+  const [rules, setRules] = useState<AdminScheduleRule[]>([]);
   const [loadingRules, setLoadingRules] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [rulesCursor, setRulesCursor] = useState<string | null>(null);
+  const [rulesDone, setRulesDone] = useState(true);
   const [deleting, setDeleting] = useState(false);
   const [segError, setSegError] = useState<string | null>(null);
 
   const loadRules = async () => {
     setLoadingRules(true);
-    const snap = await getDocs(
-      query(collection(db, 'streetSegments', seg.id, 'streetRules'), where('supersededAt', '==', null))
-    );
-    const loaded = snap.docs.map(d => ({ id: d.id, ...d.data() } as StreetRuleDoc));
-    const selected = filterAuthoritativeRules(seg, loaded);
-    setRules(selected.ok ? selected.rules : []);
+    try {
+      const page = await fetchStreetSchedules(seg.id, null);
+      setRules(page.rules);
+      setRulesCursor(page.nextCursor);
+      setRulesDone(page.done);
+      setSegError(null);
+    } catch (e: unknown) {
+      setRules([]);
+      setRulesCursor(null);
+      setRulesDone(true);
+      setSegError(e instanceof Error ? e.message : 'Could not load cleaning rules.');
+    }
     setLoadingRules(false);
+  };
+
+  const loadMoreRules = async () => {
+    if (!rulesCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const page = await fetchStreetSchedules(seg.id, rulesCursor);
+      setRules(current => appendSchedulePage(current, page.rules));
+      setRulesCursor(page.nextCursor);
+      setRulesDone(page.done);
+      setSegError(null);
+    } catch (e: unknown) {
+      setSegError(e instanceof Error ? e.message : 'Could not load more cleaning rules.');
+    }
+    setLoadingMore(false);
   };
 
   const handleExpand = () => {
@@ -328,7 +352,7 @@ function SegmentRow({ seg, onDeleted }: { seg: SegmentDoc; onDeleted: () => void
           <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mt-3 mb-2">Cleaning Rules</p>
           {loadingRules ? (
             <p className="text-xs text-gray-400">Loading…</p>
-          ) : rules.length === 0 ? (
+          ) : rules.length === 0 && rulesDone ? (
             <p className="text-xs text-gray-400">No rules yet.</p>
           ) : (
             <div className="space-y-2">
@@ -345,6 +369,16 @@ function SegmentRow({ seg, onDeleted }: { seg: SegmentDoc; onDeleted: () => void
                 ))
               ))}
             </div>
+          )}
+          {!rulesDone && (
+            <button
+              type="button"
+              onClick={loadMoreRules}
+              disabled={loadingMore}
+              className="mt-2 text-xs font-semibold text-blue-700 hover:text-blue-800 disabled:opacity-50"
+            >
+              {loadingMore ? 'Loading more…' : 'Load more cleaning rules'}
+            </button>
           )}
           <AddRuleForm segmentId={seg.id} onSaved={loadRules} />
         </div>

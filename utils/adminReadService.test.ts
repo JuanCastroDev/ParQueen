@@ -13,6 +13,7 @@ vi.mock('firebase/app', () => ({ getApp: vi.fn(() => ({})) }));
 import {
   fetchAllUsers, fetchUserDetail, fetchReportsList, fetchAuditLogList,
   fetchPingsList, fetchParseFailuresList, fetchDashboardCounts,
+  fetchStreetSchedules, fetchStreetIntelligenceHealth, appendSchedulePage,
 } from './adminReadService';
 import { httpsCallable } from 'firebase/functions';
 
@@ -39,6 +40,10 @@ describe('adminReadService — callable name contract', () => {
     await fetchParseFailuresList();
     mockCallable.mockResolvedValue({ data: { totalUsers: 0, activePings: 0, activeSessions: 0, parseFailures: 0, needsReview: 0, reports: 0, recentUsers: [] } });
     await fetchDashboardCounts();
+    mockCallable.mockResolvedValue({ data: { rules: [], nextCursor: null, done: true, segmentFound: true } });
+    await fetchStreetSchedules('curb2_public');
+    mockCallable.mockResolvedValue({ data: { totalSegments: 0, activeSegments: 0, sweepnycSegments: 0, adminSegments: 0, archivedSegments: 0, needsReviewSegments: 0, activeRules: 0 } });
+    await fetchStreetIntelligenceHealth();
 
     expect(httpsCallable).toHaveBeenCalledWith(expect.anything(), 'adminReadView');
     // Never a bespoke per-view callable name — confirms no direct Firestore
@@ -86,6 +91,26 @@ describe('adminReadService — view name and param wiring', () => {
     mockCallable.mockResolvedValue({ data: { totalUsers: 0, activePings: 0, activeSessions: 0, parseFailures: 0, needsReview: 0, reports: 0, recentUsers: [] } });
     await fetchDashboardCounts();
     expect(mockCallable).toHaveBeenLastCalledWith({ view: 'dashboardCounts', params: {} });
+
+    mockCallable.mockResolvedValue({ data: { rules: [], nextCursor: null, done: true, segmentFound: false } });
+    await fetchStreetSchedules('curb2_public');
+    expect(mockCallable).toHaveBeenLastCalledWith({
+      view: 'streetScheduleList',
+      params: { segmentId: 'curb2_public', cursor: null, limit: 100 },
+    });
+    await fetchStreetSchedules('curb2_public', 'rule-100');
+    expect(mockCallable).toHaveBeenLastCalledWith({
+      view: 'streetScheduleList',
+      params: { segmentId: 'curb2_public', cursor: 'rule-100', limit: 100 },
+    });
+    expect(appendSchedulePage(
+      [{ id: 'rule-001', type: null, schedules: [] }],
+      [{ id: 'rule-001', type: null, schedules: [] }, { id: 'rule-101', type: null, schedules: [] }],
+    ).map(rule => rule.id)).toEqual(['rule-001', 'rule-101']);
+
+    mockCallable.mockResolvedValue({ data: { activeRules: 0 } });
+    await fetchStreetIntelligenceHealth();
+    expect(mockCallable).toHaveBeenLastCalledWith({ view: 'streetIntelligenceHealth', params: {} });
   });
 });
 

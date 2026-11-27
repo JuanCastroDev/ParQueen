@@ -96,6 +96,7 @@ export default defineConfig(({ command, mode }) => {
           'firestore.rules.ping-delete.test.ts',
           'storage.rules.test.ts',
           'functions/*.integration.test.*',
+          ...(process.env.PARQUEEN_ACCEPTANCE_EMULATOR === '1' ? [] : ['adminScheduleClient.emulator.test.tsx']),
           // Emulator-only. Still required by vite.functions.config.ts.
           'functions/cancelClaim.export.test.js',
           ...(/^(localhost|127\.0\.0\.1):\d+$/.test(
